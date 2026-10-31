@@ -5,12 +5,17 @@
  *   staff see which scope or permission is missing; a protected NOT_FOUND never says the record exists;
  * - stale version (STALE_REVISION, INVALID_TRANSITION): "Reload" fetches the current record and the
  *   form keeps what was typed;
- * - no connection or no response: the outcome may be unknown, and "Try again" resends the same
- *   intent with the same idempotency key, so it is never applied twice;
+ * - no definite answer (`mayHaveTakenEffect`: a timeout, a connection lost after sending, the same
+ *   key still running, a 5xx): "Outcome not known yet", never "Something went wrong"; "Try again"
+ *   resends the same intent with the same idempotency key, so it is never applied twice;
+ * - IDEMPOTENCY_OUTCOME_UNAVAILABLE: "This may already have been done" with "Reload";
+ *   IDEMPOTENCY_SECRET_WITHHELD: created, but its one-time secret cannot be shown again; a
+ *   legacy-authority refusal: make the change in the system of record (`CommandOutcome.tsx`);
  * - validation: the code, the API's message and each field message;
  * - success: the resulting state in the machine's words, announced politely.
  */
 import { presentationForError, type ApiError } from '@sportspark/api-client';
+import { sharedCommandOutcome } from './CommandOutcome';
 import { StateView } from './StateView';
 import { StatusBadge } from './StatusBadge';
 
@@ -57,18 +62,8 @@ export function CommandError({ error, onRetry, onReload }: CommandErrorProps) {
     }
     return <StateView variant="unavailable" />;
   }
-  if (error.outcomeUnknown && error.kind === 'timeout') {
-    return (
-      <section className="state" aria-live="polite" data-testid="state-outcome-unknown">
-        <StatusBadge tone="warning" label="Outcome not known yet" />
-        <p>
-          No answer arrived, so this may already have been applied. Trying again sends the same
-          request and is never applied twice.
-        </p>
-        {onRetry ? <StateView variant="error" error={error} onRetry={onRetry} /> : null}
-      </section>
-    );
-  }
+  const shared = sharedCommandOutcome(error, { onRetry, onReload });
+  if (shared) return shared;
   const fields = Object.entries(fieldErrorsOf(error));
   return (
     <div>

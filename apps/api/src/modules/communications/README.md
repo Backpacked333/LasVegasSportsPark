@@ -93,11 +93,11 @@ per event revision; import records, reminder marks and merge follow-ups append-o
 | Method | Path                                    | Who (action)                                                                                                                                                                                                                                                                                                              |
 | ------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST   | `/notifications`                        | composer roles (`communications.compose`): compose against an audience; `protected` marks participant-private content; `scheduledFor` makes a reminder                                                                                                                                                                    |
-| GET    | `/notifications`, `/notifications/{id}` | reader roles (`communications.read_notification`), newest first, filters status/kind/facility, cursor paging                                                                                                                                                                                                              |
+| GET    | `/notifications`, `/notifications/{id}` | reader roles (`communications.read_notification`), newest first, filters status/kind/facility, cursor paging (the cursor keeps the database's microsecond instant, so pages are complete and disjoint; `__tests__/keyset-paging.spec.ts`)                                                                                 |
 | GET    | `/notifications/{id}/recipients`        | composer roles (`communications.preview_recipients`): names, basis and a count from CURRENT permissions; never contact details (SPK-COMMS-006)                                                                                                                                                                            |
 | POST   | `/notifications/{id}/send`              | composer roles (`communications.send`): resolves recipients now, suppresses obsolete unsent notices about the same subject, creates an operation, requests delivery                                                                                                                                                       |
 | GET    | `/notifications/{id}/deliveries`        | reader roles: recipients (with `displayName`, COM-02) and attempts (with `retryOfAttemptId`) with their actual states (SPK-COMMS-004, SPK-UX-006)                                                                                                                                                                         |
-| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging (SPK-UX-003); each item carries `revision` and `subjectPersonIds` (COM-02); after a merge, also the merged person's notices (COM-05)                                                                                                                     |
+| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging with a microsecond cursor (SPK-UX-003, §4.5); each item carries `revision` and `subjectPersonIds` (COM-02); after a merge, also the merged person's notices (COM-05)                                                                                     |
 | POST   | `/me/inbox/{id}/read`, `/acknowledge`   | self (`communications.acknowledge`); `expectedRevision` honoured (STALE_REVISION); another person's notice is NOT_FOUND; acknowledgment recorded once                                                                                                                                                                     |
 | GET    | `/me/communication-preferences`         | self: the effective 4 × 2 matrix with `stored` and `locked` flags                                                                                                                                                                                                                                                         |
 | PATCH  | `/me/communication-preferences`         | self (`communications.manage_preferences`); disabling operational in-app is refused by the service and the database                                                                                                                                                                                                       |
@@ -191,7 +191,21 @@ dispatch creates the attempts or suppresses the notice.
 - **Calendar feeds** (SPK-COMMS-008): 32 random bytes, hash stored; the ICS uses the scheduling
   event id as UID and `SEQUENCE` per change; every fetch re-checks `view` over each person in scope
   and includes the team entries each person is on; revocation stops future access (404) and cannot
-  recall what an external calendar already fetched.
+  recall what an external calendar already fetched. Every TEXT value (summary, location,
+  description, calendar name) escapes each line break, a bare CR included, to a literal `\n` and
+  drops the other control characters RFC 5545 §3.3.11 excludes, so a stored string such as a
+  captain's team name in a fixture title cannot add content lines to another family's feed
+  (R2-TENANCY-INPUT-04; `calendar/ics.spec.ts`, `__tests__/calendar-feeds.spec.ts`).
+- **Request text — verified** (R2-TENANCY-INPUT-04, §4.10; `__tests__/request-text.spec.ts`):
+  PostgreSQL `text` and `jsonb` cannot hold U+0000, so every communications command refuses it
+  as 400 `VALIDATION_FAILED` naming the field instead of failing at the insert with 500.
+  Single-line text (title, feed label, subject type and id, push token, app version) refuses
+  every C0 control character and DEL; multi-line text (body, reasons, acknowledgment note) keeps
+  tab, line feed and carriage return. Practical details are checked for NUL in every key and
+  value; the shared `reason` and `policyReferences`, and the provider receipt's id, message id
+  and error, for NUL only. In-process composition by other modules
+  (`ModuleComposeNotificationBody`) is not checked: it is built from text they already store, and
+  refusing it would lose the notice inside an event handler.
 
 ## Ports (`ports.ts`)
 
@@ -297,8 +311,13 @@ channel approval and the essential/promotional split (DEC-012, DEC-062), the rem
 
 - **COM-01 push devices — verified** (`__tests__/push-devices.spec.ts`): register, refresh on
   re-registration (one row), move a token from another account (older row revoked
-  `reregistered`, one transaction, a racing duplicate insert retries once; concurrent registrations
-  leave one active row on PGlite and PostgreSQL), list and revoke; the token is never returned,
+  `reregistered`, one transaction; a registration whose insert loses a race retries once and then
+  revokes the winner's row as `reregistered`, so both answer 201 and one row stays active. The
+  insert race itself is proved under PostgreSQL only: the first registration is held uncommitted
+  after its insert until the second blocks on `push_devices_active_token_idx`, whose real 23505
+  fails the second's insert. PGlite runs one transaction at a time, so there the test makes the
+  second registration's first pass throw a unique-violation error before it writes anything: only
+  the retry path is exercised, not the index), list and revoke; the token is never returned,
   logged, audited or put in an event (`tokenHint`); push fans out to every active device and never
   to a revoked one; no device → `NO_ADDRESS` without a front-desk exception, the in-app notice is
   delivered; `identity.account_relinked` revokes the account's devices last registered or
@@ -378,6 +397,22 @@ module's route classification counts once MIG-00 lands.
 - Webhook receipts are authenticated with the fake provider's HMAC secret (`FakeMessagingProvider`);
   a real adapter verifies its own signature scheme before `Inbox.record`.
 
+## Stage-6 integration — verified 2026-10-31
+
+- Notice titles built around stored names (R2-TENANCY-INPUT-02, SPK-COMMS-002, SPK-COMMS-005): an
+  event title or team name may itself be 200 characters, the compose limit for a whole title. The
+  schedule notices ("Schedule changed:", "Canceled:", "Scheduled:"), the activity reminder
+  ("Reminder:") and the competition notices ("Team invitation:", "… are you available?", "Result
+  published:") build their titles with `noticeTitle` (`communications.shared.ts`), which keeps the
+  words around the name and shortens only the name, ending it in `…` and never splitting a
+  surrogate pair. Before this, `ModuleComposeNotificationBody` refused the title inside the handler
+  or the job and the notice was never composed (`__tests__/notice-titles.spec.ts`, a 200-character
+  event moved, reminded and canceled).
+- The activity reminder job composes each due entry in its own transaction and no longer stops at
+  the first failure: a failing entry raises one `communications.activity_reminder_failed`
+  exception for `support_operator` (per event revision), its mark is not claimed so the next run
+  tries it again, and the other entries are reminded (same test file).
+
 ## Known gaps
 
 - Pending: a per-person authority basis for protected notices to explicitly chosen people (an
@@ -418,3 +453,9 @@ module's route classification counts once MIG-00 lands.
   the survivor's inbox (team membership is checked for the survivor's own id); unprotected ones are.
 - The ICS feed is a projection of `scheduling.event_changed`; it carries the facility zone in the
   description and UTC instants, not VTIMEZONE blocks.
+- Request text outside this module's contract is not checked here for control characters other
+  than NUL. The kernel's `ZodValidationPipe` refuses U+0000 in every module's body, query and
+  params with 400 `VALIDATION_FAILED` naming the field (R2-TENANCY-INPUT-04b, **Verified** in
+  `kernel/__tests__/request-nul.spec.ts`); the shared command metadata (`reason`,
+  `policyReferences`) still accepts the other C0 controls. Whatever is stored, the ICS rendering
+  above never emits a control character.

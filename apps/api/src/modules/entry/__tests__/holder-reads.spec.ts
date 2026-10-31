@@ -1,7 +1,7 @@
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { INTEGRATION_REGISTRY, type IntegrationRegistryPort } from '../../../kernel';
-import type { TestApp } from '../../../testing';
+import { idempotencyStoreContains, type TestApp } from '../../../testing';
 import { createAcknowledgmentFixture } from '../../catalog';
 import { createPersonFixture } from '../../identity';
 import { at } from '../../scheduling';
@@ -11,6 +11,7 @@ import {
   enroll,
   entryTestApp,
   family,
+  key,
   post,
   program,
   sessionRef,
@@ -112,11 +113,29 @@ describe('holder and staff reads (ENT-01)', () => {
 
   it('§4.14: the pass reference is never returned after issue', async () => {
     const holder = await adultCustomer(t);
-    const issued = await post(t, '/v1/passes', holder, {
-      holder: { kind: 'person', personId: holder.personId },
-    });
+    const idempotencyKey = key();
+    const issueBody = { holder: { kind: 'person', personId: holder.personId } };
+    const issued = await post(t, '/v1/passes', holder, issueBody, idempotencyKey);
     const reference = issued.body.reference as string;
     expect(reference).toMatch(/^spp_/);
+    expect(issued.body.id).toBe(issued.body.pass.id);
+    // §4.14 protected secret storage: the reference is not kept with the idempotency key, so a
+    // same-key replay names the pass instead of returning the live credential again.
+    expect(await idempotencyStoreContains(t.db, reference)).toBe(false);
+    const replay = await post(t, '/v1/passes', holder, issueBody, idempotencyKey);
+    expect(replay.status).toBe(409);
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    expect(replay.body).toMatchObject({
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      details: { resourceId: issued.body.pass.id },
+    });
+    expect(JSON.stringify(replay.body)).not.toContain(reference);
+    const holderPasses = await t.db
+      .selectFrom('passes')
+      .select('id')
+      .where('holder_person_id', '=', holder.personId)
+      .execute();
+    expect(holderPasses).toEqual([{ id: issued.body.pass.id }]);
     const reads = [
       await myPasses(holder),
       await post(t, `/v1/passes/${issued.body.pass.id}/revoke`, holder, {

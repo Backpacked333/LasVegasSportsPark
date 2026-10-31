@@ -41,6 +41,7 @@ import { invitationStatus, teamEntryStatus } from '../../features/teams/status';
 import { Body, ButtonRow, CommandFailure, Section, Title } from '../../features/teams/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
@@ -305,9 +306,9 @@ function TeamInvitations() {
   return (
     <Section title="Invitations to join a team" testID="team-invitations">
       {declined.map((d) => (
-        <View key={d.id} accessibilityLiveRegion="polite">
+        <LiveRegion key={d.id} announcement={`Declined the invitation to join ${d.teamName}`}>
           <StatusBadge tone="neutral" label={`Declined the invitation to join ${d.teamName}`} />
-        </View>
+        </LiveRegion>
       ))}
       <QueryBoundary
         query={invitations}

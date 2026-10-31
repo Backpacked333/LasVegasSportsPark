@@ -161,11 +161,34 @@ export async function acknowledge(
   });
 }
 
-/** Runs the outbox until nothing more is due (timers that are due, and their follow-ups). */
-export async function drain(t: TestApp): Promise<void> {
+/**
+ * Runs the outbox until nothing more is due (timers that are due, and their follow-ups).
+ *
+ * R2-TESTS-01 (§4.12: a follow-up is idempotent under replay, so "nothing more happened" must mean
+ * the handler ran and did nothing): a handler that throws is retried later, its event moving past
+ * the frozen test clock, so a drain that stopped at `claimed === 0` would read a crashed handler
+ * as an idempotent one. Any failed delivery therefore fails the drain with the handlers' recorded
+ * errors, unless the test injects the failure on purpose (`allowFailures`).
+ */
+export async function drain(t: TestApp, options: { allowFailures?: boolean } = {}): Promise<void> {
   const dispatcher = t.app.get(OutboxDispatcher);
   for (let i = 0; i < 25; i += 1) {
     const summary = await dispatcher.runOnce(200);
+    if (!options.allowFailures && summary.retried + summary.dead > 0) {
+      const failed = await t.db
+        .selectFrom('job_attempts')
+        .select(['handler', 'error'])
+        .where('source', '=', 'outbox')
+        .where('outcome', '=', 'failed')
+        .orderBy('started_at', 'desc')
+        .limit(summary.retried + summary.dead)
+        .execute();
+      throw new Error(
+        `an outbox handler failed (${summary.retried} retried, ${summary.dead} dead): ${failed
+          .map((f) => `${f.handler}: ${f.error ?? 'unknown error'}`)
+          .join(' | ')}`,
+      );
+    }
     if (summary.claimed === 0) return;
   }
 }

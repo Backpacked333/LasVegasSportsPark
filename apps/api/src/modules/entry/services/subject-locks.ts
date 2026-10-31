@@ -31,3 +31,25 @@ export function attendanceLockKey(
 export function presenceLockKey(organizationId: string, personId: string): string {
   return `entry.presence:${organizationId}:${personId}`;
 }
+
+/**
+ * R2-RACES-06 (ENT-03, SPK-AT-009): admitting a check-in and recording an activity's cancellation
+ * serialize on the activity's transaction-scoped advisory lock (`entry_activity_lock_key`,
+ * migration 0807, which the database's own guard takes too). Check-ins take it shared, so they
+ * never wait for each other; recording the cancellation takes it exclusively. The statement after
+ * the lock reads a fresh snapshot (READ COMMITTED), so each side sees what the other committed.
+ */
+export async function lockActivity(
+  trx: Trx,
+  organizationId: string,
+  activityType: 'session' | 'event',
+  activityId: string,
+  mode: 'shared' | 'exclusive',
+): Promise<void> {
+  const key = sql`entry_activity_lock_key(${organizationId}::uuid, ${activityType}, ${activityId}::uuid)`;
+  await (
+    mode === 'shared'
+      ? sql`select pg_advisory_xact_lock_shared(${key})`
+      : sql`select pg_advisory_xact_lock(${key})`
+  ).execute(trx);
+}

@@ -7,8 +7,16 @@
  *   record is not available and never implies that it exists (§4.10, §4.14);
  * - stale version (STALE_REVISION, INVALID_TRANSITION): "Reload" fetches the current record and
  *   the form keeps what was typed;
- * - no answer (timeout, lost connection): the outcome may be unknown; "Try again" resends the same
- *   intent with the same idempotency key, so the effect is never applied twice;
+ * - no definite answer (`mayHaveTakenEffect`: a timeout, a connection lost after sending, the same
+ *   key still running, a 5xx): "Outcome not known yet: this may already have taken effect", never
+ *   "nothing changed". These commands are not sent while offline, so a network failure happened
+ *   after the request left; "Try again" resends the same intent with the same idempotency key, so
+ *   the effect is never applied twice (SPK-PAY-007). The money forms stay locked meanwhile
+ *   (`sameRequest.tsx`);
+ * - IDEMPOTENCY_OUTCOME_UNAVAILABLE: "This may already have been done" with "Reload"; the key is
+ *   kept and the form stays locked until the record has been read again;
+ * - a legacy-authority refusal (K-11): make the change in the system of record, not "not available
+ *   to you" (`ui/CommandOutcome.tsx`);
  * - recovery required: PAYMENT_OUTCOME_UNKNOWN says not to take payment again and links to the
  *   attempt to reconcile (SPK-PAY-007); REFUND_PENDING says the reserved amount stays held until
  *   the refund is reconciled (SPK-PAY-008, SPK-AT-007);
@@ -18,6 +26,7 @@
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import { Link } from 'react-router';
 import { Button } from '../../ui/Button';
+import { sharedCommandOutcome } from '../../ui/CommandOutcome';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { formatMoney, humanize } from './format';
@@ -151,6 +160,26 @@ export function CommandError({ error, onRetry, onReload, onRequote, currency }: 
     }
     return <StateView variant="unavailable" />;
   }
+  if (error.code === 'PAYMENT_OUTCOME_UNKNOWN') {
+    const attempt = detailString(error, 'paymentAttemptId');
+    return (
+      <section className="state" aria-live="polite" data-testid="state-recovery">
+        <StatusBadge tone="warning" label="Recovery required: payment outcome unknown" />
+        <p>
+          The outcome of an earlier payment is not known yet. Do not take payment again: reconcile
+          the attempt from the provider&apos;s evidence first (SPK-PAY-007).
+        </p>
+        <Reference error={error} />
+        {attempt ? (
+          <Link to={`/finance/payments/${attempt}`}>Open the payment attempt to reconcile it</Link>
+        ) : (
+          <Link to="/finance/payments">Open unknown payment outcomes</Link>
+        )}
+      </section>
+    );
+  }
+  const shared = sharedCommandOutcome(error, { onRetry, onReload });
+  if (shared) return shared;
   if (error.isStale) {
     return (
       <section className="state" aria-live="polite" data-testid="state-stale">
@@ -173,24 +202,6 @@ export function CommandError({ error, onRetry, onReload, onRequote, currency }: 
         </p>
         <Reference error={error} />
         {onReload ? <Button onClick={onReload}>Reload</Button> : null}
-      </section>
-    );
-  }
-  if (error.code === 'PAYMENT_OUTCOME_UNKNOWN') {
-    const attempt = detailString(error, 'paymentAttemptId');
-    return (
-      <section className="state" aria-live="polite" data-testid="state-recovery">
-        <StatusBadge tone="warning" label="Recovery required: payment outcome unknown" />
-        <p>
-          The outcome of an earlier payment is not known yet. Do not take payment again: reconcile
-          the attempt from the provider&apos;s evidence first (SPK-PAY-007).
-        </p>
-        <Reference error={error} />
-        {attempt ? (
-          <Link to={`/finance/payments/${attempt}`}>Open the payment attempt to reconcile it</Link>
-        ) : (
-          <Link to="/finance/payments">Open unknown payment outcomes</Link>
-        )}
       </section>
     );
   }
@@ -239,23 +250,6 @@ export function CommandError({ error, onRetry, onReload, onRequote, currency }: 
           {formatMoney(detailNumber(error, 'refundedMinor'), currency)}.
         </p>
         <Reference error={error} />
-      </section>
-    );
-  }
-  if (error.isOffline) {
-    return (
-      <section className="state" aria-live="polite" data-testid="state-offline">
-        <StatusBadge
-          tone="warning"
-          label={error.kind === 'timeout' ? 'No answer: the outcome is unknown' : 'No connection'}
-        />
-        <p>
-          {error.kind === 'timeout'
-            ? 'The service did not answer in time, so this may already have taken effect. Try again sends the same request with the same key, so it is never applied twice.'
-            : 'The request did not reach the service. Nothing changed. What you entered is kept.'}
-        </p>
-        <Reference error={error} />
-        {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
       </section>
     );
   }

@@ -1,3 +1,5 @@
+import { encodeCursor, newId } from '@sportspark/contracts';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
@@ -435,6 +437,45 @@ describe('league operations (CMP-05, CMP-12; SPK-RESULT-001..005, SPK-DISC-001..
     expect(paged.body.items).toHaveLength(2);
     expect(paged.body.items).toEqual(all.body.items.slice(0, 2));
     expect((await get(`/seasons/${season.seasonId}/result-revisions`, a.captain)).status).toBe(403);
+  });
+
+  it('R2-API-CONTRACT-01b / §4.5: disciplinary decisions written at one microsecond instant page one at a time, each once; an impossible cursor is refused as invalid, not a server fault', async () => {
+    for (const basis of ['dissent', 'time wasting', 'simulation']) {
+      const made = await post('/disciplinary-decisions', leagueManager, {
+        subjectPersonId: c.player.personId,
+        basis,
+        decision: 'warning',
+      });
+      expect(made.status, JSON.stringify(made.body)).toBe(201);
+    }
+    // rows one transaction writes share its now(); give them one instant below the millisecond
+    await sql`update disciplinary_decisions set created_at = '2026-10-31T11:00:00.123456Z'::timestamptz
+               where organization_id = ${t.organizationId}`.execute(t.db);
+    const collect = async (limit: number) => {
+      const ids: string[] = [];
+      let cursor: string | null = null;
+      for (let i = 0; i < 50; i += 1) {
+        const res = await get(
+          `/disciplinary-decisions?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          leagueManager,
+        );
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        ids.push(...(res.body.items as Array<{ id: string }>).map((r) => r.id));
+        cursor = res.body.nextCursor as string | null;
+        if (!cursor) return ids;
+      }
+      throw new Error('paging did not end');
+    };
+    const all = await collect(100);
+    expect(all.length).toBeGreaterThanOrEqual(3);
+    expect(await collect(1)).toEqual(all);
+    const crafted = encodeCursor({ at: '0000-01-01T00:00:00Z', id: newId() });
+    const refused = await get(
+      `/disciplinary-decisions?cursor=${encodeURIComponent(crafted)}`,
+      leagueManager,
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe('VALIDATION_FAILED');
   });
 
   // CMP-12 (4) ------------------------------------------------------------------------------------

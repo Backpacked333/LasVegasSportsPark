@@ -374,6 +374,50 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     expect(screen.queryByRole('button', { name: 'Synchronise now' })).toBeNull();
   });
 
+  it('§4.15: with a device clock 10 minutes slow, a queued arrival is dated on the scan’s service clock like its snapshot', async () => {
+    const user = userEvent.setup();
+    // The scan answered 12:00 (the service's time) when the device read 11:50.
+    let device = new Date('2026-10-24T11:50:00.000Z');
+    const app = createTestApp({
+      now: () => device,
+      routes: routes({
+        'POST /offline-sync': (req: FakeRequest) => {
+          const body = req.body as { items: { clientObservationId: string }[] };
+          return fakeResponse(
+            201,
+            syncBatch(
+              body.items.map((i) => ({
+                clientObservationId: i.clientObservationId,
+                kind: 'arrival',
+                outcome: 'accepted',
+              })),
+            ),
+          );
+        },
+      }),
+    });
+    render(app.at('/arrival'));
+    await scan(user);
+    act(() => app.connectivity.set(false));
+    device = new Date('2026-10-24T11:53:00.000Z');
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Record arrival at the facility for Alex Rivera' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Queue selected arrivals' }));
+    await screen.findByText('1 arrival queued on this device: not yet recorded');
+    act(() => app.connectivity.set(true));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/offline-sync')).toHaveLength(1),
+    );
+    const body = app.fake.requests.find((r) => r.route === '/offline-sync')?.body as {
+      snapshot: { takenAt: string };
+      items: { observedAt: string }[];
+    };
+    expect(body.snapshot.takenAt).toBe('2026-10-24T12:00:00.000Z');
+    // Three minutes after the scan, on the service's clock (never the device's 11:53).
+    expect(body.items[0]?.observedAt).toBe('2026-10-24T12:03:00.000Z');
+  });
+
   it('§4.15 / SPK-AT-018: reconnecting on another area, or reopening online, synchronises the queue once', async () => {
     const user = userEvent.setup();
     const syncRoute = (req: FakeRequest) => {

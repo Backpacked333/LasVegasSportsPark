@@ -31,15 +31,23 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { StaffMembershipMachine } from '../identity.machines';
 import type { StaffDirectoryPort } from '../identity.ports';
-import { displayNameOf, displayNamesOf, iso, toStaffMembership } from '../identity.shared';
+import {
+  displayNameOf,
+  displayNamesOf,
+  lockPersonsForShare,
+  toStaffMembership,
+} from '../identity.shared';
 
-const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+const ListCursor = z.object({ c: KeysetInstant, id: z.uuid() });
 const DirectoryCursor = z.object({ f: z.string(), g: z.string(), id: z.uuid() });
 
 /** Roles listed in the staff directory only for staffing readers (SCR-S-32/33, ID-05). */
@@ -73,6 +81,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       organizationId,
     });
     return runInTransaction(this.uow, async ({ trx }) => {
+      await lockPersonsForShare(trx, organizationId, [input.personId]);
       const person = await trx
         .selectFrom('persons')
         .select(['kind', 'status'])
@@ -347,7 +356,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
     const cursor = decodeCursor(query.cursor, ListCursor);
     if (cursor) {
       rows = rows.where(
-        sql<SqlBool>`(created_at, id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+        afterKeyset('staff_memberships.created_at', 'staff_memberships.id', cursor.c, cursor.id),
       );
     }
     const found = await rows
@@ -369,7 +378,16 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       })),
       nextCursor:
         found.length > query.limit && last
-          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              c: await exactInstantOf(
+                this.db,
+                'staff_memberships',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }

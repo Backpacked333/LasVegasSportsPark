@@ -7,6 +7,7 @@
  */
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { LiveText } from '../../../ui/announce';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../../ui/theme';
 
 export function SectionHeader({ title, detail }: { title: string; detail?: string }) {
@@ -81,9 +82,9 @@ export function TextField({
         testID={testID}
       />
       {error ? (
-        <Text style={styles.error} accessibilityLiveRegion="polite" accessibilityRole="alert">
+        <LiveText style={styles.error} announcement={error} accessibilityRole="alert">
           ✕ {error}
-        </Text>
+        </LiveText>
       ) : null}
     </View>
   );

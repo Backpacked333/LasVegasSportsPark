@@ -106,13 +106,14 @@ function useDraftAutosave(draft: ScheduleDraft) {
       revision.current = next.revision;
       queryClient.setQueryData<ApiResponse<ScheduleDraft>>(draftQueryKey(next.id), (old) =>
         old
-          ? { ...old, data: next, receivedAt: services.now() }
+          ? { ...old, data: next, receivedAt: services.now(), serverDate: null }
           : {
               data: next,
               status: 200,
               correlationId: null,
               replayed: false,
               receivedAt: services.now(),
+              serverDate: null,
             },
       );
     },

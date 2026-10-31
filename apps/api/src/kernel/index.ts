@@ -50,3 +50,4 @@ export * from './jobs/periodic-jobs';
 export * from './outbox/outbox-history';
 export * from './kernel.module';
 export * from './app-setup';
+export * from './database/keyset';

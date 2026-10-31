@@ -18,12 +18,16 @@
  * - child information: report runs and exports carry aggregate figures only (no person-level rows);
  * - offline: creating, downloading and revoking are disabled;
  * - partial completion is not permitted: an export is the whole stored run or nothing.
+ * - a lost answer: a retry of a create whose first attempt succeeded gets IDEMPOTENCY_SECRET_WITHHELD
+ *   (the download token is never stored with the key, §4.14). The export the API names
+ *   (`details.resourceId`) is listed under "Exports made on this page" without a download, with its
+ *   revocation, and "Your exports" is read again; a new export is then a new intent.
  * Every command sends an Idempotency-Key per intent (reused on retry); revocation sends the
  * export's expected revision, and its confirmed outcome names the export and its resulting state
  * outside the row, so it stays when the revoked export leaves a filtered list (journeys.md section 3
  * rule 4).
  */
-import { ApiError, networkError, type Schema } from '@sportspark/api-client';
+import { ApiError, networkError, secretWithheldOf, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
@@ -50,6 +54,7 @@ import {
 import { ReportsNav } from '../../features/insight-admin/nav';
 import { useApi, useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { SecretWithheldNotice } from '../../ui/CommandOutcome';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 
@@ -72,6 +77,17 @@ const EXPORT_KEY = ['api', '/reports/exports/{id}'] as const;
 const DENIED_EXPORT =
   'Exporting needs its own permission, checked separately from viewing the report (SPK-REPORT-007).';
 
+/** An export the page holds: its one-time token while it is unspent (none for a withheld one). */
+function handleOf(created: ReportExportCreated): ExportHandle {
+  return {
+    id: created.id,
+    runId: created.reportRunId,
+    reportKey: created.reportKey,
+    format: created.format,
+    token: created.downloadToken,
+  };
+}
+
 function ExportForm({
   runId,
   reportKey,
@@ -79,16 +95,24 @@ function ExportForm({
 }: {
   runId: string;
   reportKey: string;
-  onCreated: (created: ReportExportCreated) => void;
+  onCreated: (handle: ExportHandle) => void;
 }) {
   const { online } = useApp();
   const [format, setFormat] = useState<ExportFormat>('csv');
   const create = useApiCommand('post', '/reports/exports', { invalidate: [EXPORTS_KEY] });
+  const withheld = create.error ? secretWithheldOf(create.error) : null;
   const send = () =>
     void create
       .submit({ body: { reportRunId: runId, format } })
-      .then(onCreated)
-      .catch(() => undefined);
+      .then((created) => onCreated(handleOf(created)))
+      .catch((error: unknown) => {
+        // §4.14: the first attempt made the export; its token was only in the lost answer. List
+        // it without a download, with its revocation (the hook re-reads "Your exports").
+        const lost = error instanceof ApiError ? secretWithheldOf(error) : null;
+        if (lost?.resourceId) {
+          onCreated({ id: lost.resourceId, runId, reportKey, format, token: null });
+        }
+      });
   const submit = (event: FormEvent) => {
     event.preventDefault();
     send();
@@ -112,7 +136,8 @@ function ExportForm({
       <Button
         type="submit"
         busy={create.isProcessing}
-        disabled={!online}
+        // The first export exists: no second one beside it until the person chooses to (§4.14).
+        disabled={!online || withheld !== null}
         aria-label={`Create export of ${reportTitle(reportKey)} run ${shortId(runId)}`}
       >
         {create.isProcessing ? 'Generating export' : 'Create export'}
@@ -126,6 +151,20 @@ function ExportForm({
           No export can be made yet: how long an export stays downloadable is not configured
           (REPORTING_EXPORT_LIFETIME_MINUTES).
         </PendingNote>
+      ) : withheld && create.error ? (
+        <SecretWithheldNotice
+          error={create.error}
+          secret="download link"
+          where={
+            withheld.resourceId
+              ? `under Exports made on this page as export ${shortId(withheld.resourceId)}, and in Your exports`
+              : 'in Your exports'
+          }
+        >
+          <Button variant="secondary" onClick={() => create.reset()}>
+            Make a new export
+          </Button>
+        </SecretWithheldNotice>
       ) : (
         <CommandError error={create.error} onRetry={send} deniedDescription={DENIED_EXPORT} />
       )}
@@ -230,7 +269,7 @@ function RunRow({
   idPrefix = 'list',
 }: {
   run: ReportRunSummary;
-  onCreated: (created: ReportExportCreated) => void;
+  onCreated: (handle: ExportHandle) => void;
   /** Keeps element ids unique when the same run is shown as selected and in the list. */
   idPrefix?: string;
 }) {
@@ -277,7 +316,7 @@ function RunsPage({
   cursor: string | null;
   isLast: boolean;
   onMore: (cursor: string) => void;
-  onCreated: (created: ReportExportCreated) => void;
+  onCreated: (handle: ExportHandle) => void;
   /** The run already shown as selected is not listed twice (SPK-UX-009). */
   excludeRunId: string | null;
 }) {
@@ -324,7 +363,7 @@ function SelectedRun({
   onCreated,
 }: {
   runId: string;
-  onCreated: (created: ReportExportCreated) => void;
+  onCreated: (handle: ExportHandle) => void;
 }) {
   const run = useApiQuery({ path: '/reports/runs/{id}', request: { path: { id: runId } } });
   return (
@@ -695,17 +734,8 @@ export function ExportsScreen() {
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
   const [handles, setHandles] = useState<ExportHandle[]>([]);
 
-  const onCreated = useCallback((created: ReportExportCreated) => {
-    setHandles((list) => [
-      {
-        id: created.id,
-        runId: created.reportRunId,
-        reportKey: created.reportKey,
-        format: created.format,
-        token: created.downloadToken,
-      },
-      ...list.filter((h) => h.id !== created.id),
-    ]);
+  const onCreated = useCallback((handle: ExportHandle) => {
+    setHandles((list) => [handle, ...list.filter((h) => h.id !== handle.id)]);
   }, []);
   const onTokenSpent = useCallback((id: string) => {
     setHandles((list) => list.map((h) => (h.id === id ? { ...h, token: null } : h)));

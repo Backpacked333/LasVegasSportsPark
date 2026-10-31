@@ -13,7 +13,7 @@ import {
 import { createPersonFixture } from '../../identity';
 import { at, createScheduledEvent, EventsService, seedPitchWithHalves } from '../../scheduling';
 import { AUTHORITY_GUARD_PORT, type AuthorityGuardPort } from '../migration.ports';
-import { applicationRouteFacts } from '../../../openapi-document';
+import { applicationRouteFacts, emitOpenApiDocument } from '../../../openapi-document';
 import {
   AUTHORITY_EXEMPT_ROUTES,
   classifyWriteRoutes,
@@ -248,7 +248,55 @@ describe('authority matrix and AuthorityGuard (§5.6, §4.7 invariant 11)', () =
     const otherDesk = await staff(t, ['front_desk'], { organizationId: other.organizationId });
     expect((await post(t, '/v1/people', otherDesk, person)).status).toBe(201);
   });
+
+  it('§4.8 R2-API-CONTRACT-02 (K-01): the published AuthorityResolution admits every null the matrix returns — a default entry has scope null, published as anyOf [$ref AuthorityScope, null]', async () => {
+    const other = await seedOrganization(t.db);
+    const reader = await staff(t, ['front_desk'], { organizationId: other.organizationId });
+    const matrix = await get(t, '/v1/authority-matrix', reader);
+    expect(matrix.status).toBe(200);
+    const entries = matrix.body.entries as Array<Record<string, unknown>>;
+    expect(entries.length).toBe(IMPORT_ENTITY_TYPES.length);
+    for (const entry of entries) {
+      expect(entry).toMatchObject({ basis: 'default', scope: null, assignmentId: null });
+    }
+    const schemas = (emitOpenApiDocument('test').components?.schemas ?? {}) as Record<
+      string,
+      SchemaNode
+    >;
+    const properties = schemas['AuthorityResolution']?.properties ?? {};
+    expect(properties['scope']).toEqual({
+      anyOf: [{ $ref: '#/components/schemas/AuthorityScope' }, { type: 'null' }],
+    });
+    for (const entry of entries) {
+      for (const [name, value] of Object.entries(entry)) {
+        if (value === null) expect(admitsNull(properties[name], schemas), name).toBe(true);
+      }
+    }
+  });
 });
+
+interface SchemaNode {
+  $ref?: string;
+  type?: string | string[];
+  enum?: unknown[];
+  anyOf?: SchemaNode[];
+  oneOf?: SchemaNode[];
+  allOf?: SchemaNode[];
+  properties?: Record<string, SchemaNode>;
+}
+
+/** Whether a JSON Schema node of the published document accepts the value null. */
+function admitsNull(node: SchemaNode | undefined, schemas: Record<string, SchemaNode>): boolean {
+  if (!node) return false;
+  if (node.$ref) return admitsNull(schemas[node.$ref.split('/').pop() as string], schemas);
+  if (node.allOf) return node.allOf.every((part) => admitsNull(part, schemas));
+  if (node.anyOf ?? node.oneOf) {
+    return (node.anyOf ?? node.oneOf ?? []).some((part) => admitsNull(part, schemas));
+  }
+  const types = node.type === undefined ? undefined : [node.type].flat();
+  if (types && !types.includes('null')) return false;
+  return !node.enum || node.enum.includes(null);
+}
 
 function fullApp(): Promise<TestApp> {
   return createTestApp({

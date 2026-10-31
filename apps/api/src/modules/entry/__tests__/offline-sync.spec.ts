@@ -420,6 +420,66 @@ describe('offline synchronization (§4.15, SPK-AT-018)', () => {
       'activity_not_found',
     ]);
     expect(timing.body.counts.rejected).toBe(3);
+    // a snapshot dated later than the received time plus the clock skew tolerance refuses the batch
+    const futureSnapshotBatch = newId();
+    const futureSnapshot = await post(t, '/v1/offline-sync', desk, {
+      deviceId: 'tablet-5',
+      clientBatchId: futureSnapshotBatch,
+      facilityId: t.facilityId,
+      snapshot: snapshot(at(TODAY, '12:00')),
+      items: [attendance(fam.childA, 'present', '12:01')],
+    });
+    expect(futureSnapshot.status).toBe(400);
+    expect(futureSnapshot.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'snapshot_in_future' },
+    });
+    expect(
+      await t.db
+        .selectFrom('offline_sync_batches')
+        .select('id')
+        .where('client_batch_id', '=', futureSnapshotBatch)
+        .execute(),
+    ).toEqual([]);
+    // §4.15 "scoped roster": a batch for one facility cannot record an activity of another; the
+    // refused item does not fail the batch, so the arrival beside it is recorded
+    const satellite = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: satellite,
+        organization_id: t.organizationId,
+        slug: `satellite-${satellite}`,
+        name: 'Satellite',
+        timezone: 'America/Los_Angeles',
+      })
+      .execute();
+    const otherFacility = await post(t, '/v1/offline-sync', desk, {
+      deviceId: 'satellite-tablet',
+      clientBatchId: newId(),
+      facilityId: satellite,
+      snapshot: snapshot(),
+      items: [
+        {
+          kind: 'arrival',
+          clientObservationId: newId(),
+          observedAt: at(TODAY, '09:40'),
+          personId: fam.childB,
+          visitorCategory: 'participant',
+        },
+        attendance(fam.childA, 'present'),
+      ],
+    });
+    expect(otherFacility.status, JSON.stringify(otherFacility.body)).toBe(201);
+    expect(otherFacility.body.items).toEqual([
+      expect.objectContaining({ outcome: 'accepted', reason: null }),
+      expect.objectContaining({
+        outcome: 'rejected',
+        reason: 'outside_snapshot_scope',
+        recordId: null,
+      }),
+    ]);
+    expect(otherFacility.body.counts).toMatchObject({ items: 2, accepted: 1, rejected: 1 });
     const customer = await post(t, '/v1/offline-sync', fam.guardian, {
       deviceId: 'phone',
       clientBatchId: newId(),
@@ -440,5 +500,42 @@ describe('offline synchronization (§4.15, SPK-AT-018)', () => {
       items: [attendance(fam.childA, 'present')],
     });
     expect(foreign.status).toBe(404);
+  });
+
+  it('§4.15: payments, capacity commitments, guardian changes and roster transfers have no offline kind; a batch carrying one is refused whole and records nothing', async () => {
+    for (const kind of ['payment', 'capacity_hold', 'guardian_change', 'roster_transfer']) {
+      const clientBatchId = newId();
+      const res = await post(t, '/v1/offline-sync', desk, {
+        deviceId: 'tablet-6',
+        clientBatchId,
+        facilityId: t.facilityId,
+        snapshot: snapshot(),
+        items: [
+          attendance(fam.childA, 'present'),
+          {
+            kind,
+            clientObservationId: newId(),
+            observedAt: at(TODAY, '10:10'),
+            personId: fam.childA,
+          },
+        ],
+      });
+      expect(res.status, kind).toBe(400);
+      expect(res.body.code, kind).toBe('VALIDATION_FAILED');
+      expect(
+        await t.db
+          .selectFrom('offline_sync_batches')
+          .select('id')
+          .where('client_batch_id', '=', clientBatchId)
+          .execute(),
+      ).toEqual([]);
+    }
+    expect(
+      await t.db
+        .selectFrom('attendance_observations')
+        .select('id')
+        .where('device_id', '=', 'tablet-6')
+        .execute(),
+    ).toEqual([]);
   });
 });

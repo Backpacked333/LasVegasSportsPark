@@ -937,11 +937,13 @@ export const SessionBookingEntitlementBasisSchema = z
   .openapi('SessionBookingEntitlementBasis');
 /**
  * What happened to a package credit or membership session when the booking was canceled:
- * returned, kept under the approved cancellation policy, or kept because no policy decides
- * (POL-007, POL-039: no automatic return without one).
+ * returned, kept under the approved cancellation policy, kept because no policy decides
+ * (POL-007, POL-039: no automatic return without one), or kept because the package or membership
+ * it came from has ended (revoked, expired or past its expiry; a membership canceled, completed or
+ * transferred: nothing can be returned to it, §4.6; migration 0518).
  */
 export const SessionBookingCreditDispositionSchema = z
-  .enum(['returned', 'retained_by_policy', 'retained_pending_policy'])
+  .enum(['returned', 'retained_by_policy', 'retained_pending_policy', 'retained_entitlement_ended'])
   .openapi('SessionBookingCreditDisposition');
 
 export const SessionBookingSchema = z
@@ -1324,11 +1326,16 @@ function command(
   });
 }
 
+/**
+ * A read. `extra` documents the operation-specific errors a read answers besides 403 and 404
+ * (§4.8, §4.10: the documented responses cover every status the operation answers).
+ */
 function query(
   path: string,
   summary: string,
   request: z.ZodObject<z.ZodRawShape> | null,
   response: z.ZodType,
+  extra: Partial<Record<400 | 409 | 422, string>> = {},
 ) {
   openApiRegistry.registerPath({
     method: 'get',
@@ -1341,6 +1348,9 @@ function query(
     },
     responses: {
       200: ok('Result', response),
+      ...Object.fromEntries(
+        Object.entries(extra).map(([status, description]) => [status, err(description)]),
+      ),
       403: err('Access denied'),
       404: err('Not found or not visible'),
     },
@@ -1735,6 +1745,11 @@ query(
   'Read-only transfer preview against the current target offering: participation, dates, capacity, financial consequence, approval (ENR-03, SPK-REG-010)',
   TransferPreviewQuery,
   TransferPreviewSchema,
+  {
+    // R2-API-CONTRACT-04 (CAPABILITIES-02 follow-up): what transferFacts refuses.
+    400: 'Validation failed (the target is the enrollment’s current offering, or the query is invalid)',
+    409: 'Not transferable (RESOURCE_CONFLICT NOT_TRANSFERABLE: a membership, session package, rental or party is canceled and bought or booked anew; transfer rules DEC-009)',
+  },
 );
 command(
   'post',

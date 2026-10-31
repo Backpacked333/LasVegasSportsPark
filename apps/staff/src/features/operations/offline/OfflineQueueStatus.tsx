@@ -51,7 +51,7 @@ export function OfflineQueueStatus({ reviewPath = '/arrival/offline' }: { review
         <span className="caption" data-testid="last-sync">
           Synchronised at {formatInstant(lastSync.at)}: {lastSync.synchronised} synchronised
           {lastSync.duplicates > 0 ? `, ${lastSync.duplicates} already recorded` : ''},{' '}
-          {lastSync.conflicts + lastSync.rejected} for review.
+          {lastSync.conflicts + lastSync.rejected + (lastSync.refused ?? 0)} for review.
         </span>
       ) : null}
       {forReview > 0 ? (

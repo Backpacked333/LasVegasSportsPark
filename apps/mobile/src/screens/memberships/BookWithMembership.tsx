@@ -43,7 +43,10 @@ import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
+
+const INELIGIBLE_LABEL = 'This session cannot be booked with this membership';
 
 /** The reasons of a refused booking that names them (ELIGIBILITY_FAILED). */
 function reasonsOf(error: ApiError): string[] {
@@ -204,18 +207,23 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
         <Button label="Not now" variant="secondary" onPress={onClose} />
       </ButtonRow>
       {refusal && failure ? (
-        <View testID="membership-booking-refused">
+        // Each refusal is announced (SPK-UX-009); the code is for support, not read out.
+        <LiveRegion testID="membership-booking-refused" announcement={refusal} occurrence={failure}>
           <StatusBadge tone="neutral" label={refusal} />
           <Caption>{`Error code: ${failure.code} (${detailCode(failure.details) ?? ''})`}</Caption>
-        </View>
+        </LiveRegion>
       ) : ineligible && failure ? (
-        <View testID="membership-booking-ineligible">
-          <StatusBadge tone="warning" label="This session cannot be booked with this membership" />
+        <LiveRegion
+          testID="membership-booking-ineligible"
+          announcement={sentences(INELIGIBLE_LABEL, ...reasonsOf(failure))}
+          occurrence={failure}
+        >
+          <StatusBadge tone="warning" label={INELIGIBLE_LABEL} />
           {reasonsOf(failure).map((m) => (
             <Body key={m}>{m}</Body>
           ))}
           <Caption>{`Error code: ${failure.code}`}</Caption>
-        </View>
+        </LiveRegion>
       ) : failure ? (
         <CommandFailure error={failure} what="the booking" onRetry={() => void submit()} />
       ) : null}

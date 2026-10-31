@@ -79,7 +79,10 @@ function isRef(node: unknown): node is { $ref: string } {
   );
 }
 
-/** Rewrites every nullable use of a named schema to `anyOf [$ref, { type: 'null' }]`. */
+/**
+ * Rewrites every nullable use of a named schema to `anyOf [$ref, { type: 'null' }]`, and adds the
+ * null a nullable enum admits to its `enum`.
+ */
 export function nullableReferences<T>(document: T): T {
   const visit = (node: Json): Json => {
     if (Array.isArray(node)) return node.map(visit);
@@ -112,6 +115,19 @@ export function nullableReferences<T>(document: T): T {
     ) {
       const { oneOf: _oneOf, ...outer } = object;
       return { ...outer, anyOf: [oneOf.find(isRef), { type: 'null' }] };
+    }
+    // R2-API-CONTRACT-02 (K-01): a nullable enum or literal (`z.literal(x).nullable()`) is emitted
+    // as `type: [..., 'null'], enum: [x]`, which refuses null under JSON Schema's enum rule; the
+    // null it admits belongs in the enum too.
+    const type = object['type'];
+    const values = object['enum'];
+    if (
+      Array.isArray(type) &&
+      type.includes('null') &&
+      Array.isArray(values) &&
+      !values.includes(null)
+    ) {
+      return { ...object, enum: [...values, null] };
     }
     return object;
   };

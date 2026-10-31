@@ -18,10 +18,35 @@ import {
   teamEntry,
 } from '../../../features/competition/__tests__/fixtures';
 
+/** The entry workspace with the given readiness issues (R2-JOURNEYS-05: the financial status). */
+const workspace = (issues: unknown[]) => ({
+  entry: teamEntry(),
+  readiness: {
+    approval: 'applied',
+    financialStatusRef: null,
+    rosterCount: 5,
+    rosterMin: 8,
+    rosterMax: 14,
+    rosterComplete: false,
+    eligiblePlayers: 5,
+    pendingInvitations: 0,
+    pendingJoinRequests: 0,
+    issues,
+  },
+});
+const unknownFinance = {
+  code: 'financial_status_unknown',
+  severity: 'warning',
+  message: 'No financial obligation has been recorded for this entry yet.',
+  responsibleRole: 'finance_operator',
+  requiredAction: 'Record the team obligation in finance.',
+};
+
 const routes = {
   ...TEAM_ROUTES,
   'GET /divisions': ok([division()]),
   'GET /team-entries': ok([teamEntry()]),
+  'GET /team-entries/{id}': ok(workspace([unknownFinance])),
 };
 
 describe('SCR-S-16 TeamEntryReviewScreen (SPK-COMP-004)', () => {
@@ -32,7 +57,12 @@ describe('SCR-S-16 TeamEntryReviewScreen (SPK-COMP-004)', () => {
     expect(await within(list).findByText('Red')).toBeInTheDocument();
     const facets = within(list).getByLabelText('Entry facets');
     expect(within(facets).getByText('Entry applied')).toBeInTheDocument();
-    expect(within(facets).getByText('No obligation recorded by finance yet')).toBeInTheDocument();
+    expect(await within(facets).findByText('Financial status not confirmed')).toBeInTheDocument();
+    expect(
+      within(facets).getByText(
+        /No financial obligation has been recorded for this entry yet\. Resolved by: finance_operator\./,
+      ),
+    ).toBeInTheDocument();
     expect(within(facets).getByText('Roster incomplete')).toBeInTheDocument();
     expect(within(facets).getByText('5 players (rule set 8 to 14)')).toBeInTheDocument();
     expect(within(facets).getByText('Eligibility review required')).toBeInTheDocument();
@@ -59,14 +89,41 @@ describe('SCR-S-16 TeamEntryReviewScreen (SPK-COMP-004)', () => {
         'GET /team-entries': ok([
           teamEntry({ status: 'approved', financialStatusRef: 'obl-1234567890' }),
         ]),
+        'GET /team-entries/{id}': ok(
+          workspace([
+            {
+              code: 'team_obligation_outstanding',
+              severity: 'warning',
+              message: '1 open team obligation with $300.00 outstanding, next due Nov 14, 2026.',
+              responsibleRole: 'captain',
+              requiredAction: 'Collect contributions or pay the team obligation.',
+            },
+          ]),
+        ),
       },
     });
     render(app.at(`/teams/seasons/${ID.season}/entries`));
     const facets = await screen.findByLabelText('Entry facets');
     expect(within(facets).getByText('Entry approved')).toBeInTheDocument();
-    expect(within(facets).getByText('Obligation obl-1234')).toBeInTheDocument();
+    // R2-JOURNEYS-05: finance's status, not the bare obligation reference
+    expect(await within(facets).findByText('Open team balance')).toBeInTheDocument();
+    expect(within(facets).getByText(/\$300\.00 outstanding/)).toBeInTheDocument();
+    expect(within(facets).queryByText(/obl-1234/)).toBeNull();
     expect(within(facets).getByText('Roster incomplete')).toBeInTheDocument();
     expect(within(facets).queryByText(/paid/i)).toBeNull();
+  });
+
+  it('R2-JOURNEYS-05 / SPK-COMP-004: an entry finance reports clear reads Settled', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /team-entries': ok([teamEntry({ financialStatusRef: 'obl-1234567890' })]),
+        'GET /team-entries/{id}': ok(workspace([])),
+      },
+    });
+    render(app.at(`/teams/seasons/${ID.season}/entries`));
+    const facets = await screen.findByLabelText('Entry facets');
+    expect(await within(facets).findByText('Settled')).toBeInTheDocument();
   });
 
   it('declines only with a reason, then sends it with the expected revision', async () => {

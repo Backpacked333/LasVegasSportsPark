@@ -1557,5 +1557,6 @@ openApiRegistry.registerPath({
     200: ok('Explainable discount lines', DiscountEvaluationSchema),
     400: err('Validation failed'),
     403: err('Access denied'),
+    404: err('An offering in the basket is unknown, hidden or not published (NOT_FOUND)'),
   },
 });

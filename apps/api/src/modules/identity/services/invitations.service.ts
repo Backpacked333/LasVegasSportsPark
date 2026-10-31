@@ -24,7 +24,7 @@ import {
   type InvitationStatus,
 } from '@sportspark/db';
 import type { InvitationsTable } from '@sportspark/db';
-import { sql, type SelectQueryBuilder, type Selectable, type SqlBool } from 'kysely';
+import { type SelectQueryBuilder, type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -37,6 +37,9 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
@@ -76,7 +79,7 @@ type InvitationBasis = 'staff_role' | 'delegated';
 /** Which path recorded an expiry (IF-25): the background sweep or a lazy check on a command. */
 export type ExpiryPath = 'sweep' | 'acceptance_attempt';
 
-const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+const ListCursor = z.object({ c: KeysetInstant, id: z.uuid() });
 
 type InvitationRow = Selectable<InvitationsTable>;
 
@@ -761,7 +764,7 @@ export class InvitationsService {
     const cursor = decodeCursor(cursorValue, ListCursor);
     if (cursor) {
       query = query.where(
-        sql<SqlBool>`(invitations.created_at, invitations.id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+        afterKeyset('invitations.created_at', 'invitations.id', cursor.c, cursor.id),
       );
     }
     const rows = await query
@@ -774,7 +777,18 @@ export class InvitationsService {
     return {
       items: await this.views(this.db, organizationId, pageRows),
       nextCursor:
-        rows.length > limit && last ? encodeCursor({ c: iso(last.created_at), id: last.id }) : null,
+        rows.length > limit && last
+          ? encodeCursor({
+              c: await exactInstantOf(
+                this.db,
+                'invitations',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
+          : null,
     };
   }
 

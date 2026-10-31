@@ -12,7 +12,6 @@ import {
   type QualificationReasonBody,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
-import { sql } from 'kysely';
 import {
   assertExpectedRevision,
   AuditWriter,
@@ -36,8 +35,25 @@ import {
   qualificationHoldsAt,
   toQualification,
   type QualificationRow,
+  type RequirementRow,
 } from '../workforce.shared';
+import { lockPerson } from './commitment-checker';
 import { MergedPersons } from './merged-persons';
+import { lockRequirementShared } from './requirement-locks';
+
+/** An accepted assignment and what its requirement demands. */
+interface UnderRequirement {
+  id: string;
+  person_id: string;
+  facility_id: string;
+  target_type: AssignmentTargetType;
+  target_id: string;
+  target_title: string;
+  role: string;
+  slot: number;
+  scheduled_start: Date;
+  required_qualifications: string[];
+}
 
 export interface QualificationCheck {
   kind: string;
@@ -297,6 +313,19 @@ export class QualificationsService {
       }
       assertExpectedRevision(expectedRevision, current.revision);
       const next = QualificationMachine.next(current.status, event);
+      // R2-RACES-02 (SPK-STAFF-001, SPK-READY-004): a revocation takes the party lock of everyone
+      // whose assignability reads this evidence (the holder, and anyone a merge resolves to the same
+      // person, WRK-05) before it writes; assertAssignable takes the same lock before it reads
+      // qualifications. A concurrent acceptance therefore either reads the revocation and is
+      // refused, or commits first and is found by flagUnqualifiedAssignments below, which also
+      // takes the locks of the requirements those assignments name (a concurrent requirement edit
+      // or creation is serialized there).
+      if (next === 'revoked') {
+        const holders = await this.merged.resolving(trx, organizationId, current.person_id);
+        for (const personId of [...holders].sort()) {
+          await lockPerson(trx, organizationId, personId);
+        }
+      }
       const now = this.clock.now();
       await trx
         .updateTable('qualifications')
@@ -342,6 +371,17 @@ export class QualificationsService {
    * `workforce.unqualified_assignment` for the assigners' queue, once per assignment. Nothing is
    * withdrawn automatically: whether the person may still work is an operator decision (POL-033
    * pending). Readiness reports the same lapse at read time.
+   *
+   * A person scope covers every assignment whose assignee resolves to the same person as the
+   * evidence's holder (WRK-05): evidence recorded for a merged person counts for the survivor's
+   * assignments (see `check`), so revoking it can leave those unqualified too.
+   *
+   * R2-RACES-02: the person scope (a revocation, under the holders' party locks) takes the shared
+   * key lock and the share lock of every requirement those assignments name, in (target, role)
+   * order, and reads what each requires after the lock. A requirement edit (row `FOR UPDATE`) or
+   * creation (key exclusive) committing meanwhile is therefore waited for and read, and one that
+   * starts later waits for the revocation and then reads it. The target scope is called by those
+   * requirement commands, under their own lock.
    */
   async flagUnqualifiedAssignments(
     trx: Trx,
@@ -350,46 +390,12 @@ export class QualificationsService {
       | { personId: string; kind: string }
       | { targetType: AssignmentTargetType; targetId: string; role: string },
   ): Promise<string[]> {
-    let q = trx
-      .selectFrom('assignments as a')
-      .innerJoin('assignment_requirements as r', (join) =>
-        join
-          .onRef('r.organization_id', '=', 'a.organization_id')
-          .onRef('r.target_type', '=', 'a.target_type')
-          .onRef('r.target_id', '=', 'a.target_id')
-          .onRef('r.role', '=', 'a.role'),
-      )
-      .select([
-        'a.id',
-        'a.person_id',
-        'a.facility_id',
-        'a.target_type',
-        'a.target_id',
-        'a.target_title',
-        'a.role',
-        'a.slot',
-        'a.scheduled_start',
-        'r.required_qualifications',
-      ])
-      .where('a.organization_id', '=', organizationId)
-      // WRK-02: a retired requirement demands nothing.
-      .where('r.retired_at', 'is', null)
-      .where('a.status', '=', 'accepted')
-      .where('a.scheduled_end', '>', this.clock.now())
-      .whereRef('a.slot', '<=', 'r.required_count')
-      .orderBy('a.id');
-    if ('personId' in scope) {
-      q = q
-        .where('a.person_id', '=', scope.personId)
-        .where(sql<boolean>`${scope.kind} = any(r.required_qualifications)`);
-    } else {
-      q = q
-        .where('a.target_type', '=', scope.targetType)
-        .where('a.target_id', '=', scope.targetId)
-        .where('a.role', '=', scope.role);
-    }
+    const rows =
+      'personId' in scope
+        ? await this.acceptedRequiringKind(trx, organizationId, scope.personId, scope.kind)
+        : await this.acceptedUnderRequirement(trx, organizationId, scope);
     const raised: string[] = [];
-    for (const row of await q.execute()) {
+    for (const row of rows) {
       if (row.required_qualifications.length === 0) continue;
       const checks = await this.check(
         trx,
@@ -424,6 +430,89 @@ export class QualificationsService {
       raised.push(exception.id);
     }
     return raised;
+  }
+
+  private acceptedAssignments(trx: Trx, organizationId: string) {
+    return trx
+      .selectFrom('assignments as a')
+      .select([
+        'a.id',
+        'a.person_id',
+        'a.facility_id',
+        'a.target_type',
+        'a.target_id',
+        'a.target_title',
+        'a.role',
+        'a.slot',
+        'a.scheduled_start',
+      ])
+      .where('a.organization_id', '=', organizationId)
+      .where('a.status', '=', 'accepted')
+      .where('a.scheduled_end', '>', this.clock.now());
+  }
+
+  /** Accepted assignments of a target's role whose requirement is in force and counts their slot. */
+  private async acceptedUnderRequirement(
+    trx: Trx,
+    organizationId: string,
+    scope: { targetType: AssignmentTargetType; targetId: string; role: string },
+  ): Promise<UnderRequirement[]> {
+    return (
+      this.acceptedAssignments(trx, organizationId)
+        .innerJoin('assignment_requirements as r', (join) =>
+          join
+            .onRef('r.organization_id', '=', 'a.organization_id')
+            .onRef('r.target_type', '=', 'a.target_type')
+            .onRef('r.target_id', '=', 'a.target_id')
+            .onRef('r.role', '=', 'a.role'),
+        )
+        .select('r.required_qualifications')
+        // WRK-02: a retired requirement demands nothing.
+        .where('r.retired_at', 'is', null)
+        .whereRef('a.slot', '<=', 'r.required_count')
+        .where('a.target_type', '=', scope.targetType)
+        .where('a.target_id', '=', scope.targetId)
+        .where('a.role', '=', scope.role)
+        .orderBy('a.id')
+        .execute()
+    );
+  }
+
+  /**
+   * Accepted assignments of everyone resolving to the person whose requirement (in force, counting
+   * their slot) names the kind, read under each requirement's key and share lock (R2-RACES-02).
+   */
+  private async acceptedRequiringKind(
+    trx: Trx,
+    organizationId: string,
+    personId: string,
+    kind: string,
+  ): Promise<UnderRequirement[]> {
+    const assignments = await this.acceptedAssignments(trx, organizationId)
+      .where('a.person_id', 'in', await this.merged.resolving(trx, organizationId, personId))
+      .orderBy('a.id')
+      .execute();
+    const keyOf = (a: { target_type: string; target_id: string; role: string }) =>
+      `${a.target_type}\u0000${a.target_id}\u0000${a.role}`;
+    const requirements = new Map<string, RequirementRow | undefined>();
+    const byKey = [...new Map(assignments.map((a) => [keyOf(a), a])).entries()].sort(([x], [y]) =>
+      x < y ? -1 : x > y ? 1 : 0,
+    );
+    for (const [key, a] of byKey) {
+      requirements.set(
+        key,
+        await lockRequirementShared(trx, organizationId, a.target_type, a.target_id, a.role),
+      );
+    }
+    const out: UnderRequirement[] = [];
+    for (const a of assignments) {
+      const requirement = requirements.get(keyOf(a));
+      if (!requirement || requirement.retired_at !== null) continue;
+      if (a.slot > requirement.required_count) continue;
+      if (!requirement.required_qualifications.includes(kind)) continue;
+      out.push({ ...a, required_qualifications: requirement.required_qualifications });
+    }
+    return out;
   }
 
   private async load(

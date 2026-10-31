@@ -50,6 +50,8 @@ import {
   type AuthorizationTargetInput,
   type RequestWithContext,
   type Trx,
+  KeysetInstant,
+  keysetInstant,
 } from '../../kernel';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records (§4.10). */
@@ -215,7 +217,9 @@ export function redactTrialParticipation(
 // created_at as the database's own text so microseconds survive the round trip.
 // ---------------------------------------------------------------------------------------------
 
-const CreatedCursor = z.object({ at: z.string().min(1).max(64), id: z.uuid() });
+// R2-API-CONTRACT-01b: the instant is the shared kernel shape, so a crafted cursor (year 0000, an
+// impossible date, free text) reads as the first page instead of failing the cast with a 500.
+const CreatedCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 export type CreatedKeyset = z.infer<typeof CreatedCursor>;
 
 /** The decoded cursor, or null (absent or malformed: the first page). */
@@ -223,9 +227,9 @@ export function decodeCreatedCursor(cursor: string | undefined): CreatedKeyset |
   return decodeCursor(cursor, CreatedCursor);
 }
 
-/** `created_at::text` of `table`, selected as `cursor_at` beside the row. */
+/** `created_at` of `table` as an ISO-8601 UTC instant with microseconds, selected as `cursor_at`. */
 export function cursorAt(table: string): RawBuilder<string> {
-  return sql<string>`${sql.ref(`${table}.created_at`)}::text`;
+  return keysetInstant(`${table}.created_at`);
 }
 
 /** Rows strictly after the cursor in (created_at desc, id desc) order. */

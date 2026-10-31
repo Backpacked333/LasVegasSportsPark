@@ -58,6 +58,17 @@ export class RequirementsService {
       facilityId: target.facilityId,
     });
     return this.uow.run(async ({ trx }) => {
+      // R2-RACES-02: the requirement key exclusively, before the insert. No assignment command or
+      // qualification revocation for this target and role is in flight meanwhile (they take the
+      // key shared), so the flagging below sees every acceptance, and every revocation it does not
+      // see waits and then finds the new requirement.
+      await this.coverage.lockRequirementKey(
+        trx,
+        organizationId,
+        target.targetType,
+        target.targetId,
+        body.role,
+      );
       const id = newId();
       try {
         await trx
@@ -110,6 +121,9 @@ export class RequirementsService {
       });
       const row = (await this.load(trx, organizationId, id)) as RequirementRow;
       await this.notify(trx, row, correlationId);
+      // SPK-STAFF-001, SPK-READY-004: assignments accepted before the target had this requirement
+      // are flagged when their assignee lacks its qualifications, as for an edit.
+      await this.flagUnqualified(trx, row);
       return this.view(trx, row);
     });
   }
@@ -166,14 +180,13 @@ export class RequirementsService {
       });
       const row = (await this.load(trx, organizationId, id)) as RequirementRow;
       await this.notify(trx, row, correlationId);
-      if (body.requiredQualifications) {
-        // SPK-STAFF-001: accepted assignees who do not hold the new qualifications are flagged
-        // for an operator decision (never withdrawn automatically, POL-033 pending).
-        await this.qualifications.flagUnqualifiedAssignments(trx, organizationId, {
-          targetType: row.target_type,
-          targetId: row.target_id,
-          role: row.role,
-        });
+      // A change of the qualifications, or of the count (a slot brought back under the
+      // requirement), can leave an accepted assignee unqualified. R2-RACES-02: this runs under the
+      // requirement row's FOR UPDATE lock, which a concurrent revocation's flagging waits for (it
+      // takes the share lock of the requirements its assignments name), so whichever commits
+      // second sees the other.
+      if (body.requiredQualifications !== undefined || body.requiredCount !== undefined) {
+        await this.flagUnqualified(trx, row);
       }
       return this.view(trx, row);
     });
@@ -194,6 +207,19 @@ export class RequirementsService {
     });
     const coverage = await this.coverage.coverage(organizationId, query.targetType, query.targetId);
     return rows.map((row) => this.toView(row, coverage));
+  }
+
+  /**
+   * SPK-STAFF-001: accepted assignees who do not hold the requirement's qualifications are flagged
+   * for an operator decision (never withdrawn automatically, POL-033 pending).
+   */
+  private async flagUnqualified(trx: Trx, row: RequirementRow): Promise<void> {
+    if (row.required_qualifications.length === 0) return;
+    await this.qualifications.flagUnqualifiedAssignments(trx, row.organization_id, {
+      targetType: row.target_type,
+      targetId: row.target_id,
+      role: row.role,
+    });
   }
 
   private async view(trx: Trx, row: RequirementRow): Promise<AssignmentRequirement> {

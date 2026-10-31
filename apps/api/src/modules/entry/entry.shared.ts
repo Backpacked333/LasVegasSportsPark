@@ -71,6 +71,25 @@ export function hashPassReference(reference: string): string {
   return createHash('sha256').update(reference.trim(), 'utf8').digest('hex');
 }
 
+/** A stored pass reference hash (lower-case hex SHA-256), as `passes.reference_hash` holds it. */
+export const PASS_REFERENCE_HASH = /^[0-9a-f]{64}$/;
+
+/**
+ * The access-control webhook event as the kernel inbox keeps it (§4.14, SPK-ENTRY-002): a pass
+ * reference the device read is replaced by its hash (`data.passReferenceHash`) before the event is
+ * recorded, so the inbox never holds the live credential at rest. Everything else is unchanged;
+ * the handler matches the pass on the hash.
+ */
+export function withPassReferenceHashed<T extends { data: object }>(event: T): T {
+  const data = event.data as { passReference?: unknown };
+  if (typeof data.passReference !== 'string') return event;
+  const { passReference, ...rest } = data as { passReference: string };
+  return {
+    ...event,
+    data: { ...rest, passReferenceHash: hashPassReference(passReference) },
+  } as T;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Facility-local day (SPK-SCHED-008: facility-local behaviour derives from facilities.timezone)
 // ---------------------------------------------------------------------------------------------

@@ -60,6 +60,7 @@ import {
   type CheckoutBasketPort,
   type CheckoutRow,
 } from './checkout-finalizer.service';
+import { FinanceCustomerScope } from './customer-scope';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
 import { PaymentsService } from './payments.service';
@@ -103,6 +104,7 @@ export class CheckoutService {
     private readonly payments: PaymentsService,
     private readonly finalizer: CheckoutFinalizer,
     private readonly policy: FinancePolicyResolver,
+    private readonly scope: FinanceCustomerScope,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -172,7 +174,9 @@ export class CheckoutService {
       type,
       id: row.id,
       organizationId: row.organization_id,
-      subjectPersonIds: [row.payer_person_id],
+      // SPK-IAM-007 (R2-LIFECYCLES-02): a merged payer's checkout or order is read under the
+      // survivor, as the /me lists show it.
+      subjectPersonIds: [await this.scope.subjectOf(row.organization_id, row.payer_person_id)],
       protected: true,
     });
   }
@@ -719,6 +723,11 @@ export class CheckoutService {
     }
 
     // Credits applied (SPK-PAY-009, invariant 7) and discount redemptions (catalog, invariant 7).
+    // SPK-IAM-007 (R2-LIFECYCLES-02): a credit of a record merged into the payer is the payer's.
+    const creditOwners =
+      (quote.applied_credits as unknown as AppliedCredit[]).length > 0
+        ? await this.scope.idsOf(organizationId, payerPersonId, trx)
+        : [payerPersonId];
     for (const credit of quote.applied_credits as unknown as AppliedCredit[]) {
       const redeemed = await this.facts.redeemCredit(trx, {
         organizationId,
@@ -726,7 +735,7 @@ export class CheckoutService {
         amountMinor: credit.amountMinor,
         currency: quote.currency,
         use: 'registration',
-        ownerPersonId: payerPersonId,
+        ownerPersonIds: creditOwners,
         referenceType: 'order',
         referenceId: orderId,
         obligationId: firstObligationId as string,

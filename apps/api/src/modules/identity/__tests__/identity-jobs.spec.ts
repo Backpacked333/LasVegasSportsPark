@@ -1,11 +1,12 @@
 import { newId } from '@sportspark/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import {
   END_ELAPSED_RESTRICTIONS_JOB,
   EXPIRE_INVITATIONS_AND_CLAIMS_JOB,
 } from '../services/identity-jobs';
+import { InvitationsService, type ExpiryPath } from '../services/invitations.service';
 import { RelationshipAuthority } from '../services/relationship-authority.service';
 import {
   authHeaderForAccount,
@@ -16,6 +17,7 @@ import {
   createRelationshipFixture,
   createStaffMemberFixture,
 } from '../testing/identity-fixtures';
+import { backendPid, gate, tracked, untilSettledOrBlockedBy } from './support';
 
 const key = () => `k-${newId()}`;
 const HOUR = 3600_000;
@@ -23,9 +25,11 @@ const HOUR = 3600_000;
 /**
  * Identity background work (§4.12): the expiry sweep (ID-07) and the end of restriction windows
  * (ID-08). Jobs scan every organization, so assertions name the rows each case created. The
- * concurrent case runs the sweep and an acceptance at once: under PGlite they serialize, under
- * TEST_DATABASE_URL the row lock (FOR UPDATE / SKIP LOCKED) decides; either way one expiry is
- * recorded.
+ * IF-25 race cases pause one side inside its transaction while it holds the invitation row, then
+ * start the other: under TEST_DATABASE_URL the acceptance must wait for the sweep's lock (and then
+ * see the expiry), and the sweep must pass over a row an acceptance holds (SKIP LOCKED); under
+ * PGlite transactions serialize and the second side runs after the first. Either way one expiry is
+ * recorded, by the path that held the row.
  */
 describe('identity periodic jobs (ID-07, ID-08; SPK-IAM-002, SPK-IAM-004, SPK-IAM-005, §4.12)', () => {
   let t: TestApp;
@@ -171,7 +175,7 @@ describe('identity periodic jobs (ID-07, ID-08; SPK-IAM-002, SPK-IAM-004, SPK-IA
     expect(accept.body.code).toBe('INVALID_TRANSITION');
   });
 
-  it('IF-25: the sweep and an acceptance racing for one expired invitation record its expiry once (PGlite and TEST_DATABASE_URL)', async () => {
+  it('IF-25: the sweep and an acceptance started together for one expired invitation record its expiry once', async () => {
     const recipient = await adultWithAccount();
     const invitation = await invitationFor(recipient.personId, 1);
     t.clock.advance(2 * HOUR);
@@ -189,6 +193,104 @@ describe('identity periodic jobs (ID-07, ID-08; SPK-IAM-002, SPK-IAM-004, SPK-IA
     const expired = await events(invitation.id, 'identity.invitation_expired');
     expect(expired).toHaveLength(1);
     expect(['sweep', 'acceptance_attempt']).toContain((expired[0] as { via: string }).via);
+  });
+
+  /**
+   * Pauses InvitationsService.expire for `invitationId` on the given path, inside its transaction
+   * after the row lock was taken, and reports that backend under TEST_DATABASE_URL.
+   */
+  function pauseExpiry(invitationId: string, path: ExpiryPath) {
+    const service = t.app.get(InvitationsService);
+    const expire = service.expire.bind(service);
+    const paused = gate();
+    const state = { holder: undefined as number | undefined };
+    const spy = vi
+      .spyOn(service, 'expire')
+      .mockImplementation(async (trx, principal, row, correlationId, via) => {
+        if (row.id === invitationId && via === path) {
+          if (t.database.concurrent) state.holder = await backendPid(trx);
+          await paused.pass();
+        }
+        return expire(trx, principal, row, correlationId, via);
+      });
+    return { paused, holder: () => state.holder, restore: () => spy.mockRestore() };
+  }
+
+  it('IF-25 / SPK-IAM-004: an acceptance arriving while the sweep holds the expired invitation waits, then answers INVALID_TRANSITION; the sweep records the expiry once (PGlite and TEST_DATABASE_URL)', async () => {
+    const recipient = await adultWithAccount();
+    const invitation = await invitationFor(recipient.personId, 1);
+    t.clock.advance(2 * HOUR);
+    const pause = pauseExpiry(invitation.id, 'sweep');
+    try {
+      const sweep = t.runPeriodicJobs([EXPIRE_INVITATIONS_AND_CLAIMS_JOB]);
+      await pause.paused.reached;
+      const accepting = tracked(
+        t.http
+          .post(`/v1/invitations/${invitation.id}/accept`)
+          .set(recipient.header)
+          .set('Idempotency-Key', key())
+          .send({ token: invitation.token }),
+      );
+      // PostgreSQL: the acceptance's locking read waits for the row the sweep holds (an unlocked
+      // read would see 'pending', try its own expiry and fail with STALE_REVISION instead).
+      if (t.database.concurrent) {
+        expect(await untilSettledOrBlockedBy(t, accepting, pause.holder)).toBe(true);
+      }
+      pause.paused.open();
+      const [[summary], accepted] = await Promise.all([sweep, accepting.promise]);
+      expect(summary).toMatchObject({ ran: true, failed: false, error: null });
+      expect(accepted.status, JSON.stringify(accepted.body)).toBe(409);
+      expect(accepted.body).toMatchObject({
+        code: 'INVALID_TRANSITION',
+        details: { from: 'expired' },
+      });
+    } finally {
+      pause.paused.open();
+      pause.restore();
+    }
+    expect(await invitationRow(invitation.id)).toEqual({ status: 'expired', revision: 2 });
+    expect(await events(invitation.id, 'identity.invitation_expired')).toEqual([
+      { invitationId: invitation.id, via: 'sweep' },
+    ]);
+  });
+
+  it('IF-25 / SPK-IAM-004: the sweep passes over an expired invitation an acceptance holds; the acceptance records the expiry once and answers INVALID_TRANSITION (PGlite and TEST_DATABASE_URL)', async () => {
+    const recipient = await adultWithAccount();
+    const invitation = await invitationFor(recipient.personId, 1);
+    t.clock.advance(2 * HOUR);
+    const pause = pauseExpiry(invitation.id, 'acceptance_attempt');
+    try {
+      const accepting = tracked(
+        t.http
+          .post(`/v1/invitations/${invitation.id}/accept`)
+          .set(recipient.header)
+          .set('Idempotency-Key', key())
+          .send({ token: invitation.token }),
+      );
+      await pause.paused.reached;
+      const sweep = tracked(t.runPeriodicJobs([EXPIRE_INVITATIONS_AND_CLAIMS_JOB]));
+      // PostgreSQL: SKIP LOCKED — the sweep finishes without waiting for the row the acceptance
+      // holds. PGlite: the sweep runs once the acceptance commits and finds nothing due.
+      if (t.database.concurrent) {
+        expect(await untilSettledOrBlockedBy(t, sweep, pause.holder)).toBe(false);
+        expect(sweep.done).toBe(true);
+      }
+      pause.paused.open();
+      const [[summary], accepted] = await Promise.all([sweep.promise, accepting.promise]);
+      expect(summary).toMatchObject({ ran: true, failed: false, error: null, processed: 0 });
+      expect(accepted.status, JSON.stringify(accepted.body)).toBe(409);
+      expect(accepted.body).toMatchObject({
+        code: 'INVALID_TRANSITION',
+        details: { from: 'expired' },
+      });
+    } finally {
+      pause.paused.open();
+      pause.restore();
+    }
+    expect(await invitationRow(invitation.id)).toEqual({ status: 'expired', revision: 2 });
+    expect(await events(invitation.id, 'identity.invitation_expired')).toEqual([
+      { invitationId: invitation.id, via: 'acceptance_attempt' },
+    ]);
   });
 
   describe('ID-08: the end of a restriction window', () => {

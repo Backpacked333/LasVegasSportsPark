@@ -1,6 +1,7 @@
 import {
   AudienceSchema,
   errors,
+  z,
   type Audience,
   type CalendarFeed,
   type DeliveryAttempt,
@@ -15,7 +16,7 @@ import type {
   NotificationRecipientsTable,
   NotificationsTable,
 } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
 
 export type NotificationRow = Selectable<NotificationsTable>;
 export type RecipientRow = Selectable<NotificationRecipientsTable>;
@@ -38,6 +39,56 @@ export function personOf(principal: Principal): string {
 export const iso = (value: Date | string): string => new Date(value).toISOString();
 export const isoOrNull = (value: Date | string | null): string | null =>
   value === null ? null : iso(value);
+
+// ---------------------------------------------------------------------------------------------
+// Keyset pages (§4.5, api-and-events.md "Pagination"): newest first on (created_at desc, id desc).
+// The columns are stamped by the database (`default now()`, microseconds on PostgreSQL), so the
+// cursor carries the instant at the database's own precision. A JavaScript Date keeps only
+// milliseconds: a cursor built from one skipped every later row of the boundary row's millisecond,
+// all the rows one transaction wrote among them (R2-API-CONTRACT-01).
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The instant shape `cursorInstant` writes: whole seconds, up to six fraction digits, UTC `Z`.
+ * The millisecond cursors issued before R2-API-CONTRACT-01 have the same shape.
+ */
+const CURSOR_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
+
+/**
+ * A keyset cursor: the boundary row's instant (ISO-8601 UTC, up to microseconds) and id. Only an
+ * instant PostgreSQL can represent decodes: the calendar date is checked (`z.iso.datetime`), and
+ * year 0000, which ISO-8601 allows but PostgreSQL rejects (there is no year 0), is refused. Any
+ * other cursor decodes to null, the first page, instead of failing the `::timestamptz` cast in
+ * `afterCursor` as a server fault.
+ */
+export const CreatedCursor = z.object({
+  createdAt: z.iso
+    .datetime()
+    .regex(CURSOR_INSTANT)
+    .refine((value) => !value.startsWith('0000-')),
+  id: z.uuid(),
+});
+export type CreatedKeyset = z.infer<typeof CreatedCursor>;
+
+/**
+ * `column` as an ISO-8601 UTC instant with microseconds, whatever the session's DateStyle and
+ * TimeZone; selected as `cursor_at` beside the row and encoded into the next cursor unchanged.
+ */
+export function cursorInstant(column: string): RawBuilder<string> {
+  return sql<string>`to_char(${sql.ref(column)} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/**
+ * Rows strictly after the cursor in (created_at desc, id desc) order. The instant is compared as
+ * the text the cursor carries, never through a Date, so no sub-millisecond part is lost.
+ */
+export function afterCursor(
+  createdColumn: string,
+  idColumn: string,
+  cursor: CreatedKeyset,
+): RawBuilder<SqlBool> {
+  return sql<SqlBool>`(${sql.ref(createdColumn)}, ${sql.ref(idColumn)}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`;
+}
 
 export function audienceOf(row: NotificationRow): Audience {
   return AudienceSchema.parse(row.audience);
@@ -190,3 +241,29 @@ export function toCalendarFeed(row: CalendarFeedRow): CalendarFeed {
 }
 
 export const uniqueStrings = (values: Iterable<string>): string[] => [...new Set(values)];
+
+/** The longest notice title the compose contract accepts (`ComposeNotificationBody` Title). */
+export const NOTICE_TITLE_MAX = 200;
+const ELLIPSIS = '…';
+
+/**
+ * R2-TENANCY-INPUT-02 (SPK-COMMS-002, SPK-COMMS-005): a notice title built around stored text (an
+ * event title or a team name of up to 200 characters) is kept within the compose limit by
+ * shortening the name, never the words around it, so the composition never fails inside an event
+ * handler. A shortened name ends in an ellipsis and never splits a surrogate pair.
+ */
+export function noticeTitle(
+  prefix: string,
+  name: string,
+  suffix = '',
+  max: number = NOTICE_TITLE_MAX,
+): string {
+  const full = `${prefix}${name}${suffix}`;
+  if (full.length <= max) return full;
+  const room = max - prefix.length - suffix.length - ELLIPSIS.length;
+  if (room <= 0) return full.slice(0, max);
+  let cut = name.slice(0, room);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${prefix}${cut.trimEnd()}${ELLIPSIS}${suffix}`;
+}

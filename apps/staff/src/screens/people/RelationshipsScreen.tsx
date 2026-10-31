@@ -19,7 +19,7 @@
  * - Guardian verification is DEC-004 (pending): the screen says so and records relationships with
  *   the staff source the API assigns. Offline, every change is unavailable (§4.15).
  */
-import type { Schema } from '@sportspark/api-client';
+import { secretWithheldOf, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
@@ -51,6 +51,7 @@ import {
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandError, CommandSuccess, fieldErrorsOf } from '../../ui/CommandFeedback';
+import { SecretWithheldNotice } from '../../ui/CommandOutcome';
 import {
   CheckboxGroup,
   Facts,
@@ -624,6 +625,8 @@ function InvitationSection({ personId }: { personId: string }) {
   );
   const [issuedOutcome, setIssuedOutcome] = useState<string | null>(null);
   const invite = useApiCommand('post', '/invitations', { invalidate: INVITATION_LIST_KEYS });
+  // §4.14: a retry found the invitation already made; its code was only in the lost answer.
+  const withheld = invite.error ? secretWithheldOf(invite.error) : null;
   const submit = () => {
     const problems: Record<string, string> = {};
     if (recipientMode === 'person') {
@@ -730,11 +733,23 @@ function InvitationSection({ personId }: { personId: string }) {
           onChange={setPermissions}
           error={errors['permissions']}
         />
-        <Button type="submit" busy={invite.isProcessing} disabled={!online}>
+        <Button type="submit" busy={invite.isProcessing} disabled={!online || withheld !== null}>
           Create invitation
         </Button>
       </form>
-      <CommandError error={invite.error} onRetry={submit} />
+      {withheld && invite.error ? (
+        <SecretWithheldNotice
+          error={invite.error}
+          secret="invitation code"
+          where={`in the invitations covering this person${withheld.resourceId ? ` (invitation ${withheld.resourceId.slice(0, 8)})` : ''}`}
+        >
+          <Button variant="secondary" onClick={() => invite.reset()}>
+            Create a new invitation
+          </Button>
+        </SecretWithheldNotice>
+      ) : (
+        <CommandError error={invite.error} onRetry={submit} />
+      )}
       <CommandSuccess message={issuedOutcome} />
       {issued ? (
         <InvitationCard

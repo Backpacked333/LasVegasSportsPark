@@ -126,6 +126,118 @@ export class FinanceNotices {
     });
   }
 
+  /** The checkout's payer, order and what was paid (the payment attempt), for recovery copy. */
+  private async checkoutFacts(trx: Trx, organizationId: string, checkoutId: string) {
+    const checkout = await trx
+      .selectFrom('checkouts')
+      .select(['payer_person_id', 'order_id', 'payment_attempt_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', checkoutId)
+      .executeTakeFirst();
+    if (!checkout) return null;
+    const payment = checkout.payment_attempt_id
+      ? await trx
+          .selectFrom('payment_attempts')
+          .select(['amount_minor', 'currency'])
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', checkout.payment_attempt_id)
+          .executeTakeFirst()
+      : undefined;
+    return { checkout, payment };
+  }
+
+  /**
+   * finance.checkout_recovery_required → the payer (R2-JOURNEYS-04, SPK-AT-023, SPK-COMMS-002):
+   * the payment was taken but the registration could not be completed, and the family is told what
+   * happens to the money next (a refund, a credit, or staff contact), never that the place is held.
+   */
+  async checkoutRecoveryRequired(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof FinanceEvents.checkoutRecoveryRequired>>,
+  ): Promise<void> {
+    const organizationId = event.organizationId;
+    const facts = await this.checkoutFacts(trx, organizationId, event.payload.checkoutId);
+    if (!facts) return;
+    const paid = facts.payment
+      ? `Your payment of ${amount(facts.payment.amount_minor, facts.payment.currency)} was received`
+      : 'Your payment was received';
+    const next =
+      event.payload.plan === 'refund'
+        ? 'It will be refunded to your payment method, and you will be told when the refund is made.'
+        : event.payload.plan === 'credit'
+          ? 'It will be kept as a credit on your account, and you will be told when the credit is added.'
+          : 'Our staff will contact you about the payment.';
+    const facility = await this.facilityOfOrder(trx, organizationId, event.payload.orderId);
+    await this.compose(
+      trx,
+      financeSystem(organizationId, 'finance.notify_checkout_recovery'),
+      event,
+      {
+        kind: 'payment_attention',
+        facilityId: facility?.facilityId,
+        subject: { type: 'order', id: event.payload.orderId },
+        audience: { subjectPersonIds: [facts.checkout.payer_person_id] },
+        protected: true,
+        title: 'Your registration could not be completed',
+        body: `${paid}, but the registration could not be completed. ${next}`,
+      },
+    );
+  }
+
+  /**
+   * finance.checkout_compensated → the payer (R2-JOURNEYS-04, SPK-AT-023): the refund was made or
+   * the credit added, with its amount.
+   */
+  async checkoutCompensated(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof FinanceEvents.checkoutCompensated>>,
+  ): Promise<void> {
+    const organizationId = event.organizationId;
+    const facts = await this.checkoutFacts(trx, organizationId, event.payload.checkoutId);
+    if (!facts) return;
+    let body: string;
+    if (event.payload.method === 'refund') {
+      const refund = event.payload.refundAttemptId
+        ? await trx
+            .selectFrom('refund_attempts')
+            .select(['amount_minor', 'currency'])
+            .where('organization_id', '=', organizationId)
+            .where('id', '=', event.payload.refundAttemptId)
+            .executeTakeFirst()
+        : undefined;
+      body = refund
+        ? `The refund of ${amount(refund.amount_minor, refund.currency)} for the registration that could not be completed has been made to your payment method.`
+        : 'The refund for the registration that could not be completed has been made to your payment method.';
+    } else {
+      const credit = event.payload.creditId
+        ? await trx
+            .selectFrom('credits')
+            .select(['original_minor', 'currency'])
+            .where('organization_id', '=', organizationId)
+            .where('id', '=', event.payload.creditId)
+            .executeTakeFirst()
+        : undefined;
+      body = credit
+        ? `A credit of ${amount(credit.original_minor, credit.currency)} for the registration that could not be completed has been added to your account.`
+        : 'A credit for the registration that could not be completed has been added to your account.';
+    }
+    const facility = await this.facilityOfOrder(trx, organizationId, event.payload.orderId);
+    await this.compose(
+      trx,
+      financeSystem(organizationId, 'finance.notify_checkout_compensated'),
+      event,
+      {
+        kind: 'payment_attention',
+        facilityId: facility?.facilityId,
+        subject: { type: 'order', id: event.payload.orderId },
+        audience: { subjectPersonIds: [facts.checkout.payer_person_id] },
+        protected: true,
+        title: event.payload.method === 'refund' ? 'Your refund was made' : 'A credit was added',
+        body,
+      },
+    );
+  }
+
   /** finance.payment_failed → the payer (SPK-COMMS-002 payment attention). */
   async paymentFailed(
     trx: Trx,

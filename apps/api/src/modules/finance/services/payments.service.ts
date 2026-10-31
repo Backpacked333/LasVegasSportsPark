@@ -51,6 +51,7 @@ import {
   type Reader,
   type ReceiptRow,
 } from '../finance.shared';
+import { FinanceCustomerScope } from './customer-scope';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
 import { PosSaleFinalizer } from './pos/pos-sale-finalizer.service';
@@ -128,6 +129,7 @@ export class PaymentsService {
     private readonly facts: MoneyFacts,
     private readonly policy: FinancePolicyResolver,
     private readonly posSales: PosSaleFinalizer,
+    private readonly scope: FinanceCustomerScope,
   ) {}
 
   get providerName(): string {
@@ -161,7 +163,9 @@ export class PaymentsService {
       type: 'payment_attempt',
       id,
       organizationId,
-      subjectPersonIds: [row.payer_person_id],
+      // SPK-IAM-007 (R2-LIFECYCLES-02): a merged payer's payment is read under the survivor, as
+      // GET /me/payments lists it.
+      subjectPersonIds: [await this.scope.subjectOf(organizationId, row.payer_person_id)],
       protected: true,
     });
     return this.detail(this.db, row);

@@ -1,3 +1,4 @@
+import { KeysetInstant } from '../../kernel';
 import {
   decodeCursor,
   encodeCursor,
@@ -47,6 +48,18 @@ export function importPrincipal(organizationId: string, batchId: string): Princi
 }
 
 /**
+ * The batch's Today card (§5.11 "import discrepancies", SPK-UX-006): one owned operational
+ * exception per batch while its rows await review, raised by validation and by an apply that
+ * leaves exceptions, and settled by the module (R2-LIFECYCLES-07).
+ */
+export const IMPORT_REVIEW_CARD = {
+  category: 'migration.import_review',
+  ownerQueue: 'migration',
+  affectedType: 'import_batch',
+  dedupeKey: (batchId: string) => `migration.import_review:${batchId}`,
+} as const;
+
+/**
  * Correlation id passed to the owning module for one mapping. The owning module writes it on
  * the audit record of the creation in the same transaction as the record itself, which is how
  * an interrupted apply finds a record it already created instead of creating it twice.
@@ -90,7 +103,7 @@ function actorOf(value: unknown): ActorSnapshot {
 
 const KeysetCursorSchema = z.object({
   /** created_at at full (microsecond) precision, UTC: `2027-01-16T17:00:00.123456Z`. */
-  at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/),
+  at: KeysetInstant.regex(/\.\d{6}Z$/),
   id: z.uuid(),
 });
 export type KeysetCursor = z.infer<typeof KeysetCursorSchema>;

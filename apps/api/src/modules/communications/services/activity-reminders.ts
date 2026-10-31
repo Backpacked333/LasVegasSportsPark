@@ -5,6 +5,7 @@ import { sql } from 'kysely';
 import {
   DATABASE,
   MODULE_SETTINGS,
+  OperationalExceptions,
   UnitOfWork,
   defineModuleSettings,
   policySetting,
@@ -14,7 +15,7 @@ import {
   type PeriodicJobResult,
 } from '../../../kernel';
 import { SESSION_AUDIENCE_PORT, type SessionAudiencePort } from '../ports';
-import { uniqueStrings } from '../communications.shared';
+import { noticeTitle, uniqueStrings } from '../communications.shared';
 import { NotificationsService } from './notifications.service';
 import { when, where } from './schedule-notices';
 
@@ -67,6 +68,7 @@ export class ActivityReminders {
     @Inject(SESSION_AUDIENCE_PORT) private readonly sessionAudience: SessionAudiencePort,
     private readonly uow: UnitOfWork,
     private readonly notifications: NotificationsService,
+    private readonly exceptions: OperationalExceptions,
   ) {}
 
   job(): PeriodicJob {
@@ -85,9 +87,41 @@ export class ActivityReminders {
     const due = await this.dueEntries(this.db, now, until, batchSize + 1);
     let processed = 0;
     for (const entry of due.slice(0, batchSize)) {
-      if (await this.remind(entry, now, until)) processed += 1;
+      try {
+        if (await this.remind(entry, now, until)) processed += 1;
+      } catch (error) {
+        // R2-TENANCY-INPUT-02 (SPK-COMMS-005, SPK-UX-006): one entry that cannot be composed never
+        // stalls the batch; its transaction rolled back (no mark), so it is tried again on the next
+        // run, and an owned exception says which activity is not being reminded.
+        await this.raiseFailure(entry, error);
+      }
     }
     return { processed, remaining: Math.max(0, due.length - batchSize) };
+  }
+
+  private async raiseFailure(entry: DueEntry, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    this.logger.warn(`activity reminder for event ${entry.event_id} failed: ${message}`);
+    try {
+      await this.uow.run(({ trx }) =>
+        this.exceptions.raise(trx, {
+          organizationId: entry.organization_id,
+          facilityId: entry.facility_id,
+          category: 'communications.activity_reminder_failed',
+          severity: 'warning',
+          title: noticeTitle('The reminder for ', entry.title, ' could not be composed'),
+          affectedType: 'event',
+          affectedId: entry.event_id,
+          ownerQueue: 'support_operator',
+          dedupeKey: `communications:activity_reminder:${entry.event_id}:${entry.source_revision}`,
+          details: { eventId: entry.event_id, eventRevision: entry.source_revision },
+        }),
+      );
+    } catch (raiseError) {
+      this.logger.error(
+        `could not raise the reminder failure for event ${entry.event_id}: ${(raiseError as Error).message}`,
+      );
+    }
   }
 
   private dueEntries(db: Db, now: Date, until: Date, limit: number): Promise<DueEntry[]> {
@@ -206,7 +240,7 @@ export class ActivityReminders {
           facilityId: entry.facility_id,
           subject: { type: 'event', id: entry.event_id },
           audience: { subjectPersonIds, teamEntryIds },
-          title: `Reminder: ${entry.title}`,
+          title: noticeTitle('Reminder: ', entry.title),
           body: `${entry.title} is on ${when(details)} at ${where(details)}.`,
           detailsAfter: { ...details, revision: entry.source_revision },
           // Who is enrolled is customer-private: re-checked before dispatch (§4.7 invariant 10).

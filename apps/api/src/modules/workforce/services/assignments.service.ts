@@ -70,7 +70,7 @@ import {
   type RequirementRow,
 } from '../workforce.shared';
 import { AvailabilityService } from './availability.service';
-import { CommitmentChecker } from './commitment-checker';
+import { CommitmentChecker, lockPerson } from './commitment-checker';
 import { CoverageService, type UncoveredCause, type UncoveredNotice } from './coverage.service';
 import { QualificationsService } from './qualifications.service';
 import { TargetResolver, type FacilityFacts, type ResolvedTarget } from './target-resolver';
@@ -351,7 +351,7 @@ export class AssignmentsService {
         ignoreAssignmentIds: [current.id],
         checkAvailability: false,
       });
-      // WRK-06: read under the person's party lock taken by the commitment check above.
+      // WRK-06: read under the person's party lock taken by assertAssignable above.
       await this.assertOfficialDailyLimit(trx, current, facility);
       const needsAccess = this.access.required(current);
       const opId = needsAccess
@@ -675,8 +675,14 @@ export class AssignmentsService {
   /**
    * Qualification (SPK-STAFF-001), declared unavailability, and overlapping commitments with
    * turnaround (SPK-STAFF-003). Throws ELIGIBILITY_FAILED or RESOURCE_CONFLICT with reasons.
+   *
+   * R2-RACES-02 (SPK-STAFF-001, SPK-READY-004): the person's party lock comes first, before any of
+   * these reads. A qualification revocation takes the same lock before it writes, so an acceptance
+   * either reads the revocation (and is refused) or commits before the revocation looks for the
+   * accepted assignments it must raise `workforce.unqualified_assignment` for.
    */
   async assertAssignable(trx: Trx, input: AssignabilityInput): Promise<void> {
+    await lockPerson(trx, input.organizationId, input.personId);
     const person = await this.people.findPerson(input.organizationId, input.personId, trx);
     if (!person || person.status !== 'active') {
       throw errors.notFound('person', input.personId);
@@ -1025,6 +1031,37 @@ export class AssignmentsService {
       event.payload.sessionId,
       'The session was canceled.',
       event.correlationId,
+    );
+  }
+
+  /**
+   * catalog.session_retimed (R2-JOURNEYS-03, SPK-STAFF-003, SPK-STAFF-004): live assignments of
+   * the session follow it to its new time, read from the session as it is now (never the
+   * payload), through the same retime as a moved fixture or event, so the commitment and overlap
+   * checks run at the real time and granted access follows. A session that is no longer scheduled
+   * moves nothing (its cancellation withdraws them through `onSessionCanceled`).
+   */
+  async onSessionRetimed(
+    event: DomainEvent<EventPayload<typeof CatalogEvents.sessionRetimed>>,
+    ctx: HandlerContext,
+  ): Promise<void> {
+    const p = event.payload;
+    const rows = await this.liveFor(ctx.trx, event.organizationId, 'session', p.sessionId);
+    if (rows.length === 0) return;
+    const current = await this.targets.currentSession(
+      ctx.trx,
+      event.organizationId,
+      p.schedulingEventId,
+      p.sessionId,
+    );
+    if (!current || current.status !== 'scheduled') return;
+    await this.retime(
+      ctx.trx,
+      rows,
+      new Date(current.scheduledStart),
+      new Date(current.scheduledEnd),
+      p.schedulingEventId,
+      event,
     );
   }
 

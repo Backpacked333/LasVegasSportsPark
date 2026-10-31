@@ -288,6 +288,49 @@ describe('SCR-S-21 RelationshipsScreen', () => {
     });
   });
 
+  it('§4.14: a retry that finds the invitation already made (IDEMPOTENCY_SECRET_WITHHELD) says the code cannot be shown again and holds back a second invitation', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        ...baseRoutes(),
+        'POST /invitations': () => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new TypeError('connection dropped'));
+          return fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+              message: 'The request succeeded, but its one-time secret is not stored.',
+              nextAction: 'revoke_and_reissue',
+              details: { resourceId: '0192f1a0-0000-7000-8000-000000000701' },
+            }),
+          );
+        },
+      },
+    });
+    render(app.at(PATH));
+    const form = await screen.findByRole('form', { name: 'Create an invitation' });
+    await user.click(within(form).getByLabelText('An email address or phone number'));
+    await user.type(within(form).getByLabelText(/^Contact \(required\)/), 'grandma@example.test');
+    await user.selectOptions(within(form).getByLabelText(/^Relationship/), 'caregiver');
+    await user.click(within(form).getByLabelText(/^collect:/));
+    await user.click(within(form).getByRole('button', { name: 'Create invitation' }));
+    const section = screen.getByRole('region', {
+      name: 'Invite someone to hold permissions over this person',
+    });
+    await user.click(await within(section).findByRole('button', { name: 'Try again' }));
+    const notice = await within(section).findByTestId('state-secret-withheld');
+    expect(
+      within(notice).getByText('Created, but the invitation code cannot be shown again'),
+    ).toBeInTheDocument();
+    expect(notice).toHaveTextContent('invitation 0192f1a0');
+    expect(within(form).getByRole('button', { name: 'Create invitation' })).toBeDisabled();
+    const [first, second] = app.fake.requests.filter((r) => r.route === '/invitations');
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+    await user.click(within(notice).getByRole('button', { name: 'Create a new invitation' }));
+    expect(within(form).getByRole('button', { name: 'Create invitation' })).toBeEnabled();
+  });
+
   it('creates a household and adds the person to it', async () => {
     const user = userEvent.setup();
     const household = {

@@ -158,6 +158,20 @@ found. Facility-scoped staff see only their facilities and cannot read organizat
 - **Retired requirements (WRK-02, migration 1303)** — the uncovered-assignments report lists only
   requirements whose `retired_at` is null and skips any role of the coverage port that is not one
   of them.
+- **View state types (§4.6)** — none of the views with a literal-typed column filters its rows:
+  each has no `where` clause and its inner joins follow not-null foreign keys (its left joins never
+  drop a row), so it passes every base row through. Each such column in `packages/db/src/schema/reporting.ts` therefore lists exactly the
+  states its base table's check constraint allows; the restriction status is the facilities
+  `RestrictionStatus` itself, `withdrawn` (migration 0903) included. One view does filter:
+  `reporting_resource_status_changes_v` (migration 1302) keeps only audited status changes, and its
+  `status` is untyped text. Test "§4.6 / SPK-FAC-003: every state a reporting view passes through
+  is typed exactly as its base check lists it (a withdrawn restriction included)" proves that each
+  of the 32 typed columns' views has no `where` clause and compares each typed union with the
+  database (the compiler rejects a listed state the type lacks).
+  The maintenance restrictions report counts `approved` and `active` restrictions
+  (`COUNTED_RESTRICTION_STATES`), and MET-054 lists every other state, `withdrawn` included, as an
+  exclusion (test "SPK-REPORT-001 / SPK-FAC-003: MET-054 lists every restriction state it does not
+  count as an exclusion, withdrawn included"). **Verified**.
 
 ## Ports, events and handlers
 

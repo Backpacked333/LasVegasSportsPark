@@ -69,8 +69,22 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   listed ("Not confirmed"). Active passes whose reference is not on the device (a reinstall) are
   listed and can be withdrawn with a reason and the listed revision; once withdrawn the row says
   only "Withdrawn", even if the list cannot be read again. Replacing uses the revision
-  the API lists now. Offline: the last known state with its age and "may refuse it if it was
-  revoked". The reference is never sent anywhere and never shown again by the API.
+  the API lists now; its withdrawal of the previous pass decides with the same predicates (an
+  answer lost after it committed reads "This may already have been done", never "still active",
+  and the list showing the pass revoked settles it). Offline: the last known state with its age and
+  "may refuse it if it was revoked". The reference is never sent anywhere and is a one-time secret
+  (§4.14): a replayed issue is answered IDEMPOTENCY_SECRET_WITHHELD (`POST /v1/passes` withholds
+  the reference from its stored answer, entry R2-TENANCY-INPUT-01), read "Pass issued, but its
+  reference cannot be shown again" with the pass listed to withdraw.
+- **No definite answer (§4.9, SPK-UX-008).** A pass issue or withdrawal, an acknowledgement, an
+  RSVP or a support request whose answer is lost (`mayHaveTakenEffect`: no response after sending,
+  a 5xx) reads "No answer yet: this may already have been recorded", never "Something went wrong",
+  and "Check again" resends exactly the request that got no answer under the same idempotency key
+  (an issue then answers for the pass it made, see Pass above; the RSVP keeps its `expectedRevision`;
+  the support request is resent as sent even after the draft was edited, and an edited draft is
+  kept). IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with "Reload".
+  The pass, inbox and support screens use the account `CommandError`, the RSVP the teams
+  `CommandFailure`; both decide with `src/api/command-outcome.ts`.
 - **Inbox (SPK-COMMS-004).** Read and acknowledge send the attempt's `revision` (the newest the
   screen knows); a stale read reloads the list; a stale acknowledgment shows the code with
   "Reload". "Acknowledge" waits while the read just sent is in flight (it bumps the revision).

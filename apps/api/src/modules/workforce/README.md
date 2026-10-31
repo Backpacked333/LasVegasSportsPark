@@ -52,7 +52,10 @@ PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** u
   (`scheduling.event_changed` for event targets: the event's current state, read in the
   handler's transaction, decides — canceled → withdrawn, otherwise retimed to its current times —
   so a late or reordered delivery never retimes back to an older time, §4.12, §4.6),
-  `workforce.follow_session` (`catalog.session_canceled` → withdrawn). A retime of an accepted
+  `workforce.follow_session` (`catalog.session_canceled` → withdrawn),
+  `workforce.follow_session_retimed` (`catalog.session_retimed`, R2-JOURNEYS-03: live `session`
+  assignments take the session's current times read in the handler's transaction, through the same
+  retime, access window included; `__tests__/access-follow-ups.spec.ts` "R2-JOURNEYS-03"). A retime of an accepted
   assignment is checked against every commitment of the person (accepted or completed
   assignments, and person commitments held in scheduling); a conflict withdraws the moved
   assignment with the activity's new time recorded on it and escalates the slot as uncovered
@@ -66,6 +69,9 @@ PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** u
   assigned-coach overlap, SPK-STAFF-003). `CommitmentChecker` takes the same per-person advisory
   lock (`lockParty`) before it reads, so an acceptance and a scheduling command for one person are
   serialized (tested under PostgreSQL concurrency in `__tests__/commitments-retime.spec.ts`).
+  `assertAssignable` takes that lock first, before the qualification, availability and
+  commitment reads, and a qualification revocation takes it too (see "Qualification lapses after
+  acceptance").
 
 ## Tables (migration `0700_workforce_core.sql`)
 
@@ -108,6 +114,19 @@ Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.t
   refuses inserting, or moving into, `proposed/offered/accepted` an assignment whose target and
   role have a retired requirement (it reads the requirement `FOR SHARE`, so a racing retirement
   either sees the assignment or refuses it). The delete guard stays.
+- Assignment identity (`0706_workforce_assignment_identity_immutable.sql`, WRK-02, R2-SCHEMA-06):
+  trigger `assignments_zz_identity_immutable` (every `UPDATE`) refuses any change to the id,
+  person, kind, target (type, id, fixture, offering session, offering), role, slot or replaced
+  assignment of a row (`check_violation`, constraint `assignments_identity_immutable`). A
+  different person, target, role or slot is a new assignment (the replacement workflow), so the
+  retired-requirement check made at insert and at every status change holds for the row's
+  lifetime; the id is fixed because audit, outbox and exception rows name an assignment without a
+  foreign key. Times, `scheduling_event_id` (a retime follows the activity), facility, title,
+  status facts, access facts and the revision stay updatable. PostgreSQL runs BEFORE ROW triggers
+  in name order and each sees the row as the earlier ones left it; the `zz_` name makes the guard
+  run after `assignments_requirement_not_retired` and `assignments_touch`, so it compares what
+  they produced. A new BEFORE UPDATE trigger on assignments must sort before it to be checked
+  (tests in `__tests__/workforce-schema.spec.ts`, including a trigger that moves the slot).
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/workforce.ts`)
 
@@ -186,11 +205,32 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   withdrawal sent while the grant is in flight waits for the acceptance's row lock and then ends
   the access. **Verified** (`__tests__/access-follow-ups.spec.ts`,
   `__tests__/access-fees-workspace.spec.ts`).
-- **Qualification lapses after acceptance** (SPK-STAFF-001): revoking a qualification, or editing
-  a requirement's qualifications, raises `workforce.unqualified_assignment` (severity high, owner
-  `league_manager` for fixtures and `scheduler` otherwise, deadline = start, one per assignment)
-  for every accepted, unfinished assignment whose assignee no longer holds the requirement's
-  qualifications. Nothing is withdrawn automatically: an operator decides (POL-033 pending).
+- **Qualification lapses after acceptance** (SPK-STAFF-001): revoking a qualification, creating a
+  requirement (`POST /assignment-requirements` or `declareRequirements`) or editing its
+  qualifications or required count raises `workforce.unqualified_assignment` (severity high,
+  owner `league_manager` for fixtures and `scheduler` otherwise, deadline = start, one per
+  assignment) for every accepted, unfinished assignment in a required slot whose assignee does not
+  hold the requirement's qualifications. Nothing is withdrawn automatically: an operator decides
+  (POL-033 pending). Evidence recorded for a merged person counts for the survivor (WRK-05), so
+  revoking it raises the survivor's assignments too (`__tests__/person-merge.spec.ts`).
+  Overlapping commands (R2-RACES-02):
+  - A revocation and an acceptance are serialized on the person: the revocation takes the party
+    lock of everyone the evidence resolves to before it writes, and every assignability check
+    (`assertAssignable`: propose, offer, accept, replace) takes the assignee's party lock before it
+    reads qualifications. The acceptance either reads the revocation and is refused, or commits
+    first and is raised.
+  - A revocation and a requirement edit or creation are serialized on the requirement, not the
+    person (requirement commands take no party lock): the revocation's flagging takes the shared
+    key lock and the row share lock of every requirement the person's accepted assignments name
+    (`services/requirement-locks.ts`), an edit holds the row `FOR UPDATE`, and a creation holds the
+    key exclusively from before its insert. Whichever commits second reads the other and raises.
+  - An acceptance and a requirement creation are serialized on the same key: every assignment
+    command takes it shared first, so the acceptance either reads the new requirement and is
+    refused, or commits first and is raised by the creation.
+
+  **Verified** under PostgreSQL concurrency and PGlite, each pair in both orders
+  (`__tests__/qualification-readiness.spec.ts`).
+
 - **Fees** (SPK-STAFF-006, §1.7): the computed amount comes from the rate basis (per assignment,
   hourly with half-up rounding, flat) next to the submitted amount; approval records the approver;
   every adjustment appends a history row; export batches are immutable records handed to payment
@@ -295,8 +335,8 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
   escalation, `GET /assignment-requirements` and so support's Today feed (which reads
   `RequirementsService.list`). A PATCH of a retired requirement answers `INVALID_TRANSITION`;
   proposing, offering, accepting or replacing on one answers `RESOURCE_CONFLICT`
-  (`requirement_retired`). Every assignment command takes the requirement's share lock before the
-  assignment's row lock, the order a retirement takes them in. Tests:
+  (`requirement_retired`). Every assignment command takes the requirement's shared key lock and
+  row share lock before the assignment's row lock, the order a retirement takes them in. Tests:
   `__tests__/booking-staffing.spec.ts` (including an acceptance racing a retirement, run under
   PostgreSQL as well).
 - **WRK-03 offering-level check** (SPK-UX-007, SPK-YOUTH-005, IF-34): `isAcceptedOnOffering` is

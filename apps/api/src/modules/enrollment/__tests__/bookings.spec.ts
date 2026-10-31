@@ -1,9 +1,4 @@
-import {
-  OfferingKindSchema,
-  newId,
-  systemPrincipal,
-  type PolicyVersion,
-} from '@sportspark/contracts';
+import { newId, systemPrincipal, type PolicyVersion } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperationalExceptions, Outbox, UnitOfWork } from '../../../kernel';
 import { staffPrincipal, type TestApp } from '../../../testing';
@@ -37,7 +32,6 @@ import {
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const partyKind = (OfferingKindSchema.options as readonly string[]).includes('party');
 
 /** ENR-13: rentals and parties (capabilities rentals and parties; DEC-016, DEC-076, DEC-077). */
 describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
@@ -265,48 +259,45 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     expect(staffed.body).toMatchObject({ status: 'confirmed', outstanding: [] });
   });
 
-  it.skipIf(!partyKind)(
-    'SPK-COND-003: a party whose host is not yet accepted is awaiting_staff after payment, never confirmed, and its exception names the scheduler queue',
-    async () => {
-      const definitionId = await definitionWithScope(t, 'party_package' as never, {
-        durationMinutes: 120,
-        guestLimit: 12,
-        resources: { resourceIds: fields, count: 1 },
-        staffing: [{ kind: 'organizer', role: 'party_host', count: 1, qualifications: [] }],
-        equipmentAssetIds: [],
-      });
-      const setup = await offering(t, {
-        kind: 'party' as never,
-        entitlementDefinitionId: definitionId,
-        basePriceMinor: 15_000,
-        ageBand: { minAgeYears: 18 },
-      });
-      useBookingTerms(setup.offeringId, await terms('instant'));
-      const host = await booker(setup);
-      const booked = await post(t, '/v1/bookings', host.header, {
-        offeringId: setup.offeringId,
-        start: start(6, 20).toISOString(),
-        resourceIds: [fields[1]],
-        guestCount: 10,
-      });
-      expect(booked.status, JSON.stringify(booked.body)).toBe(201);
-      const row = await t.db
-        .selectFrom('bookings')
-        .selectAll()
-        .where('id', '=', booked.body.id)
-        .executeTakeFirstOrThrow();
-      await pay(row.basket_id!, row.enrollment_id!);
-      const after = await t.http.get(`/v1/bookings/${booked.body.id as string}`).set(host.header);
-      expect(after.body.status).toBe('awaiting_staff');
-      const exception = await t.db
-        .selectFrom('operational_exceptions')
-        .select('owner_queue')
-        .where('category', '=', 'enrollment.booking_awaiting_staff')
-        .where('affected_id', '=', booked.body.id)
-        .executeTakeFirstOrThrow();
-      expect(exception.owner_queue).toBe('scheduler');
-    },
-  );
+  it('SPK-COND-003: a party whose host is not yet accepted is awaiting_staff after payment, never confirmed, and its exception names the scheduler queue', async () => {
+    const definitionId = await definitionWithScope(t, 'party_package' as never, {
+      durationMinutes: 120,
+      guestLimit: 12,
+      resources: { resourceIds: fields, count: 1 },
+      staffing: [{ kind: 'organizer', role: 'party_host', count: 1, qualifications: [] }],
+      equipmentAssetIds: [],
+    });
+    const setup = await offering(t, {
+      kind: 'party' as never,
+      entitlementDefinitionId: definitionId,
+      basePriceMinor: 15_000,
+      ageBand: { minAgeYears: 18 },
+    });
+    useBookingTerms(setup.offeringId, await terms('instant'));
+    const host = await booker(setup);
+    const booked = await post(t, '/v1/bookings', host.header, {
+      offeringId: setup.offeringId,
+      start: start(6, 20).toISOString(),
+      resourceIds: [fields[1]],
+      guestCount: 10,
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const row = await t.db
+      .selectFrom('bookings')
+      .selectAll()
+      .where('id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    await pay(row.basket_id!, row.enrollment_id!);
+    const after = await t.http.get(`/v1/bookings/${booked.body.id as string}`).set(host.header);
+    expect(after.body.status).toBe('awaiting_staff');
+    const exception = await t.db
+      .selectFrom('operational_exceptions')
+      .select('owner_queue')
+      .where('category', '=', 'enrollment.booking_awaiting_staff')
+      .where('affected_id', '=', booked.body.id)
+      .executeTakeFirstOrThrow();
+    expect(exception.owner_queue).toBe('scheduler');
+  });
 
   it("SPK-SCHED-007 / SPK-STAFF-002: cancelling a recurring rental after its first week withdraws only the future weeks' staffing; work already done stays accepted and can be completed", async () => {
     const setup = await rental({

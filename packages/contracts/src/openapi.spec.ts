@@ -67,6 +67,32 @@ describe('OpenAPI emission (K-01, §4.8 publish exact schemas)', () => {
     expect(leftovers).toBe(0);
   });
 
+  it('R2-API-CONTRACT-02 (K-01): a nullable enum admits null in its enum (ReleaseRecord.authorityBasis), everywhere in the document', () => {
+    expect(property('ReleaseRecord', 'authorityBasis')).toEqual({
+      type: ['string', 'null'],
+      enum: ['relationship_permission:collect', null],
+    });
+    let refusingNull = 0;
+    JSON.stringify(document, (_key, value: unknown) => {
+      const node = value as SchemaObject | null;
+      if (
+        node &&
+        Array.isArray(node['type']) &&
+        (node['type'] as unknown[]).includes('null') &&
+        Array.isArray(node['enum']) &&
+        !(node['enum'] as unknown[]).includes(null)
+      ) {
+        refusingNull += 1;
+      }
+      return value;
+    });
+    expect(refusingNull).toBe(0);
+    expect(nullableReferences({ type: ['string', 'null'], enum: ['a'] })).toEqual({
+      type: ['string', 'null'],
+      enum: ['a', null],
+    });
+  });
+
   it('nullableReferences keeps metadata next to anyOf and rewrites recursive oneOf references', () => {
     expect(
       nullableReferences({

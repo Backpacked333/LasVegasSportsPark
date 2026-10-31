@@ -178,6 +178,38 @@ describe('booking staffing and requirement retirement (WRK-02, WRK-03)', () => {
     ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
   });
 
+  it('SPK-STAFF-001: declaring a requirement whose qualification an already accepted assignee lacks raises the unqualified assignment', async () => {
+    const event = await party('2027-02-09');
+    const manager = await staffMember(t, ['program_manager']);
+    // accepted for the role before the booking declared what it requires
+    const assignment = await createAssignmentFixture(t, {
+      targetType: 'event',
+      targetId: event.id,
+      schedulingEventId: event.id,
+      personId: manager.personId,
+      kind: 'organizer',
+      role: 'program_manager',
+      status: 'accepted',
+      scheduledStart: event.scheduledStart,
+      scheduledEnd: event.scheduledEnd,
+      title: event.title,
+    });
+    const unqualified = () =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .select(['status', 'owner_queue', 'severity'])
+        .where('category', '=', 'workforce.unqualified_assignment')
+        .where('affected_id', '=', assignment)
+        .execute();
+    await uow.run(() => staffing.declareRequirements(booking, staffingOf(event)));
+    expect(await unqualified()).toEqual([
+      { status: 'open', owner_queue: 'scheduler', severity: 'high' },
+    ]);
+    // a repeat declares nothing new and raises nothing more
+    await uow.run(() => staffing.declareRequirements(booking, staffingOf(event)));
+    expect(await unqualified()).toHaveLength(1);
+  });
+
   it('the database refuses un-retiring a requirement and assigning to a retired one', async () => {
     const event = await party('2027-02-07');
     const declared = await uow.run(() => staffing.declareRequirements(booking, staffingOf(event)));

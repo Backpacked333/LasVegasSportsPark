@@ -53,6 +53,7 @@ import {
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 
@@ -92,18 +93,19 @@ function EligibilityCheck({
       );
     return <StateView variant="loading" label="the eligibility check" />;
   }
+  const verdict = check.data.eligible
+    ? `Eligible as ${PLAYING_STATUS_LABELS[status].toLowerCase()} now`
+    : 'Cannot be added now';
   return (
-    <View style={styles.group} testID="eligibility-result">
-      {check.data.eligible ? (
-        <StatusBadge
-          tone="success"
-          label={`Eligible as ${PLAYING_STATUS_LABELS[status].toLowerCase()} now`}
-        />
-      ) : (
-        <StatusBadge tone="danger" label="Cannot be added now" />
-      )}
+    // The check's answer is announced with its reasons (SPK-UX-009).
+    <LiveRegion
+      style={styles.group}
+      testID="eligibility-result"
+      announcement={sentences(verdict, ...check.data.reasons.map((reason) => reason.message))}
+    >
+      <StatusBadge tone={check.data.eligible ? 'success' : 'danger'} label={verdict} />
       {check.data.reasons.length > 0 ? <ReasonList reasons={check.data.reasons} /> : null}
-    </View>
+    </LiveRegion>
   );
 }
 

@@ -16,7 +16,7 @@ import {
   type Principal,
 } from '@sportspark/contracts';
 import { json, type AccessGrantsTable, type Db, type RelationshipsTable } from '@sportspark/db';
-import { sql, type Selectable, type SqlBool } from 'kysely';
+import { type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -30,21 +30,28 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
-import { DuplicateCandidateMachine } from '../identity.machines';
+import {
+  ClaimMachine,
+  DuplicateCandidateMachine,
+  InvitationMachine,
+  RelationshipMachine,
+} from '../identity.machines';
 import {
   displayNameOf,
-  iso,
   personColumns,
   toDuplicateCandidate,
   toPersonMerge,
   type PersonRow,
 } from '../identity.shared';
 
-const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+const ListCursor = z.object({ c: KeysetInstant, id: z.uuid() });
 
 export interface MergeSummary {
   contactPointsMoved: number;
@@ -75,6 +82,17 @@ export interface MergeSummary {
  * A merge never carries it across the pair (SPK-IAM-002, SPK-IAM-007).
  */
 const UNVERIFIED_AUTHORITY_SOURCES: ReadonlySet<string> = new Set(['self_service', 'import']);
+
+/** What every per-record write of one merge records: who, when, and which merge (§4.9, §4.14). */
+interface MergeWrite {
+  principal: Principal;
+  actor: ReturnType<typeof json>;
+  now: Date;
+  correlationId: string | null;
+  operationId: string;
+  /** Audit details naming the merge (mergeId, survivorPersonId, mergedPersonId). */
+  merge: { mergeId: string; survivorPersonId: string; mergedPersonId: string };
+}
 
 /**
  * Duplicate review and merge (SPK-IAM-007). Detection (PeopleService) and staff flagging only
@@ -302,6 +320,15 @@ export class DuplicatesService {
       };
       const actor = json(snapshotActor(principal));
       const mergeId = newId();
+      const mergeAudit = { mergeId, survivorPersonId: survivorId, mergedPersonId: mergedId };
+      const write: MergeWrite = {
+        principal,
+        actor,
+        now,
+        correlationId,
+        operationId,
+        merge: mergeAudit,
+      };
 
       // 1. Contact points: move, demoting primaries the survivor already has.
       const survivorPrimaryKinds = new Set(
@@ -344,12 +371,16 @@ export class DuplicatesService {
         .where('person_id', '=', survivorId)
         .where('status', '=', 'active')
         .executeTakeFirst();
+      // §4.9: locked, so a concurrent recovery (relink) of one of them commits first and the
+      // revision written here follows it, or waits for this merge and then sees the result.
       const mergedAccounts = await trx
         .selectFrom('accounts')
         .select(['id', 'revision'])
         .where('organization_id', '=', organizationId)
         .where('person_id', '=', mergedId)
         .where('status', '=', 'active')
+        .orderBy('id')
+        .forUpdate()
         .execute();
       for (const account of mergedAccounts) {
         if (survivorActive) {
@@ -381,7 +412,11 @@ export class DuplicatesService {
         }
       }
 
-      // 3. Live relationships and their grants.
+      // 3. Live relationships and their grants. §4.9: both are locked before they are read for a
+      // write (relationships in one fixed order, then each relationship's grants in id order), so a
+      // holder's revocation or a review's restriction either commits first, and the merge reads
+      // the committed row (a revoked grant is no longer selected), or waits for this merge and
+      // then sees its outcome. Every write below is also guarded by the revision it read.
       const liveRelationships = await trx
         .selectFrom('relationships')
         .selectAll()
@@ -391,21 +426,17 @@ export class DuplicatesService {
           eb.or([eb('actor_person_id', '=', mergedId), eb('subject_person_id', '=', mergedId)]),
         )
         .orderBy('created_at')
+        .orderBy('id')
+        .forUpdate()
         .execute();
       for (const relationship of liveRelationships) {
-        const grants = await trx
-          .selectFrom('access_grants')
-          .selectAll()
-          .where('relationship_id', '=', relationship.id)
-          .where('revoked_at', 'is', null)
-          .execute();
+        const grants = await this.lockLiveGrants(trx, organizationId, relationship.id);
         if (UNVERIFIED_AUTHORITY_SOURCES.has(relationship.source)) {
           await this.endRelationship(
             trx,
+            write,
             relationship,
             grants,
-            actor,
-            now,
             `merge: unverified ${relationship.source} authority is not transferred`,
           );
           summary.unverifiedRelationshipsSkipped += 1;
@@ -419,10 +450,9 @@ export class DuplicatesService {
         if (newActor === newSubject && relationship.kind !== 'self_managed') {
           await this.endRelationship(
             trx,
+            write,
             relationship,
             grants,
-            actor,
-            now,
             'merge: relationship between the merged pair',
           );
           summary.relationshipsEnded += 1;
@@ -442,9 +472,8 @@ export class DuplicatesService {
           if (UNVERIFIED_AUTHORITY_SOURCES.has(grant.source)) {
             await this.revokeGrant(
               trx,
+              write,
               grant,
-              actor,
-              now,
               `merge: unverified ${grant.source} grant is not transferred`,
             );
             summary.unverifiedGrantsSkipped += 1;
@@ -474,14 +503,13 @@ export class DuplicatesService {
           if (overlap) {
             await this.revokeGrant(
               trx,
+              write,
               grant,
-              actor,
-              now,
               'merge: equivalent grant already held by the survivor',
             );
             summary.grantsRevokedAsDuplicate += 1;
           } else {
-            await trx
+            const moved = await trx
               .updateTable('access_grants')
               .set({
                 relationship_id: target ? target.id : relationship.id,
@@ -489,31 +517,42 @@ export class DuplicatesService {
                 subject_person_id: newSubject,
                 revision: grant.revision + 1,
               })
+              .where('organization_id', '=', organizationId)
               .where('id', '=', grant.id)
-              .execute();
+              .where('revision', '=', grant.revision)
+              .where('revoked_at', 'is', null)
+              .executeTakeFirst();
+            ensureUpdated(moved.numUpdatedRows, () =>
+              errors.staleRevision(grant.revision, grant.revision + 1),
+            );
             summary.grantsMoved += 1;
           }
         }
         if (target) {
           await this.endRelationship(
             trx,
+            write,
             relationship,
             [],
-            actor,
-            now,
             `merge: consolidated into relationship ${target.id}`,
           );
           summary.relationshipsConsolidated += 1;
         } else {
-          await trx
+          const moved = await trx
             .updateTable('relationships')
             .set({
               actor_person_id: newActor,
               subject_person_id: newSubject,
               revision: relationship.revision + 1,
             })
+            .where('organization_id', '=', organizationId)
             .where('id', '=', relationship.id)
-            .execute();
+            .where('revision', '=', relationship.revision)
+            .where('status', 'in', ['active', 'suspended'])
+            .executeTakeFirst();
+          ensureUpdated(moved.numUpdatedRows, () =>
+            errors.staleRevision(relationship.revision, relationship.revision + 1),
+          );
           summary.relationshipsMoved += 1;
         }
       }
@@ -528,20 +567,17 @@ export class DuplicatesService {
         .where('subject_person_id', '=', survivorId)
         .where('source', '=', 'self_service')
         .where('status', 'in', ['active', 'suspended'])
+        .orderBy('created_at')
+        .orderBy('id')
+        .forUpdate()
         .execute();
       for (const relationship of survivorSelfService) {
-        const grants = await trx
-          .selectFrom('access_grants')
-          .selectAll()
-          .where('relationship_id', '=', relationship.id)
-          .where('revoked_at', 'is', null)
-          .execute();
+        const grants = await this.lockLiveGrants(trx, organizationId, relationship.id);
         await this.endRelationship(
           trx,
+          write,
           relationship,
           grants,
-          actor,
-          now,
           'merge: unverified self_service authority over the survivor ends',
         );
         summary.survivorUnverifiedRelationshipsEnded += 1;
@@ -594,14 +630,13 @@ export class DuplicatesService {
       summary.staffMembershipsMoved = Number(staff.numUpdatedRows);
 
       // 6. Pending invitations and claims addressed to the merged person are unverified: revoke.
-      const invitations = await trx
-        .updateTable('invitations')
-        .set({
-          status: 'revoked',
-          revoked_at: now,
-          revoked_by: actor,
-          revocation_reason: 'merge: pending invitation not transferred',
-        })
+      // Each takes the same pending → revoked transition as the revoke commands (machine, revision
+      // bump, the record's own audit and revoke event; §4.6, §4.9, §4.12), under its row lock so a
+      // concurrent accept or revoke either commits first (and the row is no longer pending) or
+      // waits for this merge.
+      const pendingInvitations = await trx
+        .selectFrom('invitations')
+        .select(['id', 'status', 'revision'])
         .where('organization_id', '=', organizationId)
         .where('status', '=', 'pending')
         .where((eb) =>
@@ -619,21 +654,100 @@ export class DuplicatesService {
             ),
           ]),
         )
-        .executeTakeFirst();
-      summary.pendingInvitationsRevoked = Number(invitations.numUpdatedRows);
-      const claims = await trx
-        .updateTable('claims')
-        .set({
-          status: 'revoked',
-          revoked_at: now,
-          revoked_by: actor,
-          revocation_reason: 'merge: pending claim not transferred',
-        })
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+      for (const invitation of pendingInvitations) {
+        const reason = 'merge: pending invitation not transferred';
+        const revoked = await trx
+          .updateTable('invitations')
+          .set({
+            status: InvitationMachine.next(invitation.status, 'revoke'),
+            revoked_at: now,
+            revoked_by: actor,
+            revocation_reason: reason,
+            revision: invitation.revision + 1,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', invitation.id)
+          .where('revision', '=', invitation.revision)
+          .executeTakeFirst();
+        ensureUpdated(revoked.numUpdatedRows, () =>
+          errors.staleRevision(invitation.revision, invitation.revision + 1),
+        );
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: IdentityActions.revokeInvitation.id,
+          targetType: 'invitation',
+          targetId: invitation.id,
+          beforeRevision: invitation.revision,
+          afterRevision: invitation.revision + 1,
+          reason,
+          correlationId,
+          operationId,
+          details: { via: 'merge', ...mergeAudit },
+        });
+        await this.outbox.enqueue(trx, IdentityEvents.invitationRevoked, {
+          organizationId,
+          aggregateType: 'invitation',
+          aggregateId: invitation.id,
+          payload: { invitationId: invitation.id, reason },
+          correlationId,
+          operationId,
+        });
+        summary.pendingInvitationsRevoked += 1;
+      }
+      const pendingClaims = await trx
+        .selectFrom('claims')
+        .select(['id', 'status', 'revision', 'kind'])
         .where('organization_id', '=', organizationId)
         .where('status', '=', 'pending')
         .where('subject_person_id', '=', mergedId)
-        .executeTakeFirst();
-      summary.pendingClaimsRevoked = Number(claims.numUpdatedRows);
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+      for (const claim of pendingClaims) {
+        const reason = 'merge: pending claim not transferred';
+        const revoked = await trx
+          .updateTable('claims')
+          .set({
+            status: ClaimMachine.next(claim.status, 'revoke'),
+            revoked_at: now,
+            revoked_by: actor,
+            revocation_reason: reason,
+            revision: claim.revision + 1,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', claim.id)
+          .where('revision', '=', claim.revision)
+          .executeTakeFirst();
+        ensureUpdated(revoked.numUpdatedRows, () =>
+          errors.staleRevision(claim.revision, claim.revision + 1),
+        );
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: IdentityActions.revokeClaim.id,
+          targetType: 'claim',
+          targetId: claim.id,
+          beforeRevision: claim.revision,
+          afterRevision: claim.revision + 1,
+          reason,
+          correlationId,
+          operationId,
+          details: { via: 'merge', subjectPersonId: mergedId, kind: claim.kind, ...mergeAudit },
+        });
+        await this.outbox.enqueue(trx, IdentityEvents.claimRevoked, {
+          organizationId,
+          aggregateType: 'claim',
+          aggregateId: claim.id,
+          payload: { claimId: claim.id, subjectPersonId: mergedId, reason },
+          correlationId,
+          operationId,
+        });
+        summary.pendingClaimsRevoked += 1;
+      }
 
       // 7. Open access reviews about the merged person continue about the survivor.
       const reviews = await trx
@@ -645,21 +759,51 @@ export class DuplicatesService {
         .executeTakeFirst();
       summary.accessReviewsMoved = Number(reviews.numUpdatedRows);
 
-      // 8. Other open candidates involving the merged person are moot.
+      // 8. Other open candidates involving the merged person are moot. Each takes the dismiss
+      // command's transition (machine, revision bump, its own identity.dismiss_duplicate audit
+      // tied to this merge; §4.6, §4.9), under its row lock in id order.
       const others = await trx
-        .updateTable('duplicate_candidates')
-        .set({
-          status: 'dismissed',
-          decision: json({ outcome: 'dismissed', reason: 'person_merged', mergeId }),
-          decided_by: actor,
-          decided_at: now,
-        })
+        .selectFrom('duplicate_candidates')
+        .select(['id', 'status', 'revision'])
         .where('organization_id', '=', organizationId)
         .where('status', '=', 'open')
         .where('id', '<>', candidateId)
         .where((eb) => eb.or([eb('person_a_id', '=', mergedId), eb('person_b_id', '=', mergedId)]))
-        .executeTakeFirst();
-      summary.otherCandidatesDismissed = Number(others.numUpdatedRows);
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+      for (const other of others) {
+        const dismissed = await trx
+          .updateTable('duplicate_candidates')
+          .set({
+            status: DuplicateCandidateMachine.next(other.status, 'dismiss'),
+            decision: json({ outcome: 'dismissed', reason: 'person_merged', mergeId }),
+            decided_by: actor,
+            decided_at: now,
+            revision: other.revision + 1,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', other.id)
+          .where('revision', '=', other.revision)
+          .executeTakeFirst();
+        ensureUpdated(dismissed.numUpdatedRows, () =>
+          errors.staleRevision(other.revision, other.revision + 1),
+        );
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: IdentityActions.dismissDuplicate.id,
+          targetType: 'duplicate_candidate',
+          targetId: other.id,
+          beforeRevision: other.revision,
+          afterRevision: other.revision + 1,
+          reason: 'merge: person merged',
+          correlationId,
+          operationId,
+          details: { via: 'merge', ...mergeAudit },
+        });
+        summary.otherCandidatesDismissed += 1;
+      }
       const decided = await trx
         .updateTable('duplicate_candidates')
         .set({
@@ -747,44 +891,124 @@ export class DuplicatesService {
     });
   }
 
-  private async endRelationship(
+  /** The relationship's unrevoked grants, locked in id order (§4.9). */
+  private async lockLiveGrants(
     trx: Trx,
-    relationship: Selectable<RelationshipsTable>,
-    grants: Selectable<AccessGrantsTable>[],
-    actor: ReturnType<typeof json>,
-    now: Date,
-    reason: string,
-  ): Promise<void> {
-    for (const grant of grants) await this.revokeGrant(trx, grant, actor, now, reason);
-    await trx
-      .updateTable('relationships')
-      .set({
-        status: 'ended',
-        ended_at: now,
-        ended_reason: reason,
-        revision: relationship.revision + 1,
-      })
-      .where('id', '=', relationship.id)
+    organizationId: string,
+    relationshipId: string,
+  ): Promise<Selectable<AccessGrantsTable>[]> {
+    return trx
+      .selectFrom('access_grants')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('relationship_id', '=', relationshipId)
+      .where('revoked_at', 'is', null)
+      .orderBy('id')
+      .forUpdate()
       .execute();
   }
 
-  private async revokeGrant(
+  /**
+   * Ends a relationship the merge does not carry over (§4.6 RelationshipMachine 'end'), revoking
+   * its live grants first. The caller holds the relationship's and the grants' row locks; the
+   * write is guarded by the revision read under them, and the relationship gets its own audit
+   * record tied to the merge's operation.
+   */
+  private async endRelationship(
     trx: Trx,
-    grant: Selectable<AccessGrantsTable>,
-    actor: ReturnType<typeof json>,
-    now: Date,
+    write: MergeWrite,
+    relationship: Selectable<RelationshipsTable>,
+    grants: Selectable<AccessGrantsTable>[],
     reason: string,
   ): Promise<void> {
-    await trx
+    for (const grant of grants) await this.revokeGrant(trx, write, grant, reason);
+    const ended = await trx
+      .updateTable('relationships')
+      .set({
+        status: RelationshipMachine.next(relationship.status, 'end'),
+        ended_at: write.now,
+        ended_reason: reason,
+        revision: relationship.revision + 1,
+      })
+      .where('organization_id', '=', relationship.organization_id)
+      .where('id', '=', relationship.id)
+      .where('revision', '=', relationship.revision)
+      .executeTakeFirst();
+    ensureUpdated(ended.numUpdatedRows, () =>
+      errors.staleRevision(relationship.revision, relationship.revision + 1),
+    );
+    // No end-relationship command exists; the merge that ended it is the audited action.
+    await this.audit.record(trx, {
+      organizationId: relationship.organization_id,
+      actor: write.principal,
+      action: IdentityActions.mergePersons.id,
+      targetType: 'relationship',
+      targetId: relationship.id,
+      beforeRevision: relationship.revision,
+      afterRevision: relationship.revision + 1,
+      reason,
+      correlationId: write.correlationId,
+      operationId: write.operationId,
+      details: {
+        via: 'merge',
+        transition: 'end',
+        actorPersonId: relationship.actor_person_id,
+        subjectPersonId: relationship.subject_person_id,
+        kind: relationship.kind,
+        source: relationship.source,
+        revokedGrantIds: grants.map((g) => g.id),
+        ...write.merge,
+      },
+    });
+  }
+
+  /**
+   * Revokes a grant the merge does not carry over, as the revoke command does (§4.9, SPK-IAM-006):
+   * under the caller's row lock, guarded by the revision read under it, with an
+   * identity.revoke_access audit record and one identity.access_grant_revoked, both tied to the
+   * merge's operation.
+   */
+  private async revokeGrant(
+    trx: Trx,
+    write: MergeWrite,
+    grant: Selectable<AccessGrantsTable>,
+    reason: string,
+  ): Promise<void> {
+    const revoked = await trx
       .updateTable('access_grants')
       .set({
-        revoked_at: now,
-        revoked_by: actor,
+        revoked_at: write.now,
+        revoked_by: write.actor,
         revocation_reason: reason,
         revision: grant.revision + 1,
       })
+      .where('organization_id', '=', grant.organization_id)
       .where('id', '=', grant.id)
-      .execute();
+      .where('revision', '=', grant.revision)
+      .where('revoked_at', 'is', null)
+      .executeTakeFirst();
+    ensureUpdated(revoked.numUpdatedRows, () =>
+      errors.staleRevision(grant.revision, grant.revision + 1),
+    );
+    await this.audit.record(trx, {
+      organizationId: grant.organization_id,
+      actor: write.principal,
+      action: IdentityActions.revokeAccess.id,
+      targetType: 'access_grant',
+      targetId: grant.id,
+      beforeRevision: grant.revision,
+      afterRevision: grant.revision + 1,
+      reason,
+      correlationId: write.correlationId,
+      operationId: write.operationId,
+      details: {
+        via: 'merge',
+        actorPersonId: grant.actor_person_id,
+        subjectPersonId: grant.subject_person_id,
+        permission: grant.permission,
+        ...write.merge,
+      },
+    });
     await this.outbox.enqueue(trx, IdentityEvents.accessGrantRevoked, {
       organizationId: grant.organization_id,
       aggregateType: 'access_grant',
@@ -796,6 +1020,8 @@ export class DuplicatesService {
         permission: grant.permission,
         reason,
       },
+      correlationId: write.correlationId,
+      operationId: write.operationId,
     });
   }
 
@@ -822,7 +1048,12 @@ export class DuplicatesService {
     const cursor = decodeCursor(query.cursor, ListCursor);
     if (cursor) {
       rows = rows.where(
-        sql<SqlBool>`(created_at, id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+        afterKeyset(
+          'duplicate_candidates.created_at',
+          'duplicate_candidates.id',
+          cursor.c,
+          cursor.id,
+        ),
       );
     }
     const found = await rows
@@ -856,7 +1087,16 @@ export class DuplicatesService {
       })),
       nextCursor:
         found.length > query.limit && last
-          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              c: await exactInstantOf(
+                this.db,
+                'duplicate_candidates',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }

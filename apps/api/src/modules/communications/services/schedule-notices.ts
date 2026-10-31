@@ -15,7 +15,7 @@ import type {
   SchedulePublished,
 } from '../../scheduling';
 import { SESSION_AUDIENCE_PORT, type SessionAudiencePort } from '../ports';
-import { uniqueStrings } from '../communications.shared';
+import { noticeTitle, uniqueStrings } from '../communications.shared';
 import { CalendarEntriesService } from './calendar-entries.service';
 import { NotificationsService } from './notifications.service';
 
@@ -166,17 +166,17 @@ export function describe(
   switch (kind) {
     case 'schedule_changed':
       return {
-        title: `Schedule changed: ${name}`,
+        title: noticeTitle('Schedule changed: ', name),
         body: `Was: ${when(before)} at ${where(before)}. Now: ${when(after)} at ${where(after)}.${reasonSuffix(payload.reason)}`,
       };
     case 'cancellation':
       return {
-        title: `Canceled: ${name}`,
+        title: noticeTitle('Canceled: ', name),
         body: `${name} on ${when(before)} at ${where(before)} has been canceled.${reasonSuffix(payload.reason)}`,
       };
     default:
       return {
-        title: `Scheduled: ${name}`,
+        title: noticeTitle('Scheduled: ', name),
         body: `${name} is scheduled for ${when(after)} at ${where(after)}.`,
       };
   }

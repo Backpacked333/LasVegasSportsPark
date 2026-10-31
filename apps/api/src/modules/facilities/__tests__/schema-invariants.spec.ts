@@ -25,7 +25,7 @@ import { seedAsset } from '../testing/facilities-fixtures';
  * Integrity invariants proven at the database (CLAUDE.md "Integrity that matters is enforced in
  * the database"): rows are inserted through Kysely, bypassing the services.
  */
-describe('facilities schema invariants (migrations 0900-0904)', () => {
+describe('facilities schema invariants (migrations 0900-0905)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -603,6 +603,39 @@ describe('facilities schema invariants (migrations 0900-0904)', () => {
       .set({ reason: 'clarified' })
       .where('id', '=', open)
       .execute();
+  });
+
+  it('R2-SCHEMA-01 / §4.7 invariant 9 (migration 0905): the database refuses deleting a restriction past proposed; a proposed one can still be deleted', async () => {
+    const restrictViolation = (error: unknown) =>
+      (error as { code?: string } | null)?.code === '23001';
+    const proposed = await insertRestriction();
+    const approved = await insertRestriction({
+      status: 'approved',
+      approved_by: json({ kind: 'staff' }),
+      approved_at: new Date(),
+      resource_id: pitch.southHalfId,
+    });
+    const withdrawn = await insertRestriction({
+      status: 'withdrawn',
+      withdrawn_at: new Date(),
+      withdrawn_by: json({ kind: 'staff' }),
+      withdrawal_reason: 'not needed',
+    });
+    for (const id of [approved, withdrawn]) {
+      await expect(db.deleteFrom('restrictions').where('id', '=', id).execute()).rejects.toSatisfy(
+        restrictViolation,
+      );
+    }
+    const kept = await db
+      .selectFrom('restrictions')
+      .select('id')
+      .where('id', 'in', [approved, withdrawn])
+      .execute();
+    expect(kept).toHaveLength(2);
+    await db.deleteFrom('restrictions').where('id', '=', proposed).execute();
+    expect(
+      await db.selectFrom('restrictions').select('id').where('id', '=', proposed).execute(),
+    ).toEqual([]);
   });
 
   it('§4.6 RestrictionMachine: the database refuses transitions the machine forbids and keeps what was approved final (INTEGRITY-05, migration 0904)', async () => {

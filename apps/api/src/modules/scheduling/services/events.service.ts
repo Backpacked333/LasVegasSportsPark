@@ -40,7 +40,7 @@ import { EventMachine } from '../scheduling.state-machines';
 import { localMinuteSpan, minutesOf } from '../time/local-time';
 import { EventImportService } from './event-import.service';
 import { EventSeriesService } from './event-series.service';
-import { EventWriter, sameResourceSet } from './event-writer';
+import { assertEventTitle, EventWriter, sameResourceSet } from './event-writer';
 import { organizationOf } from './organization';
 
 export { organizationOf } from './organization';
@@ -72,6 +72,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
    */
   async createEvent(principal: Principal, input: CreateEventInput): Promise<Event> {
     const organizationId = organizationOf(principal);
+    assertEventTitle(input.title);
     const scheduledStart = new Date(input.scheduledStart);
     const scheduledEnd = new Date(input.scheduledEnd);
     if (!(scheduledStart < scheduledEnd)) {

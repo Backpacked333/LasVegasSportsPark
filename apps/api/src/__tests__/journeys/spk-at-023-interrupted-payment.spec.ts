@@ -118,6 +118,19 @@ describe('SPK-UX-001 / SPK-AT-023: interrupted payment resumes once (assembled a
       });
       const once = await effects();
       expect(once.receipts).toBe(1);
+      // R2-JOURNEYS-04 (SPK-COMMS-002): the family is told of the registration exactly once
+      const outcomeNotices = async () =>
+        t.db
+          .selectFrom('notifications')
+          .select('id')
+          .where('kind', '=', 'registration_outcome')
+          .where(
+            'subject_id',
+            'in',
+            confirmed.map((e) => e.id),
+          )
+          .execute();
+      expect(await outcomeNotices()).toHaveLength(1);
       const calendar = await ok<{ items: Array<{ sessionId: string; personId: string }> }>(
         t.http
           .get('/v1/me/family-calendar')
@@ -133,6 +146,7 @@ describe('SPK-UX-001 / SPK-AT-023: interrupted payment resumes once (assembled a
       await processInbox(t);
       await drain(t);
       expect(await effects()).toEqual(once);
+      expect(await outcomeNotices()).toHaveLength(1);
       expect(provider.chargeCount()).toBe(charges);
     } finally {
       await t.close();

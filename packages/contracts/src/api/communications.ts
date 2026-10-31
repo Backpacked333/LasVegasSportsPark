@@ -1,5 +1,5 @@
 import { z } from '../zod';
-import { Revision, withCommandMeta } from '../commands';
+import { CommandMetaSchema, Revision, withCommandMeta } from '../commands';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
 import { StaffRole } from '../principal';
@@ -72,19 +72,110 @@ export const DeliveryFailureCodeSchema = z
 export type DeliveryFailureCodeValue = z.infer<typeof DeliveryFailureCodeSchema>;
 export const AcknowledgmentViaSchema = DeliveryChannelSchema;
 
-const Title = z.string().trim().min(1).max(200);
-const Body = z.string().trim().min(1).max(4000);
-const Reason = z.string().trim().min(1).max(2000);
-const Label = z.string().trim().min(1).max(100);
+// ---------------------------------------------------------------------------------------------
+// Request text (R2-TENANCY-INPUT-04, §4.10). PostgreSQL `text` and `jsonb` cannot hold U+0000, so
+// a request carrying one failed at the insert and answered 500 INTERNAL_ERROR. The free text of
+// every communications request is checked here and refused as 400 VALIDATION_FAILED naming the
+// field. Single-line text (titles, labels, identifiers, tokens) refuses every C0 control
+// character (U+0000..U+001F) and DEL (U+007F); multi-line text (bodies, reasons, notes) keeps tab,
+// line feed and carriage return. The shared command metadata (`reason`, `policyReferences`) and
+// provider receipts are checked for U+0000 only: their other characters are the kernel's and the
+// provider's to judge, and a NUL is the one that can never be stored. Text other modules compose
+// from in-process (`ModuleComposeNotificationBody`) is not checked: it is text they already store.
+// ---------------------------------------------------------------------------------------------
+const TAB = 0x09;
+const LINE_FEED = 0x0a;
+const CARRIAGE_RETURN = 0x0d;
+const DEL = 0x7f;
+
+function hasControlCharacter(value: string, multiLine: boolean): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === DEL) return true;
+    if (code >= 0x20) continue;
+    if (multiLine && (code === TAB || code === LINE_FEED || code === CARRIAGE_RETURN)) continue;
+    return true;
+  }
+  return false;
+}
+
+const hasNul = (value: string): boolean => value.includes('\u0000');
+
+/** Single-line request text: no C0 control character, no DEL. */
+const singleLine = (schema: z.ZodString) =>
+  schema.refine((value) => !hasControlCharacter(value, false), {
+    message: 'Must not contain control characters (U+0000 to U+001F, U+007F).',
+  });
+/** Multi-line request text: tab, line feed and carriage return are allowed, other controls are not. */
+const multiLine = (schema: z.ZodString) =>
+  schema.refine((value) => !hasControlCharacter(value, true), {
+    message:
+      'Must not contain control characters other than tab, line feed and carriage return (U+0000 to U+001F, U+007F).',
+  });
+const NO_NUL = { message: 'Must not contain the NUL character (U+0000).' };
+const noNul = (schema: z.ZodString) => schema.refine((value) => !hasNul(value), NO_NUL);
+
+/** True when any string or object key in `value`, at any depth, holds U+0000 (iterative: no deep recursion). */
+function containsNul(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (typeof next === 'string') {
+      if (hasNul(next)) return true;
+    } else if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+    } else if (typeof next === 'object' && next !== null) {
+      for (const [key, inner] of Object.entries(next)) {
+        if (hasNul(key)) return true;
+        pending.push(inner);
+      }
+    }
+  }
+  return false;
+}
+
+const TitleText = z.string().trim().min(1).max(200);
+const BodyText = z.string().trim().min(1).max(4000);
+const Title = singleLine(TitleText);
+const Body = multiLine(BodyText);
+const Reason = multiLine(z.string().trim().min(1).max(2000));
+const Label = singleLine(z.string().trim().min(1).max(100));
+const Note = multiLine(z.string().trim().min(1).max(2000));
+
+/** The shared command metadata with U+0000 refused in its text (see "Request text" above). */
+const RequestMeta = {
+  reason: noNul(CommandMetaSchema.shape.reason.unwrap()).optional(),
+  policyReferences: CommandMetaSchema.shape.policyReferences
+    .unwrap()
+    .superRefine((references, ctx) => {
+      references.forEach((reference, index) => {
+        if (hasNul(reference)) ctx.addIssue({ code: 'custom', path: [index], ...NO_NUL });
+      });
+    })
+    .optional(),
+};
+
+/** `withCommandMeta` for communications requests: the metadata's text is checked for U+0000. */
+function withRequestMeta<T extends z.ZodRawShape>(shape: T) {
+  return withCommandMeta(shape).extend(RequestMeta);
+}
 
 /** Practical details shown old/new on schedule notices (SPK-COMMS-005); shape owned by the source module. */
 export const PracticalDetailsSchema = z.record(z.string(), z.unknown()).openapi('PracticalDetails');
 export type PracticalDetails = z.infer<typeof PracticalDetailsSchema>;
+/** Request details: no string or key at any depth holds U+0000, which `jsonb` cannot store. */
+const PracticalDetailsRequest = PracticalDetailsSchema.refine((details) => !containsNul(details), {
+  message: 'Must not contain the NUL character (U+0000) in any key or value.',
+});
 
+const SubjectType = z.string().trim().min(1).max(100);
+const SubjectId = z.string().trim().min(1).max(200);
 export const NotificationSubjectSchema = z
-  .object({ type: z.string().trim().min(1).max(100), id: z.string().trim().min(1).max(200) })
+  .object({ type: singleLine(SubjectType), id: singleLine(SubjectId) })
   .openapi('NotificationSubject');
 export type NotificationSubject = z.infer<typeof NotificationSubjectSchema>;
+/** The subject as in-process composition gives it (unchecked text, see "Request text"). */
+const ModuleNotificationSubject = z.object({ type: SubjectType, id: SubjectId });
 
 /**
  * How recipients are resolved — always from CURRENT permissions (SPK-COMMS-003): holders of
@@ -148,7 +239,15 @@ export const NotificationSchema = z
   .openapi('Notification');
 export type Notification = z.infer<typeof NotificationSchema>;
 
-export const ComposeNotificationBody = withCommandMeta({
+/**
+ * The compose fields as other modules' in-process composition reads them
+ * (`NotificationsService.composeIn`, `composeAndQueueIn`): the request body without its
+ * request-text checks. A module composes from text it already stores (a team or offering name);
+ * refusing a control character there would lose the notice inside an event handler, and stored
+ * text never holds U+0000, which PostgreSQL cannot store. HTTP requests use
+ * `ComposeNotificationBody`, which checks the text.
+ */
+export const ModuleComposeNotificationBody = withCommandMeta({
   kind: NotificationKindSchema,
   /**
    * SPK-COMMS-007: essential and promotional messages are separate. The communication policy binds
@@ -158,20 +257,30 @@ export const ComposeNotificationBody = withCommandMeta({
    */
   category: NotificationCategorySchema.optional(),
   facilityId: z.uuid().optional(),
-  subject: NotificationSubjectSchema.optional(),
+  subject: ModuleNotificationSubject.optional(),
   audience: AudienceSchema,
-  title: Title,
-  body: Body,
+  title: TitleText,
+  body: BodyText,
   detailsBefore: PracticalDetailsSchema.optional(),
   detailsAfter: PracticalDetailsSchema.optional(),
   /** Contains participant-private information: recipients are re-checked before dispatch (SPK-COMMS-003). */
   protected: z.boolean().default(false),
   /** Deliver no earlier than this instant (reminders); an obsolete unsent reminder is suppressed (SPK-COMMS-005). */
   scheduledFor: Instant.optional(),
+});
+
+/** POST /notifications: the compose fields with their request text checked (R2-TENANCY-INPUT-04). */
+export const ComposeNotificationBody = ModuleComposeNotificationBody.extend({
+  subject: NotificationSubjectSchema.optional(),
+  title: Title,
+  body: Body,
+  detailsBefore: PracticalDetailsRequest.optional(),
+  detailsAfter: PracticalDetailsRequest.optional(),
+  ...RequestMeta,
 }).openapi('ComposeNotificationRequest');
 export type ComposeNotificationInput = z.infer<typeof ComposeNotificationBody>;
 
-export const SendNotificationBody = withCommandMeta({}).openapi('SendNotificationRequest');
+export const SendNotificationBody = withRequestMeta({}).openapi('SendNotificationRequest');
 export type SendNotificationInput = z.infer<typeof SendNotificationBody>;
 
 export const ListNotificationsQuery = PageRequestSchema.extend({
@@ -262,7 +371,7 @@ export type NotificationDeliveries = z.infer<typeof NotificationDeliveriesSchema
  * SPK-COMMS-004 (COM-02): retry one failed external delivery as a new attempt. An unknown outcome
  * is never retried (it may have reached the person); a revoked recipient is refused.
  */
-export const RetryDeliveryBody = withCommandMeta({})
+export const RetryDeliveryBody = withRequestMeta({})
   .extend({ reason: Reason })
   .openapi('RetryDeliveryRequest');
 export type RetryDeliveryInput = z.infer<typeof RetryDeliveryBody>;
@@ -312,11 +421,11 @@ export type InboxQuery = z.infer<typeof InboxQuery>;
 export const InboxPageSchema = pageSchema(InboxItemSchema).openapi('InboxPage');
 export type InboxPage = z.infer<typeof InboxPageSchema>;
 
-export const MarkReadBody = withCommandMeta({}).openapi('MarkNotificationReadRequest');
+export const MarkReadBody = withRequestMeta({}).openapi('MarkNotificationReadRequest');
 export type MarkReadInput = z.infer<typeof MarkReadBody>;
 
-export const AcknowledgeBody = withCommandMeta({
-  note: z.string().trim().min(1).max(2000).optional(),
+export const AcknowledgeBody = withRequestMeta({
+  note: Note.optional(),
 }).openapi('AcknowledgeNotificationRequest');
 export type AcknowledgeInput = z.infer<typeof AcknowledgeBody>;
 
@@ -345,7 +454,7 @@ export const CommunicationPreferencesSchema = z
   .openapi('CommunicationPreferences');
 export type CommunicationPreferences = z.infer<typeof CommunicationPreferencesSchema>;
 
-export const UpdatePreferencesBody = withCommandMeta({
+export const UpdatePreferencesBody = withRequestMeta({
   preferences: z
     .array(
       z.object({
@@ -382,7 +491,7 @@ export const CalendarFeedSchema = z
   .openapi('CalendarFeed');
 export type CalendarFeed = z.infer<typeof CalendarFeedSchema>;
 
-export const CreateCalendarFeedBody = withCommandMeta({
+export const CreateCalendarFeedBody = withRequestMeta({
   label: Label.optional(),
   /** Other people whose activities the feed includes; the owner must hold `view` over each (re-checked on every fetch). */
   subjectPersonIds: z.array(z.uuid()).max(50).default([]),
@@ -396,9 +505,13 @@ export const CalendarFeedCreatedSchema = CalendarFeedSchema.extend({
 }).openapi('CalendarFeedCreated');
 export type CalendarFeedCreated = z.infer<typeof CalendarFeedCreatedSchema>;
 
-export const RevokeCalendarFeedBody = withCommandMeta({
-  reason: Reason.optional(),
-}).openapi('RevokeCalendarFeedRequest');
+/**
+ * The reason is checked as communications text. `withCommandMeta` puts the metadata's own `reason`
+ * over one named in its shape, so it is set again after (the shape keeps the property order).
+ */
+export const RevokeCalendarFeedBody = withCommandMeta({ reason: Reason.optional() })
+  .extend({ reason: Reason.optional(), policyReferences: RequestMeta.policyReferences })
+  .openapi('RevokeCalendarFeedRequest');
 export type RevokeCalendarFeedInput = z.infer<typeof RevokeCalendarFeedBody>;
 
 export const CalendarFeedListSchema = z
@@ -432,15 +545,15 @@ export const PushDeviceSchema = z
   .openapi('PushDevice');
 export type PushDevice = z.infer<typeof PushDeviceSchema>;
 
-export const RegisterPushDeviceBody = withCommandMeta({
+export const RegisterPushDeviceBody = withRequestMeta({
   platform: PushPlatformSchema,
   /** The platform push token of this app install (opaque; stored only while the device is active). */
-  token: z.string().trim().min(1).max(4096),
-  appVersion: z.string().trim().min(1).max(50).optional(),
+  token: singleLine(z.string().trim().min(1).max(4096)),
+  appVersion: singleLine(z.string().trim().min(1).max(50)).optional(),
 }).openapi('RegisterPushDeviceRequest');
 export type RegisterPushDeviceInput = z.infer<typeof RegisterPushDeviceBody>;
 
-export const RevokePushDeviceBody = withCommandMeta({})
+export const RevokePushDeviceBody = withRequestMeta({})
   .extend({ reason: Reason })
   .openapi('RevokePushDeviceRequest');
 export type RevokePushDeviceInput = z.infer<typeof RevokePushDeviceBody>;
@@ -462,9 +575,9 @@ export const DeliveryReceiptSchema = z
   .object({
     attemptId: z.uuid(),
     organizationId: z.uuid(),
-    providerMessageId: z.string().min(1).max(200),
+    providerMessageId: noNul(z.string().min(1).max(200)),
     status: DeliveryReceiptStatusSchema,
-    error: z.string().max(2000).nullable().default(null),
+    error: noNul(z.string().max(2000)).nullable().default(null),
     occurredAt: Instant.optional(),
   })
   .openapi('DeliveryReceipt');
@@ -473,7 +586,7 @@ export type DeliveryReceipt = z.infer<typeof DeliveryReceiptSchema>;
 /** Envelope the fake messaging provider posts; a real provider adapter maps its own envelope to this. */
 export const MessagingWebhookBody = z
   .object({
-    id: z.string().min(1).max(200),
+    id: noNul(z.string().min(1).max(200)),
     type: z.literal('delivery.receipt'),
     data: DeliveryReceiptSchema,
   })

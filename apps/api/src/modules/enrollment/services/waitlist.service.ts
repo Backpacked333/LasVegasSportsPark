@@ -85,7 +85,8 @@ export type WaitlistRetirementReason =
   | 'equivalent_entitlement'
   | 'booking_required'
   | 'makeup_redemption_required'
-  | 'session_payment_unavailable';
+  | 'session_payment_unavailable'
+  | 'session_canceled';
 
 /**
  * Refusals of `assertObtainable` that end an entry instead of holding its queue: no later change of
@@ -96,6 +97,7 @@ const RETIRING_REFUSALS = new Map<string, WaitlistRetirementReason>([
   ['BOOKING_REQUIRED', 'booking_required'],
   ['MAKEUP_REDEMPTION_REQUIRED', 'makeup_redemption_required'],
   ['SESSION_PAYMENT_UNAVAILABLE', 'session_payment_unavailable'],
+  ['SESSION_CANCELED', 'session_canceled'],
 ]);
 
 /**
@@ -186,6 +188,13 @@ export class WaitlistService implements WaitlistPort {
     const capability = INTENT_CAPABILITIES[entry.intent];
     if (capability) await this.capabilities.require(organizationId, capability, trx);
     if (entry.session_id) {
+      // R2-JOURNEYS-01: a canceled session (its pools closed) is final; nobody waits for it.
+      if (await this.capacity.sessionClosed(trx, organizationId, entry.session_id)) {
+        throw errors.resourceConflict('This session was canceled.', {
+          code: 'SESSION_CANCELED',
+          sessionId: entry.session_id,
+        });
+      }
       await this.bookings.assertSessionPayable(
         trx,
         organizationId,
@@ -1167,6 +1176,45 @@ export class WaitlistService implements WaitlistPort {
       if (await matches(entry))
         await this.retireEntry(trx, organizationId, entry, system, correlationId, true);
     }
+  }
+
+  /**
+   * R2-JOURNEYS-01 (SPK-REG-008, SPK-AT-009): the facility canceled the session, so its live
+   * waitlist entries leave the queue (`removed`, reason `session_canceled`) and an open offer is
+   * declined, giving its places back to a pool that is already closed. Each family is told
+   * (`enrollment.notify_waitlist_retired`). Runs after `CapacityService.closeSessionPools` locked
+   * the offering's pools; idempotent under replay (only live entries move).
+   */
+  async retireForCanceledSession(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+    sessionId: string,
+    correlationId: string | null,
+  ): Promise<number> {
+    const entries = await trx
+      .selectFrom('waitlist_entries')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .where('session_id', '=', sessionId)
+      .where('status', 'in', ['waiting', 'offered'])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const system = enrollmentSystem(organizationId, 'enrollment.follow_session_canceled');
+    for (const entry of entries) {
+      await this.retireEntry(
+        trx,
+        organizationId,
+        entry,
+        system,
+        correlationId,
+        false,
+        'session_canceled',
+      );
+    }
+    return entries.length;
   }
 
   /** Every pool an entry needs: the session pools of its session, else the offering pools of its intent. */

@@ -35,6 +35,7 @@ import { param, registrationRoutes } from '../../features/registration/routes';
 import { Body, ButtonRow, ChoiceRow, Section, TextField } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveText } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -114,7 +115,12 @@ function CompetitionChoice({
           ) : null}
         </View>
       )}
-      {error ? <Text style={styles.error}>{`✕ ${error}`}</Text> : null}
+      {error ? (
+        // Announced when it appears, like every field error (SPK-UX-009).
+        <LiveText style={styles.error} announcement={error} accessibilityRole="alert">
+          {`✕ ${error}`}
+        </LiveText>
+      ) : null}
     </View>
   );
 }

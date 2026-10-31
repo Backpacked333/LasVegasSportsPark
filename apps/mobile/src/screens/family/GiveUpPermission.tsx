@@ -17,6 +17,7 @@ import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { ME_QUERY_KEY, permissionLabel } from '../account/components/account-data';
@@ -70,14 +71,18 @@ export function GiveUpPermission({
   };
 
   if (revoke.data) {
+    const done = `You no longer hold ${permissionLabel(revoke.data.permission)} for ${personName}. The list shows your permissions as they are now.`;
     return (
-      <View style={styles.box} testID="give-up-done">
+      // The outcome is announced (SPK-UX-009).
+      <LiveRegion
+        style={styles.box}
+        testID="give-up-done"
+        announcement={sentences('Permission given up', done)}
+      >
         <StatusBadge tone="neutral" label="Permission given up" />
-        <Paragraph inset={false}>
-          {`You no longer hold ${permissionLabel(revoke.data.permission)} for ${personName}. The list shows your permissions as they are now.`}
-        </Paragraph>
+        <Paragraph inset={false}>{done}</Paragraph>
         <Button label="Done" variant="secondary" onPress={onClose} />
-      </View>
+      </LiveRegion>
     );
   }
 

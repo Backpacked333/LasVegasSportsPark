@@ -582,6 +582,10 @@ export const ImportExceptionSchema = z
     phase: z.enum(['validation', 'apply']),
     reasons: z.array(ImportReasonSchema),
     reviewOwnerRole: StaffRole,
+    /**
+     * §4.6: `decided` once its review owner decides it (final); `withdrawn` when re-validation no
+     * longer raises it or its batch is aborted (R2-LIFECYCLES-07), also final.
+     */
     status: z.enum(['open', 'decided', 'withdrawn']),
     decision: ImportExceptionDecisionSchema.nullable(),
     resolution: ImportExceptionResolutionSchema.nullable(),
@@ -721,7 +725,12 @@ export const AuthorityResolutionSchema = z
     /** `assignment`: the most specific assignment in effect; `default`: none (SportsPark). */
     basis: z.enum(['assignment', 'default', 'conflict']),
     assignmentId: z.uuid().nullable(),
-    scope: AuthorityScopeSchema.nullable(),
+    /**
+     * Null for a `default` entry (no assignment). R2-API-CONTRACT-02, K-01: the generator drops
+     * the null of `.nullable()` on a named union (a bare `$ref`), and flattens a union nested in
+     * a union; the lazy member keeps the published shape `anyOf [$ref AuthorityScope, null]`.
+     */
+    scope: z.union([z.lazy(() => AuthorityScopeSchema), z.null()]),
     effectiveFrom: Instant.nullable(),
     effectiveTo: Instant.nullable(),
   })

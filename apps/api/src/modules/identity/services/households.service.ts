@@ -11,7 +11,7 @@ import {
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
-import { staffAuthorityApplies, toHousehold } from '../identity.shared';
+import { lockPersonsForShare, staffAuthorityApplies, toHousehold } from '../identity.shared';
 
 /**
  * Households (SPK-IAM-001, §4.5). A household is a convenience grouping: membership is never
@@ -130,6 +130,7 @@ export class HouseholdsService {
         subjectPersonIds: [input.personId],
         protected: true,
       });
+      await lockPersonsForShare(trx, organizationId, [input.personId]);
       const person = await trx
         .selectFrom('persons')
         .select('status')

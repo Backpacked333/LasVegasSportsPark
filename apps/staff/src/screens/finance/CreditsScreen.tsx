@@ -155,7 +155,7 @@ function CreditActions({ credit }: { credit: Credit }) {
           </fieldset>
         </form>
       ) : null}
-      <LockedNote error={redeem.error} onNewRequest={reload} />
+      <LockedNote error={redeem.error} reread={redeem.reread} onNewRequest={reload} />
       <CommandError
         error={approve.error ?? redeem.error}
         onReload={reload}
@@ -349,6 +349,7 @@ function IssueCredit({ ownerId }: { ownerId: string }) {
         ) : null}
         <LockedNote
           error={issue.error}
+          reread={issue.reread}
           onNewRequest={() => {
             issue.reset();
             same.forget();

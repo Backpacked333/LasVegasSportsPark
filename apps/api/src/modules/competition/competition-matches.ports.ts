@@ -75,6 +75,24 @@ export const formsUnknown: FormsCheckPort = {
   ],
 };
 
+/**
+ * R2-JOURNEYS-05 (SPK-COMP-004, SPK-CAP-002): finance's answer for one team entry, from the
+ * obligations that name it as debtor. `none`: no obligation that is not canceled; `clear`: every
+ * such obligation is settled or written off; `outstanding`: at least one is open, with the
+ * remaining amount per currency (minor units, SPK-PAY-001) and the earliest open due date;
+ * `unknown`: finance cannot answer (`explanation` says why). Never a guess.
+ */
+export type TeamEntryFinancialStatus =
+  | { status: 'none' }
+  | { status: 'clear' }
+  | {
+      status: 'outstanding';
+      openObligations: number;
+      outstanding: Array<{ amountMinor: number; currency: string }>;
+      nextDueAt: string | null;
+    }
+  | { status: 'unknown'; explanation: string };
+
 /** Finance: applicable financial conditions (team fees, holds) for the competing entries. */
 export interface FinancialConditionsPort {
   fixtureConditions(
@@ -82,10 +100,28 @@ export interface FinancialConditionsPort {
     context: FixtureConditionContext,
     trx?: Trx,
   ): Promise<ConditionFinding[]>;
+  /**
+   * R2-JOURNEYS-05: the entry's financial status, reported as a readiness issue of the team entry
+   * workspace (`GET /v1/team-entries/{id}`), with amounts and the due date only for a viewer who may
+   * read the team obligation (`finance.read_obligation`). The staff entry list
+   * (`GET /v1/team-entries`) does not carry it; the staff dashboard's entry review reads it from
+   * the workspace of each entry. Finance implements it (`ParticipationStandingService`); without an
+   * implementation (competition-only tests) competition reports the status as `unknown`, never as
+   * clear.
+   */
+  entryFinancialStatus?(
+    organizationId: string,
+    teamEntryId: string,
+    trx?: Trx,
+  ): Promise<TeamEntryFinancialStatus>;
 }
 export const FINANCIAL_CONDITIONS_PORT = Symbol('FINANCIAL_CONDITIONS_PORT');
 export const FINANCIAL_CONDITIONS_IMPL = Symbol('FINANCIAL_CONDITIONS_IMPL');
 export const financialConditionsUnknown: FinancialConditionsPort = {
+  entryFinancialStatus: async () => ({
+    status: 'unknown',
+    explanation: 'no finance check is part of this application',
+  }),
   fixtureConditions: async (_organizationId, context) => [
     {
       status: 'unknown',

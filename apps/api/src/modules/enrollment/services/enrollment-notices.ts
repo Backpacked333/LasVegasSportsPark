@@ -1,10 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DomainEvent, EventPayload, Principal } from '@sportspark/contracts';
+import type { RegistrationIntent } from '@sportspark/db';
 import { CLOCK, FacilityDirectory, type Clock, type Trx } from '../../../kernel';
 import { OFFERING_LOOKUP_PORT, type OfferingLookupPort } from '../../catalog';
 import { NotificationsService, type ComposeInput } from '../../communications';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
 import type { EnrollmentEvents } from '../enrollment.events';
+import { BOOKING_INTENTS } from '../enrollment.policy';
 import { enrollmentSystem } from '../enrollment.shared';
 
 /** A local date and time in the facility's zone, for notice copy (SPK-SCHED-008). */
@@ -134,6 +136,115 @@ export class EnrollmentNotices {
     );
   }
 
+  /**
+   * R2-JOURNEYS-04 (SPK-COMMS-002 "Registration outcome", SPK-AT-023): enrollment.enrollment_confirmed
+   * → `registration_outcome`. A registration confirmed through its basket (paid through the
+   * checkout, possibly long after the family left the app, or owing nothing) is announced to the
+   * participant and the holders of `receive_messages` over them, once per confirmation event. The
+   * enrollment is read now (deliveries arrive late): one canceled or transferred meanwhile is not
+   * announced as confirmed. A rental or party is not announced here: it is confirmed only when
+   * fully staffed, by its booking's own lifecycle (SPK-COND-003).
+   */
+  async enrollmentConfirmed(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>,
+  ): Promise<void> {
+    const organizationId = event.organizationId;
+    const enrollment = await trx
+      .selectFrom('enrollments')
+      .select(['id', 'intent', 'status', 'participant_person_id', 'offering_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', event.payload.enrollmentId)
+      .executeTakeFirst();
+    if (!enrollment || enrollment.status !== 'confirmed') return;
+    if (BOOKING_INTENTS.includes(enrollment.intent)) return;
+    const offering = await this.offeringFacts(trx, organizationId, enrollment.offering_id);
+    const copy = registrationConfirmedCopy(enrollment.intent, offering?.name ?? 'the activity');
+    await this.compose(
+      trx,
+      enrollmentSystem(organizationId, 'enrollment.notify_registration_confirmed'),
+      event,
+      {
+        kind: 'registration_outcome',
+        facilityId: offering?.facilityId,
+        subject: { type: 'enrollment', id: enrollment.id },
+        audience: { subjectPersonIds: [enrollment.participant_person_id] },
+        protected: true,
+        ...copy,
+      },
+    );
+  }
+
+  /**
+   * Stage-6 rework of R2-JOURNEYS-01 (SPK-AT-009 families are told, SPK-COMMS-002 cancellations):
+   * enrollment.session_booking_changed for a booking that enrollment.follow_session_canceled
+   * canceled because the facility canceled its session (`cancel_cause = 'session_canceled'`) →
+   * `cancellation`, one per booking (its own change event, so a replay composes nothing new). A
+   * session canceled in the catalog emits no scheduling change, so without this the booked family
+   * heard nothing; on the closure path communications' "Canceled:" notice reaches them too, and this
+   * one adds what happened to what they booked with (returned, or reviewed by staff when it was
+   * kept). A booking the family canceled itself is not announced here.
+   */
+  async sessionBookingCanceled(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof EnrollmentEvents.sessionBookingChanged>>,
+  ): Promise<void> {
+    if (event.payload.status !== 'canceled') return;
+    const organizationId = event.organizationId;
+    const booking = await trx
+      .selectFrom('session_bookings')
+      .select([
+        'id',
+        'offering_id',
+        'participant_person_id',
+        'status',
+        'cancel_cause',
+        'scheduled_start',
+        'entitlement_basis',
+        'credit_disposition',
+      ])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', event.payload.bookingId)
+      .executeTakeFirst();
+    if (!booking || booking.status !== 'canceled' || booking.cancel_cause !== 'session_canceled') {
+      return;
+    }
+    const makeupReturned =
+      booking.entitlement_basis === 'makeup'
+        ? !!(await trx
+            .selectFrom('makeup_redemptions')
+            .select('id')
+            .where('organization_id', '=', organizationId)
+            .where('session_booking_id', '=', booking.id)
+            .where('kind', '=', 'reversal')
+            .executeTakeFirst())
+        : false;
+    const offering = await this.offeringFacts(trx, organizationId, booking.offering_id);
+    const start = new Date(booking.scheduled_start);
+    const when = offering?.timezone
+      ? `${localDateTime(start, offering.timezone)} (${offering.timezone})`
+      : start.toISOString();
+    const outcome = canceledBookingOutcome(
+      booking.entitlement_basis,
+      booking.credit_disposition,
+      makeupReturned,
+    );
+    await this.compose(
+      trx,
+      enrollmentSystem(organizationId, 'enrollment.notify_session_booking_canceled'),
+      event,
+      {
+        kind: 'cancellation',
+        facilityId: offering?.facilityId,
+        subject: { type: 'session_booking', id: booking.id },
+        audience: { subjectPersonIds: [booking.participant_person_id] },
+        protected: true,
+        title: 'Session canceled',
+        body: `The ${offering?.name ?? 'booked'} session on ${when} was canceled by the facility, so the booking is canceled.${outcome ? ` ${outcome}` : ''}`,
+      },
+    );
+  }
+
   /** enrollment.application_decided → `registration_outcome`. */
   async applicationDecided(
     trx: Trx,
@@ -158,7 +269,8 @@ export class EnrollmentNotices {
 
   /**
    * enrollment.waitlist_left → `registration_outcome` when offer generation retired an entry no
-   * offer could ever be accepted for (CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01): the family
+   * offer could ever be accepted for (CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01), or the
+   * facility canceled the session it waited for (R2-JOURNEYS-01): the family
    * learns that they no longer wait, why, and what to do instead. Other departures send nothing
    * here: the family withdrew or declined, staff removed the entry with their own reason, or the
    * participant already holds the place (`equivalent_entitlement`).
@@ -195,6 +307,69 @@ export class EnrollmentNotices {
   }
 }
 
+/**
+ * R2-JOURNEYS-04 (SPK-COMMS-002 "Registration outcome") copy per intent (plain operational copy).
+ * Only offerings with catalog sessions put anything in the family calendar (catalog sessions and
+ * session bookings; SPK-YOUTH-007): a league or team registration has fixtures instead, published
+ * with the team's schedule (competition), and an individual league player is placed on a team
+ * first (the placement notice follows; SPK-PLACE-002, SPK-PLACE-003).
+ */
+export function registrationConfirmedCopy(
+  intent: RegistrationIntent,
+  name: string,
+): { title: string; body: string } {
+  switch (intent) {
+    case 'membership':
+      return { title: 'Membership confirmed', body: `The membership ${name} is confirmed.` };
+    case 'package_purchase':
+      return {
+        title: 'Session package confirmed',
+        body: `The session package ${name} is confirmed; its sessions can be booked in the app.`,
+      };
+    case 'individual_league':
+      return {
+        title: 'Registration confirmed',
+        body: `The registration for ${name} is confirmed. You are told when a team placement is made; the team's fixtures then appear in the app once its schedule is published.`,
+      };
+    case 'join_team':
+    case 'create_team_entry':
+      return {
+        title: 'Registration confirmed',
+        body: `The registration for ${name} is confirmed. The team's fixtures appear in the app once its schedule is published.`,
+      };
+    default:
+      return {
+        title: 'Registration confirmed',
+        body: `The registration for ${name} is confirmed. Its sessions appear in the family calendar.`,
+      };
+  }
+}
+
+/**
+ * What a session cancellation did with what the booking was paid with (plain operational copy):
+ * returned, or kept and reviewed by staff (the owned
+ * `enrollment.canceled_session_entitlement_pending` exception; POL-007, POL-041, DEC-003 pending).
+ * A booking that cost nothing says nothing more.
+ */
+export function canceledBookingOutcome(
+  basis: string,
+  disposition: string | null,
+  makeupReturned: boolean,
+): string | null {
+  if (basis === 'makeup') {
+    return makeupReturned
+      ? 'The makeup can be used for another session.'
+      : 'Staff review what happens to the makeup.';
+  }
+  const what =
+    basis === 'package' ? 'package credit' : basis === 'membership' ? 'membership session' : null;
+  // An unlimited membership counts no session, so nothing was used or kept.
+  if (!what || disposition === null) return null;
+  return disposition === 'returned'
+    ? `The ${what} was given back.`
+    : `Staff review what happens to the ${what}.`;
+}
+
 /** Notice copy per retirement reason (`WaitlistRetirementReason` other than an equivalent place). */
 const RETIREMENT_NOTICES = new Map<string, (offeringName: string) => string>([
   [
@@ -206,6 +381,11 @@ const RETIREMENT_NOTICES = new Map<string, (offeringName: string) => string>([
     'booking_required',
     (name) =>
       `${name} is requested as a booking with its space, equipment and staff, not from a waitlist, so you are no longer on its waitlist. Request the booking instead.`,
+  ],
+  [
+    'session_canceled',
+    (name) =>
+      `The session of ${name} you were waiting for was canceled by the facility, so you are no longer on its waitlist.`,
   ],
   [
     'makeup_redemption_required',

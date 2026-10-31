@@ -25601,7 +25601,8 @@
         "enum": [
           "returned",
           "retained_by_policy",
-          "retained_pending_policy"
+          "retained_pending_policy",
+          "retained_entitlement_ended"
         ]
       },
       "SessionBooking": {
@@ -29117,6 +29118,10 @@
       "IssuedPass": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
           "pass": {
             "$ref": "#/components/schemas/Pass"
           },
@@ -29125,6 +29130,7 @@
           }
         },
         "required": [
+          "id",
           "pass",
           "reference"
         ]
@@ -30473,7 +30479,8 @@
               "null"
             ],
             "enum": [
-              "relationship_permission:collect"
+              "relationship_permission:collect",
+              null
             ]
           },
           "authorityGrantId": {
@@ -38817,7 +38824,14 @@
             "format": "uuid"
           },
           "scope": {
-            "$ref": "#/components/schemas/AuthorityScope"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuthorityScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "effectiveFrom": {
             "type": [
@@ -46172,6 +46186,16 @@
           },
           "409": {
             "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A restriction still holds the area (ELIGIBILITY_FAILED, details.code restriction_release_required): release the restriction in facilities instead",
             "content": {
               "application/json": {
                 "schema": {
@@ -54636,6 +54660,16 @@
           },
           "403": {
             "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "An offering in the basket is unknown, hidden or not published (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {
@@ -77263,6 +77297,16 @@
               }
             }
           },
+          "400": {
+            "description": "Validation failed (the target is the enrollment’s current offering, or the query is invalid)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Access denied",
             "content": {
@@ -77275,6 +77319,16 @@
           },
           "404": {
             "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not transferable (RESOURCE_CONFLICT NOT_TRANSFERABLE: a membership, session package, rental or party is canceled and bought or booked anew; transfer rules DEC-009)",
             "content": {
               "application/json": {
                 "schema": {
@@ -80670,7 +80724,7 @@
     },
     "/passes": {
       "post": {
-        "summary": "Issue an opaque pass to a person or household (SPK-ENTRY-002)",
+        "summary": "Issue an opaque pass to a person or household (SPK-ENTRY-002); the reference is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD",
         "tags": [
           "Entry"
         ],
@@ -87913,6 +87967,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -88182,6 +88246,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -88297,6 +88371,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -88380,6 +88464,16 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -88744,6 +88838,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -88859,6 +88963,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -88942,6 +89056,16 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -89219,6 +89343,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -89334,6 +89468,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -89417,6 +89561,16 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -89694,6 +89848,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -89802,6 +89966,16 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -90019,6 +90193,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -90102,6 +90286,16 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -90335,6 +90529,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -90443,6 +90647,16 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -90565,6 +90779,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -90673,6 +90897,16 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
             "content": {
               "application/json": {
                 "schema": {

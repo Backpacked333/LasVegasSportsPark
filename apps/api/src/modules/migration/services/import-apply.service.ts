@@ -31,6 +31,7 @@ import { MIGRATION_POLICY, type MigrationPolicy } from '../migration.policy';
 import {
   applyCorrelationId,
   countOutcomes,
+  IMPORT_REVIEW_CARD,
   importPrincipal,
   MAPPING_COLUMN,
   NO_TARGETS,
@@ -1044,15 +1045,17 @@ export class ImportApplyService {
       });
       const open = await this.exceptions.counts(trx, batch.organization_id, batch.id);
       if (open.open > 0) {
+        // The review completed before the apply and settled the validation card, so this is a card
+        // of its own; the decision on the last of these exceptions settles it (R2-LIFECYCLES-07).
         await this.operationalExceptions.raise(trx, {
           organizationId: batch.organization_id,
-          category: 'migration.import_review',
+          category: IMPORT_REVIEW_CARD.category,
           severity: 'warning',
           title: `Applied import batch from ${batch.source_system} left ${open.open} rows for review`,
-          affectedType: 'import_batch',
+          affectedType: IMPORT_REVIEW_CARD.affectedType,
           affectedId: batch.id,
-          ownerQueue: 'migration',
-          dedupeKey: `migration.import_review:${batch.id}`,
+          ownerQueue: IMPORT_REVIEW_CARD.ownerQueue,
+          dedupeKey: IMPORT_REVIEW_CARD.dedupeKey(batch.id),
           details: { batchId: batch.id, openExceptions: open.open },
         });
       }

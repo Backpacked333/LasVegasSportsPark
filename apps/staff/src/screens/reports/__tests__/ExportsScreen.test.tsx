@@ -379,6 +379,60 @@ describe('SCR-S-45 ExportsScreen', () => {
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 
+  it('§4.14: a retry that finds the export already made (IDEMPOTENCY_SECRET_WITHHELD) lists it with its revocation, re-reads your exports and holds back a second export', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    let listReads = 0;
+    const test = app({
+      'POST /reports/exports': () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError('connection dropped');
+        return fakeResponse(
+          409,
+          apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+            message: 'The request succeeded, but its one-time secret is not stored.',
+            nextAction: 'revoke_and_reissue',
+            details: { resourceId: EXPORT_1 },
+          }),
+        );
+      },
+      'GET /reports/exports': () => {
+        listReads += 1;
+        return fakeResponse(200, { items: [], nextCursor: null });
+      },
+      'GET /reports/exports/{id}': ok(reportExport('ready')),
+    });
+    render(test.at('/reports/exports'));
+    await createExport(user);
+    await user.click(await screen.findByRole('button', { name: 'Try again' }));
+    const notice = await screen.findByTestId('state-secret-withheld');
+    expect(
+      within(notice).getByText('Created, but the download link cannot be shown again'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Something went wrong')).toBeNull();
+    // The export the API named is listed without a download, with its revocation.
+    const list = await screen.findByRole('list', { name: 'Exports made on this page' });
+    expect(await within(list).findByText('ready')).toBeInTheDocument();
+    expect(
+      within(list).getByText(/The one-time download link is no longer held on this page/),
+    ).toBeInTheDocument();
+    expect(
+      within(list).getByRole('button', { name: `Revoke export ${EXPORT_1.slice(0, 8)}` }),
+    ).toBeEnabled();
+    expect(
+      within(list).getByRole('button', { name: `Download export ${EXPORT_1.slice(0, 8)}` }),
+    ).toBeDisabled();
+    // "Your exports" was read again, and no second export is made beside the first one.
+    await waitFor(() => expect(listReads).toBeGreaterThan(1));
+    const create = screen.getByRole('button', {
+      name: `Create export of Daily schedule run ${RUN_1.slice(0, 8)}`,
+    });
+    expect(create).toBeDisabled();
+    await user.click(within(notice).getByRole('button', { name: 'Make a new export' }));
+    expect(create).toBeEnabled();
+    expect(calls).toBe(2);
+  });
+
   it('REP-01: lists your earlier exports with status and expiry, never a download token', async () => {
     const EXPORT_2 = uuid(202);
     const test = app({

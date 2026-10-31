@@ -17,7 +17,7 @@ import {
 } from '../../../kernel';
 import type { ProposedEvent } from '../conflicts/conflict-detector';
 import type { ImportEventInput } from '../ports';
-import { EventWriter, sameResourceSet, type EventRow } from './event-writer';
+import { assertEventTitle, EventWriter, sameResourceSet, type EventRow } from './event-writer';
 import { organizationOf } from './organization';
 
 /** `events.source_type` of an imported event; `source_id` is its import batch (SCH-04, §5.3). */
@@ -76,6 +76,7 @@ export class EventImportService {
     const { batchId, externalKey, recordId } = provenance.data;
     assertImportPrincipal(principal, provenance.data);
     const organizationId = organizationOf(principal);
+    assertEventTitle(input.title, { externalKey });
     const scheduledStart = new Date(input.scheduledStart);
     const scheduledEnd = new Date(input.scheduledEnd);
     if (!(scheduledStart.getTime() < scheduledEnd.getTime())) {

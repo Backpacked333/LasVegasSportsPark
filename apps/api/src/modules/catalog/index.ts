@@ -40,5 +40,5 @@ export {
   daysBetween,
   typedEntitlementDefinition,
 } from './services/offerings.service';
-export { SessionsService } from './services/sessions.service';
+export { SESSION_CANCELED_EVENT_REASON, SessionsService } from './services/sessions.service';
 export * from './testing/catalog-fixtures';

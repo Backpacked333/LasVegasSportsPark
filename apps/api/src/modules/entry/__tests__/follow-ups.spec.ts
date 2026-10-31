@@ -1,5 +1,5 @@
 import { newId, systemPrincipal } from '@sportspark/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Outbox, UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { CatalogEvents } from '../../catalog';
@@ -11,6 +11,7 @@ import {
   personCommitment,
   seedPitchWithHalves,
 } from '../../scheduling';
+import { ActivityResolver } from '../services/activity-resolver';
 import { createVisitFixture } from '../testing/entry-fixtures';
 import {
   adultCustomer,
@@ -196,6 +197,54 @@ describe('entry follow-ups (ENT-03, ENT-04)', () => {
       await drainOutbox(t);
       expect(await checkinRows(event.id)).toEqual([
         expect.objectContaining({ status: 'withdrawn', withdrawn_reason: 'activity_canceled' }),
+      ]);
+    });
+
+    it('R2-RACES-06 / SPK-AT-009: a check-in that read its session before a cancellation whose follow-up already ran is held with activity_canceled, never admitted', async () => {
+      const q = await program(t, manager, { from: '15:00', to: '16:00' });
+      const child = await createPersonFixture(t, { kind: 'child' });
+      await enroll(t, q, child, fam.guardian.personId);
+      await arrive(child);
+      const resolver = t.app.get(ActivityResolver);
+      const resolve = resolver.resolve.bind(resolver);
+      // The desk reads the session (scheduled); before the check-in's transaction opens, the
+      // session is canceled and entry.withdraw_on_session_canceled runs, finding no check-in.
+      const spy = vi
+        .spyOn(resolver, 'resolve')
+        .mockImplementationOnce(async (organizationId, ref) => {
+          const snapshot = await resolve(organizationId, ref);
+          expect(snapshot.canceled).toBe(false);
+          const canceled = await post(t, `/v1/sessions/${q.sessionId}/cancel`, manager, {
+            reason: 'Storm',
+          });
+          expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+          await drainOutbox(t);
+          return snapshot;
+        });
+      try {
+        const res = await post(t, '/v1/session-checkins', desk, {
+          personId: child,
+          activity: sessionRef(q),
+        });
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        expect(spy).toHaveBeenCalled();
+        expect(res.body.status).toBe('held');
+        expect(res.body.issues).toContainEqual(
+          expect.objectContaining({ code: 'activity_canceled', severity: 'blocking' }),
+        );
+      } finally {
+        spy.mockRestore();
+      }
+      await drainOutbox(t);
+      expect((await checkinRows(q.sessionId)).map((c) => c.status)).toEqual(['held']);
+      // Entry recorded the cancellation it applied, once.
+      const recorded = await t.db
+        .selectFrom('activity_cancellations')
+        .select(['activity_type', 'source'])
+        .where('activity_id', '=', q.sessionId)
+        .execute();
+      expect(recorded).toEqual([
+        { activity_type: 'session', source: 'entry.withdraw_on_session_canceled' },
       ]);
     });
   });

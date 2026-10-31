@@ -24,6 +24,23 @@
  *   stopped by its holder. The reference itself can never be shown again (only its hash is kept).
  * - The scannable symbol depends on the desk scanners, which are DEC-023 (Technical lead/account
  *   owners): until then the reference is shown as text, and that is labelled as pending.
+ * - A failed issue or withdrawal is shown by the shared account `CommandError` (§4.9, SPK-UX-008):
+ *   no definite answer (`mayHaveTakenEffect`) reads "No answer yet" with "Check again", which
+ *   resends the same request under the same key; IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may
+ *   already have been done" with "Reload", after which a pass it made is listed under "Other active
+ *   passes". Never "Something went wrong" for a request that may have gone through.
+ * - The reference is a one-time secret (SPK-ENTRY-002, §4.14), so a replay of an issue does not
+ *   carry it: `POST /v1/passes` withholds it from the stored answer and a same-key replay answers
+ *   IDEMPOTENCY_SECRET_WITHHELD with `details.resourceId` = the pass id (entry module,
+ *   R2-TENANCY-INPUT-01). The screen reads that as "Pass issued, but its reference cannot be shown
+ *   again": the passes are read again, the pass it made is listed under "Other active passes" to
+ *   withdraw, and getting a pass again is a new request.
+ * - The replace flow's withdrawal of the previous pass decides with the same predicates: an answer
+ *   lost after it committed (IDEMPOTENCY_OUTCOME_UNAVAILABLE) reads "This may already have been
+ *   done" with "Reload", never "still active"; the pending withdrawal is kept until
+ *   `GET /v1/me/passes` lists the previous pass as revoked, which settles it.
+ * - Every result here (a failure, the replace flow's outcomes, a withdrawal) is announced to screen
+ *   readers (`ui/announce`, SPK-UX-009).
  */
 import {
   formatAge,
@@ -31,8 +48,14 @@ import {
   type ApiError,
   type Schema,
 } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
+import {
+  keepsIntentAfterFailure,
+  secretWithheldOf,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery, type ApiQueryResult } from '../../api/useApiQuery';
 import { useMe } from '../../features/today/queries';
@@ -40,11 +63,14 @@ import { Caption, Section, SectionQueryState } from '../../features/today/Sectio
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
+import { OutcomeLost } from '../../ui/OutcomeLost';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
+import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
 import { usePassStore, type StoredPass } from './pass-store';
 
 type MyPass = Schema<'MyPass'>;
@@ -55,6 +81,21 @@ export const REPLACE_REASON = 'Replaced by the holder in the app';
 export const WITHDRAW_REASON = 'Withdrawn by the holder in the app: reference not on this device';
 
 const MY_PASSES_KEY = ['api', '/me/passes'] as const;
+
+const REPLACE_QUESTION =
+  'Replace this pass? The new pass works straight away and the current one stops working.';
+
+/** A refused issue (ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED, NOT_FOUND), without the code. */
+const ISSUE_NOT_AVAILABLE: NotAvailableCopy = {
+  title: 'Pass not available',
+  description: 'A pass cannot be issued to this account. The front desk can help.',
+};
+/** A refused withdrawal of a pass whose reference is not on this device. */
+const WITHDRAW_NOT_AVAILABLE: NotAvailableCopy = {
+  title: 'Pass not available',
+  description:
+    'This pass is no longer available to withdraw from the app. The front desk can help.',
+};
 
 /**
  * What the API says about the pass stored on this device (ENT-01): `active`, `revoked` (with when),
@@ -146,8 +187,10 @@ function PassContent() {
         const e = error as ApiError;
         if (!ALREADY_WITHDRAWN.has(e.code)) {
           setRevokeProblem(e);
-          // The outcome is unknown or worth retrying: keep the pending revoke for "Try again".
-          if (e.keepsIntent) return;
+          // The outcome is unknown, worth retrying, or committed with its answer lost: keep the
+          // pending revoke (and its key). A lost answer is settled when the list shows the pass
+          // revoked; nothing else is sent for it.
+          if (keepsIntentAfterFailure(e)) return;
         }
       }
       const settled: StoredPass = { ...current, pendingRevoke: null };
@@ -159,6 +202,28 @@ function PassContent() {
 
   const held = heldPassState(stored.pass?.passId, passes.data);
 
+  // The replaced pass is listed as revoked (its withdrawal committed although the answer was lost,
+  // or the desk withdrew it): nothing is pending any more.
+  const pendingRevoke = stored.pass?.pendingRevoke ?? null;
+  const pendingWithdrawn =
+    pendingRevoke !== null &&
+    passes.data?.some((p) => p.id === pendingRevoke.passId && p.status === 'revoked') === true;
+  useEffect(() => {
+    if (!pendingWithdrawn || !accountKey || !stored.pass) return;
+    const settled: StoredPass = { ...stored.pass, pendingRevoke: null };
+    setRevokeProblem(null);
+    setStored({ loaded: true, pass: settled });
+    void store.save(accountKey, settled).catch(() => undefined);
+  }, [pendingWithdrawn, accountKey, stored.pass, store]);
+
+  // A replayed issue whose reference the API withholds (§4.14): the pass exists, unshown. The
+  // list is read again so it appears under "Other active passes", where it can be withdrawn.
+  const queryClient = useQueryClient();
+  const issueWithheld = issue.error !== null && secretWithheldOf(issue.error) !== null;
+  useEffect(() => {
+    if (issueWithheld) void queryClient.invalidateQueries({ queryKey: MY_PASSES_KEY });
+  }, [issueWithheld, issue.error, queryClient]);
+
   const getPass = useCallback(async () => {
     if (!personId || !accountKey) return;
     // A pass the API already lists as revoked is not revoked again (nothing to withdraw).
@@ -167,7 +232,8 @@ function PassContent() {
     setSaveProblem(false);
     let issued;
     try {
-      // One intent: a retry after a timeout reuses the key, so the API returns the same pass.
+      // One intent: a retry after a timeout reuses the key, so the API answers for the same pass
+      // (without its reference: IDEMPOTENCY_SECRET_WITHHELD, handled by `issueWithheld` above)
       issued = await issue.submit({ body: { holder: { kind: 'person', personId } } });
     } catch {
       return; // shown from issue.error; the stored pass (if any) is untouched
@@ -298,11 +364,8 @@ function PassContent() {
             />
           ) : null}
           {pass && held.kind !== 'revoked' && confirmReplace ? (
-            <View style={styles.confirm} accessibilityLiveRegion="polite">
-              <Text style={styles.body}>
-                Replace this pass? The new pass works straight away and the current one stops
-                working.
-              </Text>
+            <LiveRegion style={styles.confirm} announcement={REPLACE_QUESTION}>
+              <Text style={styles.body}>{REPLACE_QUESTION}</Text>
               <Button
                 label="Replace"
                 busy={issue.isProcessing || revoke.isProcessing}
@@ -315,7 +378,7 @@ function PassContent() {
                 variant="secondary"
                 onPress={() => setConfirmReplace(false)}
               />
-            </View>
+            </LiveRegion>
           ) : null}
           {!pass ? (
             <Button
@@ -351,29 +414,48 @@ function PassContent() {
         </Section>
       ) : null}
 
-      {issue.error ? (
-        issue.error.isNotFound || issue.error.isPermissionRestriction ? (
-          <StateView
-            variant="unavailable"
-            title="Pass not available"
-            description="A pass cannot be issued to this account. The front desk can help."
-          />
-        ) : (
-          <StateView variant="error" error={issue.error} onRetry={() => void getPass()} />
-        )
+      {issue.error && issueWithheld ? (
+        <IssueWithheld error={issue.error} hasPass={pass !== null} />
+      ) : issue.error ? (
+        // "Check again" after no answer resends the same issue (same key), so one pass is issued.
+        <CommandError
+          error={issue.error}
+          onRetry={() => void getPass()}
+          notFound={ISSUE_NOT_AVAILABLE}
+          denied={ISSUE_NOT_AVAILABLE}
+        />
       ) : null}
       {saveProblem ? (
-        <View style={styles.pad} testID="pass-save-problem">
-          <StatusBadge tone="warning" label="New pass not saved" />
-          <Caption>
-            Your new pass could not be saved on this device, so your previous pass was kept and
-            still works. Try again, or ask the front desk.
-          </Caption>
-        </View>
+        <LiveRegion
+          style={styles.pad}
+          testID="pass-save-problem"
+          announcement={sentences(SAVE_PROBLEM_LABEL, SAVE_PROBLEM_TEXT)}
+        >
+          <StatusBadge tone="warning" label={SAVE_PROBLEM_LABEL} />
+          <Caption>{SAVE_PROBLEM_TEXT}</Caption>
+        </LiveRegion>
       ) : null}
-      {pass?.pendingRevoke && (!revokeProblem || revokeProblem.keepsIntent) ? (
-        <View style={styles.pad} testID="pass-revoke-unconfirmed">
-          <StatusBadge tone="warning" label="Previous pass may still be active" />
+      {pass?.pendingRevoke && revokeProblem && tookEffectOutcomeLost(revokeProblem) ? (
+        // The withdrawal committed before its answer was lost: never "still active". Reload reads
+        // the passes again, and the list showing the previous pass revoked settles it.
+        <OutcomeLost
+          error={revokeProblem}
+          what="the withdrawal of your previous pass"
+          testID="pass-revoke-outcome-lost"
+        />
+      ) : pass?.pendingRevoke && (!revokeProblem || keepsIntentAfterFailure(revokeProblem)) ? (
+        <LiveRegion
+          style={styles.pad}
+          testID="pass-revoke-unconfirmed"
+          // Not while the withdrawal is being sent again: its answer is announced instead.
+          announcement={
+            revoke.isProcessing
+              ? null
+              : sentences(UNCONFIRMED_LABEL, UNCONFIRMED_TEXT, offline ? null : 'Try again')
+          }
+          occurrence={revokeProblem}
+        >
+          <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
           <Caption>
             We could not confirm the previous pass was withdrawn
             {revokeProblem ? ` (error code ${revokeProblem.code})` : ''}. Your new pass is ready.
@@ -385,17 +467,59 @@ function PassContent() {
             disabled={offline}
             onPress={() => void revokePrevious(pass)}
           />
-        </View>
+        </LiveRegion>
       ) : revokeProblem ? (
-        <View style={styles.pad} testID="pass-revoke-problem">
-          <StatusBadge tone="warning" label="Previous pass still active" />
+        <LiveRegion
+          style={styles.pad}
+          testID="pass-revoke-problem"
+          announcement={sentences(STILL_ACTIVE_LABEL, STILL_ACTIVE_TEXT)}
+          occurrence={revokeProblem}
+        >
+          <StatusBadge tone="warning" label={STILL_ACTIVE_LABEL} />
           <Caption>
             Your new pass is ready, but the previous one could not be withdrawn (error code{' '}
             {revokeProblem.code}). Ask the front desk to revoke it.
           </Caption>
-        </View>
+        </LiveRegion>
       ) : null}
     </View>
+  );
+}
+
+const SAVE_PROBLEM_LABEL = 'New pass not saved';
+const SAVE_PROBLEM_TEXT =
+  'Your new pass could not be saved on this device, so your previous pass was kept and still works. Try again, or ask the front desk.';
+const UNCONFIRMED_LABEL = 'Previous pass may still be active';
+const UNCONFIRMED_TEXT =
+  'We could not confirm the previous pass was withdrawn. Your new pass is ready.';
+const STILL_ACTIVE_LABEL = 'Previous pass still active';
+const STILL_ACTIVE_TEXT =
+  'Your new pass is ready, but the previous one could not be withdrawn. Ask the front desk to revoke it.';
+export const ISSUE_WITHHELD_LABEL = 'Pass issued, but its reference cannot be shown again';
+
+/**
+ * IDEMPOTENCY_SECRET_WITHHELD on an issue (§4.14, SPK-ENTRY-002): the earlier request issued a
+ * pass whose reference was shown only in the answer that never arrived. It is not a failure, and
+ * not a link to revoke from here: the pass is listed under "Other active passes", where it is
+ * withdrawn, and the next "Get my pass" or "Replace" is a new request.
+ */
+function IssueWithheld({ error, hasPass }: { error: ApiError; hasPass: boolean }) {
+  const text = hasPass
+    ? 'Your earlier request issued a new pass, but its reference is shown only once, in an answer that did not reach this device. The pass on this device still works. The new one is listed under "Other active passes": withdraw it there.'
+    : 'Your earlier request issued a pass, but its reference is shown only once, in an answer that did not reach this device. It is listed under "Other active passes": withdraw it there, then get a new pass.';
+  return (
+    <LiveRegion
+      style={styles.pad}
+      testID="pass-issue-withheld"
+      announcement={sentences(ISSUE_WITHHELD_LABEL, text)}
+      occurrence={error}
+    >
+      <StatusBadge tone="warning" label={ISSUE_WITHHELD_LABEL} />
+      <Caption>{text}</Caption>
+      <Caption>
+        {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
+      </Caption>
+    </LiveRegion>
   );
 }
 
@@ -492,9 +616,9 @@ function OtherPass({
       <Text style={styles.body}>Pass issued {formatWhen(pass.issuedAt, zone)}</Text>
       {withdraw.status !== 'success' ? <StatusBadge tone="success" label="Active" /> : null}
       {withdraw.status === 'success' ? (
-        <View accessibilityLiveRegion="polite">
+        <LiveRegion announcement="Withdrawn">
           <StatusBadge tone="neutral" label="Withdrawn" />
-        </View>
+        </LiveRegion>
       ) : confirming ? (
         <View style={styles.confirm}>
           <Text style={styles.body}>
@@ -520,17 +644,13 @@ function OtherPass({
         />
       )}
       {error ? (
-        error.isNotFound || error.isPermissionRestriction ? (
-          <StateView
-            variant="unavailable"
-            title="Pass not available"
-            description="This pass is no longer available to withdraw from the app. The front desk can help."
-          />
-        ) : error.isStale ? (
-          <StateView variant="error" error={error} onAction={onReload} />
-        ) : (
-          <StateView variant="error" error={error} onRetry={submit} />
-        )
+        <CommandError
+          error={error}
+          onRetry={submit}
+          onReload={onReload}
+          notFound={WITHDRAW_NOT_AVAILABLE}
+          denied={WITHDRAW_NOT_AVAILABLE}
+        />
       ) : null}
     </View>
   );

@@ -145,7 +145,37 @@ Merges (SPK-IAM-007): self-service and imported relationships and grants of the 
 ended, not transferred; self-service relationships over the survivor end and the survivor's
 self-service creator privilege is cleared; the summary (`moved`) reports each count so staff can
 re-establish legitimate access through a claim or a staff grant. A child record cannot survive an
-adult.
+adult. Pending invitations and claims addressed to the merged person are revoked one by one through
+the same pending → revoked transition as the revoke commands: under the row lock, revision bumped,
+an `identity.revoke_invitation` / `identity.revoke_claim` audit record on the invitation or claim
+(`details.via: 'merge'`, the merge's `operationId`) and an `identity.invitation_revoked` /
+`identity.claim_revoked` event (§4.6, §4.9, §4.12). The other relationships, grants and candidates
+a merge ends take the same per-record path: each relationship it ends goes through
+`RelationshipMachine` 'end' with a revision-guarded write and its own `identity.merge_persons` audit
+record on the relationship (`details.via: 'merge'`, `transition: 'end'`); each grant it revokes is
+revision-guarded (and must still be unrevoked), audited as `identity.revoke_access` and announced
+once as `identity.access_grant_revoked`; each other open candidate about the merged person is
+dismissed through `DuplicateCandidateMachine` with a revision bump and an `identity.dismiss_duplicate`
+audit record; all of them carry the merge's `operationId`. Grants and relationships the merge moves
+are revision-guarded too. **Verified**: `__tests__/duplicates.spec.ts` "merge keeps history
+reachable …" and "SPK-IAM-007 / §4.9: merge moves the account …".
+
+Merge locking (§4.9): the merge locks the candidate and both persons, then the merged person's
+active accounts, then each live relationship of the merged person (and the self-service
+relationships over the survivor it ends) and that relationship's unrevoked grants, before reading
+them for a write. A holder's revocation, a review's restriction or a recovery either commits first
+(and the merge reads the committed row: a revoked grant is no longer selected) or waits for the merge
+and then sees its outcome. Commands that attach a new row to a person (`POST /accounts` with a
+`personId`, `POST /staff-memberships`, `POST /households/{id}/members`, `POST /relationships`,
+`POST /people/{id}/claims`) share-lock the person before checking its status, so one racing a merge
+waits and is then refused instead of linking the row to the merged record behind the merge; `POST
+/access-grants` share-locks the relationship, so a grant on a relationship the merge ends is refused
+(409 `INVALID_TRANSITION`). Invitation issue takes no person lock: acceptance refuses an acceptor
+who is not active and grants only over subjects that are still active (the others are reported as
+dropped). **Verified** (PGlite and PostgreSQL):
+`__tests__/merge-concurrency.spec.ts` (a holder revoking, or staff granting on, what a running merge
+has locked; a merge reaching a grant its holder is revoking; each person-scoped create racing a
+merge) and `identity-concurrency.spec.ts` "§4.9 / SPK-IAM-007: a merge racing a recovery …".
 
 Several reviews may restrict the same grant (SPK-IAM-005, §4.6): each `restrict` records its own
 row in `access_grant_suspensions`, and `lift` ends only the deciding review's rows. A grant is
@@ -194,8 +224,10 @@ recordId`, source `import`, create-if-absent (same content: the existing person 
 `window_ended`, IF-26; absent means `decision`), `identity.invitation_created`,
 `identity.invitation_accepted`, `identity.invitation_revoked`, `identity.invitation_declined`
 (IF-10, no handler yet), `identity.invitation_expired` and `identity.claim_expired` (IF-25, `via`
-`sweep` or `acceptance_attempt`, once per expiry), `identity.claim_issued`,
-`identity.claim_revoked`, `identity.claim_accepted`, `identity.staff_membership_changed`,
+`sweep` or `acceptance_attempt`, once per expiry, by whichever path holds the row: the gated race
+cases in `__tests__/identity-jobs.spec.ts` run under PGlite and PostgreSQL), `identity.claim_issued`,
+`identity.claim_revoked` (`identity.invitation_revoked` and `identity.claim_revoked` come from the
+revoke commands and from a merge alike), `identity.claim_accepted`, `identity.staff_membership_changed`,
 `identity.access_review_opened`, `identity.access_review_decided`,
 `identity.duplicate_candidate_flagged`, `identity.persons_merged` (consumers never rewrite person
 ids in history; they read through `personIdsResolvingTo`, IF-21).
@@ -234,10 +266,30 @@ Recovering (`POST /accounts/{id}/relink`), provisioning (`POST /accounts` with a
 self-claiming (issue and accept) the login of a person who holds a staff membership in force or
 scheduled needs `identity.manage_staff_membership` (system administrator): support and front desk
 cannot take over a login that may assign staff roles. A relink never re-activates a disabled account
-(409 `INVALID_TRANSITION`) and its audit names the previous and the new provider subject.
-**Verified**: `__tests__/claims-and-accounts.spec.ts` "SPK-AT-025 / §4.14: …" and
+(409 `INVALID_TRANSITION`) and its audit names the previous and the new provider subject. The
+account row is locked before the authority, status and revision checks, so a recovery that waits for
+another recovery or for a merge is decided against the committed account (§4.9). When two
+recoveries of one login at once both carry `expectedRevision`, exactly one relinks it; the other
+answers 409 `STALE_REVISION` and is neither audited nor announced. `expectedRevision` is optional:
+without it the second recovery is applied after the first, and its audit names the first one's
+subject as the previous subject. A recovery that waited for a merge which moved the account onto a
+person holding a staff membership needs the staff-role authority (support gets 403
+`ACCESS_DENIED`). **Verified**: `__tests__/claims-and-accounts.spec.ts` "SPK-AT-025 / §4.14: …",
+`__tests__/identity-concurrency.spec.ts` "§4.9 / SPK-AT-025: two recoveries of one login at once …",
+"… two recoveries without expectedRevision both apply, in order …" and "… a recovery without
+expectedRevision that waits for a merge …" (PGlite and PostgreSQL; the last two fail under
+PostgreSQL without the row lock) and
 `apps/api/src/__tests__/journeys/spk-at-025.spec.ts`. Verification evidence for recovery, rate limits
 and a second approver for staff recovery are **Pending decision** (DEC-018, DEC-091).
+
+## Keyset paging at the database's precision (R2-API-CONTRACT-01b, §4.5) — verified
+
+The keyset lists (`GET /v1/me/access-grants`, `/v1/invitations`, `/v1/staff-memberships`,
+`/v1/duplicate-candidates`, `/v1/access-reviews`) carry the boundary row's `created_at` at the
+database's precision (`exactInstantOf` in `kernel/database/keyset.ts`) and compare it as text
+(`afterKeyset`), so rows one transaction wrote (one microsecond instant) are paged once each
+instead of the rest of a millisecond being skipped. A cursor whose instant PostgreSQL cannot
+represent reads as the first page, never a server fault (`__tests__/keyset-paging.spec.ts`).
 
 ## Known gaps
 

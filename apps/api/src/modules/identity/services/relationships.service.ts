@@ -38,6 +38,7 @@ import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import {
   isSuspendedAt,
+  lockPersonsForShare,
   personColumns,
   staffAuthorityApplies,
   toAccessGrant,
@@ -92,6 +93,9 @@ export class RelationshipsService {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9, SPK-IAM-007: both people are share-locked before their status is read, so a merge
+      // of either finishes first and this refuses a relationship to the merged record.
+      await lockPersonsForShare(trx, organizationId, [input.actorPersonId, input.subjectPersonId]);
       let source: AuthoritySource;
       let actor: PersonRow | null;
       let subject: PersonRow | null;
@@ -184,11 +188,15 @@ export class RelationshipsService {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9, SPK-IAM-007: share-locked, so a merge that is moving or ending this relationship
+      // (it holds the row FOR UPDATE) finishes first and the grant then follows the committed
+      // relationship, or is refused on an ended one, instead of landing behind the merge.
       const relationship = await trx
         .selectFrom('relationships')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('id', '=', input.relationshipId)
+        .forShare()
         .executeTakeFirst();
       if (!relationship) throw errors.protectedNotFound('relationship');
       let source: AuthoritySource;

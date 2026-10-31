@@ -240,4 +240,32 @@ describe('private calendar feeds (SPK-COMMS-008 stable identities and revocable 
     // the stored token cannot be redeemed from the store: only the original response had it
     expect((await fetchFeed(created.body.path as string)).status).toBe(200);
   });
+
+  it('SPK-COMMS-008 / RFC 5545 §3.3.11 (R2-TENANCY-INPUT-04): a bare CR in a stored title never injects content lines into a subscribed feed', async () => {
+    const own = await createFeed(parent, { label: 'Mine' });
+    expect(own.status).toBe(201);
+    const game = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.pitchId],
+      start: at('2026-11-14', '10:00'),
+      end: at('2026-11-14', '11:00'),
+      // e.g. a fixture title built from a captain-chosen team name
+      title: 'Lions\rEND:VEVENT\rBEGIN:VEVENT\rSUMMARY:Game canceled v Tigers',
+      commitments: [personCommitment(people.adult.personId, 'participant')],
+    });
+    await dispatchOutbox(t.app);
+    const feed = await fetchFeed(own.body.path);
+    expect(feed.status).toBe(200);
+    expect(feed.text).toContain(`UID:${game.id}`);
+    expect(feed.text).not.toMatch(/\r(?!\n)/);
+    expect(feed.text).not.toMatch(/(?<!\r)\n/);
+    const lines = feed.text.replaceAll('\r\n ', '').split('\r\n');
+    expect(lines).toContain(
+      'SUMMARY:Lions\\nEND:VEVENT\\nBEGIN:VEVENT\\nSUMMARY:Game canceled v Tigers',
+    );
+    expect(lines.filter((l) => l === 'BEGIN:VEVENT')).toHaveLength(
+      lines.filter((l) => l.startsWith('UID:')).length,
+    );
+  });
 });

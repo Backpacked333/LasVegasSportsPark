@@ -1,8 +1,13 @@
 import { newId, type StaffRole } from '@sportspark/contracts';
 import { pgErrorCode } from '@sportspark/db';
 import { expect } from 'vitest';
-import { Inbox, OutboxDispatcher } from '../../../kernel';
-import { createTestApp, type TestApp } from '../../../testing';
+import { Inbox } from '../../../kernel';
+import {
+  createTestApp,
+  type DrainOptions,
+  drainOutboxChecked,
+  type TestApp,
+} from '../../../testing';
 import {
   createAcknowledgmentFixture,
   createOfferingFixture,
@@ -171,12 +176,9 @@ export const sessionRef = (p: Program) => ({
 });
 
 /** Runs the outbox dispatcher until no event is pending (follow-up handlers). */
-export async function drainOutbox(t: TestApp): Promise<void> {
-  const dispatcher = t.app.get(OutboxDispatcher);
-  for (let i = 0; i < 20; i += 1) {
-    const summary = await dispatcher.runOnce(100);
-    if (summary.claimed === 0) return;
-  }
+/** Runs the outbox until nothing more is due; a failed delivery fails the drain (R2-TESTS-01). */
+export function drainOutbox(t: TestApp, options: DrainOptions = {}): Promise<void> {
+  return drainOutboxChecked(t, { rounds: 20, batchSize: 100, ...options });
 }
 
 export async function drainInbox(t: TestApp): Promise<void> {

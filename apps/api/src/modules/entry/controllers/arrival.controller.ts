@@ -35,8 +35,13 @@ const IdParams = z.object({ id: z.uuid() });
 export class PassesController {
   constructor(private readonly passes: PassesService) {}
 
+  /**
+   * §4.14 protected secret storage (SPK-ENTRY-002): the reference is a live credential (a desk scan
+   * or a collector check accepts it), so it is never stored with the idempotency key. A same-key
+   * replay answers IDEMPOTENCY_SECRET_WITHHELD naming the pass (`id`) instead of the reference.
+   */
   @Post()
-  @Idempotent()
+  @Idempotent({ withhold: ['reference'] })
   issue(
     @CurrentPrincipal() principal: Principal,
     @ZodBody(IssuePassBody) body: IssuePassBody,

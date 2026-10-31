@@ -36,6 +36,7 @@ import {
   ZodValidationPipe,
   type AppConfig,
 } from '../../../kernel';
+import { withPassReferenceHashed } from '../entry.shared';
 import {
   FAKE_ACCESS_CONTROL_PROVIDER,
   FAKE_ACCESS_CONTROL_SIGNATURE_HEADER,
@@ -219,7 +220,8 @@ export class AccessControlWebhooksController {
       provider,
       providerEventId: body.id,
       eventType: body.type,
-      payload: body,
+      // §4.14: the inbox keeps the pass reference's hash, never the reference itself.
+      payload: withPassReferenceHashed(body),
       organizationId: organization.id,
       signatureVerified: true,
     });

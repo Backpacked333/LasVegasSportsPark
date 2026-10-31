@@ -13,7 +13,9 @@
  *   unrelated balance blocks only when the API says it is blocking (SPK-ENTRY-004, DEC-056).
  * - Offline, arrivals for the scanned people are queued against that scan as the roster snapshot
  *   and synchronised once on reconnection (§4.15); check-in, payments, capacity, guardian changes,
- *   roster transfers and pickup permission need a connection.
+ *   roster transfers and pickup permission need a connection. The snapshot is the scan's
+ *   `scannedAt` (the service's time) and each queued arrival is dated on that clock too
+ *   (`offline/clock.ts`).
  * - Visitor categories are the API's; which ones a facility uses is DEC-071 (pending).
  * - A person without a pass is looked up with the staff person search (`GET /v1/people`, as the
  *   viewer's role allows; PersonLookupArrival), then their arrival and check-in are recorded the
@@ -34,6 +36,7 @@ import { formatRange, humanize } from '../../features/operations/format';
 import { CHECKIN_STATUS, VISITOR_CATEGORY_LABEL } from '../../features/operations/labels';
 import { useOfflineQueue } from '../../features/operations/offline/OfflineQueueProvider';
 import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
+import { serviceClockOf, type ServiceClock } from '../../features/operations/offline/clock';
 import type { RosterSnapshot } from '../../features/operations/offline/queue';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -72,26 +75,36 @@ function passErrorMessage(error: ApiError): string | null {
 
 export function ArrivalScannerScreen() {
   const facility = useOperatingFacility();
-  const { online } = useApp();
+  const { online, services } = useApp();
   const queue = useOfflineQueue();
   const [reference, setReference] = useState('');
-  const [scan, setScan] = useState<{ result: PassScan; snapshot: RosterSnapshot; at: Date } | null>(
-    null,
-  );
+  const [scan, setScan] = useState<{
+    result: PassScan;
+    snapshot: RosterSnapshot;
+    clock: ServiceClock;
+    at: Date;
+  } | null>(null);
   const scanCommand = useApiCommand('post', '/passes/scan');
   const occupancy = useApiQuery({
     path: '/facilities/{id}/occupancy',
     request: { path: { id: facility.facilityId ?? '' } },
     enabled: facility.facilityId !== null,
   });
-  const now = useNow();
 
   const openSelection = () => {
     if (!facility.facilityId || reference.trim().length === 0) return;
     void scanCommand
       .submit({ body: { reference: reference.trim(), facilityId: facility.facilityId } })
       .then((result) => {
-        setScan({ result, snapshot: queue.newSnapshot(result.scannedAt), at: now });
+        // The scan's time is the service's: arrivals queued against it are dated on that clock
+        // too (offline/clock.ts), so a device clock that is off moves neither.
+        const receivedAt = services.now();
+        setScan({
+          result,
+          snapshot: queue.newSnapshot(result.scannedAt),
+          clock: serviceClockOf(result.scannedAt, receivedAt),
+          at: receivedAt,
+        });
         setReference('');
       })
       .catch(() => undefined);
@@ -176,6 +189,7 @@ export function ArrivalScannerScreen() {
               key={scan.result.pass.id + scan.result.scannedAt}
               scan={scan.result}
               snapshot={scan.snapshot}
+              clock={scan.clock}
               receivedAt={scan.at}
               facilityId={facility.facilityId}
               timezone={facility.timezone}
@@ -191,6 +205,9 @@ export function ArrivalScannerScreen() {
 interface SelectionProps {
   scan: PassScan;
   snapshot: RosterSnapshot;
+  /** The service's clock as seen at the scan: queued arrivals are dated on it. */
+  clock: ServiceClock;
+  /** When this device received the scan, by its own clock (the roster's age). */
   receivedAt: Date;
   facilityId: string;
   timezone: string | null;
@@ -203,6 +220,7 @@ const checkinKey = (personId: string, activity: ScanActivity) =>
 function ArrivalSelection({
   scan,
   snapshot,
+  clock,
   receivedAt,
   facilityId,
   timezone,
@@ -220,7 +238,8 @@ function ArrivalSelection({
   const [visitIds, setVisitIds] = useState<Record<string, string>>({});
 
   const maxAge = services.config.offlineRosterMaxAgeMs ?? null;
-  const rosterAgeMs = now.getTime() - new Date(snapshot.takenAt).getTime();
+  // Measured on the device clock it was received by (the snapshot time is the service's).
+  const rosterAgeMs = now.getTime() - receivedAt.getTime();
   const rosterTooOld = maxAge !== null && rosterAgeMs > maxAge;
 
   const categoryOf = (person: ScanPerson): Category | '' =>
@@ -254,7 +273,7 @@ function ArrivalSelection({
           item: {
             kind: 'arrival' as const,
             clientObservationId: queue.newObservationId(),
-            observedAt: services.now().toISOString(),
+            observedAt: clock.at(services.now()),
             personId: p.personId,
             visitorCategory: categoryOf(p) as Category,
           },

@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { useApiCommand } from '../api/useApiCommand';
 import { useApp } from '../providers/AppProviders';
+import { LiveText } from '../ui/announce';
 import { Button } from '../ui/Button';
 import { Screen } from '../ui/Screen';
 import { StateView } from '../ui/StateView';
@@ -58,9 +59,9 @@ export function DevSignInScreen() {
           testID="dev-account-id"
         />
         {accountId.length > 0 && !valid ? (
-          <Text style={styles.error} accessibilityLiveRegion="polite">
+          <LiveText style={styles.error} announcement="Enter the account id as a UUID.">
             Enter the account id as a UUID.
-          </Text>
+          </LiveText>
         ) : null}
         <Button
           label="Sign in"

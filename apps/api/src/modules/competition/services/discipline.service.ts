@@ -48,6 +48,9 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { MatchActions } from '../competition-matches.actions';
@@ -61,7 +64,7 @@ import {
   SuspensionMachine,
 } from '../competition-matches.state-machines';
 import type { Reader } from '../competition.queries';
-import { isStaffLike, iso, organizationOf } from '../competition.shared';
+import { isStaffLike, organizationOf } from '../competition.shared';
 import {
   CARD_REMOVED_OVERTURN_REASON,
   DISCIPLINE_MANAGER_ROLES,
@@ -646,13 +649,7 @@ export class DisciplineService implements SuspensionCheckPort {
       );
     }
     if (cursor) {
-      const at = new Date(cursor.at);
-      q = q.where((eb) =>
-        eb.or([
-          eb('d.created_at', '<', at),
-          eb.and([eb('d.created_at', '=', at), eb('d.id', '<', cursor.id)]),
-        ]),
-      );
+      q = q.where(afterKeyset('d.created_at', 'd.id', cursor.at, cursor.id));
     }
     const rows = await q
       .orderBy('d.created_at', 'desc')
@@ -676,7 +673,7 @@ export class DisciplineService implements SuspensionCheckPort {
     const byDecision = new Map(suspensions.map((r) => [r.decision_id, r.id]));
     return {
       items: page.map((row) => toDecision(row, byDecision.get(row.id) ?? null)),
-      nextCursor: nextCursorOf(rows, page, query.limit),
+      nextCursor: await nextCursorOf(this.db, 'disciplinary_decisions', rows, page, query.limit),
     };
   }
 
@@ -692,13 +689,7 @@ export class DisciplineService implements SuspensionCheckPort {
     if (query.status) q = q.where('status', '=', query.status);
     if (query.decisionId) q = q.where('decision_id', '=', query.decisionId);
     if (cursor) {
-      const at = new Date(cursor.at);
-      q = q.where((eb) =>
-        eb.or([
-          eb('created_at', '<', at),
-          eb.and([eb('created_at', '=', at), eb('id', '<', cursor.id)]),
-        ]),
-      );
+      q = q.where(afterKeyset('created_at', 'id', cursor.at, cursor.id));
     }
     const rows = await q
       .orderBy('created_at', 'desc')
@@ -706,7 +697,10 @@ export class DisciplineService implements SuspensionCheckPort {
       .limit(query.limit + 1)
       .execute();
     const page = rows.slice(0, query.limit);
-    return { items: page.map(toAppeal), nextCursor: nextCursorOf(rows, page, query.limit) };
+    return {
+      items: page.map(toAppeal),
+      nextCursor: await nextCursorOf(this.db, 'appeals', rows, page, query.limit),
+    };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1845,16 +1839,25 @@ export class DisciplineService implements SuspensionCheckPort {
   }
 }
 
-const ListCursor = z.object({ at: z.string(), id: z.uuid() });
+const ListCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 
-/** The keyset cursor after the page, or null on the last page. */
-export function nextCursorOf(
+/**
+ * The keyset cursor after the page, or null on the last page. The boundary row's instant is read
+ * at the database's precision (`exactInstantOf`, R2-API-CONTRACT-01b): a Date keeps only
+ * milliseconds, and a cursor built from one skipped the rest of that millisecond.
+ */
+export async function nextCursorOf(
+  db: Db | Trx,
+  table: string,
   rows: ReadonlyArray<{ created_at: Date | string; id: string }>,
   page: ReadonlyArray<{ created_at: Date | string; id: string }>,
   limit: number,
-): string | null {
+): Promise<string | null> {
   const last = page[page.length - 1];
   return rows.length > limit && last
-    ? encodeCursor({ at: iso(last.created_at), id: last.id })
+    ? encodeCursor({
+        at: await exactInstantOf(db, table, 'created_at', last.id, last.created_at),
+        id: last.id,
+      })
     : null;
 }

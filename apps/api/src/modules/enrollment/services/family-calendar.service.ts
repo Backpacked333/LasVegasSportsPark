@@ -139,6 +139,18 @@ export class FamilyCalendarService {
         .orderBy('scheduled_start')
         .execute();
       for (const booking of bookings) {
+        // R2-JOURNEYS-01 (SPK-AT-009 consistent publication): a booking of a session the facility
+        // canceled is not a commitment, even before its cancellation follow-up has run.
+        if (!sessionsByOffering.has(booking.offering_id)) {
+          sessionsByOffering.set(
+            booking.offering_id,
+            await this.sessions.list(organizationId, booking.offering_id),
+          );
+        }
+        const session = sessionsByOffering
+          .get(booking.offering_id)
+          ?.find((s) => s.id === booking.session_id);
+        if (session && session.status !== 'scheduled') continue;
         items.push({
           id: `booking:${booking.id}`,
           personId: booking.participant_person_id,

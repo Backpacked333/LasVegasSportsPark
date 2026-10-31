@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0613` and `0680`)
+`0600`–`0616` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -161,7 +161,8 @@ contribution's amount and status, never a player's payment or method.
 - Outbox handlers: `finance.finalize_checkout` on `finance.checkout_payment_received` (§4.11 step 8,
   SPK-AT-023), `finance.abort_expired_checkout` on its timer `finance.checkout_expiry_due`,
   `finance.complete_compensation` on `finance.refund_settled`, `finance.record_installment_notice`
-  on its timer `finance.installment_notice_due`. All are idempotent under replay.
+  on its timer `finance.installment_notice_due`, `finance.follow_person_merge` on
+  `identity.persons_merged` (R2-LIFECYCLES-02, below). All are idempotent under replay.
 - Inbox handler `finance.apply_payment_event` for provider `fake-payments`.
 - `FinanceWorker` (outside any transaction; started in non-test processes, `runOnce()` in tests):
   executes requested refunds (customer and compensation), cancels abandoned payment challenges at
@@ -254,7 +255,11 @@ contribution's amount and status, never a player's payment or method.
   plan's lead time before the new date; nothing is collected while the checkout's own payment is
   pending or its registration is not fulfilled; retry and notice terms come from the policy the
   quote recorded. Once every registration the order made is canceled, the plan is held (MONEY-04):
-  the first collection or notice that finds it records the hold on the plan (`hold` on
+  a registration that was transferred counts as the enrollment it was transferred to, followed
+  along `transferredToEnrollmentId` to the end of its chain (the order line keeps naming the
+  source, R2-LIFECYCLES-01), so a transfer followed by a cancellation holds the plan while a
+  transferred registration that still stands keeps collecting. The first collection or notice that
+  finds it records the hold on the plan (`hold` on
   `GET /installment-plans/{id}`, `0613`) and raises `finance.installment_registration_canceled`
   once (finance operator); enrollment's own cancellation of the registration, with any accepted
   consequence other than `none`, also raises `enrollment.cancellation_consequence_pending` for the
@@ -305,8 +310,10 @@ taxes and fees rounded half up per line (DEC-007).
   settlement reconciliation stay allowed; installment collection starts no new charge; the
   `finance.provider_facts` recovery check blocks resuming until no payment or refund outcome is
   unresolved and a processor settlement since the restore balances.
-  `apps/api/src/__tests__/journeys/spk-at-028.spec.ts`. A provider feed that recreates post-backup
-  facts is **Pending decision** (DEC-019).
+  `apps/api/src/__tests__/journeys/spk-at-028.spec.ts`. Every refused finance command, the
+  point-of-sale and accounting ones included, publishes that 503 in its contract
+  (`__tests__/recovery-contract.spec.ts`, R2-API-CONTRACT-03). A provider feed that recreates
+  post-backup facts is **Pending decision** (DEC-019).
 
 ## Stage 3 (FIN-01..FIN-07)
 
@@ -330,6 +337,30 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
   identity's `personIdsResolvingTo` (ID-01), so a merged duplicate's history shows under the
   survivor without rewriting a financial row. `/me/registration-checkouts` covers checkouts the
   caller pays or started, and shows `recovery_required` ones (SPK-PAY-007, §4.11).
+- SPK-IAM-007 (R2-LIFECYCLES-02): a merge rewrites no credit owner or obligation debtor; finance
+  reads them through the survivor instead (`FinanceCustomerScope.idsOf` / `subjectOf`).
+  `GET /credits?ownerPersonId=` and `GET /obligations?debtorPersonId=` with the survivor include
+  the records merged into it; a merged owner's credit and a merged debtor's obligation are read,
+  redeemed and paid under the survivor as the authorization subject (the merge moved the
+  relationships and grants there; someone without authority over the survivor still gets
+  `NOT_FOUND`); a quote and its checkout accept a credit owned by any record merged into the payer.
+  The handler `finance.follow_person_merge` raises one `finance.merged_person_money` exception
+  (finance operator) per merge that brings the survivor an active or pending credit with a
+  balance or an open obligation owed or answered for, each row naming the record that holds it,
+  so anything given or owed twice is reviewed; a merge that brings no money raises nothing, and a
+  replay raises nothing new. Merges chain (A into B, later B into C): the B-into-C exception names
+  A's money too, even when B holds none and A's own exception (raised for B) was resolved. The
+  identity directory gives the survivor's whole merge tree, not the branch that just joined it, so
+  the handler reads every record merged into the survivor and leaves out money an earlier
+  exception of the same survivor already named (**limit:** money issued to a merged record after
+  its own merge, which should not happen, would be named again at the survivor's next merge).
+  A merged payer's payment, refund, checkout, order and installment plan are read under the
+  survivor too, as the `/me` lists show them, and so are a contribution request asked of a merged
+  record (read and paid) and a merged customer's point-of-sale receipt; the finance operator's
+  `GET /orders?payerPersonId=` and `GET /payments?payerPersonId=` include the records merged into
+  that payer, as `/credits` and `/obligations` do. Commands on a merged payer's checkout or
+  payment (retry, abort, refund request) still name the stored payer and are done by staff.
+  `__tests__/person-merge.spec.ts`.
 - `GET /obligations/{id}` carries `liveAttempt` (`id`, `status` `created`/`action_required`/
   `processing`/`unknown`, amount, currency, `unknownSince`, `createdAt`) or `null`: staff see any
   live charge; a customer sees the one they started (contributions model) or any live charge of a
@@ -367,9 +398,15 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
   (SPK-UX-001). Verified at the port boundary; the enrollment side (ENR-06) is merged separately.
 - Finance notices through communications' `NotificationsService.composeAndQueueIn` in the
   handler's transaction: contribution requested (to the requested player), payment failed (to the
-  payer; not for POS or installment attempts), installment failed and installment due. Each is
-  keyed by its source event, so a replay queues nothing new. Kind `payment_attention`; the wording
-  is not a policy value (communication policy DEC-012 **Pending decision**).
+  payer; not for POS or installment attempts), installment failed and installment due, and (stage
+  6, R2-JOURNEYS-04, SPK-AT-023) a checkout that could not finish after payment
+  (`finance.notify_checkout_recovery` on `finance.checkout_recovery_required`: what happens to the
+  money, a refund, a credit or staff contact) and its compensation
+  (`finance.notify_checkout_compensated` on `finance.checkout_compensated`: the refund made or the
+  credit added, with the amount; `__tests__/finalization.spec.ts` "§4.11 step 10: staff may
+  compensate an unfulfillable checkout with a credit instead"). Each is keyed by its source event,
+  so a replay queues nothing new. Kind `payment_attention`; the wording is not a policy value
+  (communication policy DEC-012 **Pending decision**).
 
 ### Point of sale (FIN-06) — verified, behind capability `point_of_sale`
 
@@ -417,7 +454,12 @@ sale whatever the switch, and hides only adding a line while it is off (`SalePag
   sale; a card tender names its payment attempt, an external one its evidence (SPK-PAY-012); a
   return never exceeds a line's sold quantity or the paid amount (constraint trigger, two
   concurrent returns cannot both pass, also under PostgreSQL; since `0610` the units one return
-  names for the same line are summed first, MONEY-10); a cash return names an open drawer
+  names for the same line are summed first, MONEY-10; since `0615` every `saleLineId` is the
+  canonical lower-case uuid text, refused otherwise with `pos_returns_line_id_canonical`, and lines
+  are grouped and matched with earlier returns by uuid value, R2-SCHEMA-04; since `0616` every line
+  is an object whose `quantity` is a whole JSON number from 1 and whose `amountMinor` is a whole
+  JSON number from 0, refused otherwise with `pos_returns_line_shape`, so a missing or null value
+  can no longer make the quantity and amount checks pass, R2-SCHEMA-04); a cash return names an open drawer
   session; machine guards refuse every transition the `PosSale`, `PosTender`, `PosRegisterSession`
   machines (`finance.state-machines.ts`) do not allow.
 - Taxes and fees come only from approved catalog `tax_fee` policy versions (CAT-02, DEC-057):
@@ -468,7 +510,12 @@ outcome recording and reconciliation are never gated.
   when their batch is rejected or canceled). Migration `0609_finance_export_line_guards.sql`
   (INTEGRITY-03): a line is added only to a `prepared` batch and within its line count, copies its
   journal entry's account, debit, credit and currency, and a batch commits holding exactly its
-  `line_count` lines, so the database keeps an exported batch as it was sent.
+  `line_count` lines, so the database keeps an exported batch as it was sent. Migration
+  `0614_finance_export_line_ledger_guards.sql` (R2-SCHEMA-02): a line is live when it is added
+  (`accounting_export_lines_live_at_insert`, so no line escapes the at-most-once index while its
+  batch can still be accepted), states its journal's `posted_at`
+  (`accounting_export_lines_posted_as_booked`), and exports only an entry whose journal was posted
+  inside the batch's `[periodStart, periodEnd)` (`accounting_export_lines_within_period`).
 - No default mapping exists: a batch is prepared only when every account of its entries has an
   approved mapping, else `ACCOUNTING_MAPPING_REQUIRED` naming the accounts (SPK-PAY-011, DEC-022).
   Corrections are later journals exported in a later batch; an exported batch never changes
@@ -531,6 +578,13 @@ outcome recording and reconciliation are never gated.
 - `FINANCIAL_CONDITIONS_IMPL` (competition match readiness, `ParticipationStandingService`) reports
   an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
   DEC-056), so it is never a pass or a block until the policy is approved.
+- Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002) — **Verified**:
+  `POST /v1/obligations` for a team entry records the obligation as the entry's
+  `financialStatusRef` through competition's `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`, in
+  the same transaction (competition audits it), and `ParticipationStandingService
+.entryFinancialStatus` answers `none`, `clear` or `outstanding` (open count, remaining amount per
+  currency in minor units, earliest open due date) from the entry's obligations that are not
+  canceled. The captain workspace shows it (`__tests__/obligations.spec.ts` "R2-JOURNEYS-05").
 - The money side of transfers and cancellations is answered (consequence) but not executed
   automatically (no automatic refund, credit or charge from enrollment's commands); a plan whose
   registrations were all canceled is held (no collection, no notice) and waits for the finance

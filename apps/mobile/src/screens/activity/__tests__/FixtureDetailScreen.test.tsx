@@ -25,7 +25,7 @@ import {
   scheduleChange,
   teamWorkspace,
 } from '../../../features/today/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, dropAnswers, waitForAbsent } from '../../../testing/test-app';
 import { FixtureDetailScreen } from '../FixtureDetailScreen';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
@@ -73,8 +73,13 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
   };
 }
 
-function renderFixture(overrides: Record<string, FakeHandler> = {}) {
+function renderFixture(
+  overrides: Record<string, FakeHandler> = {},
+  options: { dropAnswer?: boolean } = {},
+) {
   const app = createTestApp({ routes: routes(overrides) });
+  // Lose the answer of the first RSVP sent, after the fake API recorded it.
+  if (options.dropAnswer) dropAnswers(app, 'POST', /\/availability$/);
   render(<FixtureDetailScreen fixtureId={FIXTURE} />, { wrapper: app.wrapper });
   return app;
 }
@@ -285,7 +290,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     expect(screen.getByText(/not a check-in and does not affect eligibility/)).toBeOnTheScreen();
   });
 
-  it('retrying the same RSVP after INTEGRATION_UNAVAILABLE reuses its key (§4.9)', async () => {
+  it('a 503 INTEGRATION_UNAVAILABLE RSVP is "No answer yet"; "Check again" reuses its key (§4.9)', async () => {
     let calls = 0;
     const app = renderFixture({
       'POST /fixtures/{id}/availability': () => {
@@ -299,13 +304,54 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       },
     });
     fireEvent.press(await screen.findByRole('radio', { name: 'Available' }));
-    fireEvent.press(await screen.findByRole('button', { name: 'Try again' }));
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
     expect(await screen.findByText('Answer recorded: Available.')).toBeOnTheScreen();
     const keys = app.fake.requests
       .filter((r) => r.route === '/fixtures/{id}/availability')
       .map((r) => r.headers['idempotency-key']);
     expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
+  });
+
+  it('SPK-UX-008 / §4.9: an RSVP whose answer was lost reads "No answer yet", never "Something went wrong"; "Check again" resends the same answer and revision under the same key', async () => {
+    const app = renderFixture(
+      {
+        'GET /fixtures/{id}': ok(
+          fixtureDetail({
+            responses: [
+              {
+                personId: SELF,
+                state: 'available',
+                revision: 4,
+                respondedAt: '2026-10-23T12:00:00.000Z',
+              },
+            ],
+          }),
+        ),
+        'POST /fixtures/{id}/availability': ok({ state: 'unavailable', revision: 5 }),
+      },
+      { dropAnswer: true },
+    );
+    fireEvent.press(await screen.findByRole('radio', { name: 'Unavailable' }));
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByText('Answer recorded: Unavailable.')).toBeOnTheScreen();
+    const answers = app.fake.requests.filter((r) => r.route === '/fixtures/{id}/availability');
+    expect(answers.map((r) => r.headers['idempotency-key'])).toEqual([
+      answers[0]?.headers['idempotency-key'],
+      answers[0]?.headers['idempotency-key'],
+    ]);
+    expect(answers.map((r) => r.body)).toEqual([
+      { state: 'unavailable', expectedRevision: 4 },
+      { state: 'unavailable', expectedRevision: 4 },
+    ]);
   });
 
   it('shows the API answers for an RSVP: not on the roster, no authority, closed fixture', async () => {
@@ -347,7 +393,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     // notifier, so wait for the re-render instead of assuming it lands within one act() flush.
     await waitFor(() => expect(reads).toBe(before + 1));
     // The stale answer is cleared with the reload (no lingering "Something went wrong").
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull());
+    await waitForAbsent(() => screen.queryByRole('button', { name: 'Reload' }), 'Reload');
     expect(screen.queryByText(/Error code: INVALID_TRANSITION/)).toBeNull();
   });
 
@@ -510,13 +556,18 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       revision: 4,
       respondedAt: '2026-10-23T12:00:00.000Z',
     };
+    // The answer is held back until the test releases it. The gate exists before rendering, so
+    // releasing it never depends on when the screen sends GET /me (deterministic, CLAUDE.md).
     let answerMe: () => void = () => undefined;
+    const meReleased = new Promise<void>((resolve) => {
+      answerMe = resolve;
+    });
     renderFixture({
       'GET /fixtures/{id}': ok(fixtureDetail({ responses: [own] })),
-      'GET /me': () =>
-        new Promise<Response>((resolve) => {
-          answerMe = () => resolve(fakeResponse(200, me()));
-        }),
+      'GET /me': async () => {
+        await meReleased;
+        return fakeResponse(200, me());
+      },
     });
     const card = await screen.findByTestId('fixture-card');
     const answers = await screen.findByTestId('fixture-family-answers');
@@ -525,7 +576,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
 
     await act(async () => answerMe());
     // Known now: the answer is the viewer's own, shown in the RSVP control, and no family list.
-    await waitFor(() => expect(screen.queryByTestId('fixture-family-answers')).toBeNull());
+    await waitForAbsent(() => screen.queryByTestId('fixture-family-answers'), 'Family answers');
     expect(within(card).getByTestId('rsvp-current')).toHaveProp(
       'accessibilityLabel',
       'Unavailable',

@@ -39,8 +39,13 @@ function RequestRefund({ paymentId, currency }: { paymentId: string; currency: s
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [local, setLocal] = useState<Record<string, string>>({});
+  // The payment (what is still refundable) and its refunds: read again after a success, after an
+  // answer that may have taken effect, and before a new request is unlocked (SPK-PAY-008).
   const refund = useApiCommand('post', '/payments/{id}/refunds', {
-    invalidate: [['api', '/payments/{id}']],
+    invalidate: [
+      ['api', '/payments/{id}'],
+      ['api', '/refunds'],
+    ],
   });
   const server = fieldErrorsOf(refund.error);
   const same = useSameRequest(refund.submit);
@@ -106,12 +111,18 @@ function RequestRefund({ paymentId, currency }: { paymentId: string; currency: s
       </form>
       <LockedNote
         error={refund.error}
+        reread={refund.reread}
         onNewRequest={() => {
           refund.reset();
           same.forget();
         }}
       />
-      <CommandError error={refund.error} currency={currency} onRetry={same.retry} />
+      <CommandError
+        error={refund.error}
+        currency={currency}
+        onRetry={same.retry}
+        onReload={() => void refund.reread().catch(() => undefined)}
+      />
       {refund.data ? (
         <div aria-live="polite">
           <p role="status">

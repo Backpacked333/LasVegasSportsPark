@@ -1,4 +1,4 @@
-import { newId } from '@sportspark/contracts';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Outbox, OutboxDispatcher, UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -17,6 +17,7 @@ import {
   drainOutbox,
   post,
   scheduleFixture,
+  staffMember,
   workforceTestApp,
   type Actor,
   type CompetitionWorld,
@@ -31,41 +32,74 @@ describe('person merge follow-up (WRK-05)', () => {
   let t: TestApp;
   let world: CompetitionWorld;
   let events: EventsService;
+  let administrator: Actor;
 
   beforeAll(async () => {
     t = await workforceTestApp();
     world = await competitionWorld(t);
     events = t.app.get(EventsService);
+    administrator = await staffMember(t, ['system_administrator']);
   });
   afterAll(async () => {
     await t.close();
   });
 
-  /** What identity's merge does to the persons table (identity owns it; a fixture here). */
-  async function markMerged(mergedPersonId: string, survivorPersonId: string): Promise<void> {
-    await t.db
-      .updateTable('persons')
-      .set({ status: 'merged', merged_into_person_id: survivorPersonId })
-      .where('id', '=', mergedPersonId)
+  /**
+   * R2-TESTS-04: merges through identity itself (POST /v1/duplicate-candidates, then its merge as a
+   * system administrator), so the persons table, the person_merges row and the
+   * identity.persons_merged event are exactly what identity produces, and every module's follow-up
+   * runs. `drainOutbox` fails on any handler failure (R2-TESTS-01). Answers the merge id.
+   */
+  async function merge(survivorPersonId: string, mergedPersonId: string): Promise<string> {
+    const flagged = await post(t, '/v1/duplicate-candidates', administrator, {
+      personAId: survivorPersonId,
+      personBId: mergedPersonId,
+      reasons: ['same name and date of birth'],
+      score: 90,
+    });
+    expect(flagged.status, JSON.stringify(flagged.body)).toBe(201);
+    const done = await post(
+      t,
+      `/v1/duplicate-candidates/${flagged.body.id as string}/merge`,
+      administrator,
+      { survivorPersonId, reason: 'Confirmed in person' },
+    );
+    expect(done.status, JSON.stringify(done.body)).toBe(201);
+    await drainOutbox(t);
+    const mergeId = done.body.id as string;
+    const recorded = await t.db
+      .selectFrom('person_merges')
+      .select('id')
+      .where('id', '=', mergeId)
       .execute();
+    expect(recorded).toHaveLength(1);
+    return mergeId;
   }
 
-  /** Announces identity.persons_merged through the outbox and delivers it. */
-  async function announceMerge(payload: {
-    mergeId: string;
-    survivorPersonId: string;
-    mergedPersonId: string;
-  }): Promise<void> {
+  /** The identity.persons_merged payload identity enqueued for a merge. */
+  async function mergedPayload(mergeId: string): Promise<Record<string, unknown>> {
+    const row = await t.db
+      .selectFrom('outbox_events')
+      .select('payload')
+      .where('event_type', '=', 'identity.persons_merged')
+      .where(sql<boolean>`payload->>'mergeId' = ${mergeId}`)
+      .executeTakeFirstOrThrow();
+    return row.payload as Record<string, unknown>;
+  }
+
+  /** Announces the same merge again under a new event id and delivers it. */
+  async function announceAgain(payload: Record<string, unknown>): Promise<void> {
     await t.app.get(UnitOfWork).run(async ({ trx }) => {
       await t.app.get(Outbox).enqueue(trx, IdentityEvents.personsMerged, {
         organizationId: t.organizationId,
         aggregateType: 'person',
-        aggregateId: payload.survivorPersonId,
-        payload: { ...payload, operationId: newId() },
+        aggregateId: payload['survivorPersonId'] as string,
+        payload: payload as never,
       });
     });
     const summary = await t.app.get(OutboxDispatcher).runOnce(200);
     expect(summary.dead).toBe(0);
+    expect(summary.retried).toBe(0);
   }
 
   const overlapExceptions = (survivorPersonId: string) =>
@@ -128,13 +162,7 @@ describe('person merge follow-up (WRK-05)', () => {
     const apart = await acceptedCoaching(merged.personId, 'north', '2027-03-07', '09:00', '10:00');
     const before = await assignmentRows([kept, clashing, apart]);
 
-    const mergeId = newId();
-    await markMerged(merged.personId, survivor.personId);
-    await announceMerge({
-      mergeId,
-      survivorPersonId: survivor.personId,
-      mergedPersonId: merged.personId,
-    });
+    const mergeId = await merge(survivor.personId, merged.personId);
 
     const raised = await overlapExceptions(survivor.personId);
     expect(raised).toHaveLength(1);
@@ -161,13 +189,8 @@ describe('person merge follow-up (WRK-05)', () => {
     const merged = await adultCustomer(t);
     await acceptedCoaching(survivor.personId, 'north', '2027-03-13', '09:00', '10:00');
     await acceptedCoaching(merged.personId, 'south', '2027-03-13', '09:00', '10:00');
-    const payload = {
-      mergeId: newId(),
-      survivorPersonId: survivor.personId,
-      mergedPersonId: merged.personId,
-    };
-    await markMerged(merged.personId, survivor.personId);
-    await announceMerge(payload);
+    const mergeId = await merge(survivor.personId, merged.personId);
+    const payload = await mergedPayload(mergeId);
     expect(await overlapExceptions(survivor.personId)).toHaveLength(1);
     // the same delivery replayed
     await t.db
@@ -178,18 +201,13 @@ describe('person merge follow-up (WRK-05)', () => {
       .execute();
     await drainOutbox(t);
     // the same merge announced again under another event id (idempotent by merge id)
-    await announceMerge(payload);
+    await announceAgain(payload);
     expect(await overlapExceptions(survivor.personId)).toHaveLength(1);
     // a merge without overlapping work raises nothing
     const quiet = await adultCustomer(t);
     const folded = await adultCustomer(t);
     await acceptedCoaching(folded.personId, 'north', '2027-03-14', '09:00', '10:00');
-    await markMerged(folded.personId, quiet.personId);
-    await announceMerge({
-      mergeId: newId(),
-      survivorPersonId: quiet.personId,
-      mergedPersonId: folded.personId,
-    });
+    await merge(quiet.personId, folded.personId);
     expect(await overlapExceptions(quiet.personId)).toEqual([]);
   });
 
@@ -219,7 +237,7 @@ describe('person merge follow-up (WRK-05)', () => {
       expect.objectContaining({ code: 'qualification_missing', kind: 'referee_level_one' }),
     ]);
 
-    await markMerged(merged.personId, survivor.personId);
+    await merge(survivor.personId, merged.personId);
     const allowed = await propose();
     expect(allowed.status, JSON.stringify(allowed.body)).toBe(201);
     // the evidence is read, not moved: the qualification still names the merged person
@@ -249,6 +267,47 @@ describe('person merge follow-up (WRK-05)', () => {
     expect(unavailable.status, JSON.stringify(unavailable.body)).toBe(409);
     expect(unavailable.body.details.conflicts).toEqual([
       expect.objectContaining({ code: 'person_unavailable' }),
+    ]);
+  });
+
+  it('SPK-STAFF-001 / SPK-READY-004: revoking the merged person’s qualification raises the survivor’s unqualified accepted assignment', async () => {
+    const game = await scheduleFixture(t, world, { date: '2027-03-22' });
+    await createRequirementFixture(t, {
+      targetType: 'fixture',
+      targetId: game.fixtureId,
+      kind: 'official',
+      role: 'referee',
+      requiredQualifications: ['referee_level_two'],
+    });
+    const survivor: Actor = await adultCustomer(t);
+    const merged = await adultCustomer(t);
+    const evidence = await createQualificationFixture(t, {
+      personId: merged.personId,
+      kind: 'referee_level_two',
+    });
+    await merge(survivor.personId, merged.personId);
+    const assignment = await createAssignmentFixture(t, {
+      targetType: 'fixture',
+      targetId: game.fixtureId,
+      personId: survivor.personId,
+      kind: 'official',
+      role: 'referee',
+      status: 'accepted',
+      scheduledStart: game.start,
+      scheduledEnd: game.end,
+    });
+    const revoked = await post(t, `/v1/qualifications/${evidence}/revoke`, world.leagueManager, {
+      reason: 'Licence suspended',
+    });
+    expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+    const raised = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['status', 'owner_queue', 'severity', 'affected_id'])
+      .where('category', '=', 'workforce.unqualified_assignment')
+      .where('affected_id', '=', assignment)
+      .execute();
+    expect(raised).toEqual([
+      { status: 'open', owner_queue: 'league_manager', severity: 'high', affected_id: assignment },
     ]);
   });
 });
