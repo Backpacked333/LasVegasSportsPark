@@ -55,7 +55,10 @@ import {
 } from '../communications.machines';
 import { COMMUNICATIONS_POLICY, type CommunicationsPolicy } from '../communications.policy';
 import {
+  CreatedCursor,
+  afterCursor,
   audienceOf,
+  cursorInstant,
   iso,
   organizationOf,
   toAttempt,
@@ -82,8 +85,6 @@ export interface QueueOptions {
 }
 
 type SuppressionReason = z.infer<typeof SuppressionReasonSchema>;
-
-const ListCursor = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
 
 /**
  * Notifications (SPK-COMMS-002/003/005/006). Lifecycle: composed → queued (recipients resolved
@@ -731,11 +732,12 @@ export class NotificationsService {
       organizationId,
       facilityId: query.facilityId ?? null,
     });
-    const cursor = decodeCursor(query.cursor, ListCursor);
+    const cursor = decodeCursor(query.cursor, CreatedCursor);
     let q = this.uow
       .reader()
       .selectFrom('notifications')
       .selectAll()
+      .select(cursorInstant('notifications.created_at').as('cursor_at'))
       .where('organization_id', '=', organizationId)
       .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
@@ -755,17 +757,13 @@ export class NotificationsService {
           : eb('facility_id', 'is', null),
       );
     }
-    if (cursor) {
-      q = q.where(
-        sql<boolean>`(created_at, id) < (${new Date(cursor.createdAt)}::timestamptz, ${cursor.id}::uuid)`,
-      );
-    }
+    if (cursor) q = q.where(afterCursor('notifications.created_at', 'notifications.id', cursor));
     const rows = await q.execute();
     const items = rows.slice(0, query.limit).map(toNotification);
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
     return {
       items,
-      nextCursor: last ? encodeCursor({ createdAt: iso(last.created_at), id: last.id }) : null,
+      nextCursor: last ? encodeCursor({ createdAt: last.cursor_at, id: last.id }) : null,
     };
   }
 

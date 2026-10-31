@@ -1,6 +1,7 @@
 import {
   AudienceSchema,
   errors,
+  z,
   type Audience,
   type CalendarFeed,
   type DeliveryAttempt,
@@ -15,7 +16,7 @@ import type {
   NotificationRecipientsTable,
   NotificationsTable,
 } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
 
 export type NotificationRow = Selectable<NotificationsTable>;
 export type RecipientRow = Selectable<NotificationRecipientsTable>;
@@ -38,6 +39,38 @@ export function personOf(principal: Principal): string {
 export const iso = (value: Date | string): string => new Date(value).toISOString();
 export const isoOrNull = (value: Date | string | null): string | null =>
   value === null ? null : iso(value);
+
+// ---------------------------------------------------------------------------------------------
+// Keyset pages (§4.5, api-and-events.md "Pagination"): newest first on (created_at desc, id desc).
+// The columns are stamped by the database (`default now()`, microseconds on PostgreSQL), so the
+// cursor carries the instant at the database's own precision. A JavaScript Date keeps only
+// milliseconds: a cursor built from one skipped every later row of the boundary row's millisecond,
+// all the rows one transaction wrote among them (R2-API-CONTRACT-01).
+// ---------------------------------------------------------------------------------------------
+
+/** A keyset cursor: the boundary row's instant (ISO-8601 UTC, up to microseconds) and id. */
+export const CreatedCursor = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
+export type CreatedKeyset = z.infer<typeof CreatedCursor>;
+
+/**
+ * `column` as an ISO-8601 UTC instant with microseconds, whatever the session's DateStyle and
+ * TimeZone; selected as `cursor_at` beside the row and encoded into the next cursor unchanged.
+ */
+export function cursorInstant(column: string): RawBuilder<string> {
+  return sql<string>`to_char(${sql.ref(column)} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/**
+ * Rows strictly after the cursor in (created_at desc, id desc) order. The instant is compared as
+ * the text the cursor carries, never through a Date, so no sub-millisecond part is lost.
+ */
+export function afterCursor(
+  createdColumn: string,
+  idColumn: string,
+  cursor: CreatedKeyset,
+): RawBuilder<SqlBool> {
+  return sql<SqlBool>`(${sql.ref(createdColumn)}, ${sql.ref(idColumn)}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`;
+}
 
 export function audienceOf(row: NotificationRow): Audience {
   return AudienceSchema.parse(row.audience);

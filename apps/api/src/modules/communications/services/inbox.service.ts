@@ -5,7 +5,6 @@ import {
   encodeCursor,
   errors,
   newId,
-  z,
   type AcknowledgeInput,
   type InboxItem,
   type InboxQuery,
@@ -15,7 +14,6 @@ import {
   type RecipientBasisValue,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
-import { sql } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -31,7 +29,9 @@ import { CommunicationsActions } from '../communications.actions';
 import { NotificationAcknowledged, NotificationRead } from '../communications.events';
 import { DeliveryAttemptMachine } from '../communications.machines';
 import {
-  iso,
+  CreatedCursor,
+  afterCursor,
+  cursorInstant,
   organizationOf,
   personOf,
   toInboxItem,
@@ -40,8 +40,6 @@ import {
 } from '../communications.shared';
 import { AudienceResolver } from './audience-resolver';
 import { MergedPersons } from './merged-persons';
-
-const InboxCursor = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
 
 /** An inbox row plus what the protected-notice re-check needs (never part of the response). */
 interface EntitlementRow extends InboxRow {
@@ -81,19 +79,16 @@ export class InboxService {
     const organizationId = organizationOf(principal);
     const personId = personOf(principal);
     await this.authorize(principal, organizationId, personId, CommunicationsActions.readInbox);
-    const cursor = decodeCursor(query.cursor, InboxCursor);
+    const cursor = decodeCursor(query.cursor, CreatedCursor);
     const reader = this.uow.reader();
     const personIds = await this.inboxPersons(reader, organizationId, personId);
     let q = this.inboxQuery(reader, organizationId, personIds)
+      .select(cursorInstant('a.created_at').as('cursor_at'))
       .orderBy('a.created_at', 'desc')
       .orderBy('a.id', 'desc')
       .limit(query.limit + 1);
     if (query.unreadOnly) q = q.where('a.status', '=', 'delivered');
-    if (cursor) {
-      q = q.where(
-        sql<boolean>`(a.created_at, a.id) < (${new Date(cursor.createdAt)}::timestamptz, ${cursor.id}::uuid)`,
-      );
-    }
+    if (cursor) q = q.where(afterCursor('a.created_at', 'a.id', cursor));
     const rows = await q.execute();
     const items: InboxItem[] = [];
     for (const row of rows.slice(0, query.limit)) {
@@ -103,9 +98,7 @@ export class InboxService {
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
     return {
       items,
-      nextCursor: last
-        ? encodeCursor({ createdAt: iso(last.attempt_created_at), id: last.attempt_id })
-        : null,
+      nextCursor: last ? encodeCursor({ createdAt: last.cursor_at, id: last.attempt_id }) : null,
     };
   }
 
