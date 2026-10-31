@@ -309,7 +309,7 @@ describe('catalog sessions follow their scheduling events (assembled application
       }),
     );
     await drain(t);
-    const changed = async (family: { header: Record<string, string> }) =>
+    const changed = async (family: { header: { Authorization: string } }) =>
       (
         await ok<{ items: Array<{ title: string }> }>(get(t, '/v1/me/inbox', family.header))
       ).items.filter((n) => n.title.startsWith('Schedule changed: U10 clinic'));

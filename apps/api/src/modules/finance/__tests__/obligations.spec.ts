@@ -476,7 +476,7 @@ describe('obligations and team billing (SPK-PAY-004/005, SPK-AT-022)', () => {
     const after = await t.http.get(`/v1/obligations/${obligation.id}`).set(captain.header);
     expect(after.body.totals).toMatchObject({ allocatedMinor: 10_000, remainingMinor: 60_000 });
   });
-  it('R2-JOURNEYS-05 / SPK-COMP-004 / SPK-CAP-002: a team obligation is the entry\'s financial status reference, outstanding until its contributions settle it, then clear', async () => {
+  it("R2-JOURNEYS-05 / SPK-COMP-004 / SPK-CAP-002: a team obligation is the entry's financial status reference, outstanding until its contributions settle it, then clear", async () => {
     const { captain, teamEntryId, roster } = await team(2);
     const workspace = async () => {
       const res = await t.http.get(`/v1/team-entries/${teamEntryId}`).set(captain.header);
