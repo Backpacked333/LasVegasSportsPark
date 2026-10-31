@@ -30,6 +30,7 @@ import {
 } from '../workforce.shared';
 import { AssignmentsService } from './assignments.service';
 import { CoverageService } from './coverage.service';
+import { QualificationsService } from './qualifications.service';
 import { TargetResolver, type FacilityFacts } from './target-resolver';
 import { TemporaryAccessService } from './temporary-access.service';
 
@@ -107,6 +108,7 @@ export class StaffingService implements WorkforceStaffingPort {
     private readonly assignments: AssignmentsService,
     private readonly access: TemporaryAccessService,
     private readonly targets: TargetResolver,
+    private readonly qualifications: QualificationsService,
   ) {}
 
   async declareRequirements(
@@ -124,6 +126,11 @@ export class StaffingService implements WorkforceStaffingPort {
     await this.authorize(principal, organizationId, body.facilityId);
     return this.uow.run(async ({ trx }) => {
       await this.assertEventAt(organizationId, body.targetId, body.facilityId);
+      // R2-RACES-02: each requirement key exclusively before the inserts (as
+      // RequirementsService.create), in role order, the order a retirement locks the rows in.
+      for (const role of [...new Set(body.requirements.map((r) => r.role))].sort()) {
+        await this.coverage.lockRequirementKey(trx, organizationId, 'event', body.targetId, role);
+      }
       const requirementIds: string[] = [];
       for (const requirement of body.requirements) {
         const id = newId();
@@ -186,6 +193,15 @@ export class StaffingService implements WorkforceStaffingPort {
         });
         const row = await this.load(trx, organizationId, id);
         await this.notify(trx, row);
+        // SPK-STAFF-001: an assignment already accepted for the role whose assignee lacks the
+        // qualifications is raised for an operator, as for RequirementsService.create.
+        if (row.required_qualifications.length > 0) {
+          await this.qualifications.flagUnqualifiedAssignments(trx, organizationId, {
+            targetType: 'event',
+            targetId: body.targetId,
+            role: row.role,
+          });
+        }
         requirementIds.push(id);
       }
       return { requirementIds };

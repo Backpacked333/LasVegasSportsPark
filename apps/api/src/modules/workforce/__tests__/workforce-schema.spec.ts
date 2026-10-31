@@ -1,10 +1,15 @@
 import { newId } from '@sportspark/contracts';
-import { json, pgConstraintName, seedOrganization } from '@sportspark/db';
+import { json, pgConstraintName, seedOrganization, type Database } from '@sportspark/db';
+import { sql, type UpdateObject } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
 import { at, createScheduledEvent, EventsService, seedPitchWithHalves } from '../../scheduling';
-import { createAssignmentFixture, createAvailabilityFixture } from '../testing/workforce-fixtures';
+import {
+  createAssignmentFixture,
+  createAvailabilityFixture,
+  createRequirementFixture,
+} from '../testing/workforce-fixtures';
 import {
   competitionWorld,
   expectPgError,
@@ -259,6 +264,113 @@ describe('workforce schema invariants (migration 0700)', () => {
       t.db.deleteFrom('availability').where('id', '=', windowId).execute(),
       '23001',
     );
+  });
+
+  it('WRK-02 / SPK-STAFF-002 (migration 0706): an assignment is never moved onto another target, role, person or slot, so a retired requirement cannot be reached by an update', async () => {
+    const official = await person();
+    const id = await createAssignmentFixture(t, {
+      ...fixtureTarget(game),
+      personId: official,
+      status: 'accepted',
+      role: 'reserve_referee',
+    });
+    // `later` has a retired reserve_referee requirement and `game` a retired video_assistant one.
+    for (const [target, role] of [
+      [later, 'reserve_referee'],
+      [game, 'video_assistant'],
+    ] as const) {
+      const requirementId = await createRequirementFixture(t, {
+        targetType: 'fixture',
+        targetId: target.fixtureId,
+        role,
+      });
+      await t.db
+        .updateTable('assignment_requirements')
+        .set({
+          retired_at: new Date(),
+          retired_reason: 'No longer staffed',
+          retired_by: json({ kind: 'system', actorLabel: 'test' }),
+        })
+        .where('id', '=', requirementId)
+        .execute();
+    }
+    const refusedUpdate = async (set: UpdateObject<Database, 'assignments'>) => {
+      let refused: unknown;
+      try {
+        await t.db.updateTable('assignments').set(set).where('id', '=', id).execute();
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused, JSON.stringify(set)).toBeDefined();
+      expect(pgConstraintName(refused)).toBe('assignments_identity_immutable');
+    };
+    // onto the other fixture (consistent target columns), where the role's requirement is retired
+    await refusedUpdate({ target_id: later.fixtureId, fixture_id: later.fixtureId });
+    // onto a retired role of the same fixture
+    await refusedUpdate({ role: 'video_assistant' });
+    // a different person, kind or slot is a new assignment (the replacement workflow), not an edit
+    await refusedUpdate({ person_id: await person() });
+    await refusedUpdate({ kind: 'coach' });
+    await refusedUpdate({ slot: 2 });
+    await refusedUpdate({ replaces_assignment_id: id });
+    // nor is its id rewritten: audit, outbox and exception rows name it without a foreign key
+    await refusedUpdate({ id: newId() });
+    const row = await t.db
+      .selectFrom('assignments')
+      .select(['target_id', 'role', 'person_id', 'slot', 'status'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({
+      target_id: game.fixtureId,
+      role: 'reserve_referee',
+      person_id: official,
+      slot: 1,
+      status: 'accepted',
+    });
+    // what the services do change still changes: the title and the revision (a retime's columns)
+    await t.db
+      .updateTable('assignments')
+      .set({ target_title: 'Renamed fixture', revision: 2 })
+      .where('id', '=', id)
+      .execute();
+  });
+
+  it('WRK-02 (migration 0706): the identity guard runs after every other BEFORE UPDATE trigger, so it compares a column another trigger changed', async () => {
+    const official = await person();
+    const id = await createAssignmentFixture(t, {
+      ...fixtureTarget(game),
+      personId: official,
+      status: 'accepted',
+      role: 'trigger_order_probe',
+    });
+    // PostgreSQL runs BEFORE ROW triggers in name order. A trigger named to sort between the two
+    // existing ones moves the row to another slot while the statement only renames the title; the
+    // guard (assignments_zz_identity_immutable) sees the slot it left. Rolled back with the test.
+    let refused: unknown;
+    try {
+      await t.db.transaction().execute(async (trx) => {
+        await sql`create function wf_test_move_slot() returns trigger language plpgsql as $$
+          begin new.slot := new.slot + 1; return new; end $$`.execute(trx);
+        await sql`create trigger assignments_m_test_move_slot before update on assignments
+          for each row execute function wf_test_move_slot()`.execute(trx);
+        await trx
+          .updateTable('assignments')
+          .set({ target_title: 'Renamed fixture' })
+          .where('id', '=', id)
+          .execute();
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeDefined();
+    expect(pgConstraintName(refused)).toBe('assignments_identity_immutable');
+    const row = await t.db
+      .selectFrom('assignments')
+      .select(['slot', 'target_title'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(row.slot).toBe(1);
+    expect(row.target_title).not.toBe('Renamed fixture');
   });
 
   it('SPK-STAFF-001: one active availability statement per person per instant', async () => {

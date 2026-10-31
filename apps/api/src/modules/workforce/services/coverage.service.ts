@@ -36,6 +36,7 @@ import {
   type RequirementRow,
 } from '../workforce.shared';
 import { QualificationsService } from './qualifications.service';
+import { lockRequirementKey, lockRequirementShared } from './requirement-locks';
 
 export interface UncoveredNotice {
   exceptionId: string;
@@ -137,10 +138,12 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
   }
 
   /**
-   * Takes the requirement row's share lock before an assignment of its role is locked or inserted
-   * (WRK-02): the trigger `assignments_requirement_not_retired` takes the same lock, and a
-   * retirement locks the requirement before the assignments, so both take the locks in one order.
-   * Returns the requirement (retired or not), if any.
+   * Takes the requirement's shared key lock and its row's share lock before an assignment of its
+   * role is locked or inserted (WRK-02, R2-RACES-02; see `requirement-locks.ts`): the trigger
+   * `assignments_requirement_not_retired` takes the same row lock, a retirement locks the
+   * requirement before the assignments, so both take the locks in one order, and a requirement
+   * being created for the role holds the key exclusively until it commits. Returns the requirement
+   * (retired or not), if any.
    */
   async lockRequirementShared(
     trx: Trx,
@@ -149,15 +152,21 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     targetId: string,
     role: string,
   ): Promise<RequirementRow | undefined> {
-    return trx
-      .selectFrom('assignment_requirements')
-      .selectAll()
-      .where('organization_id', '=', organizationId)
-      .where('target_type', '=', targetType)
-      .where('target_id', '=', targetId)
-      .where('role', '=', role)
-      .forShare()
-      .executeTakeFirst();
+    return lockRequirementShared(trx, organizationId, targetType, targetId, role);
+  }
+
+  /**
+   * R2-RACES-02: the requirement key's exclusive lock, taken by a command creating the requirement
+   * for (target, role) before it inserts the row (see `requirement-locks.ts`).
+   */
+  async lockRequirementKey(
+    trx: Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+    role: string,
+  ): Promise<void> {
+    await lockRequirementKey(trx, organizationId, targetType, targetId, role, 'exclusive');
   }
 
   /** Coverage per requirement, computed from the assignment rows (never stored, SPK-READY-004). */
