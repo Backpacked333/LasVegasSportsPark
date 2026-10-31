@@ -500,8 +500,11 @@ describe('reporting schema invariants (migration 1300)', () => {
   });
 
   it('§4.6 / SPK-FAC-003: every state a reporting view passes through is typed exactly as its base check lists it (a withdrawn restriction included)', async () => {
-    // Every literal-typed column of a `reporting_*_v` view (none of them filters its rows), so a
-    // report that switches exhaustively on a typed state never meets an untyped one at runtime.
+    // Every literal-typed column of a `reporting_*_v` view, so a report that switches exhaustively
+    // on a typed state never meets an untyped one at runtime. None of the views listed here has a
+    // `where` clause (asserted below; their inner joins follow not-null foreign keys), so each
+    // passes every base row through and its type is the base check's whole list. The one view that
+    // filters, `reporting_resource_status_changes_v` (migration 1302), types its status as text.
     const columns: PassThroughState[] = [
       passThrough('reporting_persons_v', 'person_kind', 'persons', 'kind', {
         adult: true,
@@ -715,7 +718,22 @@ describe('reporting schema invariants (migration 1300)', () => {
       expect(lists, `${table}.${column} has exactly one state check constraint`).toHaveLength(1);
       return lists[0]!;
     };
+    const definition = async (view: string): Promise<string> => {
+      const { rows } = await sql<{ def: string }>`
+        select pg_get_viewdef(c.oid) as def from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind = 'v' and c.relname = ${view} and n.nspname = current_schema()`.execute(
+        t.db,
+      );
+      expect(rows, `${view} exists`).toHaveLength(1);
+      return rows[0]!.def;
+    };
+    // The detector sees a filtering view: the status-change view keeps only audited changes.
+    expect(await definition('reporting_resource_status_changes_v')).toMatch(/\bWHERE\b/);
     for (const c of columns) {
+      expect(await definition(c.view), `${c.view} does not filter its rows`).not.toMatch(
+        /\bWHERE\b/,
+      );
       const { rows } = await sql<{ n: number }>`
         select count(*)::int as n from information_schema.view_column_usage
         where view_schema = current_schema() and view_name = ${c.view}
