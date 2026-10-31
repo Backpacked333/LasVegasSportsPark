@@ -171,12 +171,21 @@ export function TextField({
         style={[styles.input, multiline && styles.multiline, error ? styles.inputError : null]}
         testID={testID}
       />
-      {error ? (
-        <LiveText style={styles.error} announcement={error} accessibilityRole="alert">
-          ▲ {error}
-        </LiveText>
-      ) : null}
+      <FieldError error={error} />
     </View>
+  );
+}
+
+/**
+ * A field's or a choice's error, shown under it and announced when it appears (SPK-UX-009): every
+ * field error on the money, booking and enrollment screens goes through here.
+ */
+export function FieldError({ error, testID }: { error?: string | null; testID?: string }) {
+  if (!error) return null;
+  return (
+    <LiveText style={styles.error} announcement={error} accessibilityRole="alert" testID={testID}>
+      ▲ {error}
+    </LiveText>
   );
 }
 

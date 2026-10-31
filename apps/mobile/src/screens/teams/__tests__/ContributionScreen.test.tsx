@@ -188,6 +188,55 @@ describe('SCR-C-25 ContributionScreen', () => {
     await app.settle();
   });
 
+  it("SPK-UX-009 (NA-A01): the payment's state after Pay, and each change of it, is announced with what to do next", async () => {
+    const announced = () =>
+      (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mock.calls.map(
+        (call) => call[0] as string,
+      );
+    const app = renderContribution({
+      'POST /contribution-requests/{id}/pay': { status: 201, body: outcome('processing') },
+      'GET /payments/{id}': { status: 200, body: paymentAttempt({ status: 'processing' }) },
+    });
+    fireEvent.press(
+      await screen.findByRole('radio', { name: 'Development payment: processing, outcome later' }),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();
+    expect(announced()).toContain('Payment processing. Check again.');
+    await app.settle();
+    app.fake.set('GET /payments/{id}', {
+      status: 200,
+      body: paymentAttempt({ status: 'failed', failureReason: 'The card was declined' }),
+    });
+    await app.settle();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Payment failed')).toBeOnTheScreen();
+    expect(announced()).toContain('Payment failed. The card was declined.');
+    await app.settle();
+  });
+
+  it('SPK-UX-009: a payment on its way from elsewhere is announced with "Do not pay again"', async () => {
+    const app = renderContribution({
+      'GET /me/payments': {
+        status: 200,
+        body: {
+          items: [paymentAttempt({ status: 'unknown', unknownSince: '2026-10-23T12:00:00.000Z' })],
+          nextCursor: null,
+        },
+      },
+    });
+    expect(await screen.findByTestId('contribution-live-attempt')).toBeOnTheScreen();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'A payment of $75.00 toward this contribution is on its way. Do not pay again. Payment outcome being confirmed. Do not pay again. Check again.',
+      { queue: true },
+    );
+    await app.settle();
+  });
+
   it('SPK-PAY-007 IDEMPOTENCY_OUTCOME_UNAVAILABLE: when "Check again" finds the first attempt committed, the line reads "This may already have been done", paying stays locked and the payments are read again', async () => {
     let posts = 0;
     const app = renderContribution(

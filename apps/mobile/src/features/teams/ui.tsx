@@ -344,11 +344,26 @@ export function CommandFailure({
         : read
           ? 'Not loaded'
           : 'Not done';
+  // NA-A01: the announcement ends with the next action, the button's label or the instruction.
+  const nextAction =
+    stale && onReload
+      ? 'Reload'
+      : recovery.retry && onRetry
+        ? unknown
+          ? 'Check again'
+          : 'Try again'
+        : recovery.label;
   return (
     <LiveRegion
       style={styles.failure}
       testID={testID}
-      announcement={sentences(label, error.message, ...issues)}
+      announcement={sentences(
+        label,
+        error.message,
+        ...issues,
+        ...reasons.map((reason) => reason.message),
+        nextAction,
+      )}
       occurrence={error}
     >
       <StatusBadge tone={unknown || withheld ? 'warning' : 'danger'} label={label} />
@@ -364,14 +379,14 @@ export function CommandFailure({
         <Button label="Reload" onPress={onReload} variant="secondary" />
       ) : recovery.retry && onRetry ? (
         <Button
-          label={unknown ? 'Check again' : 'Try again'}
+          label={nextAction}
           onPress={onRetry}
           accessibilityHint={
             read ? 'Reads it again' : 'Sends the same request again; it is never applied twice'
           }
         />
       ) : (
-        <Text style={styles.body}>{recovery.label}</Text>
+        <Text style={styles.body}>{nextAction}</Text>
       )}
     </LiveRegion>
   );

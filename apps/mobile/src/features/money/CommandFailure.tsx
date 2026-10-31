@@ -21,7 +21,9 @@
  * canceling): it changed nothing, so it is shown as a read that did not load, with "Try again".
  *
  * Every answer is announced to screen readers when it appears (`ui/announce`: a live region on
- * Android, an announcement on iOS), "No answer yet" included (SPK-UX-009).
+ * Android, an announcement on iOS), "No answer yet" included, with its next action (SPK-UX-009,
+ * NA-A01): "Check again", "Reload", or the instruction the API's next action gives ("Do not pay
+ * again. The outcome is being confirmed.").
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text } from 'react-native';
@@ -81,10 +83,12 @@ export function CommandFailure({
   const recovery = recoveryActionFor(error);
   if (mayHaveTakenEffect(error)) {
     const body = `We did not get a definite answer about ${what}. It may already have been made. Checking again is safe: it cannot apply ${what} twice.`;
+    // NA-A01: announced with the next action, the button's label or the instruction shown.
+    const nextAction = recovery.retry && onRetry ? 'Check again' : recovery.label;
     return (
       <LiveRegion
         style={styles.box}
-        announcement={sentences('No answer yet', body)}
+        announcement={sentences('No answer yet', body, nextAction)}
         occurrence={error}
         testID="command-no-answer"
       >
@@ -95,9 +99,9 @@ export function CommandFailure({
           {error.correlationId ? `. Reference: ${error.correlationId}` : ''}
         </Text>
         {recovery.retry && onRetry ? (
-          <Button label="Check again" onPress={onRetry} />
+          <Button label={nextAction} onPress={onRetry} />
         ) : (
-          <Text style={styles.body}>{recovery.label}</Text>
+          <Text style={styles.body}>{nextAction}</Text>
         )}
       </LiveRegion>
     );
@@ -106,7 +110,7 @@ export function CommandFailure({
     return (
       <LiveRegion
         style={styles.box}
-        announcement={sentences(STALE_LABEL, error.message)}
+        announcement={sentences(STALE_LABEL, error.message, onReload ? 'Reload' : null)}
         occurrence={error}
         testID="command-stale"
       >

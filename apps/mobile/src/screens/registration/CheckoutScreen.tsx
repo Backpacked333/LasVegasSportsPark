@@ -18,7 +18,8 @@
  * unknown, never "failed". The screen says "Do not pay again" and asks again with the same
  * idempotency key (§4.9) when the app returns to the foreground or the connection comes back, or
  * when the customer taps "Check now"; the API also keeps one checkout per quote, so asking again
- * can never charge twice. When asking again finds that the first attempt committed but its answer
+ * can never charge twice. "Payment outcome being confirmed" is announced to screen readers with
+ * "Check now" each time a check gets no answer (`ui/announce`, SPK-UX-009). When asking again finds that the first attempt committed but its answer
  * was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the checkout exists: it reads "This may already have
  * been done", the price and basket are read again (the price then names the checkout, which this
  * screen opens), and paying is not offered.
@@ -54,12 +55,17 @@ import { basketStatus, holdStatus, quoteStatus } from '../../features/registrati
 import { Body, ButtonRow, ChoiceRow, Detail, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { quoteIsUsable } from './QuoteReviewScreen';
+
+const UNKNOWN_OUTCOME_LABEL = 'Payment outcome being confirmed. Do not pay again.';
+const UNKNOWN_OUTCOME_BODY =
+  'We did not get an answer about this payment. Do not pay again. When the app is back online or opened again, it asks with the same request, which can never charge you twice.';
 
 type Quote = Schema<'Quote'>;
 type Basket = Schema<'Basket'>;
@@ -148,6 +154,8 @@ function CheckoutContent({
   const [failure, setFailure] = useState<Failure | null>(null);
   /** The checkout request whose outcome is unknown; resent with the same key, never re-paid. */
   const [unknownOutcome, setUnknownOutcome] = useState<CheckoutBody | null>(null);
+  /** How many times asking got no definite answer: each one is announced (SPK-UX-009). */
+  const [unanswered, setUnanswered] = useState(0);
 
   const pay = useCallback(
     async (body: CheckoutBody) => {
@@ -168,6 +176,7 @@ function CheckoutContent({
           // 5xx, PAYMENT_OUTCOME_UNKNOWN): the checkout may exist and its payment may be on its
           // way, so it is never a failure and is asked again under the same key (SPK-PAY-007).
           setUnknownOutcome(body);
+          setUnanswered((n) => n + 1);
         } else if (tookEffectOutcomeLost(apiError)) {
           // An earlier attempt under this key committed and its answer was lost: the checkout
           // exists. The price is read again (it reads "consumed" and names the checkout) and
@@ -285,21 +294,25 @@ function CheckoutContent({
 
       {unknownOutcome ? (
         <Section title="Payment">
-          <StatusBadge
-            tone="warning"
-            label="Payment outcome being confirmed. Do not pay again."
-            testID="checkout-outcome-unknown"
-          />
-          <Body>
-            We did not get an answer about this payment. Do not pay again. When the app is back
-            online or opened again, it asks with the same request, which can never charge you twice.
-          </Body>
-          <Button
-            label="Check now"
-            onPress={() => void pay(unknownOutcome)}
-            busy={checkout.isProcessing}
-            disabled={offline}
-          />
+          {/* SPK-UX-009, NA-A01: announced with its next action, again after each unanswered check. */}
+          <LiveRegion
+            announcement={sentences(UNKNOWN_OUTCOME_LABEL, UNKNOWN_OUTCOME_BODY, 'Check now')}
+            occurrence={unanswered}
+            testID="checkout-outcome-unknown-live"
+          >
+            <StatusBadge
+              tone="warning"
+              label={UNKNOWN_OUTCOME_LABEL}
+              testID="checkout-outcome-unknown"
+            />
+            <Body>{UNKNOWN_OUTCOME_BODY}</Body>
+            <Button
+              label="Check now"
+              onPress={() => void pay(unknownOutcome)}
+              busy={checkout.isProcessing}
+              disabled={offline}
+            />
+          </LiveRegion>
         </Section>
       ) : null}
 

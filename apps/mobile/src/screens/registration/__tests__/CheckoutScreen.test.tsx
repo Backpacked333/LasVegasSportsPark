@@ -7,6 +7,7 @@
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import {
   IDS,
   basket,
@@ -245,6 +246,29 @@ describe('SCR-C-14 CheckoutScreen', () => {
     );
     const [first, second] = checkoutRequests(app);
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('SPK-UX-009 (NA-A01): "Payment outcome being confirmed" is announced with "Check now", again after each unanswered check', async () => {
+    const announced = () =>
+      (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mock.calls.map(
+        (call) => call[0] as string,
+      );
+    const words =
+      'Payment outcome being confirmed. Do not pay again. We did not get an answer about this payment. Do not pay again. When the app is back online or opened again, it asks with the same request, which can never charge you twice. Check now.';
+    renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () => {
+          throw new TypeError('Network request failed');
+        },
+      }),
+    });
+    await choosePaymentAndPay();
+    expect(await screen.findByRole('button', { name: 'Check now' })).toBeOnTheScreen();
+    await waitFor(() => expect(announced().filter((w) => w === words)).toHaveLength(1));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check now' }));
+    });
+    await waitFor(() => expect(announced().filter((w) => w === words)).toHaveLength(2));
   });
 
   it('§4.9 IDEMPOTENCY_OUTCOME_UNAVAILABLE: "Check now" that finds the checkout committed with its answer lost offers no payment, reads the price again and opens the checkout it names', async () => {

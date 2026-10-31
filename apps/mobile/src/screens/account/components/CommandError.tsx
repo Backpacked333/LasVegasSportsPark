@@ -96,10 +96,12 @@ export function CommandError({
   }
   if (mayHaveTakenEffect(error)) {
     const recovery = recoveryActionFor(error);
+    // NA-A01: announced with the next action, the button's label or the instruction shown.
+    const nextAction = recovery.retry && onRetry ? 'Check again' : recovery.label;
     return (
       <LiveRegion
         style={styles.box}
-        announcement={sentences(NO_ANSWER_LABEL, NO_ANSWER_BODY)}
+        announcement={sentences(NO_ANSWER_LABEL, NO_ANSWER_BODY, nextAction)}
         occurrence={error}
         testID="command-no-answer"
       >
@@ -109,9 +111,9 @@ export function CommandError({
           {reference}
         </Text>
         {recovery.retry && onRetry ? (
-          <Button label="Check again" onPress={onRetry} />
+          <Button label={nextAction} onPress={onRetry} />
         ) : (
-          <Text style={styles.body}>{recovery.label}</Text>
+          <Text style={styles.body}>{nextAction}</Text>
         )}
       </LiveRegion>
     );

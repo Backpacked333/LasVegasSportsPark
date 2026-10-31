@@ -5,17 +5,23 @@
  * (src/ui/announce.tsx). The jest preset renders as iOS and records those calls.
  */
 import { ApiError, type ApiErrorInit } from '@sportspark/api-client';
-import { render, screen } from '@testing-library/react-native';
+import { act, render, screen } from '@testing-library/react-native';
+import type { NavigationProp, ParamListBase } from 'expo-router/build/react-navigation/core';
+import { NavigationContext } from 'expo-router/build/react-navigation/core/NavigationContext';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AccessibilityInfo, Platform } from 'react-native';
 import { CommandFailure as MoneyCommandFailure } from '../../features/money/CommandFailure';
-import { TextField as MoneyTextField } from '../../features/money/ui';
+import {
+  FieldError as MoneyFieldError,
+  TextField as MoneyTextField,
+} from '../../features/money/ui';
 import { CommandError as RegistrationCommandError } from '../../features/registration/CommandError';
 import { TextField as RegistrationTextField } from '../../features/registration/ui';
 import { CommandFailure as TeamsCommandFailure } from '../../features/teams/ui';
 import { CommandError as AccountCommandError } from '../../screens/account/components/CommandError';
 import { TextField as AccountTextField } from '../../screens/account/components/forms';
+import { useConnectivity } from '../../providers/AppProviders';
 import { createTestApp } from '../../testing/test-app';
 import { LiveRegion, sentences } from '../announce';
 import { OUTCOME_LOST_LABEL, OutcomeLost } from '../OutcomeLost';
@@ -48,6 +54,12 @@ const noAnswer = () =>
   });
 
 const announced = () => announce.mock.calls.map((call) => call[0] as string);
+
+/** Lets the current JavaScript task end: what follows is a later answer, not the same moment. */
+const nextTask = () =>
+  act(async () => {
+    await Promise.resolve();
+  });
 
 describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
   it('every live region in the app goes through ui/announce, so none is silent on iOS', () => {
@@ -90,16 +102,101 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
     }
   });
 
-  it('StateView: an error is announced with its message, never its code or reference', () => {
+  it('StateView: an error is announced with its message and next action, never its code or reference', () => {
     render(<StateView variant="error" error={apiError('STALE_REVISION')} />);
-    expect(announced()).toEqual(['Something went wrong. The record changed since it was loaded.']);
+    expect(announced()).toEqual([
+      'Something went wrong. The record changed since it was loaded. Reload.',
+    ]);
     expect(announced()[0]).not.toMatch(/STALE_REVISION|corr-123/);
   });
 
-  it('StateView: the same words for a second failure are announced again', () => {
+  it('StateView: the same words for a second failure are announced again', async () => {
     const { rerender } = render(<StateView variant="error" error={apiError('STALE_REVISION')} />);
+    // A second answer always arrives in a later task (after another request).
+    await nextTask();
     rerender(<StateView variant="error" error={apiError('STALE_REVISION')} />);
     expect(announce).toHaveBeenCalledTimes(2);
+  });
+
+  it('the same words shown by two views at the same moment are announced once', async () => {
+    render(
+      <>
+        <LiveRegion announcement="No answer yet." />
+        <LiveRegion announcement="No answer yet." />
+        <LiveRegion announcement="Request sent." />
+      </>,
+    );
+    expect(announced()).toEqual(['No answer yet.', 'Request sent.']);
+    await nextTask();
+    render(<LiveRegion announcement="No answer yet." />);
+    expect(announced()).toEqual(['No answer yet.', 'Request sent.', 'No answer yet.']);
+  });
+
+  it('a result on a screen that is not in view (a hidden tab, the stack below) is not announced', () => {
+    const focused = { value: false };
+    const navigation = {
+      isFocused: () => focused.value,
+    } as unknown as NavigationProp<ParamListBase>;
+    const view = (words: string) => (
+      <NavigationContext.Provider value={navigation}>
+        <LiveRegion announcement={words} testID="live" />
+      </NavigationContext.Provider>
+    );
+    const { rerender } = render(view('Saved.'));
+    expect(announce).not.toHaveBeenCalled();
+    // TalkBack reads only what is on screen; the live region is still there for when it is.
+    expect(screen.getByTestId('live')).toHaveProp('accessibilityLiveRegion', 'polite');
+    focused.value = true;
+    rerender(view('Saved again.'));
+    expect(announced()).toEqual(['Saved again.']);
+  });
+
+  it('next actions: an error is announced with what to do next (NA-A01)', () => {
+    const app = createTestApp();
+    const unknownPayment = apiError('PAYMENT_OUTCOME_UNKNOWN', {
+      message: 'The payment provider has not confirmed this payment.',
+      nextAction: 'await_reconciliation',
+    });
+    render(<TeamsCommandFailure error={unknownPayment} onRetry={jest.fn()} />, {
+      wrapper: app.wrapper,
+    });
+    render(<MoneyCommandFailure error={unknownPayment} what="the payment" onRetry={jest.fn()} />, {
+      wrapper: app.wrapper,
+    });
+    render(
+      <StateView
+        variant="error"
+        error={apiError('ACCOUNT_RESTRICTED', {
+          message: 'This account cannot do that.',
+          nextAction: 'contact_support',
+        })}
+      />,
+    );
+    render(
+      <StateView
+        variant="error"
+        error={apiError('VALIDATION_FAILED', {
+          message: 'Check the dates.',
+          nextAction: 'correct_input',
+        })}
+      />,
+    );
+    render(
+      <MoneyCommandFailure
+        error={apiError('STALE_REVISION')}
+        what="the cancellation"
+        onReload={jest.fn()}
+      />,
+    );
+    expect(announced()).toEqual([
+      'No answer yet: this may already have been recorded. The payment provider has not confirmed this payment. Do not pay again. The outcome is being confirmed.',
+      expect.stringMatching(
+        /^No answer yet\. We did not get a definite answer about the payment\..* Do not pay again\. The outcome is being confirmed\.$/,
+      ),
+      'Something went wrong. This account cannot do that. Contact support.',
+      'Something went wrong. Check the dates. Review your entries.',
+      'This changed since you opened it. The record changed since it was loaded. Reload.',
+    ]);
   });
 
   it('StateView: empty, unavailable, offline and turned-off answers are announced; loading and pending decisions are not', () => {
@@ -132,6 +229,35 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
     ]);
   });
 
+  it('StateView: "You are offline" is left to the connectivity announcement while the device is offline', async () => {
+    // Shown once the device is known to be offline, as QueryBoundary shows it.
+    function OfflineRead() {
+      const { reachable } = useConnectivity();
+      return reachable === false ? (
+        <StateView
+          variant="offline-stale"
+          updatedAt={null}
+          now={NOW}
+          offline
+          unavailableActions={['Payment']}
+          onRetry={jest.fn()}
+        />
+      ) : null;
+    }
+    const app = createTestApp({ reachable: false });
+    render(<OfflineRead />, { wrapper: app.wrapper });
+    expect(await screen.findByTestId('state-offline-stale')).toBeOnTheScreen();
+    expect(announce).not.toHaveBeenCalled();
+    // Online, a read that got no answer is this view's to announce (the banner says nothing).
+    await nextTask();
+    const online = createTestApp();
+    render(
+      <StateView variant="offline-stale" updatedAt={null} now={NOW} offline onRetry={jest.fn()} />,
+      { wrapper: online.wrapper },
+    );
+    expect(announced()).toEqual(['You are offline. Try again.']);
+  });
+
   it('OutcomeLost: "This may already have been done" is announced', () => {
     const app = createTestApp();
     render(<OutcomeLost error={apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE')} what="the payment" />, {
@@ -143,7 +269,7 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
     expect(announced()[0]).toContain('so the payment may already have been done');
   });
 
-  it('"No answer yet" is announced by every shared failure view', () => {
+  it('"No answer yet" is announced by every shared failure view, with "Check again"', async () => {
     const app = createTestApp();
     const views = [
       <MoneyCommandFailure key="money" error={noAnswer()} what="the payment" onRetry={jest.fn()} />,
@@ -151,25 +277,35 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
       <AccountCommandError key="account" error={noAnswer()} onRetry={jest.fn()} />,
       <RegistrationCommandError key="registration" error={noAnswer()} onRetry={jest.fn()} />,
     ];
-    for (const view of views) render(view, { wrapper: app.wrapper });
+    for (const view of views) {
+      render(view, { wrapper: app.wrapper });
+      await nextTask();
+    }
     expect(announced()).toEqual([
       expect.stringMatching(
-        /^No answer yet\. We did not get a definite answer about the payment\./,
+        /^No answer yet\. We did not get a definite answer about the payment\..* Check again\.$/,
       ),
-      expect.stringMatching(/^No answer yet: this may already have been recorded\. The connection/),
-      expect.stringMatching(/^No answer yet: this may already have been recorded\. There was no/),
-      expect.stringMatching(/^No answer yet: this may already have been recorded\. There was no/),
+      expect.stringMatching(
+        /^No answer yet: this may already have been recorded\. The connection.* Check again\.$/,
+      ),
+      expect.stringMatching(
+        /^No answer yet: this may already have been recorded\. There was no.* Check again\.$/,
+      ),
+      expect.stringMatching(
+        /^No answer yet: this may already have been recorded\. There was no.* Check again\.$/,
+      ),
     ]);
   });
 
   it('a stale answer is announced as "This changed since you opened it"', () => {
     render(<MoneyCommandFailure error={apiError('STALE_REVISION')} what="the cancellation" />);
+    // No Reload is offered here, so none is announced.
     expect(announced()).toEqual([
       'This changed since you opened it. The record changed since it was loaded.',
     ]);
   });
 
-  it('a field error is announced and is part of the input hint, so it is read with the field', () => {
+  it('a field error is announced and is part of the input hint, so it is read with the field', async () => {
     const fields = [
       <MoneyTextField
         key="money"
@@ -205,8 +341,15 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
         'accessibilityHint',
         'For the facility. Error: Enter a reason.',
       );
+      await nextTask();
     }
     expect(announced()).toEqual(['Enter a reason.', 'Enter a reason.', 'Enter a reason.']);
+  });
+
+  it('a choice error (the booking time or space) is announced as a field error', () => {
+    render(<MoneyFieldError error="Choose a time." testID="choice-error" />);
+    expect(announced()).toEqual(['Choose a time.']);
+    expect(screen.getByTestId('choice-error')).toHaveProp('accessibilityRole', 'alert');
   });
 
   it('sentences joins a badge and its explanation as one announcement', () => {

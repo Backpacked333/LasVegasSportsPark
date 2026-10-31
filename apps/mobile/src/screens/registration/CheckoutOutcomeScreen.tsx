@@ -15,7 +15,8 @@
  *   returned. Registration was not completed." (compensated).
  *
  * A checkout of another account is answered NOT_FOUND and reads "not available". Offline, the last
- * known status is shown with its age.
+ * known status is shown with its age. The checkout's status and the payment's are announced to
+ * screen readers when they appear and whenever a re-read changes them (`ui/announce`, SPK-UX-009).
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -43,6 +44,7 @@ import {
 import { Body, ButtonRow, Detail, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -189,10 +191,25 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
 
   const status = checkoutStatus(checkout);
   const payment = checkout.payment;
+  const paymentBadge = payment
+    ? retryUnknown
+      ? { tone: 'warning' as const, label: 'Payment outcome being confirmed. Do not pay again.' }
+      : paymentStatus(payment)
+    : null;
+  const paymentExplanation =
+    payment?.status === 'unknown'
+      ? 'Do not pay again. The payment provider has not confirmed this payment yet; it is being checked. You will not be charged twice.'
+      : payment?.status === 'failed' && payment.failureReason && !retryUnknown
+        ? payment.failureReason
+        : null;
   return (
     <View>
       <Section title="Registration and payment">
-        <StatusBadge {...status} testID="outcome-status" />
+        {/* SPK-UX-009, NA-A01: every change of the checkout's status (re-read while it runs) is
+            announced, and so is the payment's below. */}
+        <LiveRegion announcement={status.label}>
+          <StatusBadge {...status} testID="outcome-status" />
+        </LiveRegion>
         {operation.data ? (
           <View
             accessible
@@ -204,24 +221,13 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
         ) : null}
       </Section>
 
-      {payment ? (
+      {payment && paymentBadge ? (
         <Section title="Payment">
-          {retryUnknown ? (
-            <StatusBadge
-              tone="warning"
-              label="Payment outcome being confirmed. Do not pay again."
-              testID="outcome-payment"
-            />
-          ) : (
-            <StatusBadge {...paymentStatus(payment)} testID="outcome-payment" />
-          )}
-          <Detail label="Amount" value={formatMoney(payment.amountMinor, payment.currency)} />
-          {payment.status === 'unknown' ? (
-            <Body>
-              Do not pay again. The payment provider has not confirmed this payment yet; it is being
-              checked. You will not be charged twice.
-            </Body>
-          ) : null}
+          <LiveRegion announcement={sentences(paymentBadge.label, paymentExplanation)}>
+            <StatusBadge {...paymentBadge} testID="outcome-payment" />
+            <Detail label="Amount" value={formatMoney(payment.amountMinor, payment.currency)} />
+            {paymentExplanation ? <Body>{paymentExplanation}</Body> : null}
+          </LiveRegion>
           {payment.status === 'action_required' ? (
             DevPaymentMethodPicker ? (
               <Body>
@@ -236,9 +242,6 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
                 owner="Technical lead/account owners"
               />
             )
-          ) : null}
-          {payment.failureReason && payment.status === 'failed' && !retryUnknown ? (
-            <Body>{payment.failureReason}</Body>
           ) : null}
         </Section>
       ) : checkout.paymentKind === 'none' ? (

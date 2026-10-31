@@ -93,11 +93,13 @@ export function CommandError({
     const body = payment
       ? error.message
       : 'There was no definite answer, so this may already have gone through. Checking again is safe: it sends the same request, so nothing happens twice.';
+    // NA-A01: announced with the next action, the button's label or the instruction shown.
+    const nextAction = recovery.retry && onRetry ? 'Check again' : recovery.label;
     return (
       <View testID={testID}>
         <LiveRegion
           style={styles.box}
-          announcement={sentences(label, body)}
+          announcement={sentences(label, body, nextAction)}
           occurrence={error}
           testID="command-no-answer"
         >
@@ -107,9 +109,9 @@ export function CommandError({
             {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
           </Text>
           {recovery.retry && onRetry ? (
-            <Button label="Check again" onPress={onRetry} />
+            <Button label={nextAction} onPress={onRetry} />
           ) : (
-            <Text style={styles.body}>{recovery.label}</Text>
+            <Text style={styles.body}>{nextAction}</Text>
           )}
         </LiveRegion>
       </View>

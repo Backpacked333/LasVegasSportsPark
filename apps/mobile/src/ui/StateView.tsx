@@ -16,8 +16,11 @@
  * Every variant carries text, never colour alone. On Android the view is a polite live region, so
  * TalkBack reads each variant as it appears or changes. iOS has no live regions, so the variants
  * that report an answer (error, empty, offline-stale, unavailable, turned-off) are announced to
- * VoiceOver when they appear (`ui/announce`), with the visible words but not the error code or a
- * data age that changes while shown. Loading (exposed as a busy progress indicator) and
+ * VoiceOver when they appear (`ui/announce`), with the visible words and the next action (NA-A01:
+ * an error's recovery, "Try again"), but not the error code or a data age that changes while
+ * shown. "You are offline" while the device is offline is left to the connectivity announcement,
+ * which VoiceOver hears once for the app (ConnectivityAnnouncer); a read that got no answer while
+ * the device is online is announced here. Loading (exposed as a busy progress indicator) and
  * pending-decision (fixed wording that answers nothing) are not announced on iOS.
  */
 import {
@@ -30,6 +33,7 @@ import {
 } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
@@ -80,6 +84,7 @@ export type StateViewProps =
     };
 
 export function StateView(props: StateViewProps) {
+  const { reachable } = useConnectivity();
   // A command refused because its capability is turned off is not a failure (K-12, DEC-016).
   const turnedOff = props.variant === 'error' ? turnedOffFromError(props.error) : null;
   const shown: StateViewProps =
@@ -95,7 +100,7 @@ export function StateView(props: StateViewProps) {
   return (
     <LiveRegion
       style={styles.container}
-      announcement={announcementFor(shown)}
+      announcement={announcementFor(shown, reachable === false)}
       occurrence={shown.variant === 'error' || shown.variant === 'turned-off' ? shown.error : null}
       testID={`state-${shown.variant}`}
     >
@@ -113,26 +118,43 @@ function offlineStaleLabel(offline: boolean): string {
 
 /**
  * What VoiceOver hears when the state appears (Android reads the live region itself): the visible
- * words, without the error code or reference, and without a data age that changes while shown.
+ * words with the next action, without the error code or reference, and without a data age that
+ * changes while shown. `deviceOffline`: the connectivity announcement already said "You are
+ * offline" for the app, so the offline state does not say it again.
  */
-export function announcementFor(props: StateViewProps): string | null {
+export function announcementFor(props: StateViewProps, deviceOffline = false): string | null {
   switch (props.variant) {
     case 'loading':
     case 'pending-decision':
       return null;
     case 'empty':
-      return sentences(props.title, props.description);
+      return sentences(
+        props.title,
+        props.description,
+        props.actionLabel && props.onAction ? props.actionLabel : null,
+      );
     case 'error':
-      return sentences('Something went wrong', props.error.message);
+      // The recovery is the button's label or, without a button, the instruction shown.
+      return sentences(
+        'Something went wrong',
+        props.error.message,
+        recoveryActionFor(props.error).label,
+      );
     case 'offline-stale':
+      if (props.offline && deviceOffline) return null;
       return sentences(
         offlineStaleLabel(props.offline),
         props.unavailableActions && props.unavailableActions.length > 0
           ? `Needs a connection: ${props.unavailableActions.join(', ')}`
           : null,
+        props.onRetry ? 'Try again' : null,
       );
     case 'unavailable':
-      return sentences(props.title ?? 'Not available', props.description ?? DEFAULT_UNAVAILABLE);
+      return sentences(
+        props.title ?? 'Not available',
+        props.description ?? DEFAULT_UNAVAILABLE,
+        props.actionLabel && props.onAction ? props.actionLabel : null,
+      );
     case 'turned-off':
       return sentences(
         turnedOffLabel(props.subject),
