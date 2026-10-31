@@ -1,4 +1,4 @@
-import { ErrorCodes } from '@sportspark/contracts';
+import { ErrorCodes, NEXT_ACTIONS } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
 import { ApiError, networkError, timeoutError } from '../errors';
 import { formatClientInfo, parseClientInfo } from '../client-info';
@@ -8,8 +8,15 @@ import {
   createCommandIntent,
   defaultKeyGenerator,
   keepsIntentAfter,
+  keepsIntentAfterFailure,
   stableStringify,
 } from '../idempotency';
+import {
+  mayHaveTakenEffect,
+  mustNotCreateAgain,
+  secretWithheldOf,
+  tookEffectOutcomeLost,
+} from '../outcome';
 import { RECOVERY_ACTION_LABELS, presentationForError, recoveryActionFor } from '../screen-state';
 import { MemorySessionStore, parseStoredSession } from '../session';
 
@@ -97,6 +104,62 @@ describe('intent after a failed attempt (§4.9, the API replays stored 4xx answe
     expect(error.isStale).toBe(true);
     expect(recoveryActionFor(error)).toMatchObject({ label: 'Reload', retry: false });
   });
+
+  it('§4.9: IDEMPOTENCY_OUTCOME_UNAVAILABLE keeps the key, so an unchanged resubmission never runs the command a second time', () => {
+    let n = 0;
+    const tracker = new CommandIntentTracker(() => `key-${String(++n).padStart(4, '0')}`);
+    const input = { amountMinor: 2500, reason: 'goodwill' };
+    const first = tracker.current(input).key;
+    const error = apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE');
+    expect(keepsIntentAfterFailure(error)).toBe(true);
+    tracker.failed(error);
+    expect(tracker.current(input).key).toBe(first);
+    // Every other definitive answer still ends the intent.
+    expect(keepsIntentAfterFailure(apiError('STALE_REVISION'))).toBe(false);
+    expect(keepsIntentAfterFailure(timeoutError(1000))).toBe(true);
+    expect(keepsIntentAfterFailure(new Error('not a client error'))).toBe(true);
+  });
+});
+
+describe('what a failure says about the effect (§4.9, SPK-PAY-007, SPK-UX-008)', () => {
+  it('SPK-PAY-007: a connection lost after sending may have taken effect, like a timeout, a 5xx or the same key still running', () => {
+    for (const error of [
+      networkError(new TypeError('Failed to fetch')),
+      timeoutError(20_000),
+      apiError('IDEMPOTENCY_IN_PROGRESS'),
+      apiError('INTERNAL_ERROR', 500),
+      apiError('INTEGRATION_UNAVAILABLE', 503),
+      apiError('PAYMENT_OUTCOME_UNKNOWN'),
+    ]) {
+      expect(mayHaveTakenEffect(error), error.code).toBe(true);
+    }
+    for (const code of ['STALE_REVISION', 'VALIDATION_FAILED', 'ACCESS_DENIED', 'RATE_LIMITED']) {
+      expect(mayHaveTakenEffect(apiError(code, code === 'RATE_LIMITED' ? 429 : 409)), code).toBe(
+        false,
+      );
+    }
+    // Committed under the key but the answer was lost: not "may have", it did; reload instead.
+    expect(mayHaveTakenEffect(apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE'))).toBe(false);
+    expect(tookEffectOutcomeLost(apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE'))).toBe(true);
+  });
+
+  it('§4.14: IDEMPOTENCY_SECRET_WITHHELD names the record that was created', () => {
+    const withheld = new ApiError({
+      kind: 'api',
+      status: 409,
+      code: 'IDEMPOTENCY_SECRET_WITHHELD',
+      message: 'm',
+      nextAction: 'revoke_and_reissue',
+      correlationId: 'c',
+      details: { resourceId: 'export-1' },
+    });
+    expect(secretWithheldOf(withheld)).toEqual({ resourceId: 'export-1' });
+    expect(secretWithheldOf(apiError('STALE_REVISION'))).toBeNull();
+    expect(mustNotCreateAgain(withheld)).toBe(true);
+    expect(mustNotCreateAgain(apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE'))).toBe(true);
+    expect(mustNotCreateAgain(apiError('VALIDATION_FAILED', 400))).toBe(false);
+    expect(mustNotCreateAgain(null)).toBe(false);
+  });
 });
 
 describe('client identification (§4.13)', () => {
@@ -173,11 +236,39 @@ describe('error presentation (SPK-UX-008, §4.10)', () => {
     expect(presentationForError(new Error('boom'))).toBe('error');
   });
 
-  it('labels every next action in packages/contracts ErrorCodes', () => {
+  it('K-11, §5.6: a legacy-authority refusal is not a permission restriction of the principal', () => {
+    const legacy = new ApiError({
+      kind: 'api',
+      status: 403,
+      code: 'ACCESS_DENIED',
+      message: 'The legacy system is still authoritative for enrollment records.',
+      nextAction: 'write_in_authoritative_system',
+      correlationId: 'c',
+      details: { code: 'LEGACY_AUTHORITY', recordCategory: 'enrollment', basis: 'assignment' },
+    });
+    expect(legacy.isLegacyAuthority).toBe(true);
+    expect(legacy.isPermissionRestriction).toBe(false);
+    expect(legacy.retryable).toBe(false);
+    expect(legacy.keepsIntent).toBe(false);
+    expect(presentationForError(legacy)).toBe('error');
+    expect(recoveryActionFor(legacy).label).toBe('Make this change in the system of record');
+    // A plain ACCESS_DENIED stays a permission restriction.
+    expect(apiError('ACCESS_DENIED', 'contact_support_or_request_access').isLegacyAuthority).toBe(
+      false,
+    );
+  });
+
+  it('labels every next action the API can send (packages/contracts NEXT_ACTIONS, §4.10)', () => {
     for (const { nextAction } of Object.values(ErrorCodes)) {
+      expect(NEXT_ACTIONS, nextAction).toContain(nextAction);
+    }
+    for (const nextAction of NEXT_ACTIONS) {
       expect(Object.keys(RECOVERY_ACTION_LABELS), nextAction).toContain(nextAction);
       expect(recoveryActionFor(apiError('X', nextAction)).nextAction).toBe(nextAction);
     }
+    expect(
+      recoveryActionFor(apiError('ACCESS_DENIED', 'write_in_authoritative_system')),
+    ).toMatchObject({ label: 'Make this change in the system of record', retry: false });
     expect(recoveryActionFor(apiError('PAYMENT_OUTCOME_UNKNOWN', 'await_reconciliation'))).toEqual({
       nextAction: 'await_reconciliation',
       label: 'Do not pay again. The outcome is being confirmed.',

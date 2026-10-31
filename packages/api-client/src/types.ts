@@ -115,4 +115,11 @@ export interface ApiResponse<T> {
   replayed: boolean;
   /** When the client received the response (client clock), for "updated <time>" labels. */
   receivedAt: Date;
+  /**
+   * The service's own time of the response (its `Date` header), or null when the header is absent
+   * or not readable (a cross-origin response exposes it only when the API lists it in
+   * Access-Control-Expose-Headers). For a time the API compares with its clock (an offline roster
+   * snapshot, §4.15), so a device clock that runs ahead does not date it in the future.
+   */
+  serverDate: Date | null;
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildUrl, createApiClient, type ApiClientOptions } from '../client';
 import { CLIENT_INFO_HEADER } from '../client-info';
 import { ApiError, UpdateRequiredError } from '../errors';
+import { mayHaveTakenEffect } from '../outcome';
 import { MemorySessionStore } from '../session';
 import { fakeFetch, jsonResponse, sequentialKeys, type Responder } from './fake-fetch';
 
@@ -255,6 +256,77 @@ describe('createApiClient (§4.8 to §4.10, §4.13)', () => {
     expect(error.outcomeUnknown).toBe(true);
     expect(error.retryable).toBe(true);
     expect(error.isOffline).toBe(true);
+  });
+
+  it('§4.9: a body that stalls after a 2xx status line is a timeout that keeps the key, not an endless wait', async () => {
+    const { api } = setup(
+      () =>
+        new Response(new ReadableStream<Uint8Array>({ start: () => undefined }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      { timeoutMs: 5 },
+    );
+    const error = (await api
+      .post('/assignments/{id}/accept', {
+        path: { id: ASSIGNMENT_ID },
+        intent: api.newIntent(),
+      })
+      .catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.code).toBe('TIMEOUT');
+    expect(error.keepsIntent).toBe(true);
+  });
+
+  it('§4.9: a body that breaks while it is read becomes NETWORK_UNAVAILABLE that keeps the key, never a raw TypeError', async () => {
+    const { api } = setup(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"id":'));
+              controller.error(new TypeError('network error'));
+            },
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        ),
+    );
+    const error = (await api
+      .post('/assignments/{id}/accept', {
+        path: { id: ASSIGNMENT_ID },
+        intent: api.newIntent(),
+      })
+      .catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.code).toBe('NETWORK_UNAVAILABLE');
+    expect(error.kind).toBe('network');
+    expect(error.keepsIntent).toBe(true);
+  });
+
+  it('§4.9: records the method on the error, so a failed read is never "may have taken effect" and a failed command is', async () => {
+    const { api } = setup(() => Promise.reject(new TypeError('Failed to fetch')));
+    const read = (await api.get('/me').catch((e: unknown) => e)) as ApiError;
+    expect(read.method).toBe('get');
+    expect(mayHaveTakenEffect(read)).toBe(false);
+    const command = (await api
+      .post('/assignments/{id}/accept', { path: { id: ASSIGNMENT_ID }, intent: api.newIntent() })
+      .catch((e: unknown) => e)) as ApiError;
+    expect(command.method).toBe('post');
+    expect(mayHaveTakenEffect(command)).toBe(true);
+  });
+
+  it('§4.15: reports the service time of a response from its Date header, and null without one', async () => {
+    const { api } = setup((request) =>
+      request.url.endsWith('/me')
+        ? jsonResponse(200, { ok: true }, { Date: 'Sat, 24 Oct 2026 11:53:00 GMT' })
+        : jsonResponse(200, { ok: true }),
+    );
+    const dated = await api.request('get', '/me');
+    expect(dated.serverDate?.toISOString()).toBe('2026-10-24T11:53:00.000Z');
+    // The client's receipt time stays the injected clock.
+    expect(dated.receivedAt).toEqual(FIXED_NOW);
+    const undated = await api.request('get', '/me/inbox', { query: { limit: 1 } });
+    expect(undated.serverDate).toBeNull();
   });
 
   it('lets a caller abort pass through untouched (screen left, query cancelled)', async () => {

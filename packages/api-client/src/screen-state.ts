@@ -42,7 +42,11 @@ export interface RecoveryAction {
   retry: boolean;
 }
 
-/** Wording for every `nextAction` the API sends (packages/contracts ErrorCodes) and the client's own. */
+/**
+ * Wording for every `nextAction` the API sends (packages/contracts `NEXT_ACTIONS`: each code's
+ * default plus `ADDITIONAL_NEXT_ACTIONS`) and the client's own. A drift test fails when the API
+ * adds a next action without wording here.
+ */
 export const RECOVERY_ACTION_LABELS: Readonly<Record<string, { label: string; retry: boolean }>> = {
   authenticate: { label: 'Sign in again', retry: false },
   contact_support_or_request_access: { label: 'Contact support', retry: false },
@@ -72,6 +76,18 @@ export const RECOVERY_ACTION_LABELS: Readonly<Record<string, { label: string; re
   retry_with_same_key: { label: 'Try again', retry: true },
   update_app: { label: 'Update the app', retry: false },
   contact_support: { label: 'Contact support', retry: false },
+  // ADDITIONAL_NEXT_ACTIONS: named by a module instead of its code's default.
+  /** A framework HTTP exception: the code says what happened. */
+  see_code: { label: 'Contact support', retry: false },
+  /** §5.6, K-11: the legacy system is still the system of record for this record category. */
+  write_in_authoritative_system: {
+    label: 'Make this change in the system of record',
+    retry: false,
+  },
+  /** Support: a case action's outcome must be recorded first. */
+  settle_case_action: { label: 'Record the outcome of the case action first', retry: false },
+  /** Support: an authorized action must be linked to the case first. */
+  link_authorized_action: { label: 'Link the authorized action to the case first', retry: false },
 };
 
 export function recoveryActionFor(error: unknown): RecoveryAction {

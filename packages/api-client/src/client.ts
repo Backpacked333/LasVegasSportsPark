@@ -3,9 +3,11 @@
  *
  * - Bearer token from the injected `SessionStore` on every request.
  * - `Idempotency-Key` from the caller's `CommandIntent` on every command (§4.9).
- * - The §4.10 error body parsed into `ApiError`; no connection and timeouts become typed errors too.
+ * - The §4.10 error body parsed into `ApiError`; no connection and timeouts become typed errors too,
+ *   including a body that stalls or breaks after the status line arrived.
  * - `X-Sportspark-Client` identifies app, platform and version on every request (§4.13), and the
- *   proposed update-required answer surfaces as `UpdateRequiredError` (DEC-061, DEC-092).
+ *   API's update-required answer (426 CLIENT_UPDATE_REQUIRED, below a configured minimum version:
+ *   DEC-061) surfaces as `UpdateRequiredError`.
  *
  * The client never decides authorization: it sends what the screen asks for and reports what the
  * API answers (ACCESS_DENIED, protected NOT_FOUND) for the screen to render.
@@ -125,8 +127,41 @@ export function buildUrl(
   return `${baseUrl.replace(/\/+$/, '')}${resolved}${qs ? `?${qs}` : ''}`;
 }
 
-async function readBody(response: Response): Promise<{ parsed: unknown; ok: boolean }> {
-  const text = await response.text();
+/**
+ * The response body as text, still under the request's timeout and the caller's abort: `fetch`
+ * resolves once the headers arrive, so a body that stalls or fails after that must not escape the
+ * typed errors (a 2xx whose body never arrived is a command whose answer was lost).
+ */
+function readText(response: Response, signal: AbortSignal): Promise<string> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('The request was aborted.'));
+  return new Promise<string>((resolve, reject) => {
+    const onAbort = () => {
+      response.body?.cancel().catch(() => undefined);
+      reject(signal.reason ?? new Error('The request was aborted.'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    response.text().then(
+      (text) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(text);
+      },
+      (cause: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(cause);
+      },
+    );
+  });
+}
+
+/** The response's `Date` header as a time, or null when it is absent, unreadable or invalid. */
+function serverDateOf(response: Response): Date | null {
+  const header = response.headers.get('Date');
+  if (!header) return null;
+  const at = new Date(header);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+function parseBody(text: string): { parsed: unknown; ok: boolean } {
   if (text.length === 0) return { parsed: undefined, ok: true };
   try {
     return { parsed: JSON.parse(text) as unknown, ok: true };
@@ -146,6 +181,20 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     method: HttpMethod,
     template: string,
     opts: LooseOptions = {},
+  ): Promise<ApiResponse<unknown>> {
+    try {
+      return await exchange(method, template, opts);
+    } catch (error) {
+      // Screens tell a failed read (nothing changed) from a command that may have taken effect.
+      if (error instanceof ApiError && error.method === null) error.method = method;
+      throw error;
+    }
+  }
+
+  async function exchange(
+    method: HttpMethod,
+    template: string,
+    opts: LooseOptions,
   ): Promise<ApiResponse<unknown>> {
     if (method !== 'get' && !opts.intent) {
       throw new Error(`${method.toUpperCase()} ${template} needs a CommandIntent (§4.9).`);
@@ -182,6 +231,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       throw opts.signal.reason ?? new Error('The request was aborted.');
     }
     let response: Response;
+    let text: string;
+    // The timeout and the caller's abort cover the whole exchange, body included: a body that
+    // stalls or breaks after the status line is a lost answer (timeout or network), never a raw
+    // error, so the intent keeps its key and a retry gets the stored outcome (§4.9).
     try {
       response = await fetchImpl(url, {
         method: method.toUpperCase(),
@@ -189,6 +242,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         body,
         signal: controller.signal,
       });
+      text = await readText(response, controller.signal);
     } catch (cause) {
       if (timedOut) throw timeoutError(timeoutMs);
       // A caller-initiated abort (screen left) is not a failure; let the caller see the abort.
@@ -201,7 +255,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     const correlationId = response.headers.get(CORRELATION_ID_HEADER);
     const replayed = response.headers.get(IDEMPOTENT_REPLAYED_HEADER) === 'true';
-    const { parsed, ok: parsedOk } = await readBody(response);
+    const { parsed, ok: parsedOk } = parseBody(text);
 
     if (!response.ok) {
       const error = errorFromResponse(
@@ -224,7 +278,14 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         correlationId,
       });
     }
-    return { data: parsed, status: response.status, correlationId, replayed, receivedAt: now() };
+    return {
+      data: parsed,
+      status: response.status,
+      correlationId,
+      replayed,
+      receivedAt: now(),
+      serverDate: serverDateOf(response),
+    };
   }
 
   const request = ((method: HttpMethod, path: string, opts?: LooseOptions) =>

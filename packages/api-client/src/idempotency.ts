@@ -93,14 +93,22 @@ export class CommandIntentTracker {
 
   /**
    * Call after an attempt failed. The intent, and so the key, is kept while the outcome is unknown
-   * or the API asked for a retry with the same key; after a definitive answer (one the API stores
-   * and would replay for this key, such as MISSING_ACKNOWLEDGMENT or STALE_REVISION) the intent
-   * ends, so the next attempt, once the user has fixed the cause, is a new intent (§4.9).
+   * or the API asked for a retry with the same key, and after IDEMPOTENCY_OUTCOME_UNAVAILABLE (the
+   * command committed under this key); after a definitive answer (one the API stores and would
+   * replay for this key, such as MISSING_ACKNOWLEDGMENT or STALE_REVISION) the intent ends, so the
+   * next attempt, once the user has fixed the cause, is a new intent (§4.9).
    */
   failed(error: unknown): void {
-    if (!keepsIntentAfter(error)) this.complete();
+    if (!keepsIntentAfterFailure(error)) this.complete();
   }
 }
+
+/**
+ * The code the API answers when an earlier attempt under this key committed changes but its
+ * response was never recorded (the API stopped first and the key's lease lapsed; next action
+ * `reload_current_state`, apps/api kernel idempotency.interceptor.ts).
+ */
+export const OUTCOME_LOST_CODE = 'IDEMPOTENCY_OUTCOME_UNAVAILABLE';
 
 /**
  * Whether a failed attempt's intent must survive for the retry. Anything that is not the typed
@@ -109,6 +117,23 @@ export class CommandIntentTracker {
 export function keepsIntentAfter(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('keepsIntent' in error)) return true;
   return (error as { keepsIntent: unknown }).keepsIntent !== false;
+}
+
+/**
+ * Whether the next attempt of the same input must keep the intent's idempotency key: as
+ * `keepsIntentAfter`, and also after IDEMPOTENCY_OUTCOME_UNAVAILABLE. The API never stores that
+ * answer but gives it again for the same key, whereas a new key would run the command a second
+ * time (`ApiError.keepsIntent` is false there, because a same-key retry cannot help). Both apps'
+ * command hooks decide with this (§4.9).
+ */
+export function keepsIntentAfterFailure(error: unknown): boolean {
+  if (
+    error &&
+    typeof error === 'object' &&
+    (error as { code?: unknown }).code === OUTCOME_LOST_CODE
+  )
+    return true;
+  return keepsIntentAfter(error);
 }
 
 /** JSON with object keys sorted, so `{a,b}` and `{b,a}` are the same input. */
