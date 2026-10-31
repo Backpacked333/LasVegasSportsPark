@@ -34,7 +34,10 @@ export const ImportBatchMachine: StateMachine<ImportBatchStatusValue, ImportBatc
 export type ImportExceptionState = 'open' | 'decided' | 'withdrawn';
 export type ImportExceptionEvent = 'decide' | 'withdraw';
 
-/** Import exception: one decision, final; withdrawn when re-validation no longer raises it. */
+/**
+ * Import exception: one decision, final; withdrawn when re-validation no longer raises it, or when
+ * its batch is aborted (R2-LIFECYCLES-07). A withdrawn exception is final as well.
+ */
 export const ImportExceptionMachine = defineStateMachine<
   ImportExceptionState,
   ImportExceptionEvent

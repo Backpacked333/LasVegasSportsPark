@@ -38,6 +38,7 @@ import {
   afterKeyset,
   countOutcomes,
   createdAtText,
+  IMPORT_REVIEW_CARD,
   keysetPage,
   organizationOf,
   readKeysetCursor,
@@ -561,15 +562,16 @@ export class ImportBatchesService {
       });
       if (counts.open > 0) {
         // §5.11 "import discrepancies" are owned operational issues (SPK-UX-006).
+        // Settled when the review completes or the batch is aborted (R2-LIFECYCLES-07).
         await this.operationalExceptions.raise(trx, {
           organizationId: batch.organization_id,
-          category: 'migration.import_review',
+          category: IMPORT_REVIEW_CARD.category,
           severity: 'warning',
           title: `Import batch from ${batch.source_system} has ${counts.open} rows awaiting review`,
-          affectedType: 'import_batch',
+          affectedType: IMPORT_REVIEW_CARD.affectedType,
           affectedId: batch.id,
-          ownerQueue: 'migration',
-          dedupeKey: `migration.import_review:${batch.id}`,
+          ownerQueue: IMPORT_REVIEW_CARD.ownerQueue,
+          dedupeKey: IMPORT_REVIEW_CARD.dedupeKey(batch.id),
           details: { batchId: batch.id, openExceptions: counts.open },
         });
       }
@@ -628,6 +630,14 @@ export class ImportBatchesService {
         correlationId,
         details: { decidedExceptions: counts.decided },
       });
+      // R2-LIFECYCLES-07: no row awaits review any more, so the batch's Today card is settled.
+      await this.exceptions.settleReviewCard(
+        trx,
+        batch.organization_id,
+        batch.id,
+        'review_completed',
+        correlationId,
+      );
       await this.outbox.enqueue(trx, MigrationEvents.batchReviewed, {
         organizationId: batch.organization_id,
         aggregateType: 'import_batch',
@@ -658,8 +668,16 @@ export class ImportBatchesService {
       }
       const status = ImportBatchMachine.next(batch.status, 'abort');
       // R2-LIFECYCLES-07 (§4.6): an aborted batch is terminal, so its open exceptions could never
-      // be decided; they are withdrawn with it instead of staying in the review queues.
+      // be decided; they are withdrawn with it instead of staying in the review queues, and the
+      // batch's Today card that announced them is settled.
       const withdrawnExceptions = await this.exceptions.withdrawAllOpen(trx, batch);
+      await this.exceptions.settleReviewCard(
+        trx,
+        batch.organization_id,
+        batch.id,
+        'batch_aborted',
+        correlationId,
+      );
       await trx
         .updateTable('import_batches')
         .set({

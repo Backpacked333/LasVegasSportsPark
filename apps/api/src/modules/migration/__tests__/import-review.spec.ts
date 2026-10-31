@@ -1,6 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { seedOrganization } from '@sportspark/db';
+import { sql } from 'kysely';
+import { AuditWriter } from '../../../kernel';
 import type { TestApp } from '../../../testing';
+import { createProgramFixture } from '../../catalog';
 import { batchChecksum, payloadHash } from '../staging/checksum';
 import { stagedObligation, stagedPerson, stagedRelationship } from '../testing/migration-fixtures';
 import {
@@ -41,6 +44,89 @@ describe('import validation and review queues (§5.4)', () => {
       reason: 'reviewed against the paper registration form',
       ...body,
     });
+
+  /** The batch's Today cards (`migration.import_review`), oldest first. */
+  const reviewCards = (batchId: string) =>
+    t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'owner_queue', 'status', 'title', 'resolution'])
+      .where('organization_id', '=', t.organizationId)
+      .where('affected_type', '=', 'import_batch')
+      .where('affected_id', '=', batchId)
+      .orderBy('opened_at')
+      .orderBy('id')
+      .execute();
+
+  /** A promise that stays pending until `open()`; `reached` resolves when someone waits on it. */
+  function gate() {
+    let open!: () => void;
+    let arrive!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    const reached = new Promise<void>((resolve) => (arrive = resolve));
+    return {
+      reached,
+      open,
+      pass: async () => {
+        arrive();
+        await opened;
+      },
+    };
+  }
+
+  /** Tracks whether a request has settled; starts it now. */
+  function tracked<T>(request: PromiseLike<T>) {
+    const state = { done: false, promise: Promise.resolve(request) };
+    void state.promise.then(
+      () => (state.done = true),
+      () => (state.done = true),
+    );
+    return state;
+  }
+
+  /**
+   * Holds the first command that audits `action` inside its open transaction — after it wrote and
+   * took its row locks, before it commits — until `open()`. Under TEST_DATABASE_URL `holder()` is
+   * that transaction's backend pid.
+   */
+  function holdAtAudit(action: string) {
+    const audit = t.app.get(AuditWriter);
+    const record = audit.record.bind(audit);
+    const held = gate();
+    let armed = true;
+    let holder: number | undefined;
+    const spy = vi.spyOn(audit, 'record').mockImplementation(async (trx, entry) => {
+      if (armed && entry.action === action) {
+        armed = false;
+        if (t.database.concurrent) {
+          const { rows } = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(trx);
+          holder = rows[0]?.pid;
+        }
+        await held.pass();
+      }
+      return record(trx, entry);
+    });
+    return { ...held, holder: () => holder, restore: () => spy.mockRestore() };
+  }
+
+  /**
+   * TEST_DATABASE_URL: returns once `work` has settled or waits for a lock the held transaction
+   * holds (so the two commands are truly concurrent). PGlite serializes transactions: `work` runs
+   * once the held one commits, so there is nothing to wait for.
+   */
+  async function untilBlockedBy(holder: () => number | undefined, work: { done: boolean }) {
+    if (!t.database.concurrent) return;
+    for (let polls = 0; !work.done; polls += 1) {
+      if (polls > 2000) throw new Error('the command neither finished nor waited for the lock');
+      const pid = holder();
+      if (pid !== undefined) {
+        const { rows } = await sql<{ n: number }>`
+          select count(*)::int as n from pg_stat_activity
+          where ${pid} = any(pg_blocking_pids(pid))`.execute(t.db);
+        if ((rows[0]?.n ?? 0) > 0) return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
 
   it('§5.4: ambiguous relationships enter the support review queue and are never imported as authority without a decision', async () => {
     const rows = [
@@ -269,15 +355,16 @@ describe('import validation and review queues (§5.4)', () => {
     ]);
     expect(applyRows.find((r) => r.externalId === 'RF-pending')?.outcome).toBe('skipped');
     expect(await t.db.selectFrom('refund_attempts').select('id').execute()).toEqual([]);
-    // The batch's open review left an owned operational exception for the Today workspace.
-    const owned = await t.db
-      .selectFrom('operational_exceptions')
-      .select(['category', 'owner_queue', 'affected_id'])
-      .where('organization_id', '=', t.organizationId)
-      .where('affected_id', '=', validated.id)
-      .execute();
-    expect(owned).toEqual([
-      { category: 'migration.import_review', owner_queue: 'migration', affected_id: validated.id },
+    // Validation raised an owned Today card for the rows awaiting review; the completed review
+    // settled it, and the apply (no exception left open) raised none (R2-LIFECYCLES-07).
+    expect(await reviewCards(validated.id)).toEqual([
+      {
+        category: 'migration.import_review',
+        owner_queue: 'migration',
+        status: 'resolved',
+        title: 'Import batch from legacy-registration has 4 rows awaiting review',
+        resolution: { settlement: 'review_completed', batchId: validated.id },
+      },
     ]);
   });
 
@@ -515,6 +602,13 @@ describe('import validation and review queues (§5.4)', () => {
       ['AB-R1', 'support_operator', 'open'],
       ['AB-R2', 'system_administrator', 'open'],
     ]);
+    // Validation announced the rows awaiting review on Today.
+    expect(await reviewCards(validated.id)).toMatchObject([
+      {
+        status: 'open',
+        title: 'Import batch from legacy-registration has 3 rows awaiting review',
+      },
+    ]);
     const byExternal = new Map(raised.map((e) => [e.externalId, e]));
     // Finance settles its item before the batch is abandoned: that decision is kept.
     const rejected = await decide(finance, byExternal.get('AB-OB')!, { decision: 'reject' });
@@ -581,37 +675,200 @@ describe('import validation and review queues (§5.4)', () => {
       reason: 'the export was taken from the wrong season',
       details: { withdrawnExceptions: 2 },
     });
+    // Today no longer says rows await review: the abort resolved the card in its transaction.
+    expect(await reviewCards(validated.id)).toEqual([
+      {
+        category: 'migration.import_review',
+        owner_queue: 'migration',
+        status: 'resolved',
+        title: 'Import batch from legacy-registration has 3 rows awaiting review',
+        resolution: { settlement: 'batch_aborted', batchId: validated.id },
+      },
+    ]);
+    const settled = await t.db
+      .selectFrom('audit_records')
+      .select(['actor', 'reason'])
+      .where('organization_id', '=', t.organizationId)
+      .where('action', '=', 'exceptions.resolved')
+      .where('correlation_id', '=', aborted.headers['x-correlation-id'] as string)
+      .execute();
+    expect(settled).toMatchObject([
+      {
+        actor: { kind: 'system', actorLabel: 'migration.import_review' },
+        reason: 'The import batch was aborted: its open exceptions were withdrawn.',
+      },
+    ]);
   });
 
-  it('§4.6 / §4.9 R2-LIFECYCLES-07: an abort racing a decision never leaves the exception open — it is either decided (and kept) or withdrawn (and the decision refused)', async () => {
+  /** A validated batch with one open support exception (an inferred relationship). */
+  async function batchWithOneException(prefix: string) {
     const validated = await stageAndValidate(t, operator, [
-      stagedPerson('RA-A', { dateOfBirth: '1980-01-01' }),
-      stagedPerson('RA-C', { dateOfBirth: '2015-01-01' }),
-      stagedRelationship('RA-R', {
-        actorExternalId: 'RA-A',
-        subjectExternalId: 'RA-C',
+      stagedPerson(`${prefix}-A`, { dateOfBirth: '1980-01-01' }),
+      stagedPerson(`${prefix}-C`, { dateOfBirth: '2015-01-01' }),
+      stagedRelationship(`${prefix}-R`, {
+        actorExternalId: `${prefix}-A`,
+        subjectExternalId: `${prefix}-C`,
         basis: 'inferred',
       }),
     ]);
     const [exception] = await exceptionsOf(t, operator, validated.id);
-    const [decided, aborted] = await Promise.all([
-      decide(support, exception!, { decision: 'reject' }),
-      post(t, `/v1/import-batches/${validated.id}/abort`, operator, {
-        reason: 'superseded by a later export',
-        expectedRevision: validated.revision,
-      }),
-    ]);
-    expect(aborted.status, JSON.stringify(aborted.body)).toBe(200);
-    const [after] = await exceptionsOf(t, operator, validated.id);
-    if (decided.status === 200) {
-      expect(after!.status).toBe('decided');
-      expect(aborted.body.exceptions).toMatchObject({ open: 0, decided: 1, withdrawn: 0 });
-    } else {
-      expect(decided.status, JSON.stringify(decided.body)).toBe(409);
-      expect(decided.body.code).toBe('INVALID_TRANSITION');
-      expect(after!.status).toBe('withdrawn');
-      expect(aborted.body.exceptions).toMatchObject({ open: 0, decided: 0, withdrawn: 1 });
+    expect(exception?.status).toBe('open');
+    return { validated, exception: exception! };
+  }
+
+  it('§4.6 / §4.9 R2-LIFECYCLES-07: a decision in flight when the abort arrives commits first; the abort waits for it and withdraws nothing (PGlite and TEST_DATABASE_URL)', async () => {
+    const { validated, exception } = await batchWithOneException('RD');
+    const held = holdAtAudit('migration.decide_exception');
+    try {
+      const deciding = tracked(decide(support, exception, { decision: 'reject' }));
+      await held.reached;
+      // The decision has written the exception and holds the batch row, uncommitted.
+      const aborting = tracked(
+        post(t, `/v1/import-batches/${validated.id}/abort`, operator, {
+          reason: 'superseded by a later export',
+          expectedRevision: validated.revision,
+        }),
+      );
+      await untilBlockedBy(held.holder, aborting);
+      held.open();
+      const [decided, aborted] = await Promise.all([deciding.promise, aborting.promise]);
+      expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+      expect(aborted.status, JSON.stringify(aborted.body)).toBe(200);
+      expect(aborted.body.exceptions).toEqual({ open: 0, decided: 1, withdrawn: 0 });
+    } finally {
+      held.restore();
     }
+    const [after] = await exceptionsOf(t, operator, validated.id);
+    expect(after).toMatchObject({ status: 'decided', revision: exception.revision + 1 });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('organization_id', '=', t.organizationId)
+      .where('action', '=', 'migration.abort_batch')
+      .where('target_id', '=', validated.id)
+      .executeTakeFirstOrThrow();
+    expect(audit.details).toMatchObject({ withdrawnExceptions: 0 });
+    expect(await reviewCards(validated.id)).toMatchObject([
+      { status: 'resolved', resolution: { settlement: 'batch_aborted' } },
+    ]);
+  });
+
+  it('§4.6 / §4.9 R2-LIFECYCLES-07: an abort in flight when a decision arrives commits first; the decision waits and is refused — the exception it read was withdrawn (PGlite and TEST_DATABASE_URL)', async () => {
+    const { validated, exception } = await batchWithOneException('RW');
+    const held = holdAtAudit('migration.abort_batch');
+    try {
+      const aborting = tracked(
+        post(t, `/v1/import-batches/${validated.id}/abort`, operator, {
+          reason: 'superseded by a later export',
+          expectedRevision: validated.revision,
+        }),
+      );
+      await held.reached;
+      // The abort has withdrawn the exception and holds the batch row, uncommitted.
+      const deciding = tracked(decide(support, exception, { decision: 'reject' }));
+      await untilBlockedBy(held.holder, deciding);
+      held.open();
+      const [aborted, decided] = await Promise.all([aborting.promise, deciding.promise]);
+      expect(aborted.status, JSON.stringify(aborted.body)).toBe(200);
+      expect(aborted.body.exceptions).toEqual({ open: 0, decided: 0, withdrawn: 1 });
+      // The reviewer decided the revision it had read; the withdrawal moved it on (§4.9).
+      expect(decided.status, JSON.stringify(decided.body)).toBe(409);
+      expect(decided.body.code).toBe('STALE_REVISION');
+    } finally {
+      held.restore();
+    }
+    const [after] = await exceptionsOf(t, operator, validated.id);
+    expect(after).toMatchObject({ status: 'withdrawn', revision: exception.revision + 1 });
+    // Re-read, the exception is final: deciding it is an invalid transition.
+    const retried = await decide(support, after!, { decision: 'reject' });
+    expect(retried.status).toBe(409);
+    expect(retried.body.code).toBe('INVALID_TRANSITION');
+    const row = await t.db
+      .selectFrom('import_exceptions')
+      .select(['decision', 'decided_at'])
+      .where('organization_id', '=', t.organizationId)
+      .where('id', '=', exception.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ decision: null, decided_at: null });
+    const decisions = await t.db
+      .selectFrom('audit_records')
+      .select('id')
+      .where('organization_id', '=', t.organizationId)
+      .where('action', '=', 'migration.decide_exception')
+      .where('target_id', '=', exception.id)
+      .execute();
+    expect(decisions).toEqual([]);
+  });
+
+  it('§5.11 / SPK-UX-006 R2-LIFECYCLES-07: an apply that leaves exceptions raises a Today card of its own; the last decision settles it, even when the last two decisions race (PGlite and TEST_DATABASE_URL)', async () => {
+    const validated = await stageAndValidate(t, operator, [
+      stagedPerson('AP-F'),
+      stagedObligation('AP-OB', { debtorExternalId: 'AP-F', amountMinor: -500 }),
+      ...['One', 'Two', 'Three'].map((n) => ({
+        entityType: 'program' as const,
+        externalId: `AP-PRG-${n}`,
+        payload: { name: `Apply Card League ${n}`, activityType: 'soccer' },
+      })),
+    ]);
+    const [balance] = await exceptionsOf(t, operator, validated.id);
+    expect((await decide(finance, balance!, { decision: 'reject' })).status).toBe(200);
+    const current = await get(t, `/v1/import-batches/${validated.id}`, operator);
+    const reviewed = await post(t, `/v1/import-batches/${validated.id}/review`, operator, {
+      expectedRevision: current.body.revision,
+    });
+    expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+    // Between review and apply, staff create programs with the same names natively.
+    for (const n of ['One', 'Two', 'Three']) {
+      await createProgramFixture(t, { name: `Apply Card League ${n}` });
+    }
+    t.clock.advance(60_000);
+    const applied = await post(t, `/v1/import-batches/${validated.id}/apply`, operator, {});
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    expect(applied.body.exceptions).toEqual({ open: 3, decided: 1, withdrawn: 0 });
+    // The validation card was settled by the review, so the apply's card is new and says so.
+    expect(await reviewCards(validated.id)).toMatchObject([
+      {
+        status: 'resolved',
+        title: 'Import batch from legacy-registration has 1 rows awaiting review',
+        resolution: { settlement: 'review_completed' },
+      },
+      {
+        status: 'open',
+        title: 'Applied import batch from legacy-registration left 3 rows for review',
+        resolution: null,
+      },
+    ]);
+    const conflicts = (await exceptionsOf(t, operator, validated.id)).filter(
+      (e) => e.status === 'open',
+    );
+    expect(conflicts.map((e) => e.kind)).toEqual(['conflict', 'conflict', 'conflict']);
+    const [first, second, third] = conflicts;
+    expect((await decide(operator, first!, { decision: 'defer' })).status).toBe(200);
+    expect((await reviewCards(validated.id))[1]?.status).toBe('open');
+
+    // The last two decisions race: the one held open has counted one exception still open.
+    const held = holdAtAudit('migration.decide_exception');
+    try {
+      const deciding = tracked(decide(operator, second!, { decision: 'reject' }));
+      await held.reached;
+      const last = tracked(decide(operator, third!, { decision: 'reject' }));
+      await untilBlockedBy(held.holder, last);
+      held.open();
+      const results = await Promise.all([deciding.promise, last.promise]);
+      expect(results.map((r) => r.status)).toEqual([200, 200]);
+    } finally {
+      held.restore();
+    }
+    expect((await exceptionsOf(t, operator, validated.id)).map((e) => e.status).sort()).toEqual([
+      'decided',
+      'decided',
+      'decided',
+      'decided',
+    ]);
+    expect((await reviewCards(validated.id))[1]).toMatchObject({
+      status: 'resolved',
+      resolution: { settlement: 'apply_exceptions_decided', batchId: validated.id },
+    });
   });
 
   it('§4.10 / §4.14: batches are protected records — cross-organization, customers and staff without migration authority get NOT_FOUND; the role matrix holds', async () => {

@@ -582,6 +582,10 @@ export const ImportExceptionSchema = z
     phase: z.enum(['validation', 'apply']),
     reasons: z.array(ImportReasonSchema),
     reviewOwnerRole: StaffRole,
+    /**
+     * §4.6: `decided` once its review owner decides it (final); `withdrawn` when re-validation no
+     * longer raises it or its batch is aborted (R2-LIFECYCLES-07), also final.
+     */
     status: z.enum(['open', 'decided', 'withdrawn']),
     decision: ImportExceptionDecisionSchema.nullable(),
     resolution: ImportExceptionResolutionSchema.nullable(),
