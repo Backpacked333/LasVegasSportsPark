@@ -1124,13 +1124,14 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
       productId: plain,
       quantity: 1,
     });
-    const [a] = paid.body.lines as Array<{ id: string }>;
+    const [a, b] = paid.body.lines as Array<{ id: string }>;
     const tendered = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
       kind: 'cash',
       amountMinor: 2_000,
     });
     expect(tendered.body.status).toBe('paid');
     const lineA = a?.id as string;
+    const lineB = b?.id as string;
     const share = { quantity: 1, amountMinor: 1_000, baseMinor: 1_000, charges: [] };
     const returnRow = (saleLineIds: string[]) => ({
       id: newId(),
@@ -1201,6 +1202,51 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
           .execute(),
       ),
     ).toBe('23514:pos_returns_line_id_canonical');
+    // 0616: the shape of each line is checked too. A line without a whole quantity, or without
+    // whole minor units, made every NULL comparison pass before, so line A (sold 1, returned 1)
+    // was returned again, and line B's return could claim any amount the tender still covered.
+    const shaped = (lines: unknown[], amountMinor = 300) => ({
+      ...returnRow([lineA]),
+      lines: json(lines),
+      amount_minor: amountMinor,
+    });
+    const rest = { baseMinor: 300, charges: [] };
+    const malformed: Array<[string, unknown[]]> = [
+      ['no quantity', [{ saleLineId: lineA, amountMinor: 300, ...rest }]],
+      ['a null quantity', [{ saleLineId: lineA, quantity: null, amountMinor: 300, ...rest }]],
+      ['a text quantity', [{ saleLineId: lineA, quantity: '1', amountMinor: 300, ...rest }]],
+      ['a fractional quantity', [{ saleLineId: lineB, quantity: 0.5, amountMinor: 300, ...rest }]],
+      ['no unit', [{ saleLineId: lineB, quantity: 0, amountMinor: 300, ...rest }]],
+      ['no amountMinor', [{ saleLineId: lineB, quantity: 1, ...rest }]],
+      ['a null amountMinor', [{ saleLineId: lineB, quantity: 1, amountMinor: null, ...rest }]],
+      ['a fractional amount', [{ saleLineId: lineB, quantity: 1, amountMinor: 299.5, ...rest }]],
+      [
+        'a negative amount',
+        [
+          { saleLineId: lineB, quantity: 1, amountMinor: 600, ...rest },
+          { saleLineId: lineA, quantity: 1, amountMinor: -300, ...rest },
+        ],
+      ],
+      ['a line that is not an object', [lineB]],
+      ['only an id (the reviewed probe)', [{ saleLineId: lineA }]],
+    ];
+    for (const [what, lines] of malformed) {
+      expect(
+        await refusedBy(t.db.insertInto('pos_returns').values(shaped(lines)).execute()),
+        what,
+      ).toBe('23514:pos_returns_line_shape');
+    }
+    expect(
+      await t.db.selectFrom('pos_returns').select('id').where('sale_id', '=', s.id).execute(),
+    ).toHaveLength(1);
+    // A well-formed line B still returns its unit.
+    await t.db
+      .insertInto('pos_returns')
+      .values(shaped([{ saleLineId: lineB, quantity: 1, amountMinor: 1_000, ...rest }], 1_000))
+      .execute();
+    expect(
+      await t.db.selectFrom('pos_returns').select('id').where('sale_id', '=', s.id).execute(),
+    ).toHaveLength(2);
   });
 
   it('§4.7 invariant 6: two concurrent returns of the whole sale — exactly one is recorded', async () => {
