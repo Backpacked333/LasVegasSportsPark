@@ -26,7 +26,9 @@ import { SessionsService } from './services/sessions.service';
  * Owns programs, offerings, sessions, entitlement definitions, policy versions, approvals,
  * acknowledgments, price rules, discount definitions and redemption counters. Depends on identity
  * for person lookups and guardian authority. Consumes `scheduling.event_changed`: a canceled
- * scheduling event cancels the catalog sessions linked to it (SPK-AT-009). See README.md.
+ * scheduling event cancels the catalog sessions linked to it, a moved or resized one retimes them
+ * (SPK-AT-009, R2-JOURNEYS-03); a session canceled here cancels its event through
+ * EVENT_SCHEDULING_PORT (R2-JOURNEYS-02). See README.md.
  */
 @Module({
   // Scheduling and facilities are read through their exported services only: publication checks
@@ -77,7 +79,8 @@ export class CatalogModule implements OnModuleInit {
 
   onModuleInit(): void {
     // SPK-AT-009, SPK-SCHED-009: the catalog session follows the scheduling event that reserves
-    // its space (scheduling is the authority for the event, catalog for the session).
+    // its space (scheduling is the authority for the event, catalog for the session): canceled,
+    // moved and resized events (R2-JOURNEYS-03).
     this.registry.on<EventPayload<typeof EventChanged>>(
       EventChanged.type,
       'catalog.follow_scheduling_event',

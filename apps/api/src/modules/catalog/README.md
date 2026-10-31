@@ -18,12 +18,17 @@ configuration), §5.3/§5.4 (program import provenance), §4.7 invariants 2, 5 a
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for person checks, `AUTHORITY_LOOKUP_PORT` for the
 `complete_forms` authority of a signer); kernel `FacilityDirectory` (K-04, IF-03: facility names and
 IANA zones; catalog no longer selects the `facilities` table itself) and `CapabilityService` (K-12,
-IF-30: Package G capability switches). Consumes `scheduling.event_changed`
+IF-30: Package G capability switches) and scheduling (`EVENT_SCHEDULING_PORT`: reading and
+canceling the event behind a session). Consumes `scheduling.event_changed`
 (`catalog.follow_scheduling_event`): when the scheduling event that reserves a session's space is
 canceled, the linked sessions are canceled too (`catalog.session_canceled`, audit with the closure),
-idempotently (SPK-AT-009, **Verified** `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`). A moved
-event does not yet move its session. `SessionsService.sessionsOfSchedulingEvents` (migration `0204`
-index) lets enrollment resolve the sessions of affected events.
+idempotently (SPK-AT-009, **Verified** `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`); when it
+is moved or resized, the linked scheduled sessions take the event's current times
+(`catalog.session_retimed`, R2-JOURNEYS-03, **Verified**
+`__tests__/session-scheduling-follow.spec.ts`). The other direction, a session canceled in the
+catalog, cancels its event through scheduling (R2-JOURNEYS-02, see "Session lifecycle and the
+scheduling event"). `SessionsService.sessionsOfSchedulingEvents` (migration `0204` index) lets
+enrollment resolve the sessions of affected events.
 
 **Status: implemented** (verified by `apps/api/src/modules/catalog/__tests__` and the unit specs
 next to the code: `pricing/discount-evaluator.spec.ts`, `entitlements/equivalence-key.spec.ts`,
@@ -84,7 +89,7 @@ Stage-3 migrations (all **Verified** by the tests named):
 | GET            | `/offerings/{id}/publication-check`                                                                  | CAT-01: `catalog.publish_offering` at the offering's facility; `{ offeringId, publicationState, revision, publishable, problems }` from publish's own validation and form resolution, plus `capability_disabled` for a gated kind; writes nothing (no approval, audit or event)                                                                                                                                                                                        |
 | POST           | `/offerings/{id}/registration/open`, `/pause`, `/resume`, `/offerings/{id}/close`                    | `catalog.manage_registration_window` — distinct from publication; pausing changes nothing about existing participation                                                                                                                                                                                                                                                                                                                                                 |
 | GET            | `/offerings` (`@Public`, `organization=<slug>` for anonymous callers), `/offerings/{id}` (`@Public`) | published states only, child-safe `PublicOffering` (with `facility { id, name, timezone }`, SPK-SCHED-008); staff readers of `/offerings/{id}` get the `staff` block and every state. CAT-01: the list filters by `facilityId`, `kind`, `programId`, `format` and the date overlap `from`/`to`; `view=staff` gives holders of `catalog.manage_offerings` every state with `staff`, narrowed to the facilities of their managing roles, and anyone else the public view |
-| POST/GET       | `/offerings/{id}/sessions`, `POST /sessions/{id}/cancel`                                             | `catalog.manage_sessions` (managers + scheduler); listing follows the offering's visibility; readers who are not catalog staff get the child-safe view (no cancel reason, scheduling event id or capacity staffing internals, §4.14)                                                                                                                                                                                                                                   |
+| POST/GET       | `/offerings/{id}/sessions`, `POST /sessions/{id}/cancel`                                             | `catalog.manage_sessions` (managers + scheduler); listing follows the offering's visibility; readers who are not catalog staff get the child-safe view (no cancel reason, scheduling event id or capacity staffing internals, §4.14). Cancel also cancels the linked scheduling event with the caller's `scheduling.manage_events` authority (R2-JOURNEYS-02); a refusal from scheduling refuses the whole cancel                                                      |
 | GET            | `/sessions?facilityId&from&to&status&cursor&limit`                                                   | CAT-01: `catalog.read_catalog` at the facility; the sessions overlapping `[from, to)` (at most 31 days) in every offering state, keyset `(scheduled_start, id)`, each `{ sessionId, offeringId, offeringName, sequence, title, scheduledStart, scheduledEnd, status, facilityId, timezone }` so a desk builds an attendance ActivityRef                                                                                                                                |
 | POST/GET       | `/offerings/{id}/price-rules`                                                                        | `catalog.manage_price_rules` (finance operator, GM, sysadmin); an effective rule is never edited, a change is a new version                                                                                                                                                                                                                                                                                                                                            |
 | POST/GET/PATCH | `/discounts[/{id}]`, `POST /discounts/{id}/retire`                                                   | `catalog.manage_discounts` (finance)                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -141,6 +146,7 @@ correlationId, { importProvenance })` for the migration module (see "Import prov
 `catalog.offering_published`, `catalog.registration_opened` (`resumed` flag),
 `catalog.registration_paused`, `catalog.offering_closed`, `catalog.offering_archived`,
 `catalog.offering_copied`, `catalog.session_created`, `catalog.session_canceled`,
+`catalog.session_retimed` (previous and new times, the session's revision),
 `catalog.policy_version_created`, `catalog.policy_version_approved`,
 `catalog.policy_version_retired`, `catalog.acknowledgment_recorded` (`assistedByStaff`),
 `catalog.acknowledgment_withdrawn`, `catalog.price_rule_created` (`supersededPriceRuleId`),
@@ -276,14 +282,51 @@ cannot set `source` or the id. `Program.source` is in every program read, which 
   offering reads it from the program. The complete fix is a catalog migration that copies the age
   band onto the offering and freezes it at publication.
 - `offering_sessions.scheduling_event_id` is a plain uuid: the scheduling module owns the event and
-  migration order forbids a cross-module key. Session completion (`complete`) has no command yet
-  (the entry module will drive it from attendance).
-- Sessions have no update command; corrections are cancel + add.
+  migration order forbids a cross-module key. Session creation does not check the event exists or
+  matches the session's times (proposed). Session completion (`complete`) has no command yet (the
+  entry module will drive it from attendance).
+- Sessions have no update command: a time change is made on the scheduling event (the session
+  follows it), any other correction is cancel + add (the cancel releases the event, so the
+  replacement can take the same slot).
 - Membership, package, rental and party offerings now have typed definitions (CAT-02), but their
   entitlement effects on attendance, redemption and booking (SPK-COND-001..003) are enrollment and
   finance behaviour, not implemented here.
 - `GET /v1/sessions` reads offering sessions only; scheduling events without a catalog session are
   listed by the scheduling module (`GET /events`).
+
+## Session lifecycle and the scheduling event (stage 6) — verified
+
+Scheduling is the authority for the event that reserves a session's space (§4.2); catalog is the
+authority for the session. Both directions now leave every module consistent (SPK-AT-009
+"consistent publication"). Tests: `__tests__/session-scheduling-follow.spec.ts` (assembled
+application, PGlite and PostgreSQL).
+
+- **R2-JOURNEYS-02** (SPK-COMMS-002 cancellation): `POST /v1/sessions/{id}/cancel` cancels the linked
+  event through `EVENT_SCHEDULING_PORT.cancelEvent` in the same unit of work, with the caller's own
+  principal and reason. Scheduling's `event_changed` 'canceled' then releases the reservation,
+  updates the calendar projection and ICS feeds, sends the families one "Canceled" notice and
+  leaves no activity reminder; `catalog.follow_scheduling_event` finds nothing left to cancel. A
+  refusal from scheduling (no `scheduling.manage_events` at the event's facility, the facility's
+  schedule still held by the legacy system, a stale event) refuses the whole cancel. The audit
+  details record `schedulingEvent { id, outcome }`: `canceled`, `already_canceled`, `not_found`
+  (a dangling id), `kept_shared` (another scheduled session still uses the event; the last one to
+  be canceled releases it, and a per-event advisory lock makes concurrent cancels agree) or
+  `kept_owned_elsewhere` (the event belongs to a fixture or a rental or party booking, whose module
+  decides).
+- **R2-JOURNEYS-03** (SPK-COMMS-005, SPK-YOUTH-007, SPK-ENTRY-003): on `event_changed` 'moved' or
+  'resized' (a series edit, a schedule-draft publication, a closure resolved by rescheduling) the
+  linked scheduled sessions take the event's current times, read through scheduling's port in the
+  handler's transaction (never the payload, so a late redelivery of an older move changes
+  nothing), with a revision bump, an audit record `catalog.session_retimed` and the event
+  `catalog.session_retimed`. Readers of catalog sessions see the new time at once (tested: the
+  family calendar's enrollment items and `GET /v1/sessions`; entry's check-in window reads the same
+  session rows through `SessionsService.list`). Canceled sessions and draft events are left alone.
+- **Pending in other modules** (they copy session times or audiences and are not catalog's to
+  change): enrollment retimes `session_bookings` on `catalog.session_retimed` and hides bookings of
+  canceled sessions from the family calendar; workforce retimes `session`-target assignments on
+  it; enrollment's `SessionParticipants` leaves the families of a canceled session out of the
+  audience of an event that stays published for another session (`kept_shared`). Until then a
+  booked session's booking row, and a coach assigned to the session, keep the old time.
 
 ## Stage-3 integration fixes — verified 2026-10-29
 

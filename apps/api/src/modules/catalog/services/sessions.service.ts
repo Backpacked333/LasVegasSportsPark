@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   decodeCursor,
+  DomainError,
   encodeCursor,
   errors,
   newId,
@@ -9,6 +10,7 @@ import {
   type CancelOfferingSessionInput,
   type DomainEvent,
   type CreateOfferingSessionInput,
+  type Event,
   type FacilitySession,
   type ListFacilitySessionsQuery,
   type OfferingSession,
@@ -29,6 +31,11 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
+import {
+  BOOKING_SOURCE_TYPE,
+  EVENT_SCHEDULING_PORT,
+  type EventSchedulingPort,
+} from '../../scheduling';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { relaxedStaffingRatios, requiredStaffFor } from '../catalog.policy';
@@ -42,6 +49,31 @@ import { EDITABLE_PUBLICATION_STATES, OfferingSessionMachine } from '../catalog.
 import { OfferingsService } from './offerings.service';
 
 const FacilitySessionCursor = z.object({ scheduledStart: z.string(), id: z.string() });
+
+/**
+ * Sources of scheduling events whose own module decides their lifecycle: a league fixture
+ * (competition postpones the fixture when its event is canceled) and a rental or party booking
+ * (enrollment ends the booking with a money exception). A catalog session linked to such an event
+ * never cancels it (§4.2: scheduling is the authority for the event, the owner for its record).
+ */
+const EVENT_SOURCES_WITH_OWN_LIFECYCLE: ReadonlySet<string> = new Set([
+  'fixture',
+  BOOKING_SOURCE_TYPE,
+]);
+
+/** Event changes that alter an event's times; a linked session follows them (R2-JOURNEYS-03). */
+const RETIMING_CHANGES: ReadonlySet<string> = new Set(['moved', 'resized']);
+
+/** What a catalog cancel did with the scheduling event that reserved the session's space. */
+export type LinkedEventOutcome =
+  'canceled' | 'already_canceled' | 'not_found' | 'kept_shared' | 'kept_owned_elsewhere';
+
+interface FollowedSchedulingEvent {
+  eventId: string;
+  change: string;
+  reason: string | null;
+  closureId: string | null;
+}
 
 /**
  * Individual sessions of an offering (§4.4 Session, SPK-CAT-002). A session may point at the
@@ -58,6 +90,7 @@ export class SessionsService {
     private readonly outbox: Outbox,
     private readonly offerings: OfferingsService,
     private readonly facilities: FacilityDirectory,
+    @Inject(EVENT_SCHEDULING_PORT) private readonly events: EventSchedulingPort,
   ) {}
 
   /**
@@ -329,6 +362,20 @@ export class SessionsService {
         .where('revision', '=', current.revision)
         .returningAll()
         .executeTakeFirstOrThrow();
+      const schedulingEvent = current.scheduling_event_id
+        ? {
+            id: current.scheduling_event_id,
+            outcome: await this.releaseLinkedEvent(
+              principal,
+              trx,
+              organizationId,
+              current.id,
+              current.scheduling_event_id,
+              body.reason,
+              correlationId,
+            ),
+          }
+        : null;
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -339,6 +386,7 @@ export class SessionsService {
         afterRevision: updated.revision,
         reason: body.reason,
         correlationId,
+        details: schedulingEvent ? { schedulingEvent } : undefined,
       });
       await this.outbox.enqueue(trx, CatalogEvents.sessionCanceled, {
         organizationId,
@@ -403,22 +451,82 @@ export class SessionsService {
   }
 
   /**
+   * R2-JOURNEYS-02 (SPK-AT-009 consistent publication, SPK-COMMS-002 cancellation, §4.2): a
+   * session canceled in the catalog releases the scheduling event that reserves its space, through
+   * scheduling's port in the caller's unit of work and with the caller's own authority
+   * (`scheduling.manage_events` at the event's facility, the facility's schedule authority). The
+   * resulting `scheduling.event_changed` 'canceled' frees the space, updates the calendar
+   * projection and ICS feeds, tells the session's families once and leaves no reminder;
+   * `catalog.follow_scheduling_event` then finds no scheduled session to cancel. Any refusal from
+   * scheduling refuses the whole cancel, so a session is never canceled while the event it should
+   * release silently stays live. The event is kept, and the audit says so, when another
+   * scheduled session still uses it (the last one to go releases it; the advisory lock serializes
+   * concurrent cancels of sessions sharing one event) or when a fixture or a booking owns it
+   * (their modules decide). A missing or already canceled event needs nothing.
+   */
+  private async releaseLinkedEvent(
+    principal: Principal,
+    trx: Trx,
+    organizationId: string,
+    sessionId: string,
+    eventId: string,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<LinkedEventOutcome> {
+    const lockKey = `catalog.session_event:${organizationId}:${eventId}`;
+    await sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`.execute(trx);
+    const event = await this.currentEvent(organizationId, eventId);
+    if (!event) return 'not_found';
+    if (event.status === 'canceled') return 'already_canceled';
+    if (event.sourceType && EVENT_SOURCES_WITH_OWN_LIFECYCLE.has(event.sourceType)) {
+      return 'kept_owned_elsewhere';
+    }
+    const sibling = await trx
+      .selectFrom('offering_sessions')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_event_id', '=', eventId)
+      .where('status', '=', 'scheduled')
+      .where('id', '!=', sessionId)
+      .limit(1)
+      .executeTakeFirst();
+    if (sibling) return 'kept_shared';
+    await this.events.cancelEvent(principal, eventId, { reason, correlationId });
+    return 'canceled';
+  }
+
+  /**
+   * The scheduling event's latest committed state, read through the active transaction (§4.2:
+   * through scheduling's port, never its tables), or null when it does not exist.
+   */
+  private async currentEvent(organizationId: string, eventId: string): Promise<Event | null> {
+    try {
+      return await this.events.getEvent(
+        systemPrincipal(organizationId, 'catalog.follow_scheduling'),
+        eventId,
+      );
+    } catch (error) {
+      if (DomainError.is(error) && error.code === 'NOT_FOUND') return null;
+      throw error;
+    }
+  }
+
+  /**
    * SPK-AT-009, SPK-SCHED-009, §4.12: scheduling is the authority for the event that reserves a
-   * session's space; when that event is canceled (a closure's `cancel_affected`, a series edit, a
-   * direct cancel) the linked catalog sessions are canceled too, so the catalog, the family
-   * calendar and the enrolled families agree. Runs in the outbox handler's transaction and is
-   * idempotent under replay (an already canceled session is left alone). Makeup or credit for
-   * the canceled session stays a staff decision under DEC-003.
+   * session's space. When that event is canceled (a closure's `cancel_affected`, a series edit, a
+   * direct cancel) the linked catalog sessions are canceled too; when it is moved or resized
+   * (a series edit, a schedule-draft publication, a closure resolved by rescheduling) the linked
+   * scheduled sessions take its new times (R2-JOURNEYS-03), so the catalog, the family calendar,
+   * entry's check-in window and the families' notices agree. Runs in the outbox handler's
+   * transaction and is idempotent under replay (an already canceled session, or one already at
+   * the event's times, is left alone). Makeup or credit for a canceled session stays a staff
+   * decision under DEC-003.
    */
   async followSchedulingEvent(
     trx: Trx,
-    event: DomainEvent<{
-      eventId: string;
-      change: string;
-      reason: string | null;
-      closureId: string | null;
-    }>,
+    event: DomainEvent<FollowedSchedulingEvent>,
   ): Promise<number> {
+    if (RETIMING_CHANGES.has(event.payload.change)) return this.retimeWithEvent(trx, event);
     if (event.payload.change !== 'canceled') return 0;
     const organizationId = event.organizationId;
     const rows = await trx
@@ -478,6 +586,94 @@ export class SessionsService {
       });
     }
     return rows.length;
+  }
+
+  /**
+   * R2-JOURNEYS-03: the linked scheduled sessions take the event's CURRENT times, read through
+   * the handler's transaction rather than the payload's `after`, because deliveries can arrive
+   * late and out of order (a retried move after a newer one): every delivery, in any order,
+   * converges on the latest committed times (§4.12, §4.6). A canceled event is left to its own
+   * 'canceled' delivery, and a draft event holds no published time yet. Each changed session gets
+   * a revision bump, an audit record and `catalog.session_retimed` for the modules that copy its
+   * times (enrollment's session bookings, workforce's session assignments).
+   */
+  private async retimeWithEvent(
+    trx: Trx,
+    event: DomainEvent<FollowedSchedulingEvent>,
+  ): Promise<number> {
+    const organizationId = event.organizationId;
+    const rows = await trx
+      .selectFrom('offering_sessions')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('scheduling_event_id', '=', event.payload.eventId)
+      .where('status', '=', 'scheduled')
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    if (rows.length === 0) return 0;
+    const current = await this.currentEvent(organizationId, event.payload.eventId);
+    if (!current || current.status !== 'published') return 0;
+    const start = new Date(current.scheduledStart);
+    const end = new Date(current.scheduledEnd);
+    const actor = systemPrincipal(organizationId, 'catalog.follow_scheduling');
+    let retimed = 0;
+    for (const row of rows) {
+      const previousStart = new Date(row.scheduled_start);
+      const previousEnd = new Date(row.scheduled_end);
+      if (previousStart.getTime() === start.getTime() && previousEnd.getTime() === end.getTime()) {
+        continue;
+      }
+      const updated = await trx
+        .updateTable('offering_sessions')
+        .set({ scheduled_start: start, scheduled_end: end, revision: row.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.id)
+        .where('revision', '=', row.revision)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      const times = {
+        previousStart: previousStart.toISOString(),
+        previousEnd: previousEnd.toISOString(),
+        scheduledStart: start.toISOString(),
+        scheduledEnd: end.toISOString(),
+      };
+      await this.audit.record(trx, {
+        organizationId,
+        actor,
+        action: 'catalog.session_retimed',
+        targetType: 'offering_session',
+        targetId: row.id,
+        beforeRevision: row.revision,
+        afterRevision: updated.revision,
+        reason: event.payload.reason,
+        correlationId: event.correlationId,
+        details: {
+          ...times,
+          schedulingEventId: event.payload.eventId,
+          eventRevision: current.revision,
+          change: event.payload.change,
+          sourceEventId: event.id,
+        },
+      });
+      await this.outbox.enqueue(trx, CatalogEvents.sessionRetimed, {
+        organizationId,
+        aggregateType: 'offering',
+        aggregateId: row.offering_id,
+        payload: {
+          sessionId: row.id,
+          offeringId: row.offering_id,
+          sequence: row.sequence,
+          schedulingEventId: event.payload.eventId,
+          ...times,
+          revision: updated.revision,
+          reason: event.payload.reason,
+        },
+        correlationId: event.correlationId,
+      });
+      retimed += 1;
+    }
+    return retimed;
   }
 
   /** Same visibility rule as the offering itself (public when published, every state for staff). */

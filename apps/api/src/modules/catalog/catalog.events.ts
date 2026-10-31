@@ -104,6 +104,29 @@ export const CatalogEvents = {
       reason: z.string(),
     }),
   ),
+  /**
+   * R2-JOURNEYS-03 (SPK-AT-009 consistent publication, SPK-COMMS-005, SPK-YOUTH-007): the
+   * scheduling event behind the session was moved or resized and the session now carries the
+   * event's times. Deliveries are not ordered per session, so a consumer copies the session's
+   * CURRENT times (`SessionsService.sessionsOfSchedulingEvents` through its own transaction) or
+   * compares `revision`, never applying an older delivery over a newer one (§4.12, §4.6).
+   */
+  sessionRetimed: defineEvent(
+    'catalog.session_retimed',
+    z.object({
+      sessionId: z.uuid(),
+      offeringId: z.uuid(),
+      sequence: z.number().int(),
+      schedulingEventId: z.uuid(),
+      previousStart: z.string(),
+      previousEnd: z.string(),
+      scheduledStart: z.string(),
+      scheduledEnd: z.string(),
+      /** The session's revision after this change. */
+      revision: z.number().int().positive(),
+      reason: z.string().nullable(),
+    }),
+  ),
   policyVersionCreated: defineEvent(
     'catalog.policy_version_created',
     z.object({
