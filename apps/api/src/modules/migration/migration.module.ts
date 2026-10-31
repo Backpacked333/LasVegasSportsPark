@@ -1,0 +1,94 @@
+import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { CatalogModule } from '../catalog';
+import { CommunicationsModule } from '../communications';
+import { CompetitionModule } from '../competition';
+import { RECORD_AUTHORITY_IMPL } from '../../kernel';
+import { FinanceModule, RECORD_AUTHORITY_IMPL as FINANCE_RECORD_AUTHORITY_IMPL } from '../finance';
+import { IdentityModule } from '../identity';
+import { SchedulingModule } from '../scheduling';
+import {
+  AuthorityController,
+  ExternalMappingsController,
+  ImportBatchesController,
+  ImportExceptionsController,
+  ReconciliationReportsController,
+} from './controllers/migration.controllers';
+import { DEFAULT_MIGRATION_POLICY, MIGRATION_POLICY } from './migration.policy';
+import { AUTHORITY_GUARD_PORT, EXTERNAL_MAPPING_PORT } from './migration.ports';
+import { AuthorityWriteInterceptor } from './services/authority-write.interceptor';
+import { AuthorityService } from './services/authority.service';
+import { ExternalMappingsService } from './services/external-mappings.service';
+import { ImportApplyService } from './services/import-apply.service';
+import { ImportBatchesService } from './services/import-batches.service';
+import { ImportContextBuilder } from './services/import-context';
+import { ImportExceptionsService } from './services/import-exceptions.service';
+import { ImportTargets } from './services/import-targets';
+import { ReconciliationService } from './services/reconciliation.service';
+
+/**
+ * MigrationModule (specification §5.3..§5.8, §4.4 Migration: ExternalMapping, ImportBatch,
+ * ImportException, AuthorityAssignment; §4.7 invariant 11; SPK-AT-024). Owns import batches,
+ * staged rows and their outcomes, external mappings, import exceptions (review queues), the
+ * authority matrix and reconciliation reports. Creates imported records only through the owning
+ * modules' exported services — identity (persons, households, relationships), catalog (programs),
+ * competition (seasons, teams, team entries, roster memberships), scheduling (future events as
+ * drafts), communications (preferences) and finance (opening obligations and credits) — never
+ * through their tables (§4.2). Registers a global
+ * interceptor that refuses the HTTP write commands of a record category while the legacy system
+ * is authoritative for it (§5.6), and implements the kernel's RECORD_AUTHORITY_PORT for in-process
+ * writers (MIG-00, IF-42). See README.md.
+ */
+@Module({
+  // MIG-02 (IF-40): the owning modules whose import commands create the operational categories.
+  imports: [
+    IdentityModule,
+    CatalogModule,
+    FinanceModule,
+    CompetitionModule,
+    SchedulingModule,
+    CommunicationsModule,
+  ],
+  providers: [
+    // Policy values left to operators (§6.6): the proposed defaults, replaceable by approval.
+    { provide: MIGRATION_POLICY, useValue: DEFAULT_MIGRATION_POLICY },
+    AuthorityService,
+    ExternalMappingsService,
+    ImportTargets,
+    ImportContextBuilder,
+    ImportExceptionsService,
+    ImportBatchesService,
+    ImportApplyService,
+    ReconciliationService,
+    { provide: AUTHORITY_GUARD_PORT, useExisting: AuthorityService },
+    // K-11, IF-42 (MIG-00): the kernel's RECORD_AUTHORITY_PORT resolves this lazily, so every
+    // in-process writer (scheduling's port writes, SCH-02) asserts record authority here (§5.6).
+    { provide: RECORD_AUTHORITY_IMPL, useExisting: AuthorityService },
+    // Finance resolves its own port at call time to guard its refund command in-process (§5.6).
+    { provide: FINANCE_RECORD_AUTHORITY_IMPL, useExisting: AuthorityService },
+    { provide: EXTERNAL_MAPPING_PORT, useExisting: ExternalMappingsService },
+    // §5.6 / §4.7 invariant 11: a synchronized copy never becomes an independent writer.
+    { provide: APP_INTERCEPTOR, useClass: AuthorityWriteInterceptor },
+  ],
+  controllers: [
+    ImportBatchesController,
+    ImportExceptionsController,
+    ExternalMappingsController,
+    ReconciliationReportsController,
+    AuthorityController,
+  ],
+  exports: [
+    MIGRATION_POLICY,
+    AUTHORITY_GUARD_PORT,
+    RECORD_AUTHORITY_IMPL,
+    FINANCE_RECORD_AUTHORITY_IMPL,
+    EXTERNAL_MAPPING_PORT,
+    AuthorityService,
+    ExternalMappingsService,
+    ImportBatchesService,
+    ImportApplyService,
+    ImportExceptionsService,
+    ReconciliationService,
+  ],
+})
+export class MigrationModule {}

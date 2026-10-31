@@ -1,0 +1,49 @@
+{
+  "name": "sportspark",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sportspark \u2014 soccer and indoor-soccer facility operating platform (modular monolith)",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b tsconfig.build.json",
+    "typecheck": "pnpm build && tsc -p packages/contracts/tsconfig.spec.json && tsc -p packages/db/tsconfig.spec.json && NODE_OPTIONS=--max-old-space-size=4096 tsc -p apps/api/tsconfig.spec.json && pnpm typecheck:clients",
+    "typecheck:clients": "tsc -p packages/api-client/tsconfig.json && tsc -p apps/staff/tsconfig.json && tsc -p apps/mobile/tsconfig.json",
+    "clean": "find . -name dist -type d -not -path '*/node_modules/*' -prune -exec rm -rf {} + ; find . -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete",
+    "test": "vitest run && pnpm test:mobile",
+    "test:mobile": "pnpm --filter @sportspark/mobile test",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:migrate": "pnpm --filter @sportspark/db migrate",
+    "openapi": "pnpm --filter @sportspark/api openapi",
+    "api-client:generate": "pnpm --filter @sportspark/api-client generate",
+    "build:staff": "pnpm --filter @sportspark/staff build",
+    "export:mobile": "pnpm --filter @sportspark/mobile export:ios",
+    "permission-matrix": "pnpm --filter @sportspark/api permission-matrix",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@swc/core": "1.16.20",
+    "@types/node": "22.20.5",
+    "eslint": "10.13.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0",
+    "unplugin-swc": "2.0.0",
+    "vitest": "5.0.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "esbuild"
+    ]
+  }
+}

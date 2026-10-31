@@ -1,0 +1,256 @@
+import type { ColumnType, Generated, JSONColumnType } from 'kysely';
+
+/** Timestamp columns: read as Date, written as Date or ISO string. */
+export type Timestamp = ColumnType<Date, Date | string, Date | string>;
+export type NullableTimestamp = ColumnType<Date | null, Date | string | null, Date | string | null>;
+export type GeneratedTimestamp = ColumnType<Date, Date | string | undefined, Date | string>;
+/** bigint minor units are parsed to JavaScript numbers by the drivers (safe-integer checked). */
+export type MinorUnits = ColumnType<number, number, number>;
+export type JsonObject = Record<string, unknown> | unknown[];
+export type Json<T extends object | null = JsonObject> = JSONColumnType<T>;
+/** JSON column with a database default (Kysely's Generated<> does not unwrap ColumnType). */
+export type GeneratedJson<T extends object | null = JsonObject> = ColumnType<
+  T,
+  string | undefined,
+  string
+>;
+
+export type OrganizationStatus = 'active' | 'suspended' | 'archived';
+export interface OrganizationsTable {
+  id: string;
+  slug: string;
+  name: string;
+  status: Generated<OrganizationStatus>;
+  settings: GeneratedJson<Record<string, unknown>>;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+export type FacilityStatus = 'active' | 'closed' | 'archived';
+export interface FacilitiesTable {
+  id: string;
+  organization_id: string;
+  slug: string;
+  name: string;
+  timezone: string;
+  address: Json<Record<string, unknown>> | null;
+  status: Generated<FacilityStatus>;
+  settings: GeneratedJson<Record<string, unknown>>;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+export interface AuditRecordsTable {
+  id: string;
+  organization_id: string;
+  occurred_at: GeneratedTimestamp;
+  actor: Json<Record<string, unknown>>;
+  action: string;
+  target_type: string;
+  target_id: string;
+  before_revision: number | null;
+  after_revision: number | null;
+  reason: string | null;
+  correlation_id: string | null;
+  operation_id: string | null;
+  details: GeneratedJson<Record<string, unknown>>;
+}
+
+export type OperationStatusValue =
+  'pending' | 'running' | 'succeeded' | 'failed' | 'recovery_required' | 'compensated';
+export interface OperationsTable {
+  id: string;
+  organization_id: string;
+  kind: string;
+  status: OperationStatusValue;
+  requested_by: Json<Record<string, unknown>>;
+  correlation_id: string | null;
+  input: Json<JsonObject> | null;
+  result: Json<JsonObject> | null;
+  error: Json<{ code: string; message: string; details?: unknown }> | null;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+  completed_at: NullableTimestamp;
+  /** The owning module's read action for the outcome (0006); null: the kernel's operations.read. */
+  read_action: ColumnType<string | null, string | null | undefined, never>;
+  facility_id: ColumnType<string | null, string | null | undefined, never>;
+  subject_person_ids: ColumnType<string[], string[] | undefined, never>;
+}
+
+export interface IdempotencyKeysTable {
+  organization_id: string;
+  scope_key: string;
+  idempotency_key: string;
+  request_hash: string;
+  status: 'in_progress' | 'completed';
+  response_status: number | null;
+  response_body: Json<JsonObject> | null;
+  operation_id: string | null;
+  created_at: GeneratedTimestamp;
+  completed_at: NullableTimestamp;
+  expires_at: Timestamp;
+  /** The claim currently holding an in-progress key (migration 0002, §4.9). */
+  claim_token: ColumnType<string | null, string | null | undefined, string | null>;
+  /** Until when that claim is reserved; a retry may take over a lapsed claim that committed nothing. */
+  locked_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** Set inside the business transaction when the request's command committed changes. */
+  committed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+}
+
+export type OutboxStatus = 'pending' | 'dispatched' | 'dead';
+export interface OutboxEventsTable {
+  id: string;
+  organization_id: string;
+  event_type: string;
+  aggregate_type: string;
+  aggregate_id: string;
+  payload: Json<JsonObject>;
+  occurred_at: GeneratedTimestamp;
+  correlation_id: string | null;
+  causation_id: string | null;
+  operation_id: string | null;
+  status: Generated<OutboxStatus>;
+  available_at: GeneratedTimestamp;
+  attempts: Generated<number>;
+  max_attempts: Generated<number>;
+  last_error: string | null;
+  locked_by: string | null;
+  locked_until: NullableTimestamp;
+  dispatched_at: NullableTimestamp;
+  failure_owner: string | null;
+}
+
+export type InboxStatus = 'received' | 'processed' | 'failed' | 'ignored' | 'dead';
+export interface InboxEventsTable {
+  id: string;
+  provider: string;
+  provider_event_id: string;
+  organization_id: string | null;
+  event_type: string;
+  payload: Json<JsonObject>;
+  signature_verified: Generated<boolean>;
+  received_at: GeneratedTimestamp;
+  status: Generated<InboxStatus>;
+  attempts: Generated<number>;
+  last_error: string | null;
+  processed_at: NullableTimestamp;
+  /** Next attempt time; failures back off like outbox events (migration 0003, §4.12). */
+  available_at: GeneratedTimestamp;
+  max_attempts: Generated<number>;
+  failure_owner: string | null;
+  locked_by: string | null;
+  locked_until: NullableTimestamp;
+}
+
+export interface EventConsumptionsTable {
+  handler: string;
+  event_id: string;
+  consumed_at: GeneratedTimestamp;
+}
+
+export interface JobAttemptsTable {
+  id: string;
+  organization_id: string | null;
+  source: 'outbox' | 'inbox' | 'scheduled';
+  source_id: string;
+  handler: string;
+  attempt_number: number;
+  worker_id: string;
+  started_at: GeneratedTimestamp;
+  finished_at: NullableTimestamp;
+  outcome: 'succeeded' | 'failed' | 'skipped' | null;
+  error: string | null;
+  correlation_id: string | null;
+}
+
+export type ExceptionSeverity = 'info' | 'warning' | 'high' | 'critical';
+export type ExceptionStatus = 'open' | 'acknowledged' | 'resolved' | 'closed';
+export interface OperationalExceptionsTable {
+  id: string;
+  organization_id: string;
+  facility_id: string | null;
+  category: string;
+  severity: ExceptionSeverity;
+  title: string;
+  affected_type: string | null;
+  affected_id: string | null;
+  owner_queue: string;
+  status: Generated<ExceptionStatus>;
+  opened_at: GeneratedTimestamp;
+  deadline_at: NullableTimestamp;
+  acknowledged_at: NullableTimestamp;
+  resolved_at: NullableTimestamp;
+  closed_at: NullableTimestamp;
+  resolution: Json<JsonObject> | null;
+  details: GeneratedJson<Record<string, unknown>>;
+  dedupe_key: string | null;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+/** §4.12 periodic job leases (migration 0007, K-06): shared infrastructure, no organization. */
+export interface PeriodicJobLeasesTable {
+  job_name: string;
+  locked_by: string | null;
+  locked_until: NullableTimestamp;
+  last_started_at: NullableTimestamp;
+  last_finished_at: NullableTimestamp;
+  last_succeeded_at: NullableTimestamp;
+  last_error: string | null;
+  consecutive_failures: Generated<number>;
+  run_count: Generated<number>;
+}
+
+/** §1.6 per-organization capability switches (migration 0011, K-12); no row = disabled. */
+export interface OrganizationCapabilitiesTable {
+  organization_id: string;
+  capability: string;
+  enabled: boolean;
+  decision_reference: string;
+  reason: string;
+  changed_by: Json<Record<string, unknown>>;
+  changed_at: Timestamp;
+  revision: Generated<number>;
+}
+
+/** Append-only history of every capability change (migration 0011, forbid_mutation). */
+export interface OrganizationCapabilityChangesTable {
+  id: string;
+  organization_id: string;
+  capability: string;
+  enabled: boolean;
+  decision_reference: string;
+  reason: string;
+  changed_by: Json<Record<string, unknown>>;
+  changed_at: Timestamp;
+  revision: number;
+  correlation_id: string | null;
+}
+
+export interface SchemaMigrationsTable {
+  version: string;
+  name: string;
+  checksum: string;
+  applied_at: GeneratedTimestamp;
+}
+
+export interface CoreTables {
+  organizations: OrganizationsTable;
+  facilities: FacilitiesTable;
+  audit_records: AuditRecordsTable;
+  operations: OperationsTable;
+  idempotency_keys: IdempotencyKeysTable;
+  outbox_events: OutboxEventsTable;
+  inbox_events: InboxEventsTable;
+  event_consumptions: EventConsumptionsTable;
+  job_attempts: JobAttemptsTable;
+  operational_exceptions: OperationalExceptionsTable;
+  periodic_job_leases: PeriodicJobLeasesTable;
+  organization_capabilities: OrganizationCapabilitiesTable;
+  organization_capability_changes: OrganizationCapabilityChangesTable;
+  schema_migrations: SchemaMigrationsTable;
+}
