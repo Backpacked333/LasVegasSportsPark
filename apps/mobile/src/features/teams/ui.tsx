@@ -16,6 +16,7 @@ import {
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
+import { LiveRegion, LiveText, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { StateView } from '../../ui/StateView';
@@ -187,9 +188,9 @@ export function TextField({
         testID={testID}
       />
       {error ? (
-        <Text style={styles.error} accessibilityLiveRegion="polite">
+        <LiveText style={styles.error} announcement={error}>
           {`▲ ${error}`}
-        </Text>
+        </LiveText>
       ) : null}
     </View>
   );
@@ -334,22 +335,38 @@ export function CommandFailure({
   const rule = detailCodeOf(error);
   const unknown = !read && mayHaveTakenEffect(error);
   const withheld = !read && secretWithheldOf(error) !== null;
+  const label = unknown
+    ? 'No answer yet: this may already have been recorded'
+    : withheld
+      ? 'Done, but the link cannot be shown again'
+      : stale
+        ? 'This changed since you opened it'
+        : read
+          ? 'Not loaded'
+          : 'Not done';
+  // NA-A01: the announcement ends with the next action, the button's label or the instruction.
+  const nextAction =
+    stale && onReload
+      ? 'Reload'
+      : recovery.retry && onRetry
+        ? unknown
+          ? 'Check again'
+          : 'Try again'
+        : recovery.label;
   return (
-    <View style={styles.failure} testID={testID} accessibilityLiveRegion="polite">
-      <StatusBadge
-        tone={unknown || withheld ? 'warning' : 'danger'}
-        label={
-          unknown
-            ? 'No answer yet: this may already have been recorded'
-            : withheld
-              ? 'Done, but the link cannot be shown again'
-              : stale
-                ? 'This changed since you opened it'
-                : read
-                  ? 'Not loaded'
-                  : 'Not done'
-        }
-      />
+    <LiveRegion
+      style={styles.failure}
+      testID={testID}
+      announcement={sentences(
+        label,
+        error.message,
+        ...issues,
+        ...reasons.map((reason) => reason.message),
+        nextAction,
+      )}
+      occurrence={error}
+    >
+      <StatusBadge tone={unknown || withheld ? 'warning' : 'danger'} label={label} />
       <Text style={styles.body}>{error.message}</Text>
       {issues.map((issue) => (
         <Text key={issue} style={styles.body}>{`▲ ${issue}`}</Text>
@@ -362,16 +379,16 @@ export function CommandFailure({
         <Button label="Reload" onPress={onReload} variant="secondary" />
       ) : recovery.retry && onRetry ? (
         <Button
-          label={unknown ? 'Check again' : 'Try again'}
+          label={nextAction}
           onPress={onRetry}
           accessibilityHint={
             read ? 'Reads it again' : 'Sends the same request again; it is never applied twice'
           }
         />
       ) : (
-        <Text style={styles.body}>{recovery.label}</Text>
+        <Text style={styles.body}>{nextAction}</Text>
       )}
-    </View>
+    </LiveRegion>
   );
 }
 

@@ -26,7 +26,8 @@
  * (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the line reads "This may already have been done": the payment
  * methods stay hidden, the payments and the request are read again (so an attempt the API recorded
  * shows "Do not pay again"), and "Reload" reads them again; paying is not offered again on this
- * visit.
+ * visit. Each of these answers, and every change of the payment's state, is announced to screen
+ * readers with what to do next (`ui/announce`, SPK-UX-009, NA-A01).
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -54,6 +55,7 @@ import {
 } from '../../features/teams/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -81,17 +83,32 @@ const UNSETTLED: ReadonlySet<PaymentAttempt['status']> = new Set([
   'unknown',
 ]);
 
+/** What a screen reader hears for a payment's state: the badge, a failure's reason, "Check again". */
+function paymentProgressWords(current: PaymentAttempt): string {
+  return sentences(
+    paymentStatus(current.status).label,
+    current.status === 'failed' ? current.failureReason : null,
+    UNSETTLED.has(current.status) ? 'Check again' : null,
+  );
+}
+
+/**
+ * The state of a payment toward this line. It is announced when it appears and whenever the state
+ * changes (SPK-UX-009, NA-A01), unless it sits inside a view that announces it (`live={false}`).
+ */
 function PaymentProgress({
   current,
   checking,
   onCheck,
+  live = true,
 }: {
   current: PaymentAttempt;
   checking: boolean;
   onCheck: () => void;
+  live?: boolean;
 }) {
-  return (
-    <View style={styles.group} testID="payment-progress">
+  const body = (
+    <>
       <StatusBadge {...paymentStatus(current.status)} />
       {current.status === 'failed' && current.failureReason ? (
         <Body>{current.failureReason}</Body>
@@ -105,8 +122,26 @@ function PaymentProgress({
           accessibilityHint="Reads the payment's current state; it never pays again"
         />
       ) : null}
+    </>
+  );
+  // Inside a view that announces it, a second live region would make TalkBack read it twice.
+  return live ? (
+    <LiveRegion
+      style={styles.group}
+      testID="payment-progress"
+      announcement={paymentProgressWords(current)}
+    >
+      {body}
+    </LiveRegion>
+  ) : (
+    <View style={styles.group} testID="payment-progress">
+      {body}
     </View>
   );
+}
+
+function elsewhereText(attempt: PaymentAttempt): string {
+  return `A payment of ${formatMoney(attempt.amountMinor, attempt.currency)} toward this contribution is on its way. Do not pay again.`;
 }
 
 function PayContribution({
@@ -179,16 +214,19 @@ function PayContribution({
   const knownState = (
     <>
       {elsewhere && !current ? (
-        <View style={styles.group} testID="contribution-live-attempt">
-          <Body>
-            {`A payment of ${formatMoney(elsewhere.amountMinor, elsewhere.currency)} toward this contribution is on its way. Do not pay again.`}
-          </Body>
+        <LiveRegion
+          style={styles.group}
+          testID="contribution-live-attempt"
+          announcement={sentences(elsewhereText(elsewhere), paymentProgressWords(elsewhere))}
+        >
+          <Body>{elsewhereText(elsewhere)}</Body>
           <PaymentProgress
             current={elsewhere}
             checking={known.payments.fetchStatus === 'fetching'}
             onCheck={() => void known.payments.refetch()}
+            live={false}
           />
-        </View>
+        </LiveRegion>
       ) : null}
       {knownFailed && !current ? (
         <View style={styles.group} testID="contribution-payments-unchecked">

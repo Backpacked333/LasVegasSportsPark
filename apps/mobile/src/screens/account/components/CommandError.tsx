@@ -17,17 +17,22 @@
  * here it is never called a failure either.
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import {
   mayHaveTakenEffect,
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../../api/command-outcome';
+import { LiveRegion, sentences } from '../../../ui/announce';
 import { Button } from '../../../ui/Button';
 import { OutcomeLost } from '../../../ui/OutcomeLost';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { colors, spacing, type } from '../../../ui/theme';
+
+const NO_ANSWER_LABEL = 'No answer yet: this may already have been recorded';
+const NO_ANSWER_BODY =
+  'There was no definite answer, so this may already have been done. Checking again is safe: it sends the same request, which is never applied twice.';
 
 export interface NotAvailableCopy {
   title: string;
@@ -70,14 +75,20 @@ export function CommandError({
   }
   const reference = `Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`;
   if (secretWithheldOf(error)) {
+    const label = 'Done, but the link cannot be shown again';
     return (
-      <View style={styles.box} accessibilityLiveRegion="polite" testID="command-secret-withheld">
-        <StatusBadge tone="warning" label="Done, but the link cannot be shown again" />
+      <LiveRegion
+        style={styles.box}
+        announcement={sentences(label, error.message)}
+        occurrence={error}
+        testID="command-secret-withheld"
+      >
+        <StatusBadge tone="warning" label={label} />
         <Text style={styles.body}>{error.message}</Text>
         <Text style={styles.caption} selectable>
           {reference}
         </Text>
-      </View>
+      </LiveRegion>
     );
   }
   if (tookEffectOutcomeLost(error)) {
@@ -85,22 +96,26 @@ export function CommandError({
   }
   if (mayHaveTakenEffect(error)) {
     const recovery = recoveryActionFor(error);
+    // NA-A01: announced with the next action, the button's label or the instruction shown.
+    const nextAction = recovery.retry && onRetry ? 'Check again' : recovery.label;
     return (
-      <View style={styles.box} accessibilityLiveRegion="polite" testID="command-no-answer">
-        <StatusBadge tone="warning" label="No answer yet: this may already have been recorded" />
-        <Text style={styles.body}>
-          There was no definite answer, so this may already have been done. Checking again is safe:
-          it sends the same request, which is never applied twice.
-        </Text>
+      <LiveRegion
+        style={styles.box}
+        announcement={sentences(NO_ANSWER_LABEL, NO_ANSWER_BODY, nextAction)}
+        occurrence={error}
+        testID="command-no-answer"
+      >
+        <StatusBadge tone="warning" label={NO_ANSWER_LABEL} />
+        <Text style={styles.body}>{NO_ANSWER_BODY}</Text>
         <Text style={styles.caption} selectable>
           {reference}
         </Text>
         {recovery.retry && onRetry ? (
-          <Button label="Check again" onPress={onRetry} />
+          <Button label={nextAction} onPress={onRetry} />
         ) : (
-          <Text style={styles.body}>{recovery.label}</Text>
+          <Text style={styles.body}>{nextAction}</Text>
         )}
-      </View>
+      </LiveRegion>
     );
   }
   return (

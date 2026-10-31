@@ -20,13 +20,19 @@
  * (`GET /v1/me/registration-checkouts`, or the enrollment's checkout) is pinned on Home (SCR-C-03)
  * and opens the checkout outcome screen (SCR-C-15). The stale threshold stays pending (DEC-032,
  * DEC-033): unset, data age is shown but never called stale.
+ *
+ * Screen readers (SPK-UX-009): each banner is a polite live region, which TalkBack reads for the
+ * screen in view. VoiceOver has no live regions, and every Screen renders a banner while
+ * expo-router keeps visited screens mounted, so the banners post nothing to VoiceOver: the root
+ * navigator's one `ConnectivityAnnouncer` announces each change of state once for the app.
  */
 import { ApiError, formatAge } from '@sportspark/api-client';
 import { notifyManager, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { receivedAtOf } from '../api/useApiQuery';
 import { useApp, useConnectivity, useNow } from '../providers/AppProviders';
+import { LiveRegion, sentences, useAnnouncement } from '../ui/announce';
 import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
 import { colors, spacing, type } from '../ui/theme';
@@ -87,7 +93,20 @@ function useRefreshFailure(): string | null {
   );
 }
 
-export function ConnectivityBanner() {
+/** What the banner says, most serious first (see the header); null when it is hidden. */
+export type ConnectivityNotice =
+  | { kind: 'offline'; age: string | null }
+  | { kind: 'reconnecting' }
+  | { kind: 'degraded'; failure: string; age: string | null }
+  | { kind: 'refreshed'; refreshedAt: number }
+  | { kind: 'stale'; age: string | null }
+  | null;
+
+/**
+ * The banner's state. Every banner (one per Screen) and the app's one `ConnectivityAnnouncer`
+ * compute it from the same connectivity, cache and clock, so they agree.
+ */
+export function useConnectivityNotice(): { notice: ConnectivityNotice; now: Date } {
   const { reachable } = useConnectivity();
   const { services } = useApp();
   const now = useNow(15_000);
@@ -128,71 +147,141 @@ export function ConnectivityBanner() {
   }, [reconnecting, queryClient, services]);
 
   const age = oldest !== null ? formatAge(oldest, now) : null;
-  const refreshNow = () => void queryClient.refetchQueries({ type: 'active' });
-
-  if (reachable === false) {
-    return (
-      <View
-        style={styles.banner}
-        accessibilityRole="alert"
-        accessibilityLiveRegion="polite"
-        testID="connectivity-banner"
-      >
-        <StatusBadge tone="warning" label="You are offline" />
-        <Text style={styles.text}>
-          {age ? `Showing information from ${age}.` : 'Nothing has been loaded yet.'} Needs a
-          connection: {OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}.
-        </Text>
-      </View>
-    );
-  }
-
-  if (reconnecting) {
-    return (
-      <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
-        <StatusBadge tone="info" label="Back online. Refreshing" />
-      </View>
-    );
-  }
-
-  if (failure) {
-    return (
-      <View
-        style={styles.banner}
-        accessibilityRole="alert"
-        accessibilityLiveRegion="polite"
-        testID="connectivity-banner"
-      >
-        <StatusBadge tone="warning" label="Some information could not be refreshed" />
-        <Text style={styles.text}>
-          {age ? `Showing information from ${age}. ` : ''}The service did not answer (error code{' '}
-          {failure}). Actions that need the service may fail until it does.
-        </Text>
-        <Button label="Try again" variant="secondary" onPress={refreshNow} />
-      </View>
-    );
-  }
-
-  if (refreshedAt !== null && now.getTime() - refreshedAt < REFRESHED_NOTICE_MS) {
-    return (
-      <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
-        <StatusBadge tone="success" label={`Back online. Updated ${formatAge(refreshedAt, now)}`} />
-      </View>
-    );
-  }
-
   const threshold = services.config.staleDataThresholdMs;
-  if (threshold !== null && oldest !== null && now.getTime() - oldest > threshold) {
-    return (
-      <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
-        <StatusBadge tone="warning" label="Some information may be out of date" />
-        <Text style={styles.text}>Updated {age}.</Text>
-        <Button label="Refresh" variant="secondary" onPress={refreshNow} />
-      </View>
-    );
-  }
+  const notice: ConnectivityNotice =
+    reachable === false
+      ? { kind: 'offline', age }
+      : reconnecting
+        ? { kind: 'reconnecting' }
+        : failure
+          ? { kind: 'degraded', failure, age }
+          : refreshedAt !== null && now.getTime() - refreshedAt < REFRESHED_NOTICE_MS
+            ? { kind: 'refreshed', refreshedAt }
+            : threshold !== null && oldest !== null && now.getTime() - oldest > threshold
+              ? { kind: 'stale', age }
+              : null;
+  return { notice, now };
+}
 
+/**
+ * What VoiceOver hears for a notice: the visible words, without the age that changes while it is
+ * shown. The error code of a degraded refresh is kept: it is fixed while shown and is what the
+ * person reads out to support.
+ */
+export function connectivityAnnouncement(notice: ConnectivityNotice): string | null {
+  switch (notice?.kind) {
+    case 'offline':
+      return sentences(
+        'You are offline',
+        `Needs a connection: ${OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}`,
+      );
+    case 'reconnecting':
+      return 'Back online. Refreshing';
+    case 'degraded':
+      return sentences(
+        'Some information could not be refreshed',
+        `The service did not answer (error code ${notice.failure}). Actions that need the service may fail until it does`,
+        'Try again',
+      );
+    case 'refreshed':
+      return 'Back online. Information updated';
+    case 'stale':
+      return sentences('Some information may be out of date', 'Refresh');
+    default:
+      return null;
+  }
+}
+
+/**
+ * The connectivity announcement for VoiceOver, made once for the app (SPK-UX-009). Every Screen
+ * renders its own banner and expo-router keeps visited screens mounted, so the banners are live
+ * regions for TalkBack only (TalkBack reads the one on screen) and this, rendered once by the root
+ * navigator, is what VoiceOver hears when the state changes.
+ */
+export function ConnectivityAnnouncer() {
+  const { notice } = useConnectivityNotice();
+  useAnnouncement(connectivityAnnouncement(notice));
   return null;
+}
+
+export function ConnectivityBanner() {
+  const { notice, now } = useConnectivityNotice();
+  const queryClient = useQueryClient();
+  const refreshNow = () => void queryClient.refetchQueries({ type: 'active' });
+  // On iOS the words are announced once for the app by ConnectivityAnnouncer, not per banner.
+  const ANNOUNCED_BY_ROOT = null;
+
+  if (notice === null) return null;
+  switch (notice.kind) {
+    case 'offline':
+      return (
+        <LiveRegion
+          style={styles.banner}
+          accessibilityRole="alert"
+          announcement={ANNOUNCED_BY_ROOT}
+          testID="connectivity-banner"
+        >
+          <StatusBadge tone="warning" label="You are offline" />
+          <Text style={styles.text}>
+            {notice.age
+              ? `Showing information from ${notice.age}.`
+              : 'Nothing has been loaded yet.'}{' '}
+            Needs a connection: {OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}.
+          </Text>
+        </LiveRegion>
+      );
+    case 'reconnecting':
+      return (
+        <LiveRegion
+          style={styles.banner}
+          announcement={ANNOUNCED_BY_ROOT}
+          testID="connectivity-banner"
+        >
+          <StatusBadge tone="info" label="Back online. Refreshing" />
+        </LiveRegion>
+      );
+    case 'degraded':
+      return (
+        <LiveRegion
+          style={styles.banner}
+          accessibilityRole="alert"
+          announcement={ANNOUNCED_BY_ROOT}
+          testID="connectivity-banner"
+        >
+          <StatusBadge tone="warning" label="Some information could not be refreshed" />
+          <Text style={styles.text}>
+            {notice.age ? `Showing information from ${notice.age}. ` : ''}The service did not answer
+            (error code {notice.failure}). Actions that need the service may fail until it does.
+          </Text>
+          <Button label="Try again" variant="secondary" onPress={refreshNow} />
+        </LiveRegion>
+      );
+    case 'refreshed':
+      return (
+        <LiveRegion
+          style={styles.banner}
+          announcement={ANNOUNCED_BY_ROOT}
+          testID="connectivity-banner"
+        >
+          <StatusBadge
+            tone="success"
+            label={`Back online. Updated ${formatAge(notice.refreshedAt, now)}`}
+          />
+        </LiveRegion>
+      );
+    case 'stale':
+      return (
+        <LiveRegion
+          style={styles.banner}
+          announcement={ANNOUNCED_BY_ROOT}
+          testID="connectivity-banner"
+        >
+          <StatusBadge tone="warning" label="Some information may be out of date" />
+          <Text style={styles.text}>Updated {notice.age}.</Text>
+          <Button label="Refresh" variant="secondary" onPress={refreshNow} />
+        </LiveRegion>
+      );
+  }
 }
 
 const styles = StyleSheet.create({

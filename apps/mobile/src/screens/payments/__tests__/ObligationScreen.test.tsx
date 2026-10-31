@@ -6,6 +6,7 @@
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import {
   IDS,
   accountRoutes,
@@ -28,6 +29,7 @@ import {
   createMoneyTestApp as createTestApp,
   settleApps,
 } from '../../../features/money/testing/money-test-app';
+import { waitForAbsent } from '../../../testing/test-app';
 import { ObligationScreen } from '../ObligationScreen';
 
 const mockRouter = createRouterMock();
@@ -426,7 +428,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });
-    await waitFor(() => expect(screen.queryByTestId('live-attempt')).toBeNull());
+    await waitForAbsent(() => screen.queryByTestId('live-attempt'), 'The payment on its way');
     expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeEnabled();
     expect(payments(app)).toHaveLength(0);
   });
@@ -487,5 +489,77 @@ describe('SCR-C-34 ObligationScreen', () => {
       'Payment processing',
     );
     expect(screen.queryByLabelText('Payment received')).toBeNull();
+  });
+  describe('SPK-UX-009 (NA-A01): the outcome of Pay is announced to VoiceOver with what to do next', () => {
+    const announced = () =>
+      (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mock.calls.map(
+        (call) => call[0] as string,
+      );
+
+    it('no answer: "Payment outcome being confirmed. Do not pay again." with "Check again"', async () => {
+      renderObligation({
+        'POST /obligations/{id}/payments': () => {
+          throw new TypeError('Network request failed');
+        },
+      });
+      await pay();
+      expect(await screen.findByTestId('payment-no-answer')).toBeOnTheScreen();
+      await waitFor(() =>
+        expect(announced()).toContain(
+          'Payment outcome being confirmed. Do not pay again. We did not get an answer, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice. Check again.',
+        ),
+      );
+    });
+
+    it('received: "Payment received" with the receipt', async () => {
+      renderObligation();
+      await pay();
+      expect(await screen.findByLabelText('Payment received')).toBeOnTheScreen();
+      expect(announced()).toContain('Payment received. Receipt: $40.00 received.');
+    });
+
+    it('failed: "Payment failed" with the reason', async () => {
+      renderObligation({
+        'POST /obligations/{id}/payments': {
+          status: 201,
+          body: outcome('failed', { failureReason: 'The card was declined', resolvedAt: null }),
+        },
+      });
+      await pay('Declined');
+      expect(await screen.findByLabelText('Payment failed')).toBeOnTheScreen();
+      expect(announced()).toContain(
+        'Payment failed. The card was declined. Nothing was charged; you can try another payment.',
+      );
+    });
+
+    it('processing: "Payment processing" with "Do not pay again" and "Check again"', async () => {
+      renderObligation({
+        'POST /obligations/{id}/payments': { status: 201, body: outcome('processing') },
+        'GET /payments/{id}': { status: 200, body: paymentAttempt({ status: 'processing' }) },
+      });
+      await pay();
+      expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();
+      expect(announced()).toContain(
+        'Payment processing. The provider is still working on this payment. Do not pay again. Check again.',
+      );
+    });
+
+    it('a payment already in progress (PAYMENT_OUTCOME_UNKNOWN) is announced as being confirmed', async () => {
+      renderObligation({
+        'POST /obligations/{id}/payments': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('PAYMENT_OUTCOME_UNKNOWN', {
+              message: 'The payment outcome is not yet known.',
+              nextAction: 'await_reconciliation',
+            }),
+          ),
+      });
+      await pay();
+      expect(await screen.findByTestId('payment-in-progress')).toBeOnTheScreen();
+      expect(announced()).toContain(
+        'Payment outcome being confirmed. Do not pay again. The payment outcome is not yet known.',
+      );
+    });
   });
 });

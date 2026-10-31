@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
@@ -127,19 +128,21 @@ export function RoleHandover({
   if (handover.data) {
     const done = handover.data;
     const label = ROLE_LABELS[done.role === 'co_captain' ? 'co_captain' : 'captain'];
+    const holder = `${names.get(done.toPersonId) ?? 'The new holder'} is ${label.toLowerCase()} from ${formatInstant(done.effectiveAt)}`;
+    const history =
+      done.fromPersonId === viewer.personId
+        ? `You no longer hold the ${label.toLowerCase()} role. Earlier role records are kept as history.`
+        : 'Earlier role records are kept as history.';
     return (
-      <View style={styles.group} testID="handover-done" accessibilityLiveRegion="polite">
-        <StatusBadge
-          tone="success"
-          label={`${names.get(done.toPersonId) ?? 'The new holder'} is ${label.toLowerCase()} from ${formatInstant(done.effectiveAt)}`}
-        />
-        <Body>
-          {done.fromPersonId === viewer.personId
-            ? `You no longer hold the ${label.toLowerCase()} role. Earlier role records are kept as history.`
-            : 'Earlier role records are kept as history.'}
-        </Body>
+      <LiveRegion
+        style={styles.group}
+        testID="handover-done"
+        announcement={sentences(holder, history)}
+      >
+        <StatusBadge tone="success" label={holder} />
+        <Body>{history}</Body>
         <Button label="Show the team" onPress={onDone} />
-      </View>
+      </LiveRegion>
     );
   }
 

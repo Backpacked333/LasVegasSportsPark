@@ -19,6 +19,7 @@ import { isLinkToken } from '../../../links/link-targets';
 import { useConnectivity } from '../../../providers/AppProviders';
 import { Button } from '../../../ui/Button';
 import { StateView } from '../../../ui/StateView';
+import { LiveRegion, sentences } from '../../../ui/announce';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { spacing } from '../../../ui/theme';
 import { listPermissions, ME_QUERY_KEY, personNameText, usePersonName } from './account-data';
@@ -127,11 +128,16 @@ export function ClaimForm({
 
 function ClaimResult({ result }: { result: ClaimAccepted }) {
   if (result.claim.kind === 'self') {
+    const linked = 'Your account is now linked to your participant record.';
     return (
-      <View style={styles.result} testID="claim-result">
+      <LiveRegion
+        style={styles.result}
+        testID="claim-result"
+        announcement={sentences('Linked', linked)}
+      >
         <StatusBadge tone="success" label="Linked" />
-        <Paragraph inset={false}>Your account is now linked to your participant record.</Paragraph>
-      </View>
+        <Paragraph inset={false}>{linked}</Paragraph>
+      </LiveRegion>
     );
   }
   return <GuardianClaimResult result={result} />;
@@ -140,16 +146,17 @@ function ClaimResult({ result }: { result: ClaimAccepted }) {
 function GuardianClaimResult({ result }: { result: ClaimAccepted }) {
   const name = usePersonName(result.claim.subjectPersonId);
   const granted = result.grants.filter((g) => g.effective).map((g) => g.permission);
+  const recorded = `You are now recorded as guardian of ${personNameText(name)} with these permissions: ${listPermissions(granted)}.`;
   return (
     <View style={styles.result} testID="claim-result">
-      <StatusBadge tone="success" label="Claimed" />
-      <Paragraph inset={false}>
-        You are now recorded as guardian of {personNameText(name)} with these permissions:{' '}
-        {listPermissions(granted)}.
-      </Paragraph>
-      <Paragraph muted inset={false}>
-        Nothing else was granted.
-      </Paragraph>
+      {/* The claim's outcome is announced (SPK-UX-009); "No permissions yet" announces itself. */}
+      <LiveRegion announcement={sentences('Claimed', recorded, 'Nothing else was granted.')}>
+        <StatusBadge tone="success" label="Claimed" />
+        <Paragraph inset={false}>{recorded}</Paragraph>
+        <Paragraph muted inset={false}>
+          Nothing else was granted.
+        </Paragraph>
+      </LiveRegion>
       {granted.length === 0 ? (
         <StateView
           variant="unavailable"

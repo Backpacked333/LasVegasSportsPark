@@ -13,6 +13,7 @@ import {
   type FakeHandler,
 } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import { createRouterMock, me } from '../../../features/money/testing/fixtures';
 import {
   createMoneyTestApp as createTestApp,
@@ -321,6 +322,44 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     );
     expect(screen.getByLabelText('Number of guests')).toHaveDisplayValue('12');
     expect(posts(app)).toHaveLength(1);
+  });
+
+  it('SPK-UX-009: a booking refused VALIDATION_FAILED on its time shows the error at the time and announces it', async () => {
+    renderFlow(
+      partyRoutes({
+        'POST /bookings': {
+          status: 400,
+          body: apiErrorBody('VALIDATION_FAILED', {
+            message: 'This time is no longer bookable.',
+            nextAction: 'correct_input',
+            details: { path: 'start' },
+          }),
+        },
+      }),
+      G.party,
+    );
+    fireEvent.press(await screen.findByRole('radio', { name: PARTY_TIME }));
+    fireEvent.press(await screen.findByRole('radio', { name: 'Party room' }));
+    fireEvent.changeText(screen.getByLabelText('Number of guests'), '8');
+    await press('Send request');
+    expect(await screen.findByTestId('booking-time-error')).toHaveTextContent(
+      /This time is no longer bookable\./,
+    );
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'This time is no longer bookable.',
+      { queue: true },
+    );
+  });
+
+  it('SPK-UX-009: the time and space choice errors are announced when they appear', async () => {
+    renderFlow(rentalRoutes());
+    await screen.findByLabelText('How long, in minutes');
+    await press('Book now');
+    expect(screen.getByTestId('booking-time-error')).toBeOnTheScreen();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Choose a start time.',
+      { queue: true },
+    );
   });
 
   it('a weekly rental sends its number of weeks; weeks that are not free (RESOURCE_CONFLICT) are listed and the times read again', async () => {

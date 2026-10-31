@@ -5,6 +5,7 @@
  */
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { LiveText } from '../../ui/announce';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 
 export function Section({
@@ -107,6 +108,10 @@ export function ChoiceRow({
   );
 }
 
+/**
+ * A labelled text field; the error is kept next to the field, announced when it appears
+ * (`ui/announce`) and part of the input's hint, so it is read with the field (SPK-UX-008, SPK-UX-009).
+ */
 export function TextField({
   label,
   value,
@@ -124,6 +129,7 @@ export function TextField({
   multiline?: boolean;
   testID?: string;
 }) {
+  const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -132,16 +138,16 @@ export function TextField({
         value={value}
         onChangeText={onChangeText}
         accessibilityLabel={label}
-        accessibilityHint={hint}
+        accessibilityHint={describedBy || undefined}
         autoCorrect={false}
         multiline={multiline}
         style={[styles.input, multiline && styles.multiline, error ? styles.inputError : null]}
         testID={testID}
       />
       {error ? (
-        <Text style={styles.error} accessibilityLiveRegion="polite">
+        <LiveText style={styles.error} announcement={error}>
           {`✕ ${error}`}
-        </Text>
+        </LiveText>
       ) : null}
     </View>
   );

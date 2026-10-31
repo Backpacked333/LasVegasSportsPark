@@ -11,10 +11,14 @@
  * changed. It never calls a screen's stale-version reload, which may end the intent: nothing is
  * sent again from here, and the key is kept (`keepsIntentAfterFailure`), so an unchanged
  * resubmission gets this answer again instead of running under a new key.
+ *
+ * It is announced to screen readers when it appears (`ui/announce`: a live region on Android, an
+ * announcement on iOS).
  */
 import type { ApiError } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
+import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
 import { colors, spacing, type } from './theme';
@@ -34,12 +38,16 @@ export function OutcomeLost({
   const queryClient = useQueryClient();
   // Every API read on screen (the record, the list, a payment's state) is read again.
   const reload = () => void queryClient.invalidateQueries({ queryKey: ['api'] });
+  const body = `Your earlier request reached the service and changed something, but its answer was lost, so ${what ?? 'this'} may already have been done. Reload to see where it stands; it is not sent again.`;
   return (
-    <View style={styles.box} accessibilityLiveRegion="polite" testID={testID}>
+    <LiveRegion
+      style={styles.box}
+      announcement={sentences(OUTCOME_LOST_LABEL, body)}
+      occurrence={error}
+      testID={testID}
+    >
       <StatusBadge tone="warning" label={OUTCOME_LOST_LABEL} />
-      <Text style={styles.body}>
-        {`Your earlier request reached the service and changed something, but its answer was lost, so ${what ?? 'this'} may already have been done. Reload to see where it stands; it is not sent again.`}
-      </Text>
+      <Text style={styles.body}>{body}</Text>
       <Text style={styles.caption} selectable>
         {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
       </Text>
@@ -49,7 +57,7 @@ export function OutcomeLost({
         onPress={reload}
         accessibilityHint="Reads what is shown here again"
       />
-    </View>
+    </LiveRegion>
   );
 }
 

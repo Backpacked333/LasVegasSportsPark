@@ -20,7 +20,9 @@
  *   the first attempt committed but its answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), it reads
  *   "This may already have been done": paying stays blocked and the balance and payments are read
  *   again, so a recorded attempt shows as on its way. A receipt is shown only when the API returns
- *   one.
+ *   one. Every outcome of Pay ("Payment outcome being confirmed. Do not pay again.", "Payment
+ *   received", "Payment failed", "Payment processing", a payment on its way) is announced to
+ *   screen readers with what to do next (`ui/announce`, SPK-UX-009, NA-A01).
  * - `liveAttempt` (FIN-01): a payment toward this balance that is still on its way or whose
  *   outcome is unknown, wherever it was started (another device, the front desk, an earlier visit),
  *   is shown with "Do not pay again" and paying is blocked until the API no longer reports it;
@@ -68,6 +70,7 @@ import {
 import { Body, ButtonRow, Caption, Field, Section } from '../../features/money/ui';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -77,6 +80,10 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { InstallmentsSection, OrderSection } from './OrderSections';
 
 type PayBody = Schema<'PayObligationRequest'>;
+
+const UNCONFIRMED_LABEL = 'Payment outcome being confirmed. Do not pay again.';
+const NO_ANSWER_BODY =
+  'We did not get an answer, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice.';
 
 function Totals({ obligation }: { obligation: Obligation }) {
   const now = useNow();
@@ -134,23 +141,42 @@ function PaymentResult({
   checking: boolean;
 }) {
   const status = paymentStatus(attempt.status);
+  const unresolved = paymentIsUnresolved(attempt.status);
+  const explanation =
+    attempt.status === 'unknown'
+      ? 'We have not had a final answer from the payment provider. Do not pay again: the facility confirms the outcome'
+      : attempt.status === 'processing' || attempt.status === 'created'
+        ? 'The provider is still working on this payment. Do not pay again.'
+        : attempt.status === 'failed' && attempt.failureReason
+          ? `${attempt.failureReason}. Nothing was charged; you can try another payment.`
+          : null;
+  const overpaid = outcome.overpaymentCreditId
+    ? 'The amount beyond the balance is held as a credit awaiting approval.'
+    : null;
+  // SPK-UX-009, NA-A01: the outcome of Pay, and every re-read that changes it, is announced with
+  // what to do next. The waiting time and the receipt's time are left out of the words.
+  const announcement = sentences(
+    status.label,
+    explanation,
+    outcome.receipt && attempt.status === 'succeeded'
+      ? `Receipt: ${formatMoney(outcome.receipt.amountMinor, outcome.receipt.currency)} received`
+      : null,
+    overpaid,
+    unresolved ? 'Check again' : null,
+  );
   return (
     <Section title="Your payment" testID="payment-result">
-      <StatusBadge {...status} testID="payment-status" />
-      <Field label="Amount" value={formatMoney(attempt.amountMinor, attempt.currency)} />
-      {attempt.status === 'unknown' ? (
-        <Body>
-          We have not had a final answer from the payment provider. Do not pay again: the facility
-          confirms the outcome
-          {attempt.unknownSince ? ` (waiting since ${formatInstant(attempt.unknownSince)})` : ''}.
-        </Body>
-      ) : null}
-      {attempt.status === 'processing' || attempt.status === 'created' ? (
-        <Body>The provider is still working on this payment. Do not pay again.</Body>
-      ) : null}
-      {attempt.status === 'failed' && attempt.failureReason ? (
-        <Body>{attempt.failureReason}. Nothing was charged; you can try another payment.</Body>
-      ) : null}
+      <LiveRegion announcement={announcement} testID="payment-result-live">
+        <StatusBadge {...status} testID="payment-status" />
+        <Field label="Amount" value={formatMoney(attempt.amountMinor, attempt.currency)} />
+        {explanation ? (
+          <Body>
+            {attempt.status === 'unknown'
+              ? `${explanation}${attempt.unknownSince ? ` (waiting since ${formatInstant(attempt.unknownSince)})` : ''}.`
+              : explanation}
+          </Body>
+        ) : null}
+      </LiveRegion>
       {attempt.status === 'action_required' ? (
         <StateView
           variant="pending-decision"
@@ -159,7 +185,7 @@ function PaymentResult({
           owner="Technical lead/account owners"
         />
       ) : null}
-      {paymentIsUnresolved(attempt.status) ? (
+      {unresolved ? (
         <ButtonRow>
           <Button label="Check again" variant="secondary" onPress={onCheck} busy={checking} />
         </ButtonRow>
@@ -167,9 +193,7 @@ function PaymentResult({
       {outcome.receipt && attempt.status === 'succeeded' ? (
         <ReceiptView receipt={outcome.receipt} />
       ) : null}
-      {outcome.overpaymentCreditId ? (
-        <Caption>The amount beyond the balance is held as a credit awaiting approval.</Caption>
-      ) : null}
+      {overpaid ? <Caption>{overpaid}</Caption> : null}
     </Section>
   );
 }
@@ -250,12 +274,13 @@ function PaySection({
         </ButtonRow>
       ) : null}
       {unknown && sent ? (
-        <View testID="payment-no-answer">
-          <StatusBadge tone="warning" label="Payment outcome being confirmed. Do not pay again." />
-          <Body>
-            We did not get an answer, so the payment may have gone through. Checking again is safe:
-            it asks about the same payment and cannot charge twice.
-          </Body>
+        <LiveRegion
+          testID="payment-no-answer"
+          announcement={sentences(UNCONFIRMED_LABEL, NO_ANSWER_BODY, 'Check again')}
+          occurrence={failure}
+        >
+          <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
+          <Body>{NO_ANSWER_BODY}</Body>
           <Caption>Error code: {failure?.code}</Caption>
           <ButtonRow>
             <Button
@@ -265,16 +290,20 @@ function PaySection({
               disabled={offline}
             />
           </ButtonRow>
-        </View>
+        </LiveRegion>
       ) : inProgressElsewhere ? (
-        <View testID="payment-in-progress">
-          <StatusBadge tone="warning" label="Payment outcome being confirmed. Do not pay again." />
+        <LiveRegion
+          testID="payment-in-progress"
+          announcement={sentences(UNCONFIRMED_LABEL, failure?.message)}
+          occurrence={failure}
+        >
+          <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
           <Body>{failure?.message}</Body>
           <Caption>
             Error code: {failure?.code}
             {failure?.correlationId ? `. Reference: ${failure.correlationId}` : ''}
           </Caption>
-        </View>
+        </LiveRegion>
       ) : failure ? (
         <CommandFailure
           error={failure}
@@ -312,8 +341,17 @@ function LiveAttemptSection({
   const openable = mine.data?.items.some((attempt) => attempt.id === live.id) === true;
   return (
     <Section title="A payment is on its way" testID="live-attempt">
-      <StatusBadge {...liveAttemptStatus(live)} testID="live-attempt-status" />
-      <Body>{liveAttemptText(live)}</Body>
+      {/* Appears when a read finds it (after Pay got no answer, or on "Check again"). */}
+      <LiveRegion
+        announcement={sentences(
+          liveAttemptStatus(live).label,
+          liveAttemptText(live),
+          'Check again',
+        )}
+      >
+        <StatusBadge {...liveAttemptStatus(live)} testID="live-attempt-status" />
+        <Body>{liveAttemptText(live)}</Body>
+      </LiveRegion>
       {mine.data !== undefined && !openable ? (
         <Caption>
           It may have been started by someone else who pays for this balance. It is shown here so

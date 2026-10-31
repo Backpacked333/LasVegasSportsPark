@@ -15,11 +15,14 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
+import { LiveRegion } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { spacing } from '../../ui/theme';
 import { Body, ButtonRow, CommandFailure, OfflineNotice, TextField } from './ui';
 
 type Dispute = Schema<'Dispute'>;
+
+const WITHDRAWN = 'You withdrew this dispute. The league no longer reviews it.';
 
 /** The states a dispute can still be withdrawn from (Dispute machine: submitted, under_review). */
 export function isWithdrawable(dispute: Pick<Dispute, 'status'>): boolean {
@@ -59,9 +62,9 @@ export function DisputeWithdraw({
 
   if (withdraw.data) {
     return (
-      <View accessibilityLiveRegion="polite" testID={`dispute-${dispute.id}-withdrawn`}>
-        <Body>You withdrew this dispute. The league no longer reviews it.</Body>
-      </View>
+      <LiveRegion announcement={WITHDRAWN} testID={`dispute-${dispute.id}-withdrawn`}>
+        <Body>{WITHDRAWN}</Body>
+      </LiveRegion>
     );
   }
   if (!isWithdrawable(dispute)) return null;

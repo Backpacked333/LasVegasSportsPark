@@ -52,6 +52,7 @@ import {
   Caption,
   ChoiceRow,
   Field,
+  FieldError,
   Section,
   TextField,
 } from '../../features/money/ui';
@@ -435,11 +436,7 @@ function BookingForm({
             </View>
           </>
         )}
-        {errors.time ? (
-          <Text style={styles.error} accessibilityRole="alert">
-            {`▲ ${errors.time}`}
-          </Text>
-        ) : null}
+        <FieldError error={errors.time} testID="booking-time-error" />
       </Section>
 
       {time && resourceCount !== null ? (
@@ -461,11 +458,7 @@ function BookingForm({
               />
             ))}
           </View>
-          {errors.resources ? (
-            <Text style={styles.error} accessibilityRole="alert">
-              {`▲ ${errors.resources}`}
-            </Text>
-          ) : null}
+          <FieldError error={errors.resources} testID="booking-resources-error" />
         </Section>
       ) : null}
 
@@ -679,5 +672,4 @@ const styles = StyleSheet.create({
   title: { ...type.title, color: colors.text },
   dayRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   day: { ...type.body, color: colors.text, fontWeight: '600' },
-  error: { ...type.caption, color: colors.danger },
 });
