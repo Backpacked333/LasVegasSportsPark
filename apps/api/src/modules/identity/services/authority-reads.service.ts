@@ -12,8 +12,17 @@ import {
   type Principal,
 } from '@sportspark/contracts';
 import type { AccessGrantsTable, Db, RelationshipsTable } from '@sportspark/db';
-import { sql, type Selectable, type SqlBool } from 'kysely';
-import { AuthorizationService, CLOCK, DATABASE, type Clock, type Trx } from '../../../kernel';
+import { type Selectable } from 'kysely';
+import {
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  type Clock,
+  type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
+} from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import {
   displayNameOf,
@@ -27,7 +36,7 @@ import {
 import { InvitationsService } from './invitations.service';
 import { RelationshipAuthority } from './relationship-authority.service';
 
-const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+const ListCursor = z.object({ c: KeysetInstant, id: z.uuid() });
 
 /** At most this many grants and relationships are returned on one person's authority read. */
 const AUTHORITY_ROWS = 500;
@@ -104,7 +113,7 @@ export class AuthorityReadsService {
     const cursor = decodeCursor(query.cursor, ListCursor);
     if (cursor) {
       rows = rows.where(
-        sql<SqlBool>`(access_grants.created_at, access_grants.id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+        afterKeyset('access_grants.created_at', 'access_grants.id', cursor.c, cursor.id),
       );
     }
     const found = (await rows
@@ -118,7 +127,16 @@ export class AuthorityReadsService {
       items: await this.grantViews(this.db, organizationId, page),
       nextCursor:
         found.length > query.limit && last
-          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              c: await exactInstantOf(
+                this.db,
+                'access_grants',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }

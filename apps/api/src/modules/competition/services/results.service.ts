@@ -36,6 +36,9 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
@@ -52,7 +55,6 @@ import {
 } from '../competition.queries';
 import {
   isStaffLike,
-  iso,
   organizationOf,
   ruleSetContentOf,
   type SeasonRow,
@@ -77,7 +79,7 @@ interface FixtureContext {
 
 const reviewDedupeKey = (revisionId: string): string => `result_correction:${revisionId}`;
 
-const ResultCursor = z.object({ at: z.string(), id: z.uuid() });
+const ResultCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 
 /** Classifications recorded before kickoff: a game that will not (or did not yet) take place. */
 const PRE_KICKOFF_CLASSIFICATIONS: readonly ResultClassification[] = [
@@ -982,13 +984,7 @@ export class ResultsService {
       .where('f.season_id', '=', seasonId);
     if (query.status) q = q.where('r.status', '=', query.status);
     if (cursor) {
-      const at = new Date(cursor.at);
-      q = q.where((eb) =>
-        eb.or([
-          eb('r.created_at', '<', at),
-          eb.and([eb('r.created_at', '=', at), eb('r.id', '<', cursor.id)]),
-        ]),
-      );
+      q = q.where(afterKeyset('r.created_at', 'r.id', cursor.at, cursor.id));
     }
     const rows = await q
       .orderBy('r.created_at', 'desc')
@@ -1001,7 +997,16 @@ export class ResultsService {
       items: page.map(toResultRevision),
       nextCursor:
         rows.length > query.limit && last
-          ? encodeCursor({ at: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              at: await exactInstantOf(
+                db,
+                'result_revisions',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }

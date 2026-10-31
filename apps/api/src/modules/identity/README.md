@@ -282,6 +282,15 @@ PostgreSQL without the row lock) and
 `apps/api/src/__tests__/journeys/spk-at-025.spec.ts`. Verification evidence for recovery, rate limits
 and a second approver for staff recovery are **Pending decision** (DEC-018, DEC-091).
 
+## Keyset paging at the database's precision (R2-API-CONTRACT-01b, §4.5) — verified
+
+The keyset lists (`GET /v1/me/access-grants`, `/v1/invitations`, `/v1/staff-memberships`,
+`/v1/duplicate-candidates`, `/v1/access-reviews`) carry the boundary row's `created_at` at the
+database's precision (`exactInstantOf` in `kernel/database/keyset.ts`) and compare it as text
+(`afterKeyset`), so rows one transaction wrote (one microsecond instant) are paged once each
+instead of the rest of a millisecond being skipped. A cursor whose instant PostgreSQL cannot
+represent reads as the first page, never a server fault (`__tests__/keyset-paging.spec.ts`).
+
 ## Known gaps
 
 - Self claims are bound only by handing the token over in person: an account with no person yet

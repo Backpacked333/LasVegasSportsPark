@@ -16,7 +16,7 @@ import {
   type Principal,
 } from '@sportspark/contracts';
 import { json, type AccessGrantsTable, type Db, type RelationshipsTable } from '@sportspark/db';
-import { sql, type Selectable, type SqlBool } from 'kysely';
+import { type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -30,6 +30,9 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
@@ -42,14 +45,13 @@ import {
 } from '../identity.machines';
 import {
   displayNameOf,
-  iso,
   personColumns,
   toDuplicateCandidate,
   toPersonMerge,
   type PersonRow,
 } from '../identity.shared';
 
-const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+const ListCursor = z.object({ c: KeysetInstant, id: z.uuid() });
 
 export interface MergeSummary {
   contactPointsMoved: number;
@@ -1046,7 +1048,12 @@ export class DuplicatesService {
     const cursor = decodeCursor(query.cursor, ListCursor);
     if (cursor) {
       rows = rows.where(
-        sql<SqlBool>`(created_at, id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+        afterKeyset(
+          'duplicate_candidates.created_at',
+          'duplicate_candidates.id',
+          cursor.c,
+          cursor.id,
+        ),
       );
     }
     const found = await rows
@@ -1080,7 +1087,16 @@ export class DuplicatesService {
       })),
       nextCursor:
         found.length > query.limit && last
-          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              c: await exactInstantOf(
+                this.db,
+                'duplicate_candidates',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }

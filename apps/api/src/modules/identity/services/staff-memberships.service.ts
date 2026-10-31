@@ -31,6 +31,9 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
@@ -40,12 +43,11 @@ import type { StaffDirectoryPort } from '../identity.ports';
 import {
   displayNameOf,
   displayNamesOf,
-  iso,
   lockPersonsForShare,
   toStaffMembership,
 } from '../identity.shared';
 
-const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+const ListCursor = z.object({ c: KeysetInstant, id: z.uuid() });
 const DirectoryCursor = z.object({ f: z.string(), g: z.string(), id: z.uuid() });
 
 /** Roles listed in the staff directory only for staffing readers (SCR-S-32/33, ID-05). */
@@ -354,7 +356,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
     const cursor = decodeCursor(query.cursor, ListCursor);
     if (cursor) {
       rows = rows.where(
-        sql<SqlBool>`(created_at, id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+        afterKeyset('staff_memberships.created_at', 'staff_memberships.id', cursor.c, cursor.id),
       );
     }
     const found = await rows
@@ -376,7 +378,16 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       })),
       nextCursor:
         found.length > query.limit && last
-          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              c: await exactInstantOf(
+                this.db,
+                'staff_memberships',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }

@@ -549,6 +549,12 @@ built, waiting on a decision or another module.
 
 ## Stage-6 review fixes — verified 2026-10-31
 
+- Keyset lists (result revisions, team invitations, disciplinary decisions, appeals, disputes,
+  solver runs) carry the boundary row's `created_at` at the database's precision and compare it as
+  text (kernel `exactInstantOf` / `afterKeyset`, R2-API-CONTRACT-01b, §4.5), so rows written at one
+  microsecond instant are paged once each; a cursor PostgreSQL cannot represent answers 400
+  `VALIDATION_FAILED`, not 500 (`__tests__/league-operations.spec.ts` "R2-API-CONTRACT-01b").
+
 - A fixture's scheduling event title (`"{home} v {away}"`, from the fixture command and from the
   generated draft) is bounded to scheduling's 200-character title limit: when two team names
   (each up to 200 characters, chosen by captains) do not fit, the longer one gives way and a cut

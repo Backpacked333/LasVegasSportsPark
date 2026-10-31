@@ -61,6 +61,9 @@ import {
   type PeriodicJobContext,
   type PeriodicJobResult,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { PeopleService } from '../../identity';
 import { MERGED_ROSTER_DUPLICATE } from '../competition-matches.policy';
@@ -647,13 +650,7 @@ export class RosterService implements RosterPort {
         ]),
       );
     if (cursor) {
-      const at = new Date(cursor.at);
-      q = q.where((eb) =>
-        eb.or([
-          eb('created_at', '<', at),
-          eb.and([eb('created_at', '=', at), eb('id', '<', cursor.id)]),
-        ]),
-      );
+      q = q.where(afterKeyset('created_at', 'id', cursor.at, cursor.id));
     }
     const rows = await q
       .orderBy('created_at', 'desc')
@@ -666,7 +663,16 @@ export class RosterService implements RosterPort {
       items: await this.invitationViews(db, organizationId, page),
       nextCursor:
         rows.length > query.limit && last
-          ? encodeCursor({ at: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              at: await exactInstantOf(
+                db,
+                'team_invitations',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }
@@ -1868,7 +1874,7 @@ export class RosterService implements RosterPort {
   }
 }
 
-const InvitationCursor = z.object({ at: z.string(), id: z.uuid() });
+const InvitationCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 
 /**
  * CMP-13 (SPK-COMP-005, DEC-002): a rule set with `roster.jerseyNumbers` refuses numbers outside

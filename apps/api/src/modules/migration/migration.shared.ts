@@ -1,3 +1,4 @@
+import { KeysetInstant } from '../../kernel';
 import {
   decodeCursor,
   encodeCursor,
@@ -102,7 +103,7 @@ function actorOf(value: unknown): ActorSnapshot {
 
 const KeysetCursorSchema = z.object({
   /** created_at at full (microsecond) precision, UTC: `2027-01-16T17:00:00.123456Z`. */
-  at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/),
+  at: KeysetInstant.regex(/\.\d{6}Z$/),
   id: z.uuid(),
 });
 export type KeysetCursor = z.infer<typeof KeysetCursorSchema>;

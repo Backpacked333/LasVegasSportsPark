@@ -24,6 +24,8 @@ import {
   assertExpectedRevision,
   snapshotActor,
   type Clock,
+  afterKeyset,
+  KeysetInstant,
 } from '../../../kernel';
 import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
@@ -34,7 +36,7 @@ import { loadRuleSetRow, loadSeasonRow, type Reader } from '../competition.queri
 import { hoursFromNow, isStaffLike, organizationOf, ruleSetContentOf } from '../competition.shared';
 import { DisciplineService, nextCursorOf } from './discipline.service';
 
-const DisputeCursor = z.object({ at: z.string(), id: z.uuid() });
+const DisputeCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 
 type DisputeRow = Selectable<DisputesTable>;
 
@@ -371,13 +373,7 @@ export class DisputesService {
       );
     }
     if (cursor) {
-      const at = new Date(cursor.at);
-      q = q.where((eb) =>
-        eb.or([
-          eb('d.created_at', '<', at),
-          eb.and([eb('d.created_at', '=', at), eb('d.id', '<', cursor.id)]),
-        ]),
-      );
+      q = q.where(afterKeyset('d.created_at', 'd.id', cursor.at, cursor.id));
     }
     const rows = await q
       .orderBy('d.created_at', 'desc')
@@ -389,7 +385,10 @@ export class DisputesService {
     for (const row of page) {
       items.push(toDispute(row, await this.appealStatus(this.db, organizationId, row.id)));
     }
-    return { items, nextCursor: nextCursorOf(rows, page, query.limit) };
+    return {
+      items,
+      nextCursor: await nextCursorOf(this.db, 'disputes', rows, page, query.limit),
+    };
   }
 
   async get(principal: Principal, disputeId: string): Promise<Dispute> {

@@ -453,10 +453,9 @@ module's route classification counts once MIG-00 lands.
   the survivor's inbox (team membership is checked for the survivor's own id); unprotected ones are.
 - The ICS feed is a projection of `scheduling.event_changed`; it carries the facility zone in the
   description and UTC instants, not VTIMEZONE blocks.
-- Request text outside this module's contract is not checked here. The shared command metadata
-  (`reason`, `policyReferences` in `packages/contracts/src/commands.ts`) still accepts the C0
-  controls other than NUL in this module's requests, and every other module's request text still
-  reaches PostgreSQL with a NUL and answers 500. Rejecting control characters for every module in
-  the kernel's `ZodValidationPipe` or the shared schemas is R2-TENANCY-INPUT-04b (**Proposed**, a
-  kernel and contracts change, not made here). Whatever is stored, the ICS rendering above never
-  emits a control character.
+- Request text outside this module's contract is not checked here for control characters other
+  than NUL. The kernel's `ZodValidationPipe` refuses U+0000 in every module's body, query and
+  params with 400 `VALIDATION_FAILED` naming the field (R2-TENANCY-INPUT-04b, **Verified** in
+  `kernel/__tests__/request-nul.spec.ts`); the shared command metadata (`reason`,
+  `policyReferences`) still accepts the other C0 controls. Whatever is stored, the ICS rendering
+  above never emits a control character.

@@ -15,7 +15,6 @@ import {
   type Principal,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, type AccessReviewStatus, type Db } from '@sportspark/db';
-import { sql, type SqlBool } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -28,6 +27,9 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  afterKeyset,
+  exactInstantOf,
+  KeysetInstant,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
@@ -38,7 +40,7 @@ import { displayNamesOf, iso, isoOrNull, isSuspendedAt, toAccessReview } from '.
 /** ID-08: the system actor that records the end of a restriction window. */
 export const RESTRICTION_WINDOW_ACTOR = 'identity.restriction_window';
 
-const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
+const ListCursor = z.object({ c: KeysetInstant, id: z.uuid() });
 
 interface LiveSuspension {
   id: string;
@@ -470,7 +472,7 @@ export class AccessReviewsService {
     const cursor = decodeCursor(query.cursor, ListCursor);
     if (cursor) {
       rows = rows.where(
-        sql<SqlBool>`(created_at, id) < (${new Date(cursor.c)}::timestamptz, ${cursor.id}::uuid)`,
+        afterKeyset('access_reviews.created_at', 'access_reviews.id', cursor.c, cursor.id),
       );
     }
     const found = await rows
@@ -525,7 +527,16 @@ export class AccessReviewsService {
       })),
       nextCursor:
         found.length > query.limit && last
-          ? encodeCursor({ c: iso(last.created_at), id: last.id })
+          ? encodeCursor({
+              c: await exactInstantOf(
+                this.db,
+                'access_reviews',
+                'created_at',
+                last.id,
+                last.created_at,
+              ),
+              id: last.id,
+            })
           : null,
     };
   }

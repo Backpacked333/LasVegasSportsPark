@@ -1,3 +1,4 @@
+import { KeysetInstant, keysetInstant } from '../../kernel';
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import {
   decodeCursor,
@@ -474,16 +475,18 @@ export function outcomeUnknownDetails(
 // reads as the first page.
 // ---------------------------------------------------------------------------------------------
 
-const KeysetCursor = z.object({ at: z.string().min(1).max(64), id: z.uuid() });
+// R2-API-CONTRACT-01b: the instant is the shared kernel shape, so a crafted cursor (year 0000, an
+// impossible date, free text) reads as the first page instead of failing the cast with a 500.
+const KeysetCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 export type Keyset = z.infer<typeof KeysetCursor>;
 
 export function decodeKeyset(cursor: string | undefined): Keyset | null {
   return decodeCursor(cursor, KeysetCursor);
 }
 
-/** `<table>.<column>::text`, selected as `cursor_at` beside the row. */
+/** `<table>.<column>` as an ISO-8601 UTC instant with microseconds, selected as `cursor_at`. */
 export function keysetAt(table: string, column = 'created_at'): RawBuilder<string> {
-  return sql<string>`${sql.ref(`${table}.${column}`)}::text`;
+  return keysetInstant(`${table}.${column}`);
 }
 
 /** Rows strictly after the cursor in (`column` desc, id desc) order. */

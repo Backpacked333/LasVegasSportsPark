@@ -34,6 +34,8 @@ import {
   executorFor,
   snapshotActor,
   type Clock,
+  afterKeyset,
+  KeysetInstant,
 } from '../../../kernel';
 import { ResourcesService, ScheduleDraftsService, resolveLocal } from '../../scheduling';
 import { MatchActions } from '../competition-matches.actions';
@@ -58,7 +60,7 @@ import {
 import { addDays, generateFixtures, type ProposedGame } from '../matches/fixture-generator';
 import { nextCursorOf } from './discipline.service';
 
-const RunCursor = z.object({ at: z.string(), id: z.uuid() });
+const RunCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 
 /** Draft states in which a generated proposal still waits in scheduling (CMP-12). */
 const OPEN_DRAFT_STATUSES = new Set(['editing', 'validated', 'publishing', 'failed']);
@@ -171,13 +173,7 @@ export class FixtureGenerationService {
       .where('organization_id', '=', organizationId)
       .where('specification_id', '=', specificationId);
     if (cursor) {
-      const at = new Date(cursor.at);
-      q = q.where((eb) =>
-        eb.or([
-          eb('created_at', '<', at),
-          eb.and([eb('created_at', '=', at), eb('id', '<', cursor.id)]),
-        ]),
-      );
+      q = q.where(afterKeyset('created_at', 'id', cursor.at, cursor.id));
     }
     const rows = await q
       .orderBy('created_at', 'desc')
@@ -187,7 +183,7 @@ export class FixtureGenerationService {
     const page = rows.slice(0, query.limit);
     return {
       items: await this.runViews(db, organizationId, page),
-      nextCursor: nextCursorOf(rows, page, query.limit),
+      nextCursor: await nextCursorOf(db, 'solver_runs', rows, page, query.limit),
     };
   }
 
