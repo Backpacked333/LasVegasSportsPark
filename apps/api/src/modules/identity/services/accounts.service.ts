@@ -19,6 +19,7 @@ import {
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
+  ensureUpdated,
   type AppConfig,
   type Clock,
   type IdentityProviderPort,
@@ -150,11 +151,15 @@ export class AccountsService {
       organizationId,
     });
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9: locked before the authority, revision and status checks, so a concurrent recovery or
+      // a person merge (which disables or moves the account) waits and then fails those checks
+      // against the committed row instead of being overwritten or audited as if it had not run.
       const current = await trx
         .selectFrom('accounts')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
+        .forUpdate()
         .executeTakeFirst();
       if (!current) throw errors.notFound('account', id);
       // §4.14, SPK-AT-025: recovering the login of a person who holds a staff membership needs the
@@ -174,21 +179,27 @@ export class AccountsService {
       if (current.status !== 'active') {
         throw errors.invalidTransition('Account', current.status, 'relink');
       }
+      let relinked: { numUpdatedRows: bigint };
       try {
-        await trx
+        relinked = await trx
           .updateTable('accounts')
           .set({
             issuer: input.issuer,
             subject: input.subject,
             revision: current.revision + 1,
           })
+          .where('organization_id', '=', organizationId)
           .where('id', '=', id)
           .where('revision', '=', current.revision)
-          .execute();
+          .executeTakeFirst();
       } catch (error) {
         if (isUniqueViolation(error)) throw this.conflict(error);
         throw error;
       }
+      // Never audit or announce a relink that did not happen (§4.9, §4.14).
+      ensureUpdated(relinked.numUpdatedRows, () =>
+        errors.staleRevision(current.revision, current.revision + 1),
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,

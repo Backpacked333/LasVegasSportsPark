@@ -461,7 +461,7 @@ describe('duplicate review and merge (SPK-IAM-007)', () => {
     expect(merged.status).toBe(201);
   });
 
-  it('merge moves the account when the survivor has none, and revokes pending invitations and claims', async () => {
+  it('SPK-IAM-007 / §4.9: merge moves the account when the survivor has none, and revokes pending invitations and claims with a revision bump, their own audit and revoke events', async () => {
     const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
     const header = await authHeaderForPerson(t, admin.personId);
     const survivor = await createPersonFixture(t, { kind: 'adult' });
@@ -509,18 +509,105 @@ describe('duplicate review and merge (SPK-IAM-007)', () => {
       (await t.http.get('/v1/me').set(await authHeaderForAccount(t, account.id))).body.principal
         .personId,
     ).toBe(survivor);
+    // §4.6, §4.9, §4.12: the same pending → revoked transition as the revoke commands — revision
+    // bumped, the record's own audit and revoke event, tied to the merge's operation.
+    expect(invitation.body.revision).toBe(1);
+    expect(claim.body.revision).toBe(1);
     const inv = await t.db
       .selectFrom('invitations')
-      .select('status')
+      .select(['status', 'revision', 'revocation_reason'])
       .where('id', '=', invitation.body.id)
       .executeTakeFirstOrThrow();
-    expect(inv.status).toBe('revoked');
+    expect(inv).toEqual({
+      status: 'revoked',
+      revision: 2,
+      revocation_reason: 'merge: pending invitation not transferred',
+    });
     const cl = await t.db
       .selectFrom('claims')
-      .select('status')
+      .select(['status', 'revision', 'revocation_reason'])
       .where('id', '=', claim.body.id)
       .executeTakeFirstOrThrow();
-    expect(cl.status).toBe('revoked');
+    expect(cl).toEqual({
+      status: 'revoked',
+      revision: 2,
+      revocation_reason: 'merge: pending claim not transferred',
+    });
+    const operationId = merged.body.operationId as string;
+    const revokedEvents = await t.db
+      .selectFrom('outbox_events')
+      .select(['aggregate_id', 'event_type', 'payload', 'operation_id'])
+      .where('aggregate_id', 'in', [invitation.body.id, claim.body.id])
+      .where('event_type', 'in', ['identity.invitation_revoked', 'identity.claim_revoked'])
+      .orderBy('event_type')
+      .execute();
+    expect(revokedEvents).toEqual([
+      {
+        aggregate_id: claim.body.id,
+        event_type: 'identity.claim_revoked',
+        payload: {
+          claimId: claim.body.id,
+          subjectPersonId: duplicate,
+          reason: 'merge: pending claim not transferred',
+        },
+        operation_id: operationId,
+      },
+      {
+        aggregate_id: invitation.body.id,
+        event_type: 'identity.invitation_revoked',
+        payload: {
+          invitationId: invitation.body.id,
+          reason: 'merge: pending invitation not transferred',
+        },
+        operation_id: operationId,
+      },
+    ]);
+    const revokedAudits = await t.db
+      .selectFrom('audit_records')
+      .select([
+        'target_id',
+        'action',
+        'before_revision',
+        'after_revision',
+        'operation_id',
+        'details',
+      ])
+      .where('target_id', 'in', [invitation.body.id, claim.body.id])
+      .where('action', 'in', ['identity.revoke_invitation', 'identity.revoke_claim'])
+      .orderBy('action')
+      .execute();
+    const mergeDetails = {
+      via: 'merge',
+      mergeId: merged.body.id,
+      survivorPersonId: survivor,
+      mergedPersonId: duplicate,
+    };
+    expect(revokedAudits).toEqual([
+      {
+        target_id: claim.body.id,
+        action: 'identity.revoke_claim',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: { ...mergeDetails, subjectPersonId: duplicate, kind: 'guardian' },
+      },
+      {
+        target_id: invitation.body.id,
+        action: 'identity.revoke_invitation',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: mergeDetails,
+      },
+    ]);
+    // a client still holding revision 1 is told the record changed
+    const staleRevoke = await t.http
+      .post(`/v1/invitations/${invitation.body.id}/revoke`)
+      .set(staff)
+      .set('Idempotency-Key', key())
+      .send({ reason: 'stale screen', expectedRevision: 1 });
+    expect(staleRevoke.status).toBe(409);
+    expect(staleRevoke.body.code).toBe('STALE_REVISION');
     const survivorIsNotCandidate = await t.http
       .post(`/v1/duplicate-candidates/${flagged.body.id}/merge`)
       .set(header)

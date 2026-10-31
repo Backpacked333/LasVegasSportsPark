@@ -34,7 +34,7 @@ import {
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
-import { DuplicateCandidateMachine } from '../identity.machines';
+import { ClaimMachine, DuplicateCandidateMachine, InvitationMachine } from '../identity.machines';
 import {
   displayNameOf,
   iso,
@@ -344,12 +344,16 @@ export class DuplicatesService {
         .where('person_id', '=', survivorId)
         .where('status', '=', 'active')
         .executeTakeFirst();
+      // §4.9: locked, so a concurrent recovery (relink) of one of them commits first and the
+      // revision written here follows it, or waits for this merge and then sees the result.
       const mergedAccounts = await trx
         .selectFrom('accounts')
         .select(['id', 'revision'])
         .where('organization_id', '=', organizationId)
         .where('person_id', '=', mergedId)
         .where('status', '=', 'active')
+        .orderBy('id')
+        .forUpdate()
         .execute();
       for (const account of mergedAccounts) {
         if (survivorActive) {
@@ -594,14 +598,14 @@ export class DuplicatesService {
       summary.staffMembershipsMoved = Number(staff.numUpdatedRows);
 
       // 6. Pending invitations and claims addressed to the merged person are unverified: revoke.
-      const invitations = await trx
-        .updateTable('invitations')
-        .set({
-          status: 'revoked',
-          revoked_at: now,
-          revoked_by: actor,
-          revocation_reason: 'merge: pending invitation not transferred',
-        })
+      // Each takes the same pending → revoked transition as the revoke commands (machine, revision
+      // bump, the record's own audit and revoke event; §4.6, §4.9, §4.12), under its row lock so a
+      // concurrent accept or revoke either commits first (and the row is no longer pending) or
+      // waits for this merge.
+      const mergeAudit = { mergeId, survivorPersonId: survivorId, mergedPersonId: mergedId };
+      const pendingInvitations = await trx
+        .selectFrom('invitations')
+        .select(['id', 'status', 'revision'])
         .where('organization_id', '=', organizationId)
         .where('status', '=', 'pending')
         .where((eb) =>
@@ -619,21 +623,100 @@ export class DuplicatesService {
             ),
           ]),
         )
-        .executeTakeFirst();
-      summary.pendingInvitationsRevoked = Number(invitations.numUpdatedRows);
-      const claims = await trx
-        .updateTable('claims')
-        .set({
-          status: 'revoked',
-          revoked_at: now,
-          revoked_by: actor,
-          revocation_reason: 'merge: pending claim not transferred',
-        })
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+      for (const invitation of pendingInvitations) {
+        const reason = 'merge: pending invitation not transferred';
+        const revoked = await trx
+          .updateTable('invitations')
+          .set({
+            status: InvitationMachine.next(invitation.status, 'revoke'),
+            revoked_at: now,
+            revoked_by: actor,
+            revocation_reason: reason,
+            revision: invitation.revision + 1,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', invitation.id)
+          .where('revision', '=', invitation.revision)
+          .executeTakeFirst();
+        ensureUpdated(revoked.numUpdatedRows, () =>
+          errors.staleRevision(invitation.revision, invitation.revision + 1),
+        );
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: IdentityActions.revokeInvitation.id,
+          targetType: 'invitation',
+          targetId: invitation.id,
+          beforeRevision: invitation.revision,
+          afterRevision: invitation.revision + 1,
+          reason,
+          correlationId,
+          operationId,
+          details: { via: 'merge', ...mergeAudit },
+        });
+        await this.outbox.enqueue(trx, IdentityEvents.invitationRevoked, {
+          organizationId,
+          aggregateType: 'invitation',
+          aggregateId: invitation.id,
+          payload: { invitationId: invitation.id, reason },
+          correlationId,
+          operationId,
+        });
+        summary.pendingInvitationsRevoked += 1;
+      }
+      const pendingClaims = await trx
+        .selectFrom('claims')
+        .select(['id', 'status', 'revision', 'kind'])
         .where('organization_id', '=', organizationId)
         .where('status', '=', 'pending')
         .where('subject_person_id', '=', mergedId)
-        .executeTakeFirst();
-      summary.pendingClaimsRevoked = Number(claims.numUpdatedRows);
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+      for (const claim of pendingClaims) {
+        const reason = 'merge: pending claim not transferred';
+        const revoked = await trx
+          .updateTable('claims')
+          .set({
+            status: ClaimMachine.next(claim.status, 'revoke'),
+            revoked_at: now,
+            revoked_by: actor,
+            revocation_reason: reason,
+            revision: claim.revision + 1,
+          })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', claim.id)
+          .where('revision', '=', claim.revision)
+          .executeTakeFirst();
+        ensureUpdated(revoked.numUpdatedRows, () =>
+          errors.staleRevision(claim.revision, claim.revision + 1),
+        );
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: IdentityActions.revokeClaim.id,
+          targetType: 'claim',
+          targetId: claim.id,
+          beforeRevision: claim.revision,
+          afterRevision: claim.revision + 1,
+          reason,
+          correlationId,
+          operationId,
+          details: { via: 'merge', subjectPersonId: mergedId, kind: claim.kind, ...mergeAudit },
+        });
+        await this.outbox.enqueue(trx, IdentityEvents.claimRevoked, {
+          organizationId,
+          aggregateType: 'claim',
+          aggregateId: claim.id,
+          payload: { claimId: claim.id, subjectPersonId: mergedId, reason },
+          correlationId,
+          operationId,
+        });
+        summary.pendingClaimsRevoked += 1;
+      }
 
       // 7. Open access reviews about the merged person continue about the survivor.
       const reviews = await trx

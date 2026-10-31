@@ -1,5 +1,6 @@
 import { newId } from '@sportspark/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AuditWriter } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import { RelationshipAuthority } from '../services/relationship-authority.service';
@@ -12,6 +13,7 @@ import {
   createPersonFixture,
   createStaffMemberFixture,
 } from '../testing/identity-fixtures';
+import { backendPid, gate, tracked, untilSettledOrBlockedBy } from './support';
 
 const key = () => `k-${newId()}`;
 
@@ -308,5 +310,147 @@ describe('identity commands under concurrency (§4.9, SPK-IAM-002, SPK-IAM-004)'
       .where('id', '=', opened.body.id)
       .executeTakeFirstOrThrow();
     expect(review.revision).toBe(3);
+  });
+
+  /**
+   * Pauses the first relink of `accountId` at its audit record, inside its transaction and after
+   * its update (so it holds the account row), and reports that backend under TEST_DATABASE_URL.
+   */
+  function pauseFirstRelink(accountId: string) {
+    const audit = t.app.get(AuditWriter);
+    const record = audit.record.bind(audit);
+    const paused = gate();
+    const state = { holder: undefined as number | undefined, gated: false };
+    const spy = vi.spyOn(audit, 'record').mockImplementation(async (trx, input) => {
+      if (!state.gated && input.targetId === accountId) {
+        state.gated = true;
+        if (t.database.concurrent) state.holder = await backendPid(trx);
+        await paused.pass();
+      }
+      return record(trx, input);
+    });
+    return { paused, holder: () => state.holder, restore: () => spy.mockRestore() };
+  }
+
+  const relinkRows = (accountId: string) =>
+    t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('target_id', '=', accountId)
+      .where('action', '=', 'identity.manage_account')
+      .execute()
+      .then((rows) =>
+        rows.filter((r) => (r.details as { operation?: string }).operation === 'relink'),
+      );
+
+  it('§4.9 / SPK-AT-025: two recoveries of one login at once relink it once; the other answers STALE_REVISION and is neither audited nor announced (PGlite and TEST_DATABASE_URL)', async () => {
+    const personId = await createPersonFixture(t, { kind: 'adult' });
+    const account = await createAccountFixture(t, { personId });
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const header = await authHeaderForPerson(t, support.personId);
+    const relink = (subject: string) =>
+      t.http
+        .post(`/v1/accounts/${account.id}/relink`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ issuer: t.config.AUTH_ISSUER, subject, reason: 'lost phone', expectedRevision: 1 });
+    const first = `recovered-first-${newId()}`;
+    const second = `recovered-second-${newId()}`;
+    const pause = pauseFirstRelink(account.id);
+    try {
+      const winner = tracked(relink(first));
+      await pause.paused.reached;
+      const loser = tracked(relink(second));
+      // PostgreSQL: the second recovery waits for the account row the first holds (it must not
+      // read the old revision, wait at its update and then match nothing). PGlite: it runs after.
+      if (t.database.concurrent) {
+        expect(await untilSettledOrBlockedBy(t, loser, pause.holder)).toBe(true);
+      }
+      pause.paused.open();
+      const [won, lost] = await Promise.all([winner.promise, loser.promise]);
+      expect(won.status, JSON.stringify(won.body)).toBe(200);
+      expect(won.body).toMatchObject({ id: account.id, revision: 2 });
+      expect(lost.status, JSON.stringify(lost.body)).toBe(409);
+      expect(lost.body.code).toBe('STALE_REVISION');
+    } finally {
+      pause.paused.open();
+      pause.restore();
+    }
+    const row = await t.db
+      .selectFrom('accounts')
+      .select(['subject', 'revision'])
+      .where('id', '=', account.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ subject: first, revision: 2 });
+    const audits = await relinkRows(account.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.details).toMatchObject({ subject: first });
+    const relinked = await t.db
+      .selectFrom('outbox_events')
+      .select('id')
+      .where('aggregate_id', '=', account.id)
+      .where('event_type', '=', 'identity.account_relinked')
+      .execute();
+    expect(relinked).toHaveLength(1);
+  });
+
+  it('§4.9 / SPK-IAM-007: a merge racing a recovery of the merged person’s login moves the account after the relink, never over it (PGlite and TEST_DATABASE_URL)', async () => {
+    const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const adminHeader = await authHeaderForPerson(t, admin.personId);
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const survivor = await createPersonFixture(t, { kind: 'adult' });
+    const duplicate = await createPersonFixture(t, { kind: 'adult' });
+    const account = await createAccountFixture(t, { personId: duplicate });
+    const flagged = await t.http
+      .post('/v1/duplicate-candidates')
+      .set(adminHeader)
+      .set('Idempotency-Key', key())
+      .send({ personAId: survivor, personBId: duplicate, reasons: ['desk'] });
+    expect(flagged.status).toBe(201);
+    const subject = `recovered-${newId()}`;
+    const pause = pauseFirstRelink(account.id);
+    try {
+      const recovering = tracked(
+        t.http
+          .post(`/v1/accounts/${account.id}/relink`)
+          .set(await authHeaderForPerson(t, support.personId))
+          .set('Idempotency-Key', key())
+          .send({
+            issuer: t.config.AUTH_ISSUER,
+            subject,
+            reason: 'lost phone',
+            expectedRevision: 1,
+          }),
+      );
+      await pause.paused.reached;
+      const merging = tracked(
+        t.http
+          .post(`/v1/duplicate-candidates/${flagged.body.id}/merge`)
+          .set(adminHeader)
+          .set('Idempotency-Key', key())
+          .send({ survivorPersonId: survivor, reason: 'same person' }),
+      );
+      // PostgreSQL: the merge waits for the account row the recovery holds before reading its
+      // revision; PGlite: it runs after the recovery commits.
+      if (t.database.concurrent) {
+        expect(await untilSettledOrBlockedBy(t, merging, pause.holder)).toBe(true);
+      }
+      pause.paused.open();
+      const [relinked, merged] = await Promise.all([recovering.promise, merging.promise]);
+      expect(relinked.status, JSON.stringify(relinked.body)).toBe(200);
+      expect(merged.status, JSON.stringify(merged.body)).toBe(201);
+      expect(merged.body.moved).toMatchObject({ accountsMoved: 1 });
+    } finally {
+      pause.paused.open();
+      pause.restore();
+    }
+    // two changes, two revisions: relink 1 → 2, merge 2 → 3
+    const row = await t.db
+      .selectFrom('accounts')
+      .select(['person_id', 'subject', 'status', 'revision'])
+      .where('id', '=', account.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ person_id: survivor, subject, status: 'active', revision: 3 });
+    expect(await relinkRows(account.id)).toHaveLength(1);
   });
 });
