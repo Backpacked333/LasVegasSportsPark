@@ -1,4 +1,4 @@
-import { newId, systemPrincipal } from '@sportspark/contracts';
+import { systemPrincipal, type EventPayload } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperationsService, Outbox, UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -29,11 +29,13 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
   let t: TestApp;
   let programManager: Actor;
   let leagueManager: Actor;
+  let administrator: Actor;
 
   beforeAll(async () => {
     t = await enrollmentTestApp();
     programManager = await staff(t, ['program_manager']);
     leagueManager = await staff(t, ['league_manager']);
+    administrator = await staff(t, ['system_administrator']);
   });
   afterAll(async () => {
     await t.close();
@@ -43,26 +45,35 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
   // ENR-07
   // -------------------------------------------------------------------------------------------
 
-  async function merge(survivor: string, merged: string, mergeId = newId()) {
-    await t.db
-      .updateTable('persons')
-      .set({ status: 'merged', merged_into_person_id: survivor })
-      .where('id', '=', merged)
-      .execute();
-    await t.app.get(UnitOfWork).run(({ trx }) =>
-      t.app.get(Outbox).enqueue(trx, IdentityEvents.personsMerged, {
-        organizationId: t.organizationId,
-        aggregateType: 'person',
-        aggregateId: survivor,
-        payload: {
-          mergeId,
-          survivorPersonId: survivor,
-          mergedPersonId: merged,
-          operationId: newId(),
-        },
-      }),
+  /**
+   * R2-TESTS-04 (SPK-IAM-007): the merge goes through identity's own command, so the merge row,
+   * the merged person and the `identity.persons_merged` event are exactly what identity produces
+   * and every module's follow-up (communications' included) completes. `drain` fails on any
+   * handler failure (R2-TESTS-01).
+   */
+  async function merge(survivor: string, merged: string) {
+    const flagged = await post(t, '/v1/duplicate-candidates', administrator.header, {
+      personAId: survivor,
+      personBId: merged,
+      reasons: ['same name and date of birth'],
+      score: 90,
+    });
+    expect(flagged.status, JSON.stringify(flagged.body)).toBe(201);
+    const done = await post(
+      t,
+      `/v1/duplicate-candidates/${flagged.body.id as string}/merge`,
+      administrator.header,
+      { survivorPersonId: survivor, reason: 'Confirmed with the family at the desk' },
     );
+    expect(done.status, JSON.stringify(done.body)).toBe(201);
     await drain(t);
+    const mergeId = done.body.id as string;
+    const followed = await t.db
+      .selectFrom('communication_merge_follow_ups')
+      .select('merge_id')
+      .where('merge_id', '=', mergeId)
+      .execute();
+    expect(followed).toHaveLength(1);
     return mergeId;
   }
 
@@ -122,20 +133,23 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
       .where('id', 'in', [kept, second])
       .execute();
     expect(statuses.map((s) => s.status)).toEqual(['confirmed', 'confirmed']);
-    // A second delivery of the same merge raises nothing more (idempotent by merge).
+    // A second delivery of the same merge (the same real merge id) raises nothing more
+    // (idempotent by merge), and no follow-up fails on it (the drain would throw).
+    const original = await t.db
+      .selectFrom('outbox_events')
+      .select(['payload'])
+      .where('event_type', '=', IdentityEvents.personsMerged.type)
+      .where('aggregate_id', '=', survivor.personId)
+      .executeTakeFirstOrThrow();
     await t.app.get(UnitOfWork).run(({ trx }) =>
       t.app.get(Outbox).enqueue(trx, IdentityEvents.personsMerged, {
         organizationId: t.organizationId,
         aggregateType: 'person',
         aggregateId: survivor.personId,
-        payload: {
-          mergeId,
-          survivorPersonId: survivor.personId,
-          mergedPersonId: duplicate.personId,
-          operationId: newId(),
-        },
+        payload: original.payload as EventPayload<typeof IdentityEvents.personsMerged>,
       }),
     );
+    expect((original.payload as { mergeId: string }).mergeId).toBe(mergeId);
     await drain(t);
     expect(await duplicates(survivor.personId)).toHaveLength(1);
   });
