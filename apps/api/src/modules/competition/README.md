@@ -563,17 +563,35 @@ built, waiting on a decision or another module.
   submitted before the fixture was canceled could still be published, counting in the standings
   and serving suspensions for a game that never took place (`__tests__/results.spec.ts`
   "R2-LIFECYCLES-04"). A draft or submitted revision of a fixture canceled afterwards stays as it
-  is (the result machine has no withdrawal state); publishing or resubmitting it is refused.
+  is (the result machine has no withdrawal state); publishing or resubmitting it is refused. A
+  correction of an official result keeps the fixture in its outcome state; a forfeit recorded for
+  a fixture with no start (unscheduled or postponed) is corrected only to another forfeit, never
+  to a played or abandoned game (same test).
 - The captain workspace's financial issue comes from finance's obligations for the entry
   (`FINANCIAL_CONDITIONS_PORT.entryFinancialStatus`), not from whether `financial_status_ref` is
   set (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002): `none` gives `financial_status_unknown` ("No
   financial obligation has been recorded for this entry yet", owner `finance_operator`);
-  `outstanding` gives `team_obligation_outstanding` (warning, owner `captain`, remaining amounts in
-  minor units, the next due date, and that the effect on play awaits POL-017/DEC-056); `clear`
-  gives no financial issue; `unknown` (no implementation, or it fails) gives
-  `financial_status_unknown` naming whether an obligation is recorded. Finance records the
-  obligation reference through `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`
-  (`__tests__/team-entry-finance.spec.ts`, with a deterministic finance double). Not yet done by
-  finance: calling `recordFinancialStatusRef` when it creates a team-entry obligation, and
-  implementing `entryFinancialStatus`; until then, in the assembled application, the workspace
-  reports the financial status as `unknown` and the reference stays null.
+  `outstanding` gives `team_obligation_outstanding` (warning, owner `captain`, the number of open
+  obligations, the remaining amounts formatted by the Money helpers, and the next due date and time
+  in the division facility's time zone, or UTC named as such without one); `clear` gives no
+  financial issue; `unknown` (no implementation, or it fails) gives `financial_status_unknown`
+  naming whether an obligation is recorded, with finance's explanation for staff only. The
+  issue is a warning, not a block: whether an open team balance affects play awaits POL-017 /
+  DEC-056, and the message makes no claim either way.
+- Who sees the details follows finance's read rule for the team obligation, not the workspace's
+  (SPK-CAP-002): the kernel decides `finance.read_obligation` on the entry
+  (`READ_TEAM_OBLIGATION_ACTION`), which for a team obligation admits the captain (and a
+  co-captain only where the rule set lets them act as captain) and the staff who read financial
+  records, never coaches or officials. Every other workspace viewer (a rostered member, a guardian
+  of a child player, a coach) gets the same code, severity and owner with a message that names no
+  amount, count, date or explanation ("The team has an open balance. The captain can see the
+  amount and the due date."; "The team's financial status is not confirmed yet."). In an
+  application without finance the action is unknown and nobody sees details.
+- Finance records the obligation reference through `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`
+  (`__tests__/team-entry-finance.spec.ts`, with a deterministic finance double and finance's real
+  action definitions). **Pending** (R2-JOURNEYS-05, finance's part): calling
+  `recordFinancialStatusRef` when finance creates a team-entry obligation, and implementing
+  `entryFinancialStatus`; until then, in the assembled application, the workspace reports the
+  financial status as `unknown` and the reference stays null. **Pending** (staff dashboard): the
+  entry review screen shows `financialStatusRef` as a neutral reference badge from the entry list,
+  which carries no status; it should show the workspace's financial issue instead.

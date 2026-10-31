@@ -3,14 +3,19 @@ import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import { staffPrincipal, type TestApp } from '../../../testing';
+// Finance's read rule for the obligation is the one the workspace follows (READ_TEAM_OBLIGATION_ACTION).
+import { FinanceActions } from '../../finance/finance.actions';
+import { createPersonFixture, createRelationshipFixture } from '../../identity';
 import {
   FINANCIAL_CONDITIONS_IMPL,
   type FinancialConditionsPort,
   type TeamEntryFinancialStatus,
 } from '../competition-matches.ports';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../ports';
-import { financialIssueOf } from '../services/team-entries.service';
+import { financialIssueOf, READ_TEAM_OBLIGATION_ACTION } from '../services/team-entries.service';
 import {
+  addRosterMemberFixture,
+  createDivisionFixture,
   createSeasonFixture,
   createTeamEntryFixture,
   type SeasonFixture,
@@ -35,6 +40,7 @@ interface Issue {
 describe('team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002)', () => {
   let t: TestApp;
   let season: SeasonFixture;
+  let divisionId: string;
   let leagueManager: Actor;
   const statuses = new Map<string, TeamEntryFinancialStatus | 'throws'>();
   const finance: FinancialConditionsPort = {
@@ -51,6 +57,8 @@ describe('team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002
       providers: [{ provide: FINANCIAL_CONDITIONS_IMPL, useValue: finance }],
     });
     season = await createSeasonFixture(t, { status: 'open' });
+    // the division plays at the test facility (America/Los_Angeles): due dates are shown there
+    divisionId = await createDivisionFixture(t, { seasonId: season.seasonId });
     leagueManager = await staffMember(t, ['league_manager']);
   });
   afterAll(async () => {
@@ -63,6 +71,7 @@ describe('team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002
       seasonId: season.seasonId,
       captainPersonId: captain.personId,
       teamName: name,
+      divisionId,
     });
     return { teamEntryId: created.teamEntryId, captain };
   }
@@ -154,8 +163,15 @@ describe('team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002
         responsibleRole: 'captain',
       }),
     ]);
-    expect(open.financial[0]?.message).toContain('30000 USD (minor units)');
-    expect(open.financial[0]?.message).toContain('POL-017');
+    // SPK-PAY-001/004: the amount through the Money helpers, the due date at the facility, and no
+    // policy or decision ids in what the captain reads
+    const message = open.financial[0]?.message ?? '';
+    expect(message).toContain('1 open team obligation with $300.00 outstanding');
+    expect(message).toContain('Nov 14, 2026');
+    expect(message).toContain('(America/Los_Angeles)');
+    expect(message).not.toContain('minor units');
+    expect(message).not.toContain('2026-11-15T');
+    expect(message).not.toMatch(/POL-|DEC-/);
     // the league manager reviewing the entry sees the same status
     expect((await workspace(bolts.teamEntryId, leagueManager)).financial).toEqual(open.financial);
 
@@ -174,19 +190,113 @@ describe('team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002
     expect(failed.financial[0]?.message).toContain('An obligation is recorded for this entry');
   });
 
-  it('R2-JOURNEYS-05: the issue for each finance answer (unit)', () => {
-    expect(financialIssueOf('obl', { status: 'clear' })).toBeNull();
-    expect(financialIssueOf(null, { status: 'none' })).toMatchObject({
+  it('R2-JOURNEYS-05 / SPK-CAP-002: a rostered member, a guardian of a child player and a coach open the workspace but see neither the amount nor the due date of the team balance, which finance shows only to the captain and financial staff', async () => {
+    // the workspace follows finance's own read rule for the team obligation
+    expect(READ_TEAM_OBLIGATION_ACTION).toBe(FinanceActions.readObligation.id);
+    const hawks = await entry('Hawks');
+    const member = await adultCustomer(t);
+    await addRosterMemberFixture(t, { teamEntryId: hawks.teamEntryId, personId: member.personId });
+    const child = await createPersonFixture(t, { kind: 'child', dateOfBirth: '2014-04-02' });
+    await addRosterMemberFixture(t, { teamEntryId: hawks.teamEntryId, personId: child });
+    const guardian = await adultCustomer(t);
+    await createRelationshipFixture(t, {
+      actorPersonId: guardian.personId,
+      subjectPersonId: child,
+      permissions: ['view'],
+    });
+    const coach = await staffMember(t, ['coach']);
+    await record(hawks.teamEntryId, newId());
+    statuses.set(hawks.teamEntryId, {
+      status: 'outstanding',
+      openObligations: 2,
+      outstanding: [{ amountMinor: 45050, currency: 'USD' }],
+      nextDueAt: '2026-12-01T20:00:00.000Z',
+    });
+
+    const captainView = await workspace(hawks.teamEntryId, hawks.captain);
+    expect(captainView.financial[0]?.message).toContain('2 open team obligations with $450.50');
+    expect(captainView.financial[0]?.message).toContain('Dec 1, 2026');
+
+    for (const viewer of [member, guardian, coach]) {
+      const res = await t.http.get(`/v1/team-entries/${hawks.teamEntryId}`).set(viewer.header);
+      expect(res.status).toBe(200);
+      const issues = (res.body.readiness as { issues: Issue[] }).issues;
+      const financial = issues.filter((i) => i.code === 'team_obligation_outstanding');
+      expect(financial).toEqual([
+        {
+          code: 'team_obligation_outstanding',
+          severity: 'warning',
+          message: 'The team has an open balance. The captain can see the amount and the due date.',
+          responsibleRole: 'captain',
+          requiredAction: 'The captain collects the remaining contributions or pays the balance.',
+        },
+      ]);
+      const body = JSON.stringify(res.body);
+      expect(body).not.toContain('450.50');
+      expect(body).not.toContain('45050');
+      expect(body).not.toContain('Dec 1, 2026');
+      expect(body).not.toContain('2026-12-01T20:00');
+    }
+
+    // an unknown status: finance's explanation is for staff, never for customers
+    statuses.set(hawks.teamEntryId, {
+      status: 'unknown',
+      explanation: 'the obligation ledger is being reconciled',
+    });
+    const staffUnknown = (await workspace(hawks.teamEntryId, leagueManager)).financial[0];
+    expect(staffUnknown?.message).toContain('(the obligation ledger is being reconciled)');
+    const captainUnknown = (await workspace(hawks.teamEntryId, hawks.captain)).financial[0];
+    expect(captainUnknown).toMatchObject({ code: 'financial_status_unknown', severity: 'unknown' });
+    expect(captainUnknown?.message).toContain('An obligation is recorded for this entry');
+    expect(captainUnknown?.message).not.toContain('reconciled');
+    const memberUnknown = (await workspace(hawks.teamEntryId, member)).financial;
+    expect(memberUnknown).toEqual([
+      expect.objectContaining({
+        code: 'financial_status_unknown',
+        severity: 'unknown',
+        message: "The team's financial status is not confirmed yet.",
+        responsibleRole: 'finance_operator',
+      }),
+    ]);
+  });
+
+  it('R2-JOURNEYS-05: the issue for each finance answer and audience (unit)', () => {
+    const captain = { readsObligation: true, staff: false, timezone: 'America/Los_Angeles' };
+    const staff = { readsObligation: true, staff: true, timezone: null };
+    const teammate = { readsObligation: false, staff: false, timezone: 'America/Los_Angeles' };
+    expect(financialIssueOf('obl', { status: 'clear' }, captain)).toBeNull();
+    expect(financialIssueOf('obl', { status: 'clear' }, teammate)).toBeNull();
+    expect(financialIssueOf(null, { status: 'none' }, captain)).toMatchObject({
       code: 'financial_status_unknown',
       severity: 'unknown',
+      message: 'No financial obligation has been recorded for this entry yet.',
     });
-    expect(financialIssueOf('obl', { status: 'none' })?.message).toContain('was canceled');
-    expect(
-      financialIssueOf(null, { status: 'unknown', explanation: 'no finance check' }),
-    ).toMatchObject({
+    expect(financialIssueOf('obl', { status: 'none' }, captain)?.message).toContain('was canceled');
+    expect(financialIssueOf('obl', { status: 'none' }, teammate)?.message).toBe(
+      "The team's financial status is not confirmed yet.",
+    );
+    const unknown = { status: 'unknown', explanation: 'no finance check' } as const;
+    expect(financialIssueOf(null, unknown, staff)).toMatchObject({
       code: 'financial_status_unknown',
       severity: 'unknown',
-      message: expect.stringContaining('no finance check'),
+      message: expect.stringContaining('(no finance check)'),
     });
+    expect(financialIssueOf(null, unknown, captain)?.message).not.toContain('no finance check');
+    const outstanding: TeamEntryFinancialStatus & { status: 'outstanding' } = {
+      status: 'outstanding',
+      openObligations: 1,
+      outstanding: [
+        { amountMinor: 30000, currency: 'USD' },
+        { amountMinor: 1250, currency: 'EUR' },
+      ],
+      nextDueAt: '2026-11-15T00:00:00.000Z',
+    };
+    // without a facility the due instant is shown in UTC, named as such
+    expect(financialIssueOf(null, outstanding, staff)?.message).toBe(
+      '1 open team obligation with $300.00 and €12.50 outstanding; the next payment is due 2026-11-15 00:00 UTC.',
+    );
+    expect(financialIssueOf(null, { ...outstanding, nextDueAt: null }, staff)?.message).toBe(
+      '1 open team obligation with $300.00 and €12.50 outstanding.',
+    );
   });
 });
