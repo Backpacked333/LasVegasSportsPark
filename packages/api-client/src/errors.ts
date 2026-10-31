@@ -58,11 +58,20 @@ function detailCodeOf(details: unknown): string | null {
   return typeof code === 'string' ? code : null;
 }
 
+/**
+ * A command answered with a success status (2xx) whose body could not be read (truncated, or
+ * HTML from something in front of the API). A 2xx means the command may well have committed, so
+ * the outcome is not known: the intent keeps its key (retryable) and a same-key retry gets the
+ * stored outcome (§4.9, SPK-PAY-007). A read with such a body stays UNEXPECTED_RESPONSE.
+ */
+export const RESPONSE_UNREADABLE_CODE = 'RESPONSE_UNREADABLE';
+
 /** Failures detected by the client, never sent by the API. */
 export const CLIENT_ERROR_CODES = [
   'NETWORK_UNAVAILABLE',
   'TIMEOUT',
   'UNEXPECTED_RESPONSE',
+  RESPONSE_UNREADABLE_CODE,
 ] as const;
 export type ClientErrorCode = (typeof CLIENT_ERROR_CODES)[number];
 
@@ -102,6 +111,7 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   'INTERNAL_ERROR',
   'NETWORK_UNAVAILABLE',
   'TIMEOUT',
+  RESPONSE_UNREADABLE_CODE,
 ]);
 
 export class ApiError extends Error {
@@ -206,8 +216,9 @@ export class ApiError extends Error {
    * retry with the same key can only get the same refusal again, so the intent ends and the next
    * attempt gets a new key. The key is kept only while the outcome is not known: no response
    * (network, timeout), a retryable code (IDEMPOTENCY_IN_PROGRESS, INTEGRATION_UNAVAILABLE,
-   * RATE_LIMITED, INTERNAL_ERROR, a 5xx without the contract), or PAYMENT_OUTCOME_UNKNOWN, where a
-   * new key could start a second payment (SPK-PAY-007).
+   * RATE_LIMITED, INTERNAL_ERROR, a 5xx without the contract, RESPONSE_UNREADABLE: a 2xx whose
+   * body could not be read), or PAYMENT_OUTCOME_UNKNOWN, where a new key could start a second
+   * payment (SPK-PAY-007).
    */
   get keepsIntent(): boolean {
     return this.isOffline || this.retryable || this.code === 'PAYMENT_OUTCOME_UNKNOWN';

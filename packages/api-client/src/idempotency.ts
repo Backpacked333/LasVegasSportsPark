@@ -123,8 +123,9 @@ export function keepsIntentAfter(error: unknown): boolean {
  * Whether the next attempt of the same input must keep the intent's idempotency key: as
  * `keepsIntentAfter`, and also after IDEMPOTENCY_OUTCOME_UNAVAILABLE. The API never stores that
  * answer but gives it again for the same key, whereas a new key would run the command a second
- * time (`ApiError.keepsIntent` is false there, because a same-key retry cannot help). Both apps'
- * command hooks decide with this (§4.9).
+ * time (`ApiError.keepsIntent` is false there, because a same-key retry cannot help). The staff
+ * dashboard's command hooks decide with this (§4.9); the customer app keeps an equal copy of its
+ * own (apps/mobile/src/api/command-outcome.ts).
  */
 export function keepsIntentAfterFailure(error: unknown): boolean {
   if (

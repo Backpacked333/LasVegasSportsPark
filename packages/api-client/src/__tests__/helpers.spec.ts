@@ -14,6 +14,8 @@ import {
 import {
   mayHaveTakenEffect,
   mustNotCreateAgain,
+  outcomeStillOpen,
+  refusedBeforeRunning,
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../outcome';
@@ -141,6 +143,49 @@ describe('what a failure says about the effect (§4.9, SPK-PAY-007, SPK-UX-008)'
     // Committed under the key but the answer was lost: not "may have", it did; reload instead.
     expect(mayHaveTakenEffect(apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE'))).toBe(false);
     expect(tookEffectOutcomeLost(apiError('IDEMPOTENCY_OUTCOME_UNAVAILABLE'))).toBe(true);
+  });
+
+  it('SPK-AT-028, SPK-AUTO-005: a guard refusal before the key is claimed (recovery_mode, disabled) changed nothing and does not lock the form', () => {
+    const refusal = (reason: string) =>
+      new ApiError({
+        kind: 'api',
+        status: 503,
+        code: 'INTEGRATION_UNAVAILABLE',
+        message: 'Payments are paused while the service recovers from a restore. Try again later.',
+        nextAction: 'retry_later',
+        correlationId: 'corr-r',
+        details: { reason },
+      });
+    for (const reason of ['recovery_mode', 'disabled']) {
+      const error = refusal(reason);
+      expect(refusedBeforeRunning(error), reason).toBe(true);
+      expect(mayHaveTakenEffect(error), reason).toBe(false);
+      expect(outcomeStillOpen(error), reason).toBe(false);
+      // The guard claimed no key: the same key may be sent again later.
+      expect(error.keepsIntent, reason).toBe(true);
+    }
+    // A provider that did not answer inside a command may still have let part of it commit.
+    const provider = refusal('provider_timeout');
+    expect(refusedBeforeRunning(provider)).toBe(false);
+    expect(mayHaveTakenEffect(provider)).toBe(true);
+    expect(outcomeStillOpen(provider)).toBe(true);
+    expect(refusedBeforeRunning(apiError('INTEGRATION_UNAVAILABLE', 503))).toBe(false);
+  });
+
+  it('SPK-PAY-007: a success status whose answer could not be read may have taken effect and keeps the key', () => {
+    const error = new ApiError({
+      kind: 'unexpected_response',
+      status: 201,
+      code: 'RESPONSE_UNREADABLE',
+      message: 'The service answered, but its answer could not be read.',
+      nextAction: 'retry_with_same_key',
+      correlationId: null,
+    });
+    error.method = 'post';
+    expect(mayHaveTakenEffect(error)).toBe(true);
+    expect(error.keepsIntent).toBe(true);
+    expect(outcomeStillOpen(error)).toBe(true);
+    expect(recoveryActionFor(error)).toMatchObject({ retry: true });
   });
 
   it('§4.14: IDEMPOTENCY_SECRET_WITHHELD names the record that was created', () => {

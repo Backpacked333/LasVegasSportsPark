@@ -15,6 +15,7 @@
 import { CLIENT_INFO_HEADER, formatClientInfo, type ClientInfo } from './client-info';
 import {
   ApiError,
+  RESPONSE_UNREADABLE_CODE,
   UpdateRequiredError,
   errorFromResponse,
   networkError,
@@ -269,6 +270,19 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       throw error;
     }
     if (!parsedOk) {
+      // A command answered with a success status (2xx) may have committed, whatever the body
+      // (truncated, or a page from something in front of the API): its outcome is not known, so
+      // the intent keeps its key and a same-key retry gets the stored answer (§4.9, SPK-PAY-007).
+      if (method !== 'get') {
+        throw new ApiError({
+          kind: 'unexpected_response',
+          status: response.status,
+          code: RESPONSE_UNREADABLE_CODE,
+          message: 'The service answered, but its answer could not be read.',
+          nextAction: 'retry_with_same_key',
+          correlationId,
+        });
+      }
       throw new ApiError({
         kind: 'unexpected_response',
         status: response.status,

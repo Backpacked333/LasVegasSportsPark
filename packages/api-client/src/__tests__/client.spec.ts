@@ -315,6 +315,45 @@ describe('createApiClient (§4.8 to §4.10, §4.13)', () => {
     expect(mayHaveTakenEffect(command)).toBe(true);
   });
 
+  it('SPK-PAY-007: a command answered 2xx with a truncated or HTML body is RESPONSE_UNREADABLE: it may have taken effect and the intent keeps its key', async () => {
+    const bodies = [
+      '{"id":"refund-1","status":',
+      '<html><body>Signed in to the network</body></html>',
+    ];
+    let n = 0;
+    const { api, fetch } = setup(() => new Response(bodies[n++ % bodies.length], { status: 201 }));
+    const tracker = api.intentTracker();
+    const input = { path: { id: ASSIGNMENT_ID } };
+    for (let i = 0; i < bodies.length; i += 1) {
+      const intent = tracker.current(input);
+      const error = (await api
+        .post('/assignments/{id}/accept', { ...input, intent })
+        .catch((e: unknown) => e)) as ApiError;
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({
+        kind: 'unexpected_response',
+        status: 201,
+        code: 'RESPONSE_UNREADABLE',
+        nextAction: 'retry_with_same_key',
+        method: 'post',
+      });
+      expect(error.keepsIntent).toBe(true);
+      expect(mayHaveTakenEffect(error)).toBe(true);
+      tracker.failed(error);
+    }
+    // Both attempts went under one key: the retry gets the stored answer, never a second refund.
+    const keys = fetch.requests.map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('a read answered 2xx with a body that cannot be read stays UNEXPECTED_RESPONSE (nothing changed)', async () => {
+    const { api } = setup(() => new Response('<html>portal</html>', { status: 200 }));
+    const error = (await api.get('/me').catch((e: unknown) => e)) as ApiError;
+    expect(error.code).toBe('UNEXPECTED_RESPONSE');
+    expect(mayHaveTakenEffect(error)).toBe(false);
+  });
+
   it('§4.15: reports the service time of a response from its Date header, and null without one', async () => {
     const { api } = setup((request) =>
       request.url.endsWith('/me')
