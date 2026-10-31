@@ -189,7 +189,15 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   (`concurrency.spec.ts`, under PGlite and `TEST_DATABASE_URL`).
   Occurrence indexes are stable, and occurrences that already ended are never changed by an edit.
 - Closure application either cancels affected published events (notices carry the closure id) or
-  leaves them for staff resolution as an operational exception in the `scheduler` queue.
+  leaves them for staff resolution as an operational exception in the `scheduler` queue
+  (`scheduling.closure_resolution_required`, dedupe `closure:<id>`). Lifting the closure (the HTTP
+  route, or the facilities release through `CLOSURE_PORT`, SPK-AT-021) resolves that exception, if
+  still open or acknowledged, in the lift's transaction with resolution
+  `{ outcome: 'closure_lifted', closureId }`, audited as the `scheduling.closure_lifted` system
+  actor (the releasing operator need not hold the scheduler queue), so Today no longer asks for a
+  resolution of events nothing blocks (`closures.spec.ts` "SPK-AT-021 / §4.12: lifting an applied
+  closure resolves its closure_resolution_required exception ..."). A closure is withdrawn only
+  while pending, before any such exception exists.
 
 ### Closure withdrawal and preview (SCH-01: SPK-FAC-003, SPK-SCHED-009) — verified
 

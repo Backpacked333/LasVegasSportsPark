@@ -2,6 +2,7 @@ import { newId, type Principal } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { OperationalExceptions, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { CLOSURE_PORT, type ClosurePort } from '../ports';
 import { ClosuresService } from '../services/closures.service';
@@ -276,6 +277,97 @@ describe('closures: impact preview, apply, lift (SPK-SCHED-009, SPK-FAC-003/004,
       'scheduling.closure_applied',
       'scheduling.closure_lifted',
     ]);
+  });
+
+  it('SPK-AT-021 / §4.12: lifting an applied closure resolves its closure_resolution_required exception and leaves other closures open', async () => {
+    const exceptions = t.app.get(OperationalExceptions);
+    const uow = t.app.get(UnitOfWork);
+    const scheduler = staffPrincipal(org, ['scheduler']);
+    const applyWithEvent = async (day: string, title: string) => {
+      const event = await createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: facility,
+        resourceIds: [pitch.southHalfId],
+        start: at(day, '09:00'),
+        end: at(day, '10:00'),
+        title,
+      });
+      const created = await t.http
+        .post('/v1/closures')
+        .set(auth)
+        .set('Idempotency-Key', key())
+        .send({
+          facilityId: facility,
+          resourceId: pitch.southHalfId,
+          interval: { start: at(day, '08:00'), end: at(day, '20:00') },
+          reason: `Turf repair south half ${day}`,
+          source: 'maintenance',
+        });
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      const applied = await t.http
+        .post(`/v1/closures/${created.body.id}/apply`)
+        .set(auth)
+        .set('Idempotency-Key', key())
+        .send({ mode: 'leave_for_resolution', expectedRevision: 1 });
+      expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+      expect(applied.body.resolution.unresolvedEventIds).toEqual([event.id]);
+      const exception = await t.db
+        .selectFrom('operational_exceptions')
+        .selectAll()
+        .where('organization_id', '=', org)
+        .where('dedupe_key', '=', `closure:${created.body.id}`)
+        .executeTakeFirstOrThrow();
+      expect(exception).toMatchObject({
+        category: 'scheduling.closure_resolution_required',
+        status: 'open',
+      });
+      return { closureId: created.body.id as string, event, exceptionId: exception.id };
+    };
+    const lifting = await applyWithEvent('2026-11-22', 'A v B');
+    const staying = await applyWithEvent('2026-11-23', 'North clinic');
+    // the scheduler has seen the card (acknowledged) before the area is reopened
+    await uow.run(({ trx }) =>
+      exceptions.transition(trx, scheduler, lifting.exceptionId, 'acknowledged'),
+    );
+
+    t.clock.advance(30 * 60_000);
+    const lifted = await t.http
+      .post(`/v1/closures/${lifting.closureId}/lift`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: 2, reason: 'inspection passed' });
+    expect(lifted.status, JSON.stringify(lifted.body)).toBe(200);
+    expect(lifted.body).toMatchObject({ status: 'lifted' });
+
+    // the facilities operator who reopened the area holds no scheduler queue: the exception is
+    // settled by the scheduling system actor in the lift's transaction
+    const settled = await exceptions.get(org, lifting.exceptionId);
+    expect(settled).toMatchObject({
+      status: 'resolved',
+      resolution: { outcome: 'closure_lifted', closureId: lifting.closureId },
+    });
+    expect(new Date(settled!.resolved_at!).toISOString()).toBe(t.clock.now().toISOString());
+    const transitionAudit = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'actor', 'reason'])
+      .where('organization_id', '=', org)
+      .where('target_type', '=', 'operational_exception')
+      .where('target_id', '=', lifting.exceptionId)
+      .where('action', '=', 'exceptions.resolved')
+      .executeTakeFirstOrThrow();
+    expect(transitionAudit).toMatchObject({
+      actor: { kind: 'system', actorLabel: 'scheduling.closure_lifted' },
+      reason: 'Closure lifted: inspection passed',
+    });
+    const stillOpen = await exceptions.list(org, {
+      statuses: ['open', 'acknowledged'],
+      category: 'scheduling.closure_resolution_required',
+    });
+    expect(stillOpen.items.map((e) => e.id)).toEqual([staying.exceptionId]);
+
+    // the other closure is still active and its exception still asks for a resolution
+    const otherClosure = await closures.getClosure(facilitiesOperator, staying.closureId);
+    expect(otherClosure.status).toBe('active');
   });
 
   it('SPK-AT-009: applying a facility closure with cancel_affected cancels every affected event with a notice naming the closure', async () => {

@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  systemPrincipal,
   type Closure,
   type ClosureImpact,
   type ClosureStatus,
@@ -57,6 +58,9 @@ function withImpactDefaults(impact: ClosureImpact | null): ClosureImpact | null 
     },
   };
 }
+
+/** The Today exception `applyClosure` opens for events it leaves for resolution (scheduler queue). */
+const CLOSURE_RESOLUTION_REQUIRED = 'scheduling.closure_resolution_required';
 
 const PROGRAM_KINDS = new Set(['session', 'practice', 'pickup']);
 const RENTAL_KINDS = new Set(['rental', 'party']);
@@ -242,7 +246,7 @@ export class ClosuresService implements ClosurePort {
         await this.exceptions.raise(trx, {
           organizationId,
           facilityId: closure.facility_id,
-          category: 'scheduling.closure_resolution_required',
+          category: CLOSURE_RESOLUTION_REQUIRED,
           severity: 'high',
           title: `${unresolved.length} event(s) affected by a closure need resolution`,
           affectedType: 'closure',
@@ -405,6 +409,7 @@ export class ClosuresService implements ClosurePort {
         .where('id', '=', closureId)
         .where('revision', '=', closure.revision)
         .execute();
+      await this.settleResolutionException(trx, organizationId, closureId, input);
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -466,6 +471,52 @@ export class ClosuresService implements ClosurePort {
       .orderBy('id');
     if (status) q = q.where('status', '=', status);
     return (await q.execute()).map((r) => this.view(r));
+  }
+
+  /**
+   * SPK-AT-021 (authorized reopening), §4.12, SPK-UX-006: the `scheduling.closure_resolution_required`
+   * exception `applyClosure` opened for the events it left for resolution describes the closure
+   * blocking them. Once the closure is lifted (by the HTTP route or by the facilities release
+   * through CLOSURE_PORT) nothing blocks those events any more, so the open or acknowledged
+   * exception is resolved in the lift's own transaction, so that Today never asks the scheduler
+   * to cancel or move events that can now run. The kernel transition runs as the scheduling system
+   * actor: the exception belongs to the `scheduler` queue, and the releasing principal (for
+   * example a facilities operator) need not hold that queue. A closure is only ever applied once
+   * (ClosureMachine) and is withdrawn only while pending, so the lift is the only path that ends
+   * an applied closure.
+   */
+  private async settleResolutionException(
+    trx: Trx,
+    organizationId: string,
+    closureId: string,
+    input: LiftClosureInput,
+  ): Promise<void> {
+    const open = await this.exceptions.list(
+      organizationId,
+      {
+        statuses: ['open', 'acknowledged'],
+        category: CLOSURE_RESOLUTION_REQUIRED,
+        affectedType: 'closure',
+        affectedId: closureId,
+        limit: 200,
+      },
+      trx,
+    );
+    for (const exception of open.items) {
+      await this.exceptions.transition(
+        trx,
+        systemPrincipal(organizationId, 'scheduling.closure_lifted'),
+        exception.id,
+        'resolved',
+        {
+          reason: input.reason
+            ? `Closure lifted: ${input.reason}`
+            : 'Closure lifted: the events it left for resolution are no longer blocked.',
+          resolution: { outcome: 'closure_lifted', closureId },
+          correlationId: input.correlationId ?? undefined,
+        },
+      );
+    }
   }
 
   /**
