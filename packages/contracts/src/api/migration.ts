@@ -721,7 +721,12 @@ export const AuthorityResolutionSchema = z
     /** `assignment`: the most specific assignment in effect; `default`: none (SportsPark). */
     basis: z.enum(['assignment', 'default', 'conflict']),
     assignmentId: z.uuid().nullable(),
-    scope: AuthorityScopeSchema.nullable(),
+    /**
+     * Null for a `default` entry (no assignment). R2-API-CONTRACT-02, K-01: the generator drops
+     * the null of `.nullable()` on a named union (a bare `$ref`), and flattens a union nested in
+     * a union; the lazy member keeps the published shape `anyOf [$ref AuthorityScope, null]`.
+     */
+    scope: z.union([z.lazy(() => AuthorityScopeSchema), z.null()]),
     effectiveFrom: Instant.nullable(),
     effectiveTo: Instant.nullable(),
   })
