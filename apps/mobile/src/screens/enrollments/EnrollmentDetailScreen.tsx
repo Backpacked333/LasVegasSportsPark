@@ -8,8 +8,9 @@
  * ("Confirmed. Next payment due <date>." — a future installment never makes the enrollment look
  * unconfirmed), what a pending enrollment waits for ("Registration pending: <reason>",
  * `pendingReason`), the operation or checkout of a pending enrollment (a `recovery_required`
- * checkout, from the operation or `GET /v1/me/registration-checkouts`, reads "Payment received.
- * We are completing your registration."), and the linked enrollments of a transfer (the old and
+ * checkout, from the operation or every page of `GET /v1/me/registration-checkouts?status=
+ * recovery_required`, the same test as the list row, reads "Payment received. We are completing
+ * your registration."), and the linked enrollments of a transfer (the old and
  * new records stay linked; attendance history is kept). A membership shows its term,
  * suspensions and the renewal the customer may start (MembershipSection).
  *
@@ -27,7 +28,7 @@ import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateRange, formatMoney } from '../../features/money/format';
 import { formatInstant } from '../../features/registration/format';
-import { checkoutOf, useMyCheckouts } from '../../features/registration/in-progress';
+import { useRecoveryCheckouts } from '../../features/registration/in-progress';
 import { useNameOf } from '../../features/money/people';
 import { useApiRecords } from '../../features/money/records';
 import { moneyRoutes, param } from '../../features/money/routes';
@@ -48,7 +49,12 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { INTENT_LABELS, offeringLabel } from './EnrollmentsScreen';
+import {
+  INTENT_LABELS,
+  offeringLabel,
+  pendingEnrollmentInRecovery,
+  recoveryEnrollmentIds,
+} from './EnrollmentsScreen';
 import { MembershipSection } from './MembershipSection';
 import { enrollmentOffering } from './participation';
 
@@ -65,10 +71,9 @@ function useEnrollmentContext(enrollment: Enrollment) {
     request: { path: { id: enrollment.offeringId } },
     enabled: !enrollment.offering,
   });
-  const checkouts = useMyCheckouts(enrollment.status === 'pending' && enrollment.basketId !== null);
-  const checkout = enrollment.basketId
-    ? checkoutOf(checkouts.data, { basketId: enrollment.basketId })
-    : null;
+  // Every checkout in recovery, as the list reads them (R3-SCREEN-STATES-04).
+  const checkouts = useRecoveryCheckouts(enrollment.status === 'pending');
+  const recovery = recoveryEnrollmentIds(checkouts.data);
   const placement = useApiQuery({
     path: '/placement-requests/{id}',
     request: { path: { id: enrollment.placementRequestId ?? '' } },
@@ -101,7 +106,7 @@ function useEnrollmentContext(enrollment: Enrollment) {
       .map((r) => r.data?.offeringId)
       .filter((id): id is string => typeof id === 'string'),
   );
-  return { offering, checkout, placement, order, plan, operation, linked, linkedOfferings };
+  return { offering, recovery, placement, order, plan, operation, linked, linkedOfferings };
 }
 
 function PaymentSummary({
@@ -168,10 +173,11 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
   const source = enrollment.transferredFromEnrollmentId
     ? ctx.linked[enrollment.transferredFromEnrollmentId]?.data
     : undefined;
-  const recoveryRequired =
-    enrollment.status === 'pending' &&
-    (ctx.operation.data?.status === 'recovery_required' ||
-      ctx.checkout?.status === 'recovery_required');
+  const recoveryRequired = pendingEnrollmentInRecovery(
+    enrollment,
+    ctx.recovery,
+    ctx.operation.data,
+  );
   const status = enrollmentStatus(enrollment, {
     offeringName,
     transferTargetName: target

@@ -106,6 +106,35 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
     expect(screen.getByText(/do not pay\s+again/)).toBeOnTheScreen();
   });
 
+  it('R3-SCREEN-STATES-04 §4.11: a checkout in recovery behind twenty newer checkouts is found, as on the list', async () => {
+    const BASKET = '0192f1a0-0000-7000-8000-00000000a501';
+    const checkout = (n: number, status: string, basketId: string) => ({
+      id: `0192f1a0-0000-7000-8000-0000000b${String(n).padStart(4, '0')}`,
+      basketId,
+      status,
+      enrollmentIds: [],
+    });
+    const all = [
+      ...Array.from({ length: 25 }, (_, n) =>
+        checkout(n, 'completed', `0192f1a0-0000-7000-8000-0000000c${String(n).padStart(4, '0')}`),
+      ),
+      checkout(999, 'recovery_required', BASKET),
+    ];
+    renderDetail(enrollment({ status: 'pending', pendingReason: 'payment', basketId: BASKET }), {
+      // Newest first with the API's `status` filter (money-reads.service myCheckouts).
+      'GET /me/registration-checkouts': (req) => {
+        const matching = req.query.status ? all.filter((c) => c.status === req.query.status) : all;
+        return fakeResponse(200, {
+          items: matching.slice(0, Number(req.query.limit ?? 50)),
+          nextCursor: null,
+        });
+      },
+    });
+    expect(
+      await screen.findByLabelText('Payment received. We are completing your registration.'),
+    ).toBeOnTheScreen();
+  });
+
   it('SPK-REG-010: a transferred enrollment links to the new one, and history is kept', async () => {
     const next = enrollment({
       id: IDS.enrollmentB,

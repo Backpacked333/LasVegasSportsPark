@@ -6,7 +6,8 @@
  * - `GET /v1/me/baskets`: the caller's own baskets, newest first (ENR-01, SPK-REG-004);
  * - `GET /v1/me/registration-checkouts`: their checkouts, including one that needs recovery
  *   (FIN-01), so a payment whose outcome is unknown or a `recovery_required` checkout is found
- *   again without anything kept on the device;
+ *   again without anything kept on the device; `useRecoveryCheckouts` reads every page of the
+ *   `recovery_required` ones, so a label that depends on them never misses an older one;
  * - `GET /v1/me/waitlist-entries?status=offered`: entries with an open offer and its server
  *   expiry (ENR-01, SPK-REG-008).
  *
@@ -16,6 +17,8 @@
  * (`progress.tsx`).
  */
 import type { Schema } from '@sportspark/api-client';
+import { useEffect } from 'react';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp } from '../../providers/AppProviders';
 import { checkoutInFlight } from './status';
@@ -61,6 +64,28 @@ export function useMyCheckouts(enabled = true) {
     request: { query: { limit: IN_PROGRESS_PAGE_SIZE } },
     enabled: enabled && session.status === 'signed_in',
   });
+}
+
+/**
+ * Every checkout of the caller in `recovery_required` (§4.11; FIN-01 `status` filter), all pages:
+ * the enrollment list and record label a pending enrollment from it, and a checkout in recovery
+ * can be older than any number of newer checkouts of the same payer (R3-SCREEN-STATES-04). Few
+ * checkouts are in recovery at once, so following the cursor to the end is cheap. Same query as
+ * Home's pinned list, so both read one cache entry.
+ */
+export function useRecoveryCheckouts(enabled = true) {
+  const { session } = useApp();
+  const pages = useApiPages({
+    path: '/me/registration-checkouts',
+    request: { query: { status: 'recovery_required', limit: IN_PROGRESS_PAGE_SIZE } },
+    enabled: enabled && session.status === 'signed_in',
+  });
+  const { hasNextPage, isFetchingNextPage, nextPageError, loadMore } = pages;
+  useEffect(() => {
+    // A failed page stops here (shown by the caller); a refresh starts over from the first page.
+    if (hasNextPage && !isFetchingNextPage && !nextPageError) loadMore();
+  }, [hasNextPage, isFetchingNextPage, nextPageError, loadMore]);
+  return pages;
 }
 
 export function useMyOffers(enabled = true) {

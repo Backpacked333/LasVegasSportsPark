@@ -8,9 +8,10 @@
  *   current first, then history (transfers, cancellations, completed seasons). The offering's
  *   name and dates come from the enrollment itself (ENR-02), also for a closed or archived
  *   season. A pending enrollment names what it waits for ("Registration pending: awaiting
- *   approval", from `pendingReason`); one whose checkout is `recovery_required`
- *   (`GET /v1/me/registration-checkouts`) reads "Payment received. We are completing your
- *   registration."; a confirmed one awaiting placement reads "Confirmed in <offering>. Awaiting
+ *   approval", from `pendingReason`); one whose checkout is `recovery_required` (every page of
+ *   `GET /v1/me/registration-checkouts?status=recovery_required`, or its last operation, the same
+ *   test as the record) reads "Payment received. We are completing your registration."; a
+ *   confirmed one awaiting placement reads "Confirmed in <offering>. Awaiting
  *   placement.", and a placed one "Confirmed: <team>" (`GET /v1/placement-requests/{id}`);
  * - applications (`GET /v1/me/applications`): "Awaiting approval", "Not approved: <reason>";
  * - trial participations (`GET /v1/me/trial-participations`), never shown as enrollments;
@@ -40,7 +41,7 @@ import { moneyRoutes } from '../../features/money/routes';
 import { bookingStatus, enrollmentStatus, type Enrollment } from '../../features/money/status';
 import { Caption, Section } from '../../features/money/ui';
 import { formatInstant } from '../../features/registration/format';
-import { useMyCheckouts } from '../../features/registration/in-progress';
+import { useRecoveryCheckouts } from '../../features/registration/in-progress';
 import { RequireSession } from '../../session/RequireSession';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
@@ -55,6 +56,7 @@ import {
 
 type Offering = Schema<'Offering'>;
 type Checkout = Schema<'Checkout'>;
+type Operation = Schema<'Operation'>;
 
 const CURRENT: readonly Enrollment['status'][] = ['pending', 'confirmed'];
 export const ENROLLMENTS_PAGE_SIZE = 50;
@@ -93,17 +95,38 @@ export function recoveryEnrollmentIds(checkouts: readonly Checkout[] | undefined
   };
 }
 
+/**
+ * A pending enrollment whose money was received but whose registration is not complete (§4.11):
+ * its checkout is among the caller's `recovery_required` ones (every page, `useRecoveryCheckouts`)
+ * or its last operation is `recovery_required`. The list row and the record decide with this one
+ * test, so they never disagree (R3-SCREEN-STATES-04).
+ */
+export function pendingEnrollmentInRecovery(
+  enrollment: Pick<Enrollment, 'id' | 'status' | 'basketId'>,
+  recovery: ReturnType<typeof recoveryEnrollmentIds>,
+  operation: Pick<Operation, 'status'> | null | undefined,
+): boolean {
+  return (
+    enrollment.status === 'pending' &&
+    (operation?.status === 'recovery_required' ||
+      recovery.enrollmentIds.has(enrollment.id) ||
+      (enrollment.basketId !== null && recovery.basketIds.has(enrollment.basketId)))
+  );
+}
+
 function EnrollmentRows({
   items,
   all,
   offerings,
   placements,
+  operations,
   recovery,
 }: {
   items: readonly Enrollment[];
   all: readonly Enrollment[];
   offerings: Records<'/offerings/{id}'>;
   placements: Records<'/placement-requests/{id}'>;
+  operations: Records<'/operations/{id}'>;
   recovery: ReturnType<typeof recoveryEnrollmentIds>;
 }) {
   const router = useRouter();
@@ -128,10 +151,11 @@ function EnrollmentRows({
           placementUnknown:
             enrollment.placementRequestId !== null &&
             placements[enrollment.placementRequestId]?.data === undefined,
-          recoveryRequired:
-            enrollment.status === 'pending' &&
-            (recovery.enrollmentIds.has(enrollment.id) ||
-              (enrollment.basketId !== null && recovery.basketIds.has(enrollment.basketId))),
+          recoveryRequired: pendingEnrollmentInRecovery(
+            enrollment,
+            recovery,
+            enrollment.lastOperationId ? operations[enrollment.lastOperationId]?.data : null,
+          ),
         });
         const dates = about ? formatDateRange(about.startsOn, about.endsOn) : undefined;
         return (
@@ -170,8 +194,16 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
       .map((e) => e.placementRequestId as string),
     enrollments.data !== undefined,
   );
-  const checkouts = useMyCheckouts(items.some((e) => e.status === 'pending'));
-  const recovery = recoveryEnrollmentIds(checkouts.data?.items);
+  // Recovery is read the way the record reads it (R3-SCREEN-STATES-04): every checkout in
+  // recovery, not the newest page of all checkouts, and each pending enrollment's last operation.
+  const pending = items.filter((e) => e.status === 'pending');
+  const checkouts = useRecoveryCheckouts(pending.length > 0);
+  const operations = useApiRecords(
+    '/operations/{id}',
+    pending.flatMap((e) => (e.lastOperationId ? [e.lastOperationId] : [])),
+    enrollments.data !== undefined,
+  );
+  const recovery = recoveryEnrollmentIds(checkouts.data);
   const whose = person.self ? 'your' : `${person.displayName}’s`;
   return (
     <View>
@@ -199,6 +231,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
                     all={list}
                     offerings={offerings}
                     placements={placements}
+                    operations={operations}
                     recovery={recovery}
                   />
                 </Section>
@@ -210,6 +243,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
                     all={list}
                     offerings={offerings}
                     placements={placements}
+                    operations={operations}
                     recovery={recovery}
                   />
                 </Section>
