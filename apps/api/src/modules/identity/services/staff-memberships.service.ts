@@ -37,7 +37,13 @@ import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { StaffMembershipMachine } from '../identity.machines';
 import type { StaffDirectoryPort } from '../identity.ports';
-import { displayNameOf, displayNamesOf, iso, toStaffMembership } from '../identity.shared';
+import {
+  displayNameOf,
+  displayNamesOf,
+  iso,
+  lockPersonsForShare,
+  toStaffMembership,
+} from '../identity.shared';
 
 const ListCursor = z.object({ c: z.iso.datetime(), id: z.uuid() });
 const DirectoryCursor = z.object({ f: z.string(), g: z.string(), id: z.uuid() });
@@ -73,6 +79,7 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       organizationId,
     });
     return runInTransaction(this.uow, async ({ trx }) => {
+      await lockPersonsForShare(trx, organizationId, [input.personId]);
       const person = await trx
         .selectFrom('persons')
         .select(['kind', 'status'])

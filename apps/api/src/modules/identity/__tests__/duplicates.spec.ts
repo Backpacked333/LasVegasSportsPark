@@ -115,13 +115,13 @@ describe('duplicate review and merge (SPK-IAM-007)', () => {
       value: 'dana@example.test',
       verified: true,
     });
-    await createRelationshipFixture(t, {
+    const duplicateOverChild1 = await createRelationshipFixture(t, {
       actorPersonId: duplicate,
       subjectPersonId: child1,
       permissions: ['view', 'collect'],
     });
     const child2 = await createPersonFixture(t, { kind: 'child' });
-    await createRelationshipFixture(t, {
+    const importedOverChild2 = await createRelationshipFixture(t, {
       actorPersonId: duplicate,
       subjectPersonId: child2,
       permissions: ['view'],
@@ -141,6 +141,14 @@ describe('duplicate review and merge (SPK-IAM-007)', () => {
       .set(header)
       .set('Idempotency-Key', key())
       .send({ personAId: survivor, personBId: duplicate, reasons: ['same name'] });
+    // another open candidate about the duplicate, which the merge makes moot
+    const lookalike = await createPersonFixture(t, { kind: 'adult' });
+    const otherCandidate = await t.http
+      .post('/v1/duplicate-candidates')
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ personAId: duplicate, personBId: lookalike, reasons: ['same phone'] });
+    expect(otherCandidate.status).toBe(201);
     const frontDesk = await createStaffMemberFixture(t, { roles: ['front_desk'] });
     const denied = await t.http
       .post(`/v1/duplicate-candidates/${flagged.body.id}/merge`)
@@ -239,8 +247,133 @@ describe('duplicate review and merge (SPK-IAM-007)', () => {
       .selectFrom('audit_records')
       .select(['target_id'])
       .where('action', '=', 'identity.merge_persons')
+      .where('target_type', '=', 'person')
       .execute();
     expect(audit.map((a) => a.target_id).sort()).toEqual([survivor, duplicate].sort());
+
+    // §4.6, §4.9, §4.14: every relationship, grant and candidate the merge ends takes its own
+    // lifecycle transition (machine, revision bump) with its own audit record and, for grants, one
+    // revoke event, all tied to the merge's operation.
+    const operationId = merged.body.operationId as string;
+    const mergeDetails = {
+      via: 'merge',
+      mergeId: merged.body.id,
+      survivorPersonId: survivor,
+      mergedPersonId: duplicate,
+    };
+    const endedIds = [duplicateOverChild1.relationshipId, importedOverChild2.relationshipId];
+    const ended = await t.db
+      .selectFrom('relationships')
+      .select(['id', 'status', 'revision', 'ended_reason'])
+      .where('id', 'in', endedIds)
+      .execute();
+    expect(ended.map((r) => ({ ...r })).sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      [
+        {
+          id: duplicateOverChild1.relationshipId,
+          status: 'ended',
+          revision: 2,
+          ended_reason: expect.stringMatching(/^merge: consolidated into relationship /),
+        },
+        {
+          id: importedOverChild2.relationshipId,
+          status: 'ended',
+          revision: 2,
+          ended_reason: 'merge: unverified import authority is not transferred',
+        },
+      ].sort((a, b) => a.id.localeCompare(b.id)),
+    );
+    const relationshipAudits = await t.db
+      .selectFrom('audit_records')
+      .select([
+        'target_id',
+        'action',
+        'before_revision',
+        'after_revision',
+        'operation_id',
+        'details',
+      ])
+      .where('target_type', '=', 'relationship')
+      .where('target_id', 'in', endedIds)
+      .execute();
+    expect(relationshipAudits).toHaveLength(2);
+    for (const row of relationshipAudits) {
+      expect(row).toMatchObject({
+        action: 'identity.merge_persons',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: { ...mergeDetails, transition: 'end' },
+      });
+    }
+    const revokedGrantIds = [
+      duplicateOverChild1.grantIds.view as string, // equivalent already held by the survivor
+      importedOverChild2.grantIds.view as string, // unverified import
+    ];
+    const grantAudits = await t.db
+      .selectFrom('audit_records')
+      .select([
+        'target_id',
+        'action',
+        'before_revision',
+        'after_revision',
+        'operation_id',
+        'details',
+      ])
+      .where('target_id', 'in', revokedGrantIds)
+      .execute();
+    expect(grantAudits.map((a) => a.target_id).sort()).toEqual([...revokedGrantIds].sort());
+    for (const row of grantAudits) {
+      expect(row).toMatchObject({
+        action: 'identity.revoke_access',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: mergeDetails,
+      });
+    }
+    const grantEvents = await t.db
+      .selectFrom('outbox_events')
+      .select(['aggregate_id', 'operation_id'])
+      .where('event_type', '=', 'identity.access_grant_revoked')
+      .where('aggregate_id', 'in', revokedGrantIds)
+      .execute();
+    expect(grantEvents.map((e) => e.aggregate_id).sort()).toEqual([...revokedGrantIds].sort());
+    expect(grantEvents.every((e) => e.operation_id === operationId)).toBe(true);
+    expect(merged.body.moved).toMatchObject({ otherCandidatesDismissed: 1 });
+    const other = await t.db
+      .selectFrom('duplicate_candidates')
+      .select(['status', 'revision', 'decision'])
+      .where('id', '=', otherCandidate.body.id)
+      .executeTakeFirstOrThrow();
+    expect(other).toEqual({
+      status: 'dismissed',
+      revision: 2,
+      decision: { outcome: 'dismissed', reason: 'person_merged', mergeId: merged.body.id },
+    });
+    const dismissAudits = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'before_revision', 'after_revision', 'operation_id', 'details'])
+      .where('target_id', '=', otherCandidate.body.id)
+      .where('action', '=', 'identity.dismiss_duplicate')
+      .execute();
+    expect(dismissAudits).toEqual([
+      {
+        action: 'identity.dismiss_duplicate',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: mergeDetails,
+      },
+    ]);
+    // a staff screen still holding revision 1 of that candidate is told it changed
+    const staleDismiss = await t.http
+      .post(`/v1/duplicate-candidates/${otherCandidate.body.id}/dismiss`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ reason: 'stale screen', expectedRevision: 1 });
+    expect(staleDismiss.status).toBe(409);
+    expect(staleDismiss.body.code).toBe('STALE_REVISION');
     // a merged person cannot be merged again or edited
     const again = await t.http
       .post(`/v1/duplicate-candidates/${flagged.body.id}/merge`)

@@ -60,11 +60,15 @@ export class AccountsService {
     });
     return runInTransaction(this.uow, async ({ trx }) => {
       if (input.personId) {
+        // §4.9, SPK-IAM-007: share-locked before the status check, so a running merge (which holds
+        // the person FOR UPDATE) finishes first and this check then sees 'merged' instead of the
+        // account being linked behind the merge to a person whose accounts it has already moved.
         const person = await trx
           .selectFrom('persons')
           .select(['status'])
           .where('organization_id', '=', organizationId)
           .where('id', '=', input.personId)
+          .forShare()
           .executeTakeFirst();
         if (!person) throw errors.notFound('person', input.personId);
         if (person.status !== 'active') {

@@ -33,6 +33,7 @@ import {
   hashToken,
   holdsStaffMembership,
   hoursFromNow,
+  lockPersonsForShare,
   newToken,
   normalizeContactValue,
   personColumns,
@@ -79,6 +80,7 @@ export class ClaimsService {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
+      await lockPersonsForShare(trx, organizationId, [subjectPersonId]);
       const subject = await this.loadPerson(trx, organizationId, subjectPersonId);
       if (!subject) throw errors.protectedNotFound('person');
       // §4.10: the target is the person, so a denial reads exactly like a missing person.

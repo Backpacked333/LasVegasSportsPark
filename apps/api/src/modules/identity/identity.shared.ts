@@ -204,6 +204,30 @@ export async function requireStaffLoginAuthority(
 }
 
 /**
+ * §4.9, SPK-IAM-007: share-locks people, in id order, before a command checks their status and
+ * attaches a new row to them (an account, a staff or household membership, a relationship, a
+ * claim). A running merge holds both persons FOR UPDATE, so the command waits for it and then
+ * reads 'merged' instead of linking the row, behind the merge, to a person the merge has already
+ * emptied. Unknown ids lock nothing (the caller's own existence check still decides).
+ */
+export async function lockPersonsForShare(
+  trx: Trx,
+  organizationId: string,
+  ids: readonly string[],
+): Promise<void> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return;
+  await trx
+    .selectFrom('persons')
+    .select('id')
+    .where('organization_id', '=', organizationId)
+    .where('id', 'in', unique)
+    .orderBy('id')
+    .forShare()
+    .execute();
+}
+
+/**
  * SPK-AT-025, §4.14: a self claim on a person who holds a staff membership is honoured only when
  * whoever issued it held a role that assigns staff roles (a membership may be added after a support
  * or front-desk claim was issued).

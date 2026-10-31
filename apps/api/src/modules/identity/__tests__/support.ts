@@ -43,13 +43,15 @@ export async function backendPid(trx: Trx): Promise<number> {
 }
 
 /**
- * TEST_DATABASE_URL: returns once `work` has settled or another backend waits for a lock held by
- * the backend `holder()` names. Returns whether a backend was found waiting.
+ * TEST_DATABASE_URL: returns once `work` has settled or at least `waiting` other backends wait for
+ * a lock held by the backend `holder()` names (pass the number of requests already started against
+ * the same holder). Returns whether that many backends were found waiting.
  */
 export async function untilSettledOrBlockedBy(
   t: TestApp,
   work: { done: boolean },
   holder: () => number | undefined,
+  waiting = 1,
 ): Promise<boolean> {
   for (let polls = 0; !work.done; polls += 1) {
     if (polls > 2000) throw new Error('the work neither finished nor waited for a row lock');
@@ -58,7 +60,7 @@ export async function untilSettledOrBlockedBy(
       const { rows } = await sql<{ n: number }>`
         select count(*)::int as n from pg_stat_activity
         where ${pid}::int = any(pg_blocking_pids(pid))`.execute(t.db);
-      if (Number(rows[0]?.n) > 0) return true;
+      if (Number(rows[0]?.n) >= waiting) return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
