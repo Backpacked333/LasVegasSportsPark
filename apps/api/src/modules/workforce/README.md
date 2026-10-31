@@ -66,6 +66,9 @@ PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** u
   assigned-coach overlap, SPK-STAFF-003). `CommitmentChecker` takes the same per-person advisory
   lock (`lockParty`) before it reads, so an acceptance and a scheduling command for one person are
   serialized (tested under PostgreSQL concurrency in `__tests__/commitments-retime.spec.ts`).
+  `assertAssignable` takes that lock first, before the qualification, availability and
+  commitment reads, and a qualification revocation takes it too (see "Qualification lapses after
+  acceptance").
 
 ## Tables (migration `0700_workforce_core.sql`)
 
@@ -199,6 +202,15 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   `league_manager` for fixtures and `scheduler` otherwise, deadline = start, one per assignment)
   for every accepted, unfinished assignment whose assignee no longer holds the requirement's
   qualifications. Nothing is withdrawn automatically: an operator decides (POL-033 pending).
+  Evidence recorded for a merged person counts for the survivor (WRK-05), so revoking it raises the
+  survivor's assignments too (`__tests__/person-merge.spec.ts`). A revocation and an acceptance
+  that overlap are serialized on the person: the revocation takes the party lock of everyone the
+  evidence resolves to before it writes, and every assignability check (`assertAssignable`:
+  propose, offer, accept, replace) takes the assignee's party lock before it reads
+  qualifications. The acceptance either reads the revocation and is refused, or commits first and
+  is raised. **Verified** under PostgreSQL concurrency and PGlite
+  (`__tests__/qualification-readiness.spec.ts`, R2-RACES-02). Requirement edits are serialized by
+  the requirement's lock instead.
 - **Fees** (SPK-STAFF-006, §1.7): the computed amount comes from the rate basis (per assignment,
   hourly with half-up rounding, flat) next to the submitted amount; approval records the approver;
   every adjustment appends a history row; export batches are immutable records handed to payment

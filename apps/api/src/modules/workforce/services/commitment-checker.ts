@@ -55,6 +55,18 @@ export interface CommitmentQuery {
  * (`lockParty`), so concurrent commands for one person are serialized and the second one sees the
  * first (SPK-STAFF-003, SPK-SCHED-004; no single constraint spans the two modules' tables).
  */
+/**
+ * The person's scheduling party lock (`lockParty`, the key scheduling's commands take too). Every
+ * workforce command that reads or changes what makes a person assignable takes it before it reads:
+ * the assignability checks (qualifications, availability, commitments) and a qualification
+ * revocation (SPK-STAFF-001, SPK-STAFF-003, SPK-READY-004). Commands for one person are therefore
+ * serialized, and the second one reads what the first one committed. Re-entrant within a
+ * transaction (an advisory transaction lock stacks).
+ */
+export function lockPerson(trx: Trx, organizationId: string, personId: string): Promise<void> {
+  return lockParty(trx, organizationId, 'person', personId);
+}
+
 @Injectable()
 export class CommitmentChecker {
   constructor(
@@ -63,7 +75,7 @@ export class CommitmentChecker {
   ) {}
 
   async conflicts(trx: Trx, query: CommitmentQuery): Promise<CommitmentConflict[]> {
-    if (query.lock !== false) await lockParty(trx, query.organizationId, 'person', query.personId);
+    if (query.lock !== false) await lockPerson(trx, query.organizationId, query.personId);
     const out: CommitmentConflict[] = [];
     const heldEnd = addMinutes(query.scheduledEnd, query.turnaroundMinutes);
     let others = trx

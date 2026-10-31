@@ -251,4 +251,45 @@ describe('person merge follow-up (WRK-05)', () => {
       expect.objectContaining({ code: 'person_unavailable' }),
     ]);
   });
+
+  it('SPK-STAFF-001 / SPK-READY-004: revoking the merged person’s qualification raises the survivor’s unqualified accepted assignment', async () => {
+    const game = await scheduleFixture(t, world, { date: '2027-03-22' });
+    await createRequirementFixture(t, {
+      targetType: 'fixture',
+      targetId: game.fixtureId,
+      kind: 'official',
+      role: 'referee',
+      requiredQualifications: ['referee_level_two'],
+    });
+    const survivor: Actor = await adultCustomer(t);
+    const merged = await adultCustomer(t);
+    const evidence = await createQualificationFixture(t, {
+      personId: merged.personId,
+      kind: 'referee_level_two',
+    });
+    await markMerged(merged.personId, survivor.personId);
+    const assignment = await createAssignmentFixture(t, {
+      targetType: 'fixture',
+      targetId: game.fixtureId,
+      personId: survivor.personId,
+      kind: 'official',
+      role: 'referee',
+      status: 'accepted',
+      scheduledStart: game.start,
+      scheduledEnd: game.end,
+    });
+    const revoked = await post(t, `/v1/qualifications/${evidence}/revoke`, world.leagueManager, {
+      reason: 'Licence suspended',
+    });
+    expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+    const raised = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['status', 'owner_queue', 'severity', 'affected_id'])
+      .where('category', '=', 'workforce.unqualified_assignment')
+      .where('affected_id', '=', assignment)
+      .execute();
+    expect(raised).toEqual([
+      { status: 'open', owner_queue: 'league_manager', severity: 'high', affected_id: assignment },
+    ]);
+  });
 });

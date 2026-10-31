@@ -1,14 +1,21 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { Trx } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { at } from '../../scheduling';
+import { AssignmentsService } from '../services/assignments.service';
+import { QualificationsService } from '../services/qualifications.service';
 import { createQualificationFixture } from '../testing/workforce-fixtures';
 import {
+  backendPid,
   competitionWorld,
   drainOutbox,
+  gate,
   key,
   post,
   scheduleFixture,
   staffMember,
+  tracked,
+  untilSettledOrWaiting,
   workforceTestApp,
   type Actor,
   type CompetitionWorld,
@@ -68,7 +75,7 @@ describe('required officials stay qualified after acceptance (SPK-READY-004, SPK
     return req.body as { id: string; revision: number };
   }
 
-  async function acceptedReferee(fixtureId: string, official: Actor): Promise<string> {
+  async function offeredReferee(fixtureId: string, official: Actor): Promise<string> {
     const offered = await post(t, '/v1/assignments', lm, {
       personId: official.personId,
       kind: 'official',
@@ -78,14 +85,14 @@ describe('required officials stay qualified after acceptance (SPK-READY-004, SPK
       offer: true,
     });
     expect(offered.status, JSON.stringify(offered.body)).toBe(201);
-    const accepted = await post(
-      t,
-      `/v1/assignments/${offered.body.assignment.id}/accept`,
-      official,
-      {},
-    );
-    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
     return offered.body.assignment.id as string;
+  }
+
+  async function acceptedReferee(fixtureId: string, official: Actor): Promise<string> {
+    const id = await offeredReferee(fixtureId, official);
+    const accepted = await post(t, `/v1/assignments/${id}/accept`, official, {});
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    return id;
   }
 
   const unqualifiedExceptions = (assignmentId: string) =>
@@ -199,5 +206,143 @@ describe('required officials stay qualified after acceptance (SPK-READY-004, SPK
     const after = await readiness(game.fixtureId);
     expect(after.check?.status).toBe('ready');
     expect(await unqualifiedExceptions(assignment)).toEqual([]);
+  });
+
+  /**
+   * R2-RACES-02: an acceptance and a revocation of the qualification it depends on, overlapping.
+   * A gate pauses one command inside its open transaction while the other one is sent. Under
+   * TEST_DATABASE_URL the two transactions really overlap: the paused one holds the person's party
+   * lock, the other waits for it and then reads what the first committed. Under PGlite the second
+   * runs once the first commits. Either way the outcome is the one a sequential execution gives:
+   * never an accepted assignment for a revoked qualification without the exception.
+   */
+  describe('acceptance and revocation under concurrency (SPK-STAFF-001, SPK-READY-004)', () => {
+    /** TEST_DATABASE_URL: the backend pid of the first locking read of a record by `spied`. */
+    function lockingReads<T extends object>(
+      target: T,
+      method: string,
+      matches: (args: unknown[]) => boolean,
+    ) {
+      const pids: number[] = [];
+      const host = target as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+      const original = host[method]!.bind(target);
+      const spy = vi.spyOn(host, method).mockImplementation(async (...args: unknown[]) => {
+        if (t.database.concurrent && matches(args)) {
+          const pid = await backendPid(args[0] as Trx);
+          if (pid !== undefined) pids.push(pid);
+        }
+        return original(...args);
+      });
+      return { pids, restore: () => spy.mockRestore() };
+    }
+
+    it('R2-RACES-02 / SPK-STAFF-001: a revocation sent while the acceptance is open raises the unqualified assignment (PGlite and TEST_DATABASE_URL)', async () => {
+      const official = await staffMember(t, ['official']);
+      const game = await scheduleFixture(t, world, { date: '2027-02-16' });
+      await requirement(game.fixtureId, ['referee_grade_5']);
+      const qualificationId = await createQualificationFixture(t, {
+        personId: official.personId,
+        kind: 'referee_grade_5',
+      });
+      const assignment = await offeredReferee(game.fixtureId, official);
+      const qualifications = t.app.get(QualificationsService);
+      const check = qualifications.check.bind(qualifications);
+      const afterRead = gate();
+      let armed = true;
+      const checkSpy = vi
+        .spyOn(qualifications, 'check')
+        .mockImplementation(async (db, organizationId, personId, kinds, instant) => {
+          const result = await check(db, organizationId, personId, kinds, instant);
+          // the acceptance has read the qualification as verified, inside its open transaction
+          if (armed && personId === official.personId) {
+            armed = false;
+            await afterRead.pass();
+          }
+          return result;
+        });
+      const revoker = lockingReads(
+        qualifications,
+        'load',
+        (args) => args[2] === qualificationId && args[3] === true,
+      );
+      try {
+        const accepting = tracked(post(t, `/v1/assignments/${assignment}/accept`, official, {}));
+        await afterRead.reached;
+        const revoking = tracked(
+          post(t, `/v1/qualifications/${qualificationId}/revoke`, lm, {
+            reason: 'Licence suspended',
+          }),
+        );
+        // PostgreSQL: the revocation waits for the person's lock the acceptance holds (without it,
+        // it would commit beside the paused acceptance and find nothing to raise).
+        if (t.database.concurrent) {
+          await untilSettledOrWaiting(t, revoking, () => revoker.pids[0]);
+        }
+        afterRead.open();
+        const [accepted, revoked] = await Promise.all([accepting.promise, revoking.promise]);
+        expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+        expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+      } finally {
+        checkSpy.mockRestore();
+        revoker.restore();
+      }
+      expect(await unqualifiedExceptions(assignment)).toEqual([
+        { status: 'open', owner_queue: 'league_manager', severity: 'high' },
+      ]);
+    });
+
+    it('R2-RACES-02 / SPK-STAFF-001: an acceptance sent while the revocation is open is refused (PGlite and TEST_DATABASE_URL)', async () => {
+      const official = await staffMember(t, ['official']);
+      const game = await scheduleFixture(t, world, { date: '2027-02-17' });
+      await requirement(game.fixtureId, ['referee_grade_5']);
+      const qualificationId = await createQualificationFixture(t, {
+        personId: official.personId,
+        kind: 'referee_grade_5',
+      });
+      const assignment = await offeredReferee(game.fixtureId, official);
+      const qualifications = t.app.get(QualificationsService);
+      const flag = qualifications.flagUnqualifiedAssignments.bind(qualifications);
+      const afterFlag = gate();
+      const flagSpy = vi
+        .spyOn(qualifications, 'flagUnqualifiedAssignments')
+        .mockImplementation(async (trx, organizationId, scope) => {
+          const raised = await flag(trx, organizationId, scope);
+          // the revocation is written and has looked for accepted assignments; it is not committed
+          if ('personId' in scope && scope.personId === official.personId) await afterFlag.pass();
+          return raised;
+        });
+      const acceptor = lockingReads(
+        t.app.get(AssignmentsService),
+        'lock',
+        (args) => args[2] === assignment,
+      );
+      try {
+        const revoking = tracked(
+          post(t, `/v1/qualifications/${qualificationId}/revoke`, lm, {
+            reason: 'Licence suspended',
+          }),
+        );
+        await afterFlag.reached;
+        const accepting = tracked(post(t, `/v1/assignments/${assignment}/accept`, official, {}));
+        // PostgreSQL: the acceptance waits for the person's lock the revocation holds (without it,
+        // it would read the still-verified qualification and commit beside the paused revocation).
+        if (t.database.concurrent) {
+          await untilSettledOrWaiting(t, accepting, () => acceptor.pids[0]);
+        }
+        afterFlag.open();
+        const [revoked, accepted] = await Promise.all([revoking.promise, accepting.promise]);
+        expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+        expect(accepted.status, JSON.stringify(accepted.body)).toBe(422);
+        expect(accepted.body.details.reasons).toEqual([
+          expect.objectContaining({ code: 'qualification_missing', kind: 'referee_grade_5' }),
+        ]);
+      } finally {
+        flagSpy.mockRestore();
+        acceptor.restore();
+      }
+      const row = await t.http.get(`/v1/assignments/${assignment}`).set(lm.header);
+      expect(row.body.status).toBe('offered');
+      expect(await unqualifiedExceptions(assignment)).toEqual([]);
+    });
   });
 });

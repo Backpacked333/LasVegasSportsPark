@@ -37,6 +37,7 @@ import {
   toQualification,
   type QualificationRow,
 } from '../workforce.shared';
+import { lockPerson } from './commitment-checker';
 import { MergedPersons } from './merged-persons';
 
 export interface QualificationCheck {
@@ -297,6 +298,17 @@ export class QualificationsService {
       }
       assertExpectedRevision(expectedRevision, current.revision);
       const next = QualificationMachine.next(current.status, event);
+      // R2-RACES-02 (SPK-STAFF-001, SPK-READY-004): a revocation takes the party lock of everyone
+      // whose assignability reads this evidence (the holder, and anyone a merge resolves to the same
+      // person, WRK-05) before it writes; assertAssignable takes the same lock before it reads
+      // qualifications. A concurrent acceptance therefore either reads the revocation and is
+      // refused, or commits first and is found by flagUnqualifiedAssignments below.
+      if (next === 'revoked') {
+        const holders = await this.merged.resolving(trx, organizationId, current.person_id);
+        for (const personId of [...holders].sort()) {
+          await lockPerson(trx, organizationId, personId);
+        }
+      }
       const now = this.clock.now();
       await trx
         .updateTable('qualifications')
@@ -342,6 +354,10 @@ export class QualificationsService {
    * `workforce.unqualified_assignment` for the assigners' queue, once per assignment. Nothing is
    * withdrawn automatically: whether the person may still work is an operator decision (POL-033
    * pending). Readiness reports the same lapse at read time.
+   *
+   * A person scope covers every assignment whose assignee resolves to the same person as the
+   * evidence's holder (WRK-05): evidence recorded for a merged person counts for the survivor's
+   * assignments (see `check`), so revoking it can leave those unqualified too.
    */
   async flagUnqualifiedAssignments(
     trx: Trx,
@@ -380,7 +396,11 @@ export class QualificationsService {
       .orderBy('a.id');
     if ('personId' in scope) {
       q = q
-        .where('a.person_id', '=', scope.personId)
+        .where(
+          'a.person_id',
+          'in',
+          await this.merged.resolving(trx, organizationId, scope.personId),
+        )
         .where(sql<boolean>`${scope.kind} = any(r.required_qualifications)`);
     } else {
       q = q

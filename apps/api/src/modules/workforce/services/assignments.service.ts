@@ -70,7 +70,7 @@ import {
   type RequirementRow,
 } from '../workforce.shared';
 import { AvailabilityService } from './availability.service';
-import { CommitmentChecker } from './commitment-checker';
+import { CommitmentChecker, lockPerson } from './commitment-checker';
 import { CoverageService, type UncoveredCause, type UncoveredNotice } from './coverage.service';
 import { QualificationsService } from './qualifications.service';
 import { TargetResolver, type FacilityFacts, type ResolvedTarget } from './target-resolver';
@@ -351,7 +351,7 @@ export class AssignmentsService {
         ignoreAssignmentIds: [current.id],
         checkAvailability: false,
       });
-      // WRK-06: read under the person's party lock taken by the commitment check above.
+      // WRK-06: read under the person's party lock taken by assertAssignable above.
       await this.assertOfficialDailyLimit(trx, current, facility);
       const needsAccess = this.access.required(current);
       const opId = needsAccess
@@ -675,8 +675,14 @@ export class AssignmentsService {
   /**
    * Qualification (SPK-STAFF-001), declared unavailability, and overlapping commitments with
    * turnaround (SPK-STAFF-003). Throws ELIGIBILITY_FAILED or RESOURCE_CONFLICT with reasons.
+   *
+   * R2-RACES-02 (SPK-STAFF-001, SPK-READY-004): the person's party lock comes first, before any of
+   * these reads. A qualification revocation takes the same lock before it writes, so an acceptance
+   * either reads the revocation (and is refused) or commits before the revocation looks for the
+   * accepted assignments it must raise `workforce.unqualified_assignment` for.
    */
   async assertAssignable(trx: Trx, input: AssignabilityInput): Promise<void> {
+    await lockPerson(trx, input.organizationId, input.personId);
     const person = await this.people.findPerson(input.organizationId, input.personId, trx);
     if (!person || person.status !== 'active') {
       throw errors.notFound('person', input.personId);

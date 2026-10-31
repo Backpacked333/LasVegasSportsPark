@@ -1,6 +1,7 @@
 import type { TestingModuleBuilder } from '@nestjs/testing';
 import { DomainError, newId, type StaffRole } from '@sportspark/contracts';
 import { pgErrorCode, type Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import { expect } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing';
 import { currentTransaction, DATABASE, OutboxDispatcher, type Trx } from '../../../kernel';
@@ -247,4 +248,63 @@ export async function expectPgError(promise: Promise<unknown>, code: string): Pr
 
 export function post(t: TestApp, path: string, actor: Actor, body: object, idempotencyKey = key()) {
   return t.http.post(path).set(actor.header).set('Idempotency-Key', idempotencyKey).send(body);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Overlapping commands (PGlite and TEST_DATABASE_URL)
+// ---------------------------------------------------------------------------------------------
+
+/** A promise that stays pending until `open()`; `reached` resolves when someone waits on it. */
+export function gate() {
+  let open!: () => void;
+  let arrive!: () => void;
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  const reached = new Promise<void>((resolve) => (arrive = resolve));
+  return {
+    reached,
+    open,
+    pass: async () => {
+      arrive();
+      await opened;
+    },
+  };
+}
+
+/** Tracks whether a promise (or a supertest request, sent once) has settled. */
+export function tracked<T>(work: PromiseLike<T>) {
+  const promise = Promise.resolve(work);
+  const state = { done: false, promise };
+  void promise.then(
+    () => (state.done = true),
+    () => (state.done = true),
+  );
+  return state;
+}
+
+/** The backend pid of the connection running `db` (TEST_DATABASE_URL only). */
+export async function backendPid(db: Db | Trx): Promise<number | undefined> {
+  const { rows } = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(db);
+  return rows[0]?.pid;
+}
+
+/**
+ * TEST_DATABASE_URL: returns once `work` has settled or the backend `pid()` waits for a lock (a row
+ * lock or an advisory lock), so a test can release a paused command knowing the other one is
+ * either finished or queued behind it.
+ */
+export async function untilSettledOrWaiting(
+  t: TestApp,
+  work: { done: boolean },
+  pid: () => number | undefined,
+): Promise<void> {
+  for (let polls = 0; !work.done; polls += 1) {
+    if (polls > 2000) throw new Error('the work neither finished nor waited for a lock');
+    const waiting = pid();
+    if (waiting !== undefined) {
+      const { rows } = await sql<{ wait: string | null }>`
+        select wait_event_type as wait from pg_stat_activity where pid = ${waiting}`.execute(t.db);
+      if (rows[0]?.wait === 'Lock') return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
