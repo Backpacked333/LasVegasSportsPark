@@ -9957,6 +9957,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -59110,9 +59119,11 @@ export type components = {
             count: number;
             /** Format: uuid */
             facilityId: string | null;
+            omitted: number | null;
             source: string;
             /** @enum {string} */
             status: "ok" | "not_permitted" | "unavailable";
+            truncated: boolean;
         };
         ToolInvocation: {
             actionId: string | null;

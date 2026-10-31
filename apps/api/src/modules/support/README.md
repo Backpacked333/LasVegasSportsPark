@@ -109,7 +109,7 @@ waiting_internal | resolved`; `waiting_internal → open | waiting_customer | re
 | PATCH/POST     | `/cases/{id}`, `/{id}/assign`, `/{id}/transition`, `/{id}/notes` | case staff (`support.work_case`); `expectedRevision` required for edits, assignment and transitions; resolve and close take `acknowledgeOpenRecovery` (SUP-04)            |
 | POST           | `/cases/{id}/actions`                                            | case staff (`support.link_action`): link the operation or audit record of a command the operator ran                                                                      |
 | POST           | `/cases/{id}/resend-notification`                                | case staff; communications authorizes the read and the compose + send (`communications.read_notification`, `communications.compose`/`send`)                               |
-| POST           | `/cases/{id}/request-refund`                                     | case staff; finance authorizes `finance.refund` (finance operator, general manager, system administrator) and enforces the refundable ceiling                             |
+| POST           | `/cases/{id}/request-refund`                                     | case staff; finance authorizes `finance.refund` (finance operator, general manager, system administrator) and enforces the refundable ceiling; 503 during recovery        |
 | POST           | `/cases/{id}/actions/{actionId}/settle`                          | case staff who also hold `exceptions.manage` and see the outcome's queue: record the owning module's outcome of an `unknown` helper action                                |
 | GET            | `/today`                                                         | operations staff (`support.read_today`): front desk, league/program managers, scheduler, finance and facilities operators, GM, sysadmin, support                          |
 | GET            | `/exceptions`, `/exceptions/{id}`                                | kernel `exceptions.read`, limited to the viewer's queues (oversight roles see every queue) and facilities; newest first                                                   |
@@ -183,6 +183,25 @@ and `close` events of `POST /cases/{id}/transition` (there are no separate route
   record, owner queue, age, deadline, revision, the next actions the viewer is permitted to take
   (decided with their principal, each with its verb) and resolution history. "Today" is the
   facility-local day.
+- **Today is bounded per read (R3-PERFORMANCE-01, `today-bounds.spec.ts`):** at most
+  `todayExceptionLimit` exceptions are listed (one resolution-history read each), most severe and
+  soonest due first; the rest are counted on the `kernel.operational_exceptions` source
+  (`truncated: true`, `omitted: n`) and summarised by one `exceptions-omitted` item (as severe as
+  the most severe of them, by severity and queue, next action `GET /v1/exceptions`, where they all
+  stay). Only a listed exception stands in for the coverage slot it owns. At most
+  `todayReadinessLimit` fixtures are evaluated for readiness per read, across every facility in it:
+  fixtures still to finish, soonest start first, then finished ones, latest first. Each facility's
+  `competition.readiness` source counts the rest, and one `readiness-omitted:<facilityId>` warning
+  names them (their readiness is unknown there, never ready, SPK-READY-002) and points at the next
+  one's `GET /v1/fixtures/{id}/readiness`. A facility schedule longer than `todayEventLimit` marks
+  its schedule, readiness and coverage sources `truncated` with `omitted: null` (number unknown).
+- **Refunds during recovery (R3-OPERATIONS-02, §5.8, SPK-AT-028, `case-actions.spec.ts`,
+  `recovery-contract.spec.ts`):** while the organization recovers from a restore,
+  `POST /cases/{id}/request-refund` is `@RefusedDuringRecovery()` (503 INTEGRATION_UNAVAILABLE
+  `recovery_mode`, before the idempotency key is claimed, documented in the contract), and the
+  helper itself refuses an in-process caller the same way before recording anything; no refund,
+  reservation, case action or operation is recorded, and the same request succeeds after
+  `POST /v1/recovery/resume`. Notes, links, resends and settling an unknown outcome stay available.
 - **Exceptions (`exceptions.spec.ts`):** acknowledge, resolve and close go through the kernel's
   `OperationalExceptions.transition` (authorization, lifecycle, revision, audit); the history comes
   from those audit records; the affected record is never changed (`underlyingRecordUnchanged`),
@@ -225,6 +244,9 @@ DEC-015 (support coverage, service objectives) and the §6.6 support/operations 
 - a helper request's outcome is treated as lost 15 minutes after its intent
   (`helperOutcomeGraceMinutes`);
 - fixtures with only warnings or unknown readiness evidence are shown as `info` items;
+- **R3-PERFORMANCE-01:** one Today read lists at most 50 exceptions (`todayExceptionLimit`, one
+  exceptions page) and evaluates the readiness of at most 10 fixtures (`todayReadinessLimit`);
+  pending DEC-036 (the §5.9 latency target these bounds serve);
 - **SUP-01:** every category of a customer's request is routed to the `support_operator` queue
   (`customerRequestQueues`, the conservative choice: the queue that triages and reassigns), at
   priority `normal` (`customerRequestPriority`). Routing by category to other queues is pending
@@ -256,6 +278,13 @@ DEC-015 (support coverage, service objectives) and the §6.6 support/operations 
 - **Stale helpers (SUP-04):** only refund helpers can be settled automatically; a resend is
   recorded with its request in one transaction, and communications exposes no lookup of a resend by
   correlation id.
+- **Today cost (R3-PERFORMANCE-01, pending in other modules):** the bounds above cap the work of
+  one read, but each readiness evaluation still costs competition's per-player eligibility reads
+  (hundreds of queries for two full rosters), each listed exception still costs one audit read
+  (the kernel offers no batched history), the exception read itself is unbounded in the kernel
+  (`OperationalExceptions.listOpen` has no limit), and coverage costs one workforce read per live
+  activity (up to `todayEventLimit`). The staff client does not yet show `truncated`/`omitted` on
+  its source list; the `*-omitted` items show in every client.
 - **Today workspace:** current and upcoming activities are counted, not listed; expected arrivals
   (entry) and resource-level field status are not part of the feed; incidents from competition
   discipline appear only when a module raises them as exceptions (no incident port exists).

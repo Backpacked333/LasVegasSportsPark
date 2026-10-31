@@ -27,6 +27,7 @@ import {
   OperationsService,
   Outbox,
   OutboxHistory,
+  RecoveryMode,
   UnitOfWork,
   actionRegistry,
   snapshotActor,
@@ -56,6 +57,18 @@ export const CASE_ACTION_STALE_CATEGORY = 'support.case_action_stale';
 const HELPER_OUTCOME_UNKNOWN_CATEGORY = 'support.helper_outcome_unknown';
 /** Keyset bound above every UUID, for the exclusive outbox-history position just before an instant. */
 const MAX_UUID = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+
+/**
+ * The refusal of a new refund during recovery after a restore: the same answer as the kernel's
+ * RecoveryGuard gives finance's own money commands (§5.8, SPK-AT-028).
+ */
+function refundsPausedForRecovery(): DomainError {
+  return new DomainError(
+    'INTEGRATION_UNAVAILABLE',
+    'Payments are paused while the service recovers from a restore. Try again later.',
+    { details: { reason: 'recovery_mode' } },
+  );
+}
 
 /** Finance refund states in which a refund moved no money and holds no reservation. */
 const REFUND_NO_EFFECT: readonly string[] = ['failed', 'canceled'];
@@ -145,6 +158,7 @@ export class CaseActionsService {
     private readonly auditReader: AuditReader,
     private readonly auditEvidence: AuditEvidence,
     private readonly outboxHistory: OutboxHistory,
+    private readonly recovery: RecoveryMode,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -486,6 +500,11 @@ export class CaseActionsService {
         }
         return { kind: 'replay' as const, action: toCaseAction(existing) };
       }
+      // R3-OPERATIONS-02 (§5.8, SPK-AT-028): no new refund while the organization recovers from a
+      // restore — the refundable funds may be the restored, stale ones. The route is refused at
+      // the edge too; this holds for every in-process caller. Nothing is recorded, so the same
+      // request may be retried after recovery.
+      if (await this.recovery.isActive(organizationId, trx)) throw refundsPausedForRecovery();
       const supportOperationId = await this.operations.create(trx, {
         organizationId,
         kind: 'support.request_refund',
