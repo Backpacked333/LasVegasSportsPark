@@ -1,6 +1,6 @@
 import { newId } from '@sportspark/contracts';
 import { json, pgConstraintName, seedOrganization, type Database } from '@sportspark/db';
-import type { UpdateObject } from 'kysely';
+import { sql, type UpdateObject } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
@@ -313,6 +313,8 @@ describe('workforce schema invariants (migration 0700)', () => {
     await refusedUpdate({ kind: 'coach' });
     await refusedUpdate({ slot: 2 });
     await refusedUpdate({ replaces_assignment_id: id });
+    // nor is its id rewritten: audit, outbox and exception rows name it without a foreign key
+    await refusedUpdate({ id: newId() });
     const row = await t.db
       .selectFrom('assignments')
       .select(['target_id', 'role', 'person_id', 'slot', 'status'])
@@ -331,6 +333,44 @@ describe('workforce schema invariants (migration 0700)', () => {
       .set({ target_title: 'Renamed fixture', revision: 2 })
       .where('id', '=', id)
       .execute();
+  });
+
+  it('WRK-02 (migration 0706): the identity guard runs after every other BEFORE UPDATE trigger, so it compares a column another trigger changed', async () => {
+    const official = await person();
+    const id = await createAssignmentFixture(t, {
+      ...fixtureTarget(game),
+      personId: official,
+      status: 'accepted',
+      role: 'trigger_order_probe',
+    });
+    // PostgreSQL runs BEFORE ROW triggers in name order. A trigger named to sort between the two
+    // existing ones moves the row to another slot while the statement only renames the title; the
+    // guard (assignments_zz_identity_immutable) sees the slot it left. Rolled back with the test.
+    let refused: unknown;
+    try {
+      await t.db.transaction().execute(async (trx) => {
+        await sql`create function wf_test_move_slot() returns trigger language plpgsql as $$
+          begin new.slot := new.slot + 1; return new; end $$`.execute(trx);
+        await sql`create trigger assignments_m_test_move_slot before update on assignments
+          for each row execute function wf_test_move_slot()`.execute(trx);
+        await trx
+          .updateTable('assignments')
+          .set({ target_title: 'Renamed fixture' })
+          .where('id', '=', id)
+          .execute();
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeDefined();
+    expect(pgConstraintName(refused)).toBe('assignments_identity_immutable');
+    const row = await t.db
+      .selectFrom('assignments')
+      .select(['slot', 'target_title'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+    expect(row.slot).toBe(1);
+    expect(row.target_title).not.toBe('Renamed fixture');
   });
 
   it('SPK-STAFF-001: one active availability statement per person per instant', async () => {

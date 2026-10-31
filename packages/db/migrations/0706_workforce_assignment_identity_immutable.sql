@@ -15,18 +15,28 @@
 -- commitment checks. With these columns immutable, the retirement check made at insert and at each
 -- status change stays true for the row's lifetime.
 --
+-- The row's `id` is fixed too: audit records, outbox events and operational exceptions name an
+-- assignment by id without a foreign key, so a rewritten id would orphan them.
+--
 -- Still mutable: status and the facts each state carries, times (`scheduled_start`,
 -- `scheduled_end`, `committed_end`) and `scheduling_event_id` (a retime follows the activity; an
 -- event target's id stays pinned to it by `assignments_event_target`), `facility_id`, `target_title`,
 -- access facts and the revision.
 --
--- The trigger fires on every UPDATE (no column list), so a column changed by another BEFORE trigger
--- is compared too.
+-- Trigger order: the trigger fires on every UPDATE (no column list), but PostgreSQL runs the
+-- BEFORE ROW triggers of one event in alphabetical order of their names, and each one sees NEW as
+-- the triggers before it left it. The guard is therefore named `assignments_zz_identity_immutable`,
+-- so it sorts after every other BEFORE UPDATE trigger on assignments
+-- (`assignments_requirement_not_retired`, 0704; `assignments_touch`, 0700) and compares the row
+-- they produced. A BEFORE UPDATE trigger whose name sorts after it would NOT be checked: name new
+-- ones so they sort before `assignments_zz_`. The error keeps the constraint name
+-- `assignments_identity_immutable`.
 
 create or replace function assignments_identity_guard() returns trigger
 language plpgsql as $$
 begin
-  if new.organization_id is distinct from old.organization_id
+  if new.id is distinct from old.id
+     or new.organization_id is distinct from old.organization_id
      or new.person_id is distinct from old.person_id
      or new.kind is distinct from old.kind
      or new.target_type is distinct from old.target_type
@@ -44,5 +54,5 @@ begin
 end
 $$;
 
-create trigger assignments_identity_immutable before update on assignments
+create trigger assignments_zz_identity_immutable before update on assignments
   for each row execute function assignments_identity_guard();
