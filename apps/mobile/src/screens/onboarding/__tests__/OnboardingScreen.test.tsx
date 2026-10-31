@@ -5,7 +5,9 @@
 import { fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { clearLinkSecrets, holdLinkSecret, readLinkSecret } from '../../../links/link-secrets';
-import { createTestApp } from '../../../testing/test-app';
+import { useApp, type AppContextValue } from '../../../providers/AppProviders';
+import { createTestApp, TEST_SESSION } from '../../../testing/test-app';
+import { holdSecretOf } from '../../link/LinkLandingScreen';
 import {
   apiError,
   contactPoint,
@@ -321,6 +323,60 @@ describe('SCR-C-01 OnboardingScreen', () => {
     view.unmount();
     render(<OnboardingRoute />, { wrapper: app.wrapper });
     expect(await screen.findByLabelText('Claim code')).toHaveProp('value', '');
+  });
+
+  it('R3-SECURITY-07 §4.13: after a sign-out, the next account to sign in is not offered the previous person’s claim code', async () => {
+    const app = createTestApp({ routes: { 'GET /me': ok(me({ person: null })) } });
+    let controls: AppContextValue | null = null;
+    function Device({ onboarding }: { onboarding: boolean }) {
+      controls = useApp();
+      return onboarding ? <OnboardingRoute /> : null;
+    }
+    const view = render(<Device onboarding={false} />, { wrapper: app.wrapper });
+    await waitFor(() => expect(controls?.session.status).toBe('signed_in'));
+    // Adult A opens the front desk's self-claim link (the link landing holds it, then opens setup).
+    holdSecretOf({ to: 'claim', token: TOKEN });
+    view.rerender(<Device onboarding />);
+    expect(await screen.findByLabelText('Claim code')).toHaveProp('value', TOKEN);
+
+    // A is interrupted and signs out; the setup screen stays where it is.
+    await act(async () => {
+      await controls?.signOut();
+    });
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeOnTheScreen();
+    expect(readLinkSecret('claim')).toBeNull();
+
+    // Adult B signs in with another account in the same app session.
+    await act(async () => {
+      await controls?.signIn({
+        ...TEST_SESSION,
+        token: 'other-token',
+        accountId: '0192f1a0-0000-7000-8000-0000000000bb',
+      });
+    });
+    expect(
+      await screen.findByLabelText('Step 2 of 4, Participant record, Not linked yet'),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Claim code')).toHaveProp('value', '');
+    expect(screen.queryByText('Filled in from the link you opened.')).toBeNull();
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+  });
+
+  it('§4.13: a claim link opened while signed out is still offered once that person signs in', async () => {
+    const app = createTestApp({ session: null, routes: { 'GET /me': ok(me({ person: null })) } });
+    let controls: AppContextValue | null = null;
+    function Device() {
+      controls = useApp();
+      return <OnboardingRoute />;
+    }
+    holdSecretOf({ to: 'claim', token: TOKEN });
+    render(<Device />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeOnTheScreen();
+    await act(async () => {
+      await controls?.signIn(TEST_SESSION);
+    });
+    expect(await screen.findByLabelText('Claim code')).toHaveProp('value', TOKEN);
+    expect(screen.getByText('Filled in from the link you opened.')).toBeOnTheScreen();
   });
 
   it('offline: claiming is disabled, the code is kept and nothing is sent', async () => {
