@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { FreshnessClass, MetricUnitValue, ReportKey } from '@sportspark/contracts';
+import type { RestrictionStatus } from '@sportspark/db';
 
 /**
  * Metric registry (SPK-REPORT-001): every metric a report computes, with the nine SPK-REPORT-001
@@ -45,6 +46,16 @@ const PERIOD_LOCAL =
 const PERIOD_INSTANT =
   'Instants periodStart (inclusive) to periodEnd (exclusive), as of the as-of instant';
 const LIVE = 'The as-of instant (evaluated live; the as-of instant is displayed)';
+
+/**
+ * The restriction states the maintenance restrictions report counts (MET-054, MET-057). Every other
+ * state a restriction can hold is a listed MET-054 exclusion, including `withdrawn` (migration
+ * 0903: a withdrawn proposal never took effect).
+ */
+export const COUNTED_RESTRICTION_STATES = [
+  'approved',
+  'active',
+] as const satisfies readonly RestrictionStatus[];
 
 export const METRICS: readonly MetricSpec[] = [
   // R01 Daily schedule --------------------------------------------------------------------------
@@ -681,7 +692,7 @@ export const METRICS: readonly MetricSpec[] = [
       'Approved or active restrictions whose interval contains the as-of instant, with the affected conflict units',
     denominator: 'none (count)',
     timeBasis: LIVE,
-    exclusions: ['proposed restrictions', 'released restrictions'],
+    exclusions: ['proposed restrictions', 'released restrictions', 'withdrawn restrictions'],
     dimensions: ['space', 'kind (closed, limited)', 'source (task, preventive schedule, manual)'],
     currency: 'none',
     freshness: 'F1',

@@ -1,5 +1,6 @@
 import type { ColumnType, Generated } from 'kysely';
 import type { GeneratedTimestamp, Json, MinorUnits, NullableTimestamp, Timestamp } from './core';
+import type { RestrictionStatus } from './facilities';
 
 /**
  * Reporting module tables and read-only views (migration 1300, specification §3.20
@@ -636,7 +637,11 @@ export interface ReportingRestrictionsView {
   kind: V<'closed' | 'limited'>;
   starts_at: V<Date>;
   ends_at: V<Date>;
-  status: V<'proposed' | 'approved' | 'active' | 'released'>;
+  /**
+   * The restriction's own status, passed through unfiltered: it includes `withdrawn` (migration
+   * 0903), so it is the facilities `RestrictionStatus` itself rather than a copy that can drift.
+   */
+  status: V<RestrictionStatus>;
   approved_at: V<Date | null>;
   released_at: V<Date | null>;
   affected_unit_count: V<number>;

@@ -1,8 +1,14 @@
 import { REPORT_KEYS, type ReportResponse } from '@sportspark/contracts';
+import type { RestrictionStatus } from '@sportspark/db';
 import { describe, expect, it } from 'vitest';
 import { csvCell, renderCsv, renderJson, resultDigest } from './output/report-output';
 import { CostInputMachine, ExportMachine, MetricDefinitionMachine } from './reporting.machines';
-import { definitionHash, METRICS, metricsForReport } from './reporting.metrics';
+import {
+  COUNTED_RESTRICTION_STATES,
+  definitionHash,
+  METRICS,
+  metricsForReport,
+} from './reporting.metrics';
 import { agingBand } from './reports/finance.reports';
 import { costInputFor } from './reports/economics.report';
 import { closedPeriods, parseWeights } from './reports/utilization.report';
@@ -70,6 +76,22 @@ describe('metric registry (SPK-REPORT-001)', () => {
     ]) {
       expect(cited.has(id), id).toBe(true);
     }
+  });
+
+  it('SPK-REPORT-001 / SPK-FAC-003: MET-054 lists every restriction state it does not count as an exclusion, withdrawn included', () => {
+    // Keyed by RestrictionStatus, so the compiler demands every state a restriction can hold.
+    const states: Record<RestrictionStatus, true> = {
+      proposed: true,
+      approved: true,
+      active: true,
+      released: true,
+      withdrawn: true,
+    };
+    const counted: readonly string[] = COUNTED_RESTRICTION_STATES;
+    const excluded = Object.keys(states).filter((state) => !counted.includes(state));
+    expect(excluded).toEqual(['proposed', 'released', 'withdrawn']);
+    const met054 = METRICS.find((m) => m.key === 'MET-054')!;
+    expect(met054.exclusions).toEqual(excluded.map((state) => `${state} restrictions`));
   });
 
   it('the definition hash changes with any field (a changed definition is a new version)', () => {

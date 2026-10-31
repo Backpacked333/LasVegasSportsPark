@@ -4,6 +4,7 @@ import { ReadinessService } from '../../competition';
 import { ASSIGNMENT_COVERAGE_PORT, type AssignmentCoveragePort } from '../../workforce';
 import { column, type ReportDefinition } from '../engine/report-definition';
 import { ReportingActions } from '../reporting.actions';
+import { COUNTED_RESTRICTION_STATES } from '../reporting.metrics';
 import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import { iso, localDays, metricValue, ratio, HOUR_MS } from '../reporting.shared';
 
@@ -264,7 +265,7 @@ export class OperationsReports {
         .selectAll()
         .where('organization_id', '=', ctx.organizationId)
         .where('facility_id', '=', facility.id)
-        .where('status', 'in', ['approved', 'active'])
+        .where('status', 'in', COUNTED_RESTRICTION_STATES)
         .where('starts_at', '<=', ctx.asOf)
         .where('ends_at', '>', ctx.asOf)
         .orderBy('starts_at')
