@@ -71,7 +71,7 @@ PostgreSQL (`TEST_DATABASE_URL`). Statements below are verified unless marked pr
 | `seasons`                | competition, one rule-set version of the competition's format, `starts_on/ends_on`, `registration_offering_ref` (catalog id as text, no cross-module key), registration window, status `draft → open → active → completed → archived`, revision                                                                              |
 | `divisions`              | season, documented criteria jsonb (age band, level, category, format; DEC-048), `facility_id` (location, composite FK), `capacity_team_entries`; `unique (organization_id, season_id, id)` so entries and fixtures reference a division of their own season                                                                  |
 | `teams`                  | Continuing identity (§4.5): name, colors, creator; status `active/inactive/archived`                                                                                                                                                                                                                                         |
-| `team_entries`           | One team's participation in one season: status `applied → approved \| rejected \| withdrawn` (approved → withdrawn) with the matching facts, `division_id` (null until placed), `financial_status_ref` (set by finance), `eligibility_status`, `renewed_from_entry_id`, revision. Roster completion is derived, never stored |
+| `team_entries`           | One team's participation in one season: status `applied → approved \| rejected \| withdrawn` (approved → withdrawn) with the matching facts, `division_id` (null until placed), `financial_status_ref` (see port notes), `eligibility_status`, `renewed_from_entry_id`, revision. Roster completion is derived, never stored |
 | `team_roles`             | Effective-dated `captain/co_captain/member`; partial unique: one open role per person per entry                                                                                                                                                                                                                              |
 | `roster_memberships`     | Effective-dated rows `invited/requested/active/guest/substitute/removed`; removal sets `effective_to`, `status_before_removal`, `removed_*` and never deletes (SPK-COMP-005); partial unique: one open row per person per entry; jersey numbers unique among open playing rows; `eligibility_snapshot` kept with the row     |
 | `team_invitations`       | Inviter, recipient (person **or** contact, check-constrained), message, token hash, expiry, acceptance, revocation, placeholder roster row; one pending per recipient per entry                                                                                                                                              |
@@ -175,7 +175,11 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
 ## Ports (`ports.ts`, provided by `CompetitionModule`)
 
 - `TEAM_ENTRY_QUERY_PORT` → `findTeamEntry`, `listSeasonEntries`, `entriesOfPerson(at)` (ids and
-  readiness facts only).
+  readiness facts only), and one write for finance: `recordFinancialStatusRef(trx, …)` sets
+  `team_entries.financial_status_ref` to the latest obligation finance created with the entry as
+  debtor, in finance's transaction, audited (`competition.record_financial_status`) and idempotent
+  (R2-JOURNEYS-05, **Verified** in `__tests__/team-entry-finance.spec.ts`; finance does not call
+  it yet).
 - `ROSTER_PORT` → `effectiveRoster(organizationId, teamEntryId, at)` (SPK-COMP-005: the roster as
   it was at an instant) and `addRegisteredMember(trx, …)` (SPK-AT-002: enrollment's confirmation of
   a paid `join_team` registration adds the active membership, source `registration` from migration
@@ -209,7 +213,10 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
   results), `FORMS_CHECK_PORT` (enrollment over catalog: the season's registration offering's
   required forms against the rostered participants' acknowledgments — default `unknown`),
   `FINANCIAL_CONDITIONS_PORT` (finance: open obligations of the competing team entries, reported
-  `unknown` while POL-017/DEC-056 are pending — default `unknown`), `CHANGE_NOTICE_CHECK_PORT`
+  `unknown` while POL-017/DEC-056 are pending — default `unknown`; and, optionally,
+  `entryFinancialStatus` for one entry — `none`, `clear`, `outstanding` or `unknown` — which the
+  captain workspace reports; an implementation without it, or that fails, is reported `unknown`,
+  never clear; finance does not implement it yet, R2-JOURNEYS-05), `CHANGE_NOTICE_CHECK_PORT`
   (communications: delivery of the notice that describes the fixture's current time — default
   `unknown`). **Verified** in the assembled application
   (`apps/api/src/__tests__/cross-module-ports.spec.ts`).
@@ -229,8 +236,8 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
 
 `competition.competition_created/updated`, `competition.rule_set_created`,
 `competition.season_created/updated`, `competition.division_created/updated`,
-`competition.team_created/updated`, `competition.team_entry_created` (finance and enrollment react:
-nothing is charged here, SPK-CAP-005), `competition.team_entry_status_changed`,
+`competition.team_created/updated`, `competition.team_entry_created` (no module consumes it
+today; nothing is charged here, SPK-CAP-005), `competition.team_entry_status_changed`,
 `competition.team_role_changed`, `competition.roster_changed` (one per row opened or closed),
 `competition.team_invitation_created/resolved` (communications delivers; recipients are resolved by
 id or contact, never carried in the payload), `competition.join_request_created/decided`,
@@ -557,3 +564,16 @@ built, waiting on a decision or another module.
   and serving suspensions for a game that never took place (`__tests__/results.spec.ts`
   "R2-LIFECYCLES-04"). A draft or submitted revision of a fixture canceled afterwards stays as it
   is (the result machine has no withdrawal state); publishing or resubmitting it is refused.
+- The captain workspace's financial issue comes from finance's obligations for the entry
+  (`FINANCIAL_CONDITIONS_PORT.entryFinancialStatus`), not from whether `financial_status_ref` is
+  set (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002): `none` gives `financial_status_unknown` ("No
+  financial obligation has been recorded for this entry yet", owner `finance_operator`);
+  `outstanding` gives `team_obligation_outstanding` (warning, owner `captain`, remaining amounts in
+  minor units, the next due date, and that the effect on play awaits POL-017/DEC-056); `clear`
+  gives no financial issue; `unknown` (no implementation, or it fails) gives
+  `financial_status_unknown` naming whether an obligation is recorded. Finance records the
+  obligation reference through `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`
+  (`__tests__/team-entry-finance.spec.ts`, with a deterministic finance double). Not yet done by
+  finance: calling `recordFinancialStatusRef` when it creates a team-entry obligation, and
+  implementing `entryFinancialStatus`; until then, in the assembled application, the workspace
+  reports the financial status as `unknown` and the reference stays null.
