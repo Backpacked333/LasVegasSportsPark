@@ -145,7 +145,14 @@ Merges (SPK-IAM-007): self-service and imported relationships and grants of the 
 ended, not transferred; self-service relationships over the survivor end and the survivor's
 self-service creator privilege is cleared; the summary (`moved`) reports each count so staff can
 re-establish legitimate access through a claim or a staff grant. A child record cannot survive an
-adult.
+adult. Pending invitations and claims addressed to the merged person are revoked one by one through
+the same pending → revoked transition as the revoke commands: under the row lock, revision bumped,
+an `identity.revoke_invitation` / `identity.revoke_claim` audit record on the invitation or claim
+(`details.via: 'merge'`, the merge's `operationId`) and an `identity.invitation_revoked` /
+`identity.claim_revoked` event (§4.6, §4.9, §4.12). The merged person's accounts are locked before
+they are disabled or moved, so a recovery racing the merge commits first and the merge's revision
+follows it. **Verified**: `__tests__/duplicates.spec.ts` "SPK-IAM-007 / §4.9: merge moves the
+account …" and `identity-concurrency.spec.ts` "§4.9 / SPK-IAM-007: a merge racing a recovery …".
 
 Several reviews may restrict the same grant (SPK-IAM-005, §4.6): each `restrict` records its own
 row in `access_grant_suspensions`, and `lift` ends only the deciding review's rows. A grant is
@@ -194,8 +201,10 @@ recordId`, source `import`, create-if-absent (same content: the existing person 
 `window_ended`, IF-26; absent means `decision`), `identity.invitation_created`,
 `identity.invitation_accepted`, `identity.invitation_revoked`, `identity.invitation_declined`
 (IF-10, no handler yet), `identity.invitation_expired` and `identity.claim_expired` (IF-25, `via`
-`sweep` or `acceptance_attempt`, once per expiry), `identity.claim_issued`,
-`identity.claim_revoked`, `identity.claim_accepted`, `identity.staff_membership_changed`,
+`sweep` or `acceptance_attempt`, once per expiry, by whichever path holds the row: the gated race
+cases in `__tests__/identity-jobs.spec.ts` run under PGlite and PostgreSQL), `identity.claim_issued`,
+`identity.claim_revoked` (`identity.invitation_revoked` and `identity.claim_revoked` come from the
+revoke commands and from a merge alike), `identity.claim_accepted`, `identity.staff_membership_changed`,
 `identity.access_review_opened`, `identity.access_review_decided`,
 `identity.duplicate_candidate_flagged`, `identity.persons_merged` (consumers never rewrite person
 ids in history; they read through `personIdsResolvingTo`, IF-21).
@@ -234,8 +243,12 @@ Recovering (`POST /accounts/{id}/relink`), provisioning (`POST /accounts` with a
 self-claiming (issue and accept) the login of a person who holds a staff membership in force or
 scheduled needs `identity.manage_staff_membership` (system administrator): support and front desk
 cannot take over a login that may assign staff roles. A relink never re-activates a disabled account
-(409 `INVALID_TRANSITION`) and its audit names the previous and the new provider subject.
-**Verified**: `__tests__/claims-and-accounts.spec.ts` "SPK-AT-025 / §4.14: …" and
+(409 `INVALID_TRANSITION`) and its audit names the previous and the new provider subject. The
+account row is locked before the authority, status and revision checks, so of two recoveries of one
+login at once exactly one relinks it; the other answers 409 `STALE_REVISION` and is neither audited
+nor announced (§4.9). **Verified**: `__tests__/claims-and-accounts.spec.ts` "SPK-AT-025 / §4.14: …",
+`__tests__/identity-concurrency.spec.ts` "§4.9 / SPK-AT-025: two recoveries …" (PGlite and
+PostgreSQL) and
 `apps/api/src/__tests__/journeys/spk-at-025.spec.ts`. Verification evidence for recovery, rate limits
 and a second approver for staff recovery are **Pending decision** (DEC-018, DEC-091).
 
