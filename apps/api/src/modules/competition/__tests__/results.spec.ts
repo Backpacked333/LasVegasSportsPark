@@ -575,7 +575,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
     expect(foreignPublish.status).toBe(404);
   });
 
-  it('R2-LIFECYCLES-04 / SPK-RESULT-001 / SPK-DISC-002: a result that records a game outcome is refused for a fixture the fixture machine cannot move to it (unscheduled, postponed, canceled after submission), so standings never count a game that did not take place', async () => {
+  it('R2-LIFECYCLES-04 / SPK-RESULT-001 / SPK-DISC-002: a result that records a game outcome is refused for a fixture the fixture machine cannot move to it (unscheduled, postponed, canceled after submission) and as a correction of a forfeit on a fixture that never had a start, so standings never count a game that did not take place', async () => {
     const patch = (path: string, actor: Actor, body: object) =>
       t.http.patch(`/v1${path}`).set(actor.header).set('Idempotency-Key', key()).send(body);
     const fixtureRevision = async (id: string) =>
@@ -694,5 +694,53 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
       forfeitingEntryId: d.teamEntryId,
     });
     expect(forfeit.status).toBe(201);
+    const forfeitPublished = await post(`/results/${forfeit.body.id}/publish`, leagueManager, {
+      expectedRevision: forfeit.body.revision,
+    });
+    expect(forfeitPublished.status).toBe(200);
+    const afterForfeit = await table();
+    expect(afterForfeit.sourceResultIds).toContain(forfeit.body.id);
+    // ... but a correction of that forfeit to a played or abandoned game is refused: the fixture
+    // never had a kickoff, so neither the standings nor served suspensions may count a game there
+    for (const body of [played, abandoned]) {
+      const correction = await post(`/fixtures/${unscheduled}/results`, leagueManager, {
+        ...body,
+        reason: 'The game was played after all.',
+      });
+      expect(correction.status).toBe(409);
+      expect(correction.body.code).toBe('INVALID_TRANSITION');
+      expect(correction.body.details).toMatchObject({ machine: 'Fixture', from: 'forfeit' });
+    }
+    // a correction that keeps the outcome a forfeit (the other side forfeited) is still accepted
+    const forfeitCorrection = await post(`/fixtures/${unscheduled}/results`, leagueManager, {
+      classification: 'forfeit',
+      homeScore: 0,
+      awayScore: 3,
+      forfeitingEntryId: c.teamEntryId,
+      reason: 'The home side forfeited, not the away side.',
+    });
+    expect(forfeitCorrection.status).toBe(201);
+    const pending = await t.db
+      .selectFrom('result_revisions')
+      .select(['id', 'classification', 'status'])
+      .where('fixture_id', '=', unscheduled)
+      .orderBy('revision_no')
+      .execute();
+    expect(pending.map((r) => [r.classification, r.status])).toEqual([
+      ['forfeit', 'official'],
+      ['forfeit', 'submitted'],
+    ]);
+    const finalTable = await table();
+    expect(finalTable.sourceResultIds).toEqual(afterForfeit.sourceResultIds);
+    expect(finalTable.rows).toEqual(afterForfeit.rows);
+    expect(
+      (
+        await t.db
+          .selectFrom('fixtures')
+          .select('status')
+          .where('id', '=', unscheduled)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('forfeit');
   });
 });

@@ -1041,16 +1041,16 @@ export class ResultsService {
   }
 
   /**
-   * CMP-12 (SPK-RESULT-001): a played result waits for kickoff; before the scheduled start only a
-   * forfeit, cancellation or postponement is recorded (INVALID_TRANSITION FIXTURE_NOT_STARTED).
-   */
-  /**
    * R2-LIFECYCLES-04 (§4.6, SPK-RESULT-001, SPK-DISC-002): a canceled fixture takes no result, and a
    * classification that records a game outcome (completed, forfeit, abandoned) is accepted only for
    * a fixture the fixture machine can move to that outcome, or one whose outcome is already
    * recorded (a correction: the outcome states are terminal or replayable, and the result revision
-   * is authoritative). So an unscheduled or postponed fixture never takes a played or abandoned
-   * result, and standings and served suspensions never count a game that did not take place.
+   * is authoritative). A played or abandoned fixture had a kickoff, so a correction there may
+   * record any outcome. A forfeit can be recorded for a fixture that never had a start (unscheduled
+   * or postponed); a correction of it to a played or abandoned game is accepted only when the
+   * fixture has a start (whether that start has passed is `assertKickoffPassed`'s check). So a
+   * game that never had a kickoff never takes a played or abandoned result, and standings and
+   * served suspensions never count a game that did not take place.
    */
   private assertFixtureTakesResult(
     fixture: FixtureRow,
@@ -1063,10 +1063,17 @@ export class ResultsService {
     const outcome = outcomeOfClassification(classification);
     if (!outcome) return;
     if (FixtureMachine.can(fixture.status, outcome.event)) return;
-    if (OUTCOME_STATES.includes(fixture.status)) return;
+    if (OUTCOME_STATES.includes(fixture.status)) {
+      const hadKickoff = fixture.status !== 'forfeit' || fixture.scheduled_start !== null;
+      if (outcome.outcome === 'forfeit' || hadKickoff) return;
+    }
     throw errors.invalidTransition('Fixture', fixture.status, outcome.event);
   }
 
+  /**
+   * CMP-12 (SPK-RESULT-001): a played result waits for kickoff; before the scheduled start only a
+   * forfeit, cancellation or postponement is recorded (INVALID_TRANSITION FIXTURE_NOT_STARTED).
+   */
   private assertKickoffPassed(fixture: FixtureRow, classification: ResultClassification): void {
     if (!fixture.scheduled_start || PRE_KICKOFF_CLASSIFICATIONS.includes(classification)) return;
     if (this.clock.now().getTime() >= new Date(fixture.scheduled_start).getTime()) return;
