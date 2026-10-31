@@ -263,7 +263,12 @@ reservation, commitment or notice); the draft is published only through a schedu
 `create` change names it, whose validation and publication re-detect later conflicts. Tests:
 `__tests__/event-import.spec.ts` ("SPK-AT-024: importing the same event twice creates one draft
 event", "an import that conflicts with an existing reservation or closure answers
-IMPORT_SCHEDULE_CONFLICT and writes nothing", "§5.6: importing publishes nothing").
+IMPORT_SCHEDULE_CONFLICT and writes nothing", "§5.6: importing publishes nothing", "§5.3 future
+schedules / SPK-SCHED-004 / SPK-SCHED-006: two imported events that overlap each other both
+import; the schedule draft that publishes them is where the conflict surfaces"). The import does
+not compare imported events with each other: two that overlap both import, and the conflict is
+reported by the schedule draft that publishes them (`intra_draft_overlap`, or a refused
+publication against the one published first).
 
 ### Closure impact contributors (SPK-SCHED-009, SPK-AT-009) — verified
 
