@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0616` and `0680`)
+`0600`–`0617` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -81,6 +81,11 @@ carry `revision` and `touch_updated_at`.
   together, recorded once and never changed or cleared (`installment_plans_hold_recorded`), and no
   installment payment attempt can name an installment of a held plan
   (`payment_attempts_installment_plan_held`).
+- **SPK-PAY-006 / SPK-PAY-004 (`0617`, R3-TIME-MONEY-08):** a plan's installments add up to its
+  total, checked at commit when a plan is created or its total changes and when an installment is
+  created, removed or its amount or plan changes (`installment_plans_total_matches_installments`;
+  `__tests__/credits-installments.spec.ts`). `0617` also gave every earlier plan the sum of its
+  installments as total.
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
   (`refunded + reserved + compensated <= captured`, `0612`); captured is fixed, refunded and
   compensated (what a compensation credit took, MONEY-02) only accumulate.
@@ -158,11 +163,25 @@ contribution's amount and status, never a player's payment or method.
 
 ## Durable work
 
-- Outbox handlers: `finance.finalize_checkout` on `finance.checkout_payment_received` (§4.11 step 8,
-  SPK-AT-023), `finance.abort_expired_checkout` on its timer `finance.checkout_expiry_due`,
-  `finance.complete_compensation` on `finance.refund_settled`, `finance.record_installment_notice`
-  on its timer `finance.installment_notice_due`, `finance.follow_person_merge` on
-  `identity.persons_merged` (R2-LIFECYCLES-02, below). All are idempotent under replay.
+- Outbox handlers (all twelve registered in `finance.module.ts`; the cross-module consumer
+  inventory is `docs/architecture/overview.md` §7.1; R3-DOCS-TRUTH-3-08):
+  - `finance.finalize_checkout` on `finance.checkout_payment_received` (§4.11 step 8, SPK-AT-023);
+  - `finance.abort_expired_checkout` on its timer `finance.checkout_expiry_due`;
+  - `finance.complete_compensation` on `finance.refund_settled`;
+  - `finance.pos_return_refund_outcome` on `finance.refund_settled` (a failed card refund of a
+    point-of-sale return is owned by the finance operator, FIN-06);
+  - `finance.record_installment_notice` on its timer `finance.installment_notice_due`;
+  - finance notices (FIN-05, R2-JOURNEYS-04): `finance.notify_contribution_requested` on
+    `finance.contribution_requested`, `finance.notify_checkout_recovery` on
+    `finance.checkout_recovery_required`, `finance.notify_checkout_compensated` on
+    `finance.checkout_compensated`, `finance.notify_payment_failed` on `finance.payment_failed`,
+    `finance.notify_installment_failed` on `finance.installment_failed`,
+    `finance.notify_installment_due` on `finance.installment_notice`;
+  - `finance.follow_person_merge` on `identity.persons_merged` (R2-LIFECYCLES-02, below).
+
+  All are idempotent under replay. A change to the payload of `finance.refund_settled` reaches two
+  of them (compensation and POS returns).
+
 - Inbox handler `finance.apply_payment_event` for provider `fake-payments`.
 - `FinanceWorker` (outside any transaction; started in non-test processes, `runOnce()` in tests):
   executes requested refunds (customer and compensation), cancels abandoned payment challenges at
@@ -183,7 +202,9 @@ contribution's amount and status, never a player's payment or method.
 
 - **Quotes (SPK-PAY-001/002/003):** prices come from catalog's price rule effective now (never the
   client), discounts from catalog's explainable evaluation, approved taxes and fees from the rule's
-  charge lines (exclusive ones added, inclusive ones shown), credits the payer owns; the quote shows
+  charge lines (exclusive ones added, inclusive ones shown; several inclusive rates are extracted
+  together, so a price of 10800 including 5% and 3% shows 500 and 300 included, R3-TIME-MONEY-09),
+  credits the payer owns; the quote shows
   every line, totals, due now, future obligations, expiry and policies. Unknown discount codes are
   refused. A quote expires at the earlier of its validity and the basket's hold expiry.
 - **Checkout (§4.11):** steps 1–10 as in `services/checkout.service.ts`. One checkout per quote: a
@@ -197,6 +218,16 @@ contribution's amount and status, never a player's payment or method.
   another path is never charged again (a retry answers `CHECKOUT_MONEY_RECEIVED`) and an abort with
   it raises the critical exception `finance.aborted_order_money_received` for the finance
   operator.
+- **Discount redemptions (SPK-PAY-003, R3-TIME-MONEY-01):** checkout redeems each applied
+  discount once per participant whose lines it reduced, in that participant's name (never the
+  payer's), referenced by the participant's first discounted order line (reference type
+  `order_line`) and with the part of the discount allocated to their lines
+  (`pricing/discount-redemptions.ts`); an abort releases exactly those references. A per-person
+  limit therefore counts the participant both when catalog evaluates the quote and when its
+  database guard (0207/0208) counts the redemption: a guardian paying for two children uses each
+  child's allowance once, and two guardians paying for the same child share that child's one
+  allowance (`__tests__/discount-redemption.spec.ts`). The organization-wide `redemption_limit`
+  consequently counts one redemption per participant.
 - **Payment uncertainty (SPK-PAY-007):** a timeout is `unknown` with a critical exception owned by
   the finance operator; retries and aborts are refused until a webhook, staff reconciliation or the
   worker sweep resolves it. A direct payment, a cash or external tender and a credit redemption
@@ -248,7 +279,10 @@ contribution's amount and status, never a player's payment or method.
   payable only while its obligation is open. Redeeming a credit into a team obligation needs the
   same authority as paying it (responsible payer, or the captain in the contributions model).
 - **Installments (SPK-PAY-006):** explicit authorization at checkout; due now is the first
-  installment; notices three days before; collection by the worker with the authorized method; a
+  installment; the plan total is the order total, which its installments add up to, and credits
+  applied in the quote are allocations against installment 1 (so installment 1 is due now plus
+  the credits, and `outstandingMinor` counts what is still owed after them; R3-TIME-MONEY-08);
+  notices three days before; collection by the worker with the authorized method; a
   failure is a financial state plus exception `finance.installment_failed` and event
   `finance.installment_failed` — the enrollment stays as it is (participation consequences are
   evaluated separately, POL-017); extensions reset the attempts and the notice, which goes out the
@@ -565,6 +599,11 @@ outcome recording and reconciliation are never gated.
 - Compensation does not yet release the order's discount redemptions (per-person discount limits),
   and an open future installment obligation partly paid before compensation is canceled for its
   full amount (the same as abort).
+- Catalog's quote evaluation checks a discount's organization-wide `redemption_limit` once per
+  discount, while checkout redeems once per participant (above): a basket with more discounted
+  participants than redemptions left is quoted with the discount and refused at checkout with
+  `DISCOUNT_REDEMPTION_LIMIT`. Closing it needs catalog's evaluator to count the participants
+  (recorded as a deferred catalog change, R3-TIME-MONEY-01).
 - `written_off` obligations, credit revocation and the accounting of credit expiry (breakage) have
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
 - Revenue recognition (deferred → earned) is not implemented (DEC-022); the accounting export
@@ -577,7 +616,13 @@ outcome recording and reconciliation are never gated.
   owned exception asks the finance operator to decide.
 - `FINANCIAL_CONDITIONS_IMPL` (competition match readiness, `ParticipationStandingService`) reports
   an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
-  DEC-056), so it is never a pass or a block until the policy is approved.
+  DEC-056), so it is never a pass or a block until the policy is approved. The finding names the
+  team entry only: `GET /v1/fixtures/{id}/readiness` is read by players and guardians of both
+  teams and competition passes the finding through unchanged, so it carries no count, amount or
+  due date (deadline `null`) for anyone, staff included; those stay on the team entry workspace for
+  the viewers `finance.read_obligation` admits (R3-TRACE-B-01, `__tests__/fixture-conditions.spec.ts`).
+  Showing the formatted details in readiness to those viewers is a competition change (recorded as
+  deferred).
 - Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002) — **Verified**:
   `POST /v1/obligations` for a team entry records the obligation as the entry's
   `financialStatusRef` through competition's `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`, in

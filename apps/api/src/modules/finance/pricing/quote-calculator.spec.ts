@@ -144,3 +144,33 @@ describe('quote arithmetic (SPK-PAY-001/002/003)', () => {
     ).toThrow(/same currency/);
   });
 });
+
+describe('inclusive charges extracted together (R3-TIME-MONEY-09, SPK-PAY-002)', () => {
+  it('SPK-PAY-002: a price including 5% and 3% contains 500 and 300 of a 10000 base, not 514 and 315', () => {
+    const charges = applyCharges(10_800, 1, [
+      { code: 'state', label: 'State tax', kind: 'tax', basisPoints: 500, inclusive: true },
+      { code: 'city', label: 'City tax', kind: 'tax', basisPoints: 300, inclusive: true },
+    ]);
+    expect(charges.charges.map((c) => c.amountMinor)).toEqual([500, 300]);
+    expect(charges.includedMinor).toBe(800);
+    expect(charges.taxMinor).toBe(0);
+  });
+
+  it('the parts add up to the included total by the largest remainder, and one rate is unchanged', () => {
+    // 9999 including 7.25% and 2.5%: included = round(9999 * 975 / 10975) = 888, split 660 / 228.
+    const two = applyCharges(9_999, 1, [
+      { code: 'a', label: 'A', kind: 'tax', basisPoints: 725, inclusive: true },
+      { code: 'fee', label: 'Fee', kind: 'fee', amountMinor: 150, inclusive: false },
+      { code: 'b', label: 'B', kind: 'tax', basisPoints: 250, inclusive: true },
+    ]);
+    expect(two.charges.map((c) => c.amountMinor)).toEqual([660, 150, 228]);
+    expect(two.includedMinor).toBe(888);
+    expect(two.feeMinor).toBe(150);
+    // A single inclusive rate keeps its earlier extraction (net * bp / (10000 + bp), half up).
+    expect(
+      applyCharges(10_000, 1, [
+        { code: 'vat', label: 'VAT', kind: 'tax', basisPoints: 1_000, inclusive: true },
+      ]).includedMinor,
+    ).toBe(roundHalfUp(10_000 * 1_000, 11_000));
+  });
+});

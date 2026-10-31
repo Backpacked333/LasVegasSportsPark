@@ -45,6 +45,10 @@ import {
   type Reader,
 } from '../finance.shared';
 import { LedgerService } from '../ledger/ledger.service';
+import {
+  DISCOUNT_REDEMPTION_REFERENCE,
+  participantRedemptions,
+} from '../pricing/discount-redemptions';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
 import { RefundsService } from './refunds.service';
@@ -1088,12 +1092,31 @@ export class CheckoutFinalizer {
       .where('organization_id', '=', organizationId)
       .where('id', '=', checkout.quote_id)
       .executeTakeFirstOrThrow();
-    for (const discount of quote.discounts as unknown as QuoteDiscountLine[]) {
+    // R3-TIME-MONEY-01 (SPK-PAY-003): the releases name exactly the redemptions checkout recorded,
+    // one per participant whose lines the discount reduced, so each participant's allowance (and
+    // the discount's organization-wide count) is given back.
+    const orderLines = await trx
+      .selectFrom('order_lines')
+      .select(['id', 'sequence', 'participant_person_id', 'price_basis'])
+      .where('organization_id', '=', organizationId)
+      .where('order_id', '=', order.id)
+      .execute();
+    const discountRedemptions = participantRedemptions(
+      quote.discounts as unknown as QuoteDiscountLine[],
+      orderLines.map((line) => ({
+        orderLineId: line.id,
+        sequence: line.sequence,
+        participantPersonId: line.participant_person_id,
+        discounts: ((line.price_basis as { discounts?: QuoteDiscountLine[] }).discounts ??
+          []) as QuoteDiscountLine[],
+      })),
+    );
+    for (const redemption of discountRedemptions) {
       await this.pricing.releaseDiscount(trx, organizationId, {
-        discountDefinitionId: discount.discountDefinitionId,
-        referenceType: 'order',
-        referenceId: order.id,
-        personId: checkout.payer_person_id,
+        discountDefinitionId: redemption.discountDefinitionId,
+        referenceType: DISCOUNT_REDEMPTION_REFERENCE,
+        referenceId: redemption.orderLineId,
+        personId: redemption.personId,
         actor,
         correlationId,
       });
