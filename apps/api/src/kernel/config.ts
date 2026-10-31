@@ -107,6 +107,22 @@ export const ConfigSchema = z
       .transform((value, ctx) => parseOrigins(value, ctx)),
     /** How long a browser may cache a CORS preflight answer (technical value). */
     CORS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(600),
+    /**
+     * The largest request body the API reads, in bytes (R3-SECURITY-02, §4.8, §4.15; technical
+     * value). Every route shares it. The default (2 MiB) holds a contract-maximum offline batch
+     * (`OfflineSyncBody`, 500 items with every bounded field at its maximum, even fully escaped),
+     * which is about 0.35 MB in plain ASCII. A larger body answers 400 VALIDATION_FAILED with
+     * `details.code = 'body_too_large'` and `details.limitBytes`, never a 5xx, so a client splits
+     * it instead of retrying it. Import staging (`POST /v1/import-batches`) advertises more than
+     * this in one request (17 CSV documents of 500,000 characters): stage large snapshots in
+     * chunks, as the migration README says, or raise this for the migration window.
+     */
+    HTTP_BODY_LIMIT_BYTES: z.coerce
+      .number()
+      .int()
+      .min(64 * 1024)
+      .max(64 * 1024 * 1024)
+      .default(2 * 1024 * 1024),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {
