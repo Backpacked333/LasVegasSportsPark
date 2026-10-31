@@ -11,6 +11,7 @@ import {
   type CreatePersonInput,
   type ImportProvenance,
   type MakePrimaryContactPointInput,
+  type MakePrimaryContactPointResponse,
   type Page,
   type PersonDetail,
   type PersonName,
@@ -19,6 +20,7 @@ import {
   type RemoveContactPointInput,
   type SearchPeopleQueryInput,
   type UpdatePersonInput,
+  type UpdatePersonResponse,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, type Db, type PersonSource } from '@sportspark/db';
 import { sql, type SqlBool } from 'kysely';
@@ -249,12 +251,19 @@ export class PeopleService implements PersonDirectoryPort {
     return this.detail(this.db, organizationId, id);
   }
 
+  /**
+   * PATCH /v1/people/{id} (SPK-IAM-001, SPK-IAM-003, §4.9). Self, holders of `register` and staff
+   * may change a person (Proposed: `register` covers the registration data of a child, its names,
+   * date of birth and contact points, like DEC-090 for availability). The answer is the person only
+   * when the caller may also read it (identity.read_person); a `register`-only holder gets the id
+   * and the new revision (R3-TRACE-A-05), so `register` never silently yields `view`.
+   */
   async updatePerson(
     principal: Principal,
     id: string,
     input: UpdatePersonInput,
     correlationId: string | null,
-  ): Promise<PersonDetail> {
+  ): Promise<UpdatePersonResponse> {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
@@ -321,10 +330,38 @@ export class PeopleService implements PersonDirectoryPort {
         payload: { personId: id, revision: current.revision + 1 },
         correlationId,
       });
+      if (!(await this.mayReadPerson(principal, organizationId, id))) {
+        return { id, revision: current.revision + 1, detailWithheld: true as const };
+      }
       return this.detail(trx, organizationId, id);
     });
   }
 
+  /**
+   * SPK-IAM-003, §4.10 (R3-TRACE-A-05): whether a command may answer with the person's record.
+   * Changing a person needs identity.update_person (`register`); reading it needs
+   * identity.read_person (`view`), decided separately so one permission never implies the other.
+   */
+  private async mayReadPerson(
+    principal: Principal,
+    organizationId: string,
+    personId: string,
+  ): Promise<boolean> {
+    const decision = await this.authorization.decide(principal, IdentityActions.readPerson, {
+      type: 'person',
+      id: personId,
+      organizationId,
+      subjectPersonIds: [personId],
+      protected: true,
+    });
+    return decision.allowed;
+  }
+
+  /**
+   * POST /v1/people/{id}/contact-points (SPK-IAM-001). The answer echoes only the contact point the
+   * caller sent (its own value, as normalized), so a `register`-only holder learns nothing it may
+   * not read (SPK-IAM-003).
+   */
   async addContactPoint(
     principal: Principal,
     personId: string,
@@ -388,7 +425,7 @@ export class PeopleService implements PersonDirectoryPort {
     contactPointId: string,
     input: MakePrimaryContactPointInput,
     correlationId: string | null,
-  ): Promise<ContactPoint> {
+  ): Promise<MakePrimaryContactPointResponse> {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
@@ -400,7 +437,19 @@ export class PeopleService implements PersonDirectoryPort {
         contactPointId,
         input.expectedRevision,
       );
-      if (contact.is_primary) return toContactPoint(contact);
+      // SPK-IAM-003 (R3-TRACE-A-05): the contact point itself only to a caller who may read the person.
+      const readable = await this.mayReadPerson(principal, organizationId, personId);
+      if (contact.is_primary) {
+        return readable
+          ? toContactPoint(contact)
+          : {
+              id: contactPointId,
+              personId,
+              kind: contact.kind,
+              personRevision: person.revision,
+              detailWithheld: true as const,
+            };
+      }
       await trx
         .updateTable('contact_points')
         .set({ is_primary: false })
@@ -450,6 +499,15 @@ export class PeopleService implements PersonDirectoryPort {
         payload: { personId, revision },
         correlationId,
       });
+      if (!readable) {
+        return {
+          id: contactPointId,
+          personId,
+          kind: contact.kind,
+          personRevision: revision,
+          detailWithheld: true as const,
+        };
+      }
       const row = await trx
         .selectFrom('contact_points')
         .selectAll()

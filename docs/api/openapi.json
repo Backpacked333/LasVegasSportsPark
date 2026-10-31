@@ -10157,6 +10157,40 @@
           }
         ]
       },
+      "PersonChangeAcknowledgement": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "detailWithheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "detailWithheld"
+        ]
+      },
+      "UpdatePersonResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/PersonDetail"
+          },
+          {
+            "$ref": "#/components/schemas/PersonChangeAcknowledgement"
+          }
+        ]
+      },
       "Account": {
         "type": "object",
         "properties": {
@@ -12477,6 +12511,49 @@
         },
         "required": [
           "removedContactPointId"
+        ]
+      },
+      "ContactPointChangeAcknowledgement": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ContactPointKind"
+          },
+          "personRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "detailWithheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "personId",
+          "kind",
+          "personRevision",
+          "detailWithheld"
+        ]
+      },
+      "MakePrimaryContactPointResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ContactPoint"
+          },
+          {
+            "$ref": "#/components/schemas/ContactPointChangeAcknowledgement"
+          }
         ]
       },
       "InvitationParty": {
@@ -57171,8 +57248,8 @@
         }
       },
       "patch": {
-        "summary": "Update a person with an expected revision",
-        "description": "Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).",
+        "summary": "Update a person with an expected revision; answers the person only to a caller who may read it, otherwise the id and new revision",
+        "description": "Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).",
         "tags": [
           "Identity"
         ],
@@ -57216,7 +57293,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PersonDetail"
+                  "$ref": "#/components/schemas/UpdatePersonResponse"
                 }
               }
             }
@@ -60753,8 +60830,8 @@
     },
     "/people/{id}/contact-points/{contactPointId}/make-primary": {
       "post": {
-        "summary": "Make a contact point the primary one of its kind (one transaction)",
-        "description": "Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).",
+        "summary": "Make a contact point the primary one of its kind (one transaction); the contact point is answered only to a caller who may read the person",
+        "description": "Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).",
         "tags": [
           "Identity"
         ],
@@ -60807,7 +60884,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ContactPoint"
+                  "$ref": "#/components/schemas/MakePrimaryContactPointResponse"
                 }
               }
             }
