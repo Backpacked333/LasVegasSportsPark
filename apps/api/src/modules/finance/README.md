@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0613` and `0680`)
+`0600`–`0614` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -472,7 +472,12 @@ outcome recording and reconciliation are never gated.
   when their batch is rejected or canceled). Migration `0609_finance_export_line_guards.sql`
   (INTEGRITY-03): a line is added only to a `prepared` batch and within its line count, copies its
   journal entry's account, debit, credit and currency, and a batch commits holding exactly its
-  `line_count` lines, so the database keeps an exported batch as it was sent.
+  `line_count` lines, so the database keeps an exported batch as it was sent. Migration
+  `0614_finance_export_line_ledger_guards.sql` (R2-SCHEMA-02): a line is live when it is added
+  (`accounting_export_lines_live_at_insert`, so no line escapes the at-most-once index while its
+  batch can still be accepted), states its journal's `posted_at`
+  (`accounting_export_lines_posted_as_booked`), and exports only an entry whose journal was posted
+  inside the batch's `[periodStart, periodEnd)` (`accounting_export_lines_within_period`).
 - No default mapping exists: a batch is prepared only when every account of its entries has an
   approved mapping, else `ACCOUNTING_MAPPING_REQUIRED` naming the accounts (SPK-PAY-011, DEC-022).
   Corrections are later journals exported in a later batch; an exported batch never changes
