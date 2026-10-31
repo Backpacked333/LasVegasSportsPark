@@ -1,16 +1,24 @@
 /**
  * Money commands and unknown outcomes (§4.9, SPK-PAY-007, SPK-PAY-008). A command that got no
- * answer, a retryable answer or PAYMENT_OUTCOME_UNKNOWN may still take effect, so:
+ * definite answer, a retryable answer, PAYMENT_OUTCOME_UNKNOWN or IDEMPOTENCY_OUTCOME_UNAVAILABLE
+ * may already have taken effect (or did), so:
  *
  * - "Try again" resends exactly the request that was sent (same body, so the same
  *   Idempotency-Key), never one rebuilt from fields edited since;
- * - while that outcome is unknown the form is locked; "Start a new request" clears it and re-reads
- *   the record, and only then can a different request be made.
+ * - while that outcome is unknown the form is locked (`outcomePending`, which follows
+ *   `keepsIntentAfterFailure`: the hook keeps the key exactly as long), except after a refusal
+ *   before running (`refusedBeforeRunning`), which changed nothing;
+ * - "Start a new request" first reads the record again (the payment and its refunds, the
+ *   obligation, the credits) and unlocks only once that read succeeded (`rereadQueries`: every
+ *   shown query fetched afresh), so the next request is decided from the current state, never
+ *   beside a refund or tender that already happened. It is not offered offline, where no read can
+ *   start.
  */
-import type { ApiError } from '@sportspark/api-client';
-import { useRef } from 'react';
+import { outcomeStillOpen, type ApiError } from '@sportspark/api-client';
+import { useRef, useState } from 'react';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { useOnline } from './offline';
 
 export function useSameRequest<R>(submit: (request: R) => Promise<unknown>) {
   const last = useRef<R | null>(null);
@@ -28,29 +36,67 @@ export function useSameRequest<R>(submit: (request: R) => Promise<unknown>) {
   };
 }
 
-/** The outcome of the last attempt may still be applied: the form stays locked. */
+/**
+ * The outcome of the last attempt may still be applied (or was): the form stays locked. Not after
+ * a refusal before running (payments paused during a restore's recovery, SPK-AT-028): nothing
+ * happened, so the form may change (`outcomeStillOpen`).
+ */
 export function outcomePending(error: ApiError | null | undefined): boolean {
-  return !!error && error.keepsIntent;
+  return outcomeStillOpen(error);
 }
 
 export function LockedNote({
   error,
+  reread,
   onNewRequest,
 }: {
   error: ApiError | null | undefined;
+  /** Reads the record again; rejects when the read fails (the form then stays locked). */
+  reread: () => Promise<unknown>;
+  /** Unlocks the form for a new request (after `reread` succeeded). */
   onNewRequest: () => void;
 }) {
+  const online = useOnline();
+  const [checking, setChecking] = useState(false);
+  const [readFailed, setReadFailed] = useState(false);
   if (!outcomePending(error)) return null;
+  const start = () => {
+    setChecking(true);
+    setReadFailed(false);
+    reread().then(
+      () => {
+        setChecking(false);
+        onNewRequest();
+      },
+      () => {
+        setChecking(false);
+        setReadFailed(true);
+      },
+    );
+  };
   return (
     <div className="rf-locked" role="status" data-testid="request-locked">
       <StatusBadge tone="warning" label="Locked until the outcome is known" />
       <p className="caption">
         The fields are locked so a retry sends exactly the same request. To make a different request
-        instead, first check the record, then start a new request.
+        instead, start a new request: the record is read again first, so you decide from its current
+        state.
       </p>
-      <Button variant="secondary" onClick={onNewRequest}>
+      {readFailed ? (
+        <p className="caption" role="alert">
+          The record could not be read again, so the fields stay locked. Try again when the
+          connection is back.
+        </p>
+      ) : null}
+      {/* The record can only be read again online: offline the fields stay locked. */}
+      <Button variant="secondary" busy={checking} disabled={!online} onClick={start}>
         Start a new request
       </Button>
+      {!online ? (
+        <p className="caption">
+          Starting a new request needs a connection: the record is read again first.
+        </p>
+      ) : null}
     </div>
   );
 }

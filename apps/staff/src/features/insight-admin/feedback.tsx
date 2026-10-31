@@ -6,17 +6,22 @@
  *   the plain "not available" and never implies the record exists (§4.10, §4.14);
  * - stale version (STALE_REVISION, INVALID_TRANSITION): "Reload" fetches the current record and the
  *   form keeps what was typed;
- * - no response: the outcome may be unknown and "Try again" resends the same intent with the same
- *   idempotency key, so it is never applied twice;
+ * - no definite answer (`mayHaveTakenEffect`: a timeout, a connection lost after sending, the same
+ *   key still running, a 5xx): "Outcome not known yet", never "Something went wrong"; "Try again"
+ *   resends the same intent with the same idempotency key, so it is never applied twice;
+ * - IDEMPOTENCY_OUTCOME_UNAVAILABLE, IDEMPOTENCY_SECRET_WITHHELD (an export created whose download
+ *   link cannot be shown again: the Exports screen lists it with its revocation) and a
+ *   legacy-authority refusal: the shared views of `ui/CommandOutcome.tsx`;
  * - validation: the code, the API's message and each field message the API sent;
  * - INTEGRATION_UNAVAILABLE: names the provider decision owner (§5.2, DEC-013);
  * - API gaps: a part of a screen the API cannot serve yet is "Not available yet", named, and kept
  *   apart from permission restrictions and from empty states.
  */
-import { presentationForError, type ApiError } from '@sportspark/api-client';
+import { presentationForError, refusedBeforeRunning, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { QueryBoundary, type QueryBoundaryProps } from '../../ui/QueryBoundary';
 import { Button } from '../../ui/Button';
+import { sharedCommandOutcome } from '../../ui/CommandOutcome';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { DECISIONS } from './labels';
@@ -87,16 +92,21 @@ export function CommandError({ error, onRetry, onReload, deniedDescription }: Co
   if (presentation === 'unavailable') {
     return <PermissionRestriction error={error} description={deniedDescription} />;
   }
-  if (error.kind === 'timeout') {
+  // A guard's refusal before running (recovery mode, assistant off) is not a provider outage.
+  const providerOwner =
+    error.code === 'INTEGRATION_UNAVAILABLE' && !refusedBeforeRunning(error) ? (
+      <p className="caption">
+        A provider this depends on is unavailable. Owner: {DECISIONS.providers.owner} (
+        {DECISIONS.providers.ids.join(', ')}).
+      </p>
+    ) : null;
+  const shared = sharedCommandOutcome(error, { onRetry, onReload });
+  if (shared) {
     return (
-      <section className="state" aria-live="polite" data-testid="state-outcome-unknown">
-        <StatusBadge tone="warning" label="Outcome not known yet" />
-        <p>
-          No answer arrived, so this may already have been applied. Trying again sends the same
-          request and is never applied twice.
-        </p>
-        <StateView variant="error" error={error} onRetry={onRetry} />
-      </section>
+      <div>
+        {shared}
+        {providerOwner}
+      </div>
     );
   }
   const fields = Object.entries(fieldErrorsOf(error));
@@ -121,12 +131,7 @@ export function CommandError({ error, onRetry, onReload, deniedDescription }: Co
         onRetry={onRetry}
         onAction={error.isStale ? onReload : undefined}
       />
-      {error.code === 'INTEGRATION_UNAVAILABLE' ? (
-        <p className="caption">
-          A provider this depends on is unavailable. Owner: {DECISIONS.providers.owner} (
-          {DECISIONS.providers.ids.join(', ')}).
-        </p>
-      ) : null}
+      {providerOwner}
       {fields.length > 0 ? (
         <ul className="caption" aria-label="Fields to correct">
           {fields.map(([path, message]) => (

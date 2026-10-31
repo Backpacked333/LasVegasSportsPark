@@ -264,7 +264,11 @@ describe('SCR-W-02 / SCR-W-03 AssignmentWorkspaceScreen', () => {
       }),
     );
     const app = createTestApp({
-      routes: routes({ 'GET /me/assignments': myAssignments([workspaceItem(session, [])]) }),
+      routes: routes({
+        'GET /me/assignments': myAssignments([workspaceItem(session, [])]),
+        // The synchronisation on opening gets no answer: the item stays queued (same batch).
+        'POST /offline-sync': () => Promise.reject(new TypeError('Failed to fetch')),
+      }),
     });
     render(app.at('/workspace'));
     const status = await screen.findByTestId('offline-queue-status');

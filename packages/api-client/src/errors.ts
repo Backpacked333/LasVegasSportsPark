@@ -38,18 +38,40 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 /**
  * `CLIENT_UPDATE_REQUIRED` (HTTP 426, next action `update_app`, `details.minimumVersion`): the API
  * kernel's client-compatibility guard answers it for a build below the minimum supported app
- * version of its platform, read from the `X-Sportspark-Client` header (§4.13, SPK-AT-027, DEC-092
- * proposed). The client also treats any HTTP 426 as update-required. The minimum versions are
- * configuration pending DEC-061 (none enforced by default).
+ * version of its platform, read from the `X-Sportspark-Client` header (§4.13, SPK-AT-027; the code
+ * ships ahead of its approval, DEC-092). The client also treats any HTTP 426 as update-required.
+ * The minimum versions are configuration pending DEC-061 (none enforced by default).
  */
 export const UPDATE_REQUIRED_CODE = 'CLIENT_UPDATE_REQUIRED';
 export const UPDATE_REQUIRED_STATUS = 426;
+
+/**
+ * `details.code` of the ACCESS_DENIED the migration module's record-authority check answers while
+ * the legacy system is authoritative for a record category (apps/api migration authority.service).
+ */
+export const LEGACY_AUTHORITY_CODE = 'LEGACY_AUTHORITY';
+
+/** The machine-readable `details.code` an error carries, or null. */
+function detailCodeOf(details: unknown): string | null {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+  const code = (details as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+/**
+ * A command answered with a success status (2xx) whose body could not be read (truncated, or
+ * HTML from something in front of the API). A 2xx means the command may well have committed, so
+ * the outcome is not known: the intent keeps its key (retryable) and a same-key retry gets the
+ * stored outcome (§4.9, SPK-PAY-007). A read with such a body stays UNEXPECTED_RESPONSE.
+ */
+export const RESPONSE_UNREADABLE_CODE = 'RESPONSE_UNREADABLE';
 
 /** Failures detected by the client, never sent by the API. */
 export const CLIENT_ERROR_CODES = [
   'NETWORK_UNAVAILABLE',
   'TIMEOUT',
   'UNEXPECTED_RESPONSE',
+  RESPONSE_UNREADABLE_CODE,
 ] as const;
 export type ClientErrorCode = (typeof CLIENT_ERROR_CODES)[number];
 
@@ -64,7 +86,7 @@ export type ApiErrorKind =
   | 'timeout'
   /** The API (or a proxy in front of it) answered with something that is not the error contract. */
   | 'unexpected_response'
-  /** This build is below the minimum supported app version (proposed, DEC-061/DEC-092). */
+  /** This build is below the minimum supported app version (the minimums are DEC-061). */
   | 'update_required';
 
 export interface ApiErrorInit {
@@ -89,6 +111,7 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   'INTERNAL_ERROR',
   'NETWORK_UNAVAILABLE',
   'TIMEOUT',
+  RESPONSE_UNREADABLE_CODE,
 ]);
 
 export class ApiError extends Error {
@@ -100,6 +123,12 @@ export class ApiError extends Error {
   readonly nextAction: string;
   readonly correlationId: string | null;
   readonly details: unknown;
+  /**
+   * The HTTP method of the request that failed, set by the client when it throws (null for an
+   * error built elsewhere). A failed read (`get`) changed nothing, so `mayHaveTakenEffect` is false
+   * for it whatever the failure.
+   */
+  method: string | null = null;
 
   constructor(init: ApiErrorInit) {
     super(init.message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -119,7 +148,12 @@ export class ApiError extends Error {
     return RETRYABLE_CODES.has(this.code);
   }
 
-  /** The command may have taken effect; never present this as a plain failure (SPK-PAY-007). */
+  /**
+   * No response arrived in time, or the API holds a payment's outcome as unknown (SPK-PAY-007).
+   * This is narrower than "the command may have taken effect": a lost connection after sending
+   * (`kind: 'network'`), IDEMPOTENCY_IN_PROGRESS and any 5xx may also have taken effect, so command
+   * failure views decide with `mayHaveTakenEffect` (outcome.ts), never with this alone.
+   */
   get outcomeUnknown(): boolean {
     return this.kind === 'timeout' || this.code === 'PAYMENT_OUTCOME_UNKNOWN';
   }
@@ -138,8 +172,19 @@ export class ApiError extends Error {
    * principal (`isCapabilityDisabled`) and is shown as "turned off" instead.
    */
   get isPermissionRestriction(): boolean {
-    if (this.isCapabilityDisabled) return false;
+    if (this.isCapabilityDisabled || this.isLegacyAuthority) return false;
     return this.code === 'ACCESS_DENIED' || this.code === 'PARTICIPANT_AUTHORITY_REQUIRED';
+  }
+
+  /**
+   * ACCESS_DENIED with `details.code: 'LEGACY_AUTHORITY'` (next action
+   * `write_in_authoritative_system`): during a migration transition window the legacy system is
+   * still the system of record for this record category (§5.6, K-11). Not a restriction of the
+   * principal: no role would allow the write here, so screens say to make the change in the system
+   * of record (`details.recordCategory`), never "not available to you". Never retryable.
+   */
+  get isLegacyAuthority(): boolean {
+    return this.code === 'ACCESS_DENIED' && detailCodeOf(this.details) === LEGACY_AUTHORITY_CODE;
   }
   /**
    * ACCESS_DENIED with `details.code: 'CAPABILITY_DISABLED'`: a gated command of a capability the
@@ -147,11 +192,7 @@ export class ApiError extends Error {
    * decision that may turn it on.
    */
   get isCapabilityDisabled(): boolean {
-    if (this.code !== 'ACCESS_DENIED') return false;
-    const details = this.details as { code?: unknown } | null | undefined;
-    return (
-      typeof details === 'object' && details !== null && details.code === 'CAPABILITY_DISABLED'
-    );
+    return this.code === 'ACCESS_DENIED' && detailCodeOf(this.details) === 'CAPABILITY_DISABLED';
   }
 
   /**
@@ -175,8 +216,9 @@ export class ApiError extends Error {
    * retry with the same key can only get the same refusal again, so the intent ends and the next
    * attempt gets a new key. The key is kept only while the outcome is not known: no response
    * (network, timeout), a retryable code (IDEMPOTENCY_IN_PROGRESS, INTEGRATION_UNAVAILABLE,
-   * RATE_LIMITED, INTERNAL_ERROR, a 5xx without the contract), or PAYMENT_OUTCOME_UNKNOWN, where a
-   * new key could start a second payment (SPK-PAY-007).
+   * RATE_LIMITED, INTERNAL_ERROR, a 5xx without the contract, RESPONSE_UNREADABLE: a 2xx whose
+   * body could not be read), or PAYMENT_OUTCOME_UNKNOWN, where a new key could start a second
+   * payment (SPK-PAY-007).
    */
   get keepsIntent(): boolean {
     return this.isOffline || this.retryable || this.code === 'PAYMENT_OUTCOME_UNKNOWN';
@@ -198,7 +240,7 @@ export class ApiError extends Error {
 /** The build is below the minimum supported version; the app must show "Update required". */
 export class UpdateRequiredError extends ApiError {
   override readonly name: string = 'UpdateRequiredError';
-  /** `details.minimumVersion` when the API states it (proposed, DEC-092). */
+  /** `details.minimumVersion` when the API states it (the kernel guard always does). */
   readonly minimumVersion: string | null;
 
   constructor(init: Omit<ApiErrorInit, 'kind'>) {

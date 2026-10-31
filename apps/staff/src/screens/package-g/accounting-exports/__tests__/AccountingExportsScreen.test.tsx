@@ -227,7 +227,7 @@ describe('SCR-S-57 AccountingExportsScreen', () => {
     });
     render(app.at(BATCH_PATH));
     await user.click(await screen.findByRole('button', { name: 'Submit the batch' }));
-    expect(await screen.findByTestId('state-offline')).toBeInTheDocument();
+    expect(await screen.findByTestId('state-outcome-unknown')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Submit the batch' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(calls).toBe(2));

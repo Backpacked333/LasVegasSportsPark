@@ -9,6 +9,7 @@ export * from './errors';
 export * from './freshness';
 export * from './idempotency';
 export * from './money';
+export * from './outcome';
 export * from './paging';
 export * from './permissions';
 export * from './screen-state';

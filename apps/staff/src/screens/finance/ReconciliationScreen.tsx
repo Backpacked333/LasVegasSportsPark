@@ -439,6 +439,7 @@ function RecordSettlement() {
         ) : null}
         <LockedNote
           error={record.error}
+          reread={record.reread}
           onNewRequest={() => {
             record.reset();
             same.forget();
@@ -597,6 +598,7 @@ function RecordTender({ obligationId }: { obligationId: string }) {
         ) : null}
         <LockedNote
           error={record.error}
+          reread={record.reread}
           onNewRequest={() => {
             record.reset();
             same.forget();

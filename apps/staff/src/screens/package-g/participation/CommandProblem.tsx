@@ -4,10 +4,12 @@
  * the code and reference, field messages, "Reload" for a stale version, "turned off" for
  * CAPABILITY_DISABLED), plus what these commands add:
  *
- * - No answer (a timeout, or the connection lost while the request was in flight; these commands
- *   are not sent while offline, so a network failure here happened after sending): "Outcome not
- *   known yet", never a failure, with "Try again" resending the same intent with the same
- *   idempotency key and body, so it is never applied twice (§4.9, SPK-PAY-007).
+ * - No definite answer (`mayHaveTakenEffect`: a timeout, the connection lost while the request was
+ *   in flight, the same key still running, a 5xx; these commands are not sent while offline, so a
+ *   network failure here happened after sending): "Outcome not known yet", never a failure, with
+ *   "Try again" resending the same intent with the same idempotency key and body, so it is never
+ *   applied twice (§4.9, SPK-PAY-007). IDEMPOTENCY_OUTCOME_UNAVAILABLE: "This may already have
+ *   been done" with the reload (`ui/CommandOutcome.tsx`).
  * - RESOURCE_CONFLICT: the API's `details.code` in words when one is known, the conflicting
  *   occurrences it lists, and a "Reload" that reads the record again (a booking whose slot was
  *   taken before approval stays requested; nothing was written).
@@ -15,8 +17,8 @@
  */
 import type { ApiError } from '@sportspark/api-client';
 import { CommandError } from '../../../ui/CommandFeedback';
+import { sharedCommandOutcome } from '../../../ui/CommandOutcome';
 import { Button } from '../../../ui/Button';
-import { StatusBadge } from '../../../ui/StatusBadge';
 import { formatInstant } from './format';
 
 /** Wording for the `details.code` values these commands answer RESOURCE_CONFLICT with. */
@@ -119,23 +121,8 @@ export function CommandProblem({
   resourceLabel?: (resourceId: string) => string;
 }) {
   if (!error) return null;
-  if (error.isOffline) {
-    return (
-      <div data-testid="command-problem">
-        <section className="state" aria-live="polite" data-testid="state-outcome-unknown">
-          <StatusBadge tone="warning" label="Outcome not known yet" />
-          <p>
-            {error.kind === 'timeout'
-              ? 'No answer arrived in time, so this may or may not have been applied.'
-              : 'The connection was lost before an answer arrived, so this may or may not have been applied.'}{' '}
-            Trying again sends the same request and is never applied twice.
-          </p>
-          <p className="caption">Error code: {error.code}</p>
-          {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
-        </section>
-      </div>
-    );
-  }
+  const shared = sharedCommandOutcome(error, { onRetry, onReload });
+  if (shared) return <div data-testid="command-problem">{shared}</div>;
   const code = detailCode(error);
   const conflict = error.code === 'RESOURCE_CONFLICT';
   const conflicts = conflict ? conflictsOf(error) : [];

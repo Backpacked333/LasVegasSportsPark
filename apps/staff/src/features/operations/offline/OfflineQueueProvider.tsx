@@ -7,8 +7,16 @@
  *
  * Upload: `POST /v1/offline-sync` with the device id, the batch's client id, the facility, the
  * roster snapshot (reference and time) and the items. The idempotency key belongs to the batch
- * intent and is reused when the same batch is retried in this tab; after a reload the API still
- * recognises the batch by device and client batch id and returns its stored outcome.
+ * intent and is reused when the same batch is retried in this tab while its outcome is unknown;
+ * after a reload the API still recognises the batch by device and client batch id and returns its
+ * stored outcome. A batch the API refuses outright ends its intent and its items go to review
+ * (`OfflineSyncRunner`), so a later run is never stuck replaying the stored refusal. After
+ * IDEMPOTENCY_OUTCOME_UNAVAILABLE the batch is sent once more under a new key with the same client
+ * batch id, which the API answers with the stored batch (`batchSender`), so the queue never stops
+ * at it.
+ *
+ * Every tab of the browser profile shares the queue: the store follows the other tabs' writes
+ * (`storage` event) and one tab at a time synchronises (Web Locks, where the browser has them).
  */
 import { ApiError, type CommandIntent, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -28,8 +36,11 @@ import type { StaffServices } from '../../../providers/services';
 import {
   OfflineQueueStore,
   OfflineSyncRunner,
+  batchSender,
   browserStorage,
+  browserSyncLock,
   type OfflineQueueState,
+  type StorageEvents,
   type PendingBatch,
   type QueuedItem,
   type RosterSnapshot,
@@ -47,8 +58,14 @@ const devices = new WeakMap<StaffServices, Device>();
 export function deviceFor(services: StaffServices): Device {
   let device = devices.get(services);
   if (!device) {
-    const store = new OfflineQueueStore(browserStorage(), services.generateKey);
-    device = { store, runner: new OfflineSyncRunner(store) };
+    const storage = browserStorage();
+    const store = new OfflineQueueStore(storage, services.generateKey);
+    // Another tab's queued or synchronised observations show here too (R2-CLIENTS-2-04).
+    const events = globalThis as Partial<StorageEvents>;
+    if (storage && typeof events.addEventListener === 'function') {
+      store.watch(events as StorageEvents);
+    }
+    device = { store, runner: new OfflineSyncRunner(store, browserSyncLock) };
     devices.set(services, device);
   }
   return device;
@@ -69,6 +86,8 @@ export interface OfflineQueueValue {
   newSnapshot(takenAt: Date | string): RosterSnapshot;
   sync(): Promise<SyncSummary | null>;
   dismissReview(clientObservationId: string): void;
+  /** Queues a refused item again under a new batch (a new client batch id and key). */
+  requeue(clientObservationId: string): void;
 }
 
 const OfflineQueueContext = createContext<OfflineQueueValue | null>(null);
@@ -97,9 +116,7 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
 
   const sync = useCallback(async () => {
     if (!accountId) return null;
-    const send = async (batch: PendingBatch, deviceId: string) => {
-      const intent = intents.current.get(batch.batchId) ?? api.newIntent();
-      intents.current.set(batch.batchId, intent);
+    const post = (batch: PendingBatch, deviceId: string, intent: CommandIntent) => {
       const body: SyncBody = {
         deviceId,
         clientBatchId: batch.batchId,
@@ -107,10 +124,9 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
         snapshot: batch.snapshot,
         items: batch.items.map((q) => q.item),
       };
-      const result = await api.post('/offline-sync', { body, intent });
-      intents.current.delete(batch.batchId);
-      return result;
+      return api.post('/offline-sync', { body, intent });
     };
+    const send = batchSender(post, () => api.newIntent(), intents.current);
     const summary = await runner.run(accountId, send, services.now);
     if (summary) {
       await Promise.all([
@@ -158,6 +174,7 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
       }),
       sync,
       dismissReview: (id) => store.dismissReview(id),
+      requeue: (id) => store.requeue(id),
     }),
     [state, mine, others, runtime, accountId, services, store, sync],
   );

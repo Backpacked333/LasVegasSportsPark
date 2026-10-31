@@ -11,7 +11,18 @@
  *
  * Not available from the API: device approval and a server-issued, encrypted roster snapshot
  * (entry module known gaps; DEC-023, DEC-032, DEC-033 pending). The snapshot reference stays the
- * device's own label for the read it queued against, with the server's time of that read.
+ * device's own label for the read it queued against. Its time, and every observed time queued
+ * against it, is on the service's clock when the read's `Date` header is readable (same origin, or
+ * the API exposes it): the device clock moved by the offset seen at that read
+ * (`offline/clock.ts`). Otherwise both are the device clock. The API refuses a snapshot dated more
+ * than its clock-skew tolerance after its own clock (`snapshot_in_future`); a requeued item keeps
+ * the times it was queued with, so the hint says when queuing it again can succeed.
+ *
+ * A batch the API refuses outright (a 4xx such as VALIDATION_FAILED or ACCESS_DENIED: nothing in
+ * it was recorded) is not retried under the same key for ever: its items move to "Kept for
+ * review" with the API's code and message, where they can be queued again under a new batch or
+ * discarded, and the other batches are still sent. Only a batch whose outcome is unknown (no
+ * answer, a 5xx, the same key still running) stops the run and keeps its key for the retry.
  */
 import { formatAge } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
@@ -128,7 +139,13 @@ export function OfflineQueueScreen({
         ) : null}
         {queue.syncing ? <StatusBadge tone="pending" label="Synchronising" /> : null}
         {queue.syncError ? (
-          <CommandError error={queue.syncError} onRetry={() => void queue.sync()} />
+          // A lost answer is read again by synchronising: the batch goes under a new key with its
+          // client batch id, and the API answers the stored batch (`batchSender`).
+          <CommandError
+            error={queue.syncError}
+            onRetry={() => void queue.sync()}
+            onReload={() => void queue.sync()}
+          />
         ) : null}
         {last ? (
           <p data-testid="sync-summary">
@@ -136,7 +153,8 @@ export function OfflineQueueScreen({
               tone={last.conflicts + last.rejected > 0 ? 'warning' : 'success'}
               label={`Synchronised at ${formatInstant(last.at)}`}
             />{' '}
-            {last.synchronised} synchronised, {last.conflicts + last.rejected} for review
+            {last.synchronised} synchronised, {last.conflicts + last.rejected + (last.refused ?? 0)}{' '}
+            for review
             {last.duplicates > 0 ? `, ${last.duplicates} already recorded (not applied twice)` : ''}
             {last.stale > 0 ? `, ${last.stale} against an old roster (flagged)` : ''}.
           </p>
@@ -161,6 +179,11 @@ export function OfflineQueueScreen({
                   </span>
                   {r.outcome === 'accepted_with_conflict' ? (
                     <StatusBadge tone="warning" label="Recorded with a conflict: kept for review" />
+                  ) : r.outcome === 'refused' ? (
+                    <StatusBadge
+                      tone="danger"
+                      label={`Not recorded: the service refused the batch${r.reason ? `: ${r.reason}` : ''}`}
+                    />
                   ) : (
                     <StatusBadge
                       tone="danger"
@@ -170,15 +193,38 @@ export function OfflineQueueScreen({
                   <span className="caption">
                     Observed {formatInstant(r.queued.item.observedAt)}
                     {r.queued.context ? ` · ${r.queued.context}` : ''} · batch {shortRef(r.batchId)}
-                    . The conflict is raised in the Today workspace for review.
+                    {r.outcome === 'refused'
+                      ? `. Error code: ${r.code ?? 'not stated'}. Nothing of this batch was recorded; queue it again once the cause is fixed, or discard it.`
+                      : '. The conflict is raised in the Today workspace for review.'}
                   </span>
+                  {r.outcome === 'refused' && r.flags.includes('snapshot_in_future') ? (
+                    <span className="caption" data-testid="snapshot-in-future-hint">
+                      The roster time stored with it ({formatInstant(r.queued.snapshot.takenAt)}) is
+                      later than the service&apos;s clock: this device&apos;s clock was ahead when
+                      it was queued. The stored times are sent unchanged, so correcting the clock
+                      now does not fix them. Queue it again only after{' '}
+                      {formatInstant(r.queued.snapshot.takenAt)} by the service&apos;s time (the
+                      service allows a few minutes&apos; difference), or discard it and record the
+                      observation again while online.
+                    </span>
+                  ) : null}
                 </div>
+                {r.outcome === 'refused' ? (
+                  <Button
+                    variant="secondary"
+                    disabled={!online}
+                    aria-label={`Queue again: ${eventLabel(r.queued.item)}`}
+                    onClick={() => queue.requeue(r.queued.item.clientObservationId)}
+                  >
+                    Queue again
+                  </Button>
+                ) : null}
                 <Button
                   variant="secondary"
-                  aria-label={`Dismiss from this device: ${eventLabel(r.queued.item)}`}
+                  aria-label={`${r.outcome === 'refused' ? 'Discard (not recorded)' : 'Dismiss from this device'}: ${eventLabel(r.queued.item)}`}
                   onClick={() => queue.dismissReview(r.queued.item.clientObservationId)}
                 >
-                  Dismiss from this device
+                  {r.outcome === 'refused' ? 'Discard (not recorded)' : 'Dismiss from this device'}
                 </Button>
                 {r.serverBatchId ? (
                   <ReviewBatch batchId={r.serverBatchId} label={eventLabel(r.queued.item)} />

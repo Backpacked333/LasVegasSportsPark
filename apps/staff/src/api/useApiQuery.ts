@@ -38,6 +38,11 @@ export type ApiQueryResult<P extends GetPath> = Omit<
   data: ResponseBody<P, 'get'> | undefined;
   /** When the shown data was received, or null when nothing has loaded yet. */
   updatedAt: Date | null;
+  /**
+   * The service's time of that response (its `Date` header), or null when it was not readable:
+   * for a time the API compares with its own clock (an offline roster snapshot, §4.15).
+   */
+  serverDate: Date | null;
 };
 
 /** Receipt time of a cached query's data: the client's `receivedAt` when the query is ours. */
@@ -71,5 +76,6 @@ export function useApiQuery<P extends GetPath>(args: ApiQueryArgs<P>): ApiQueryR
     ...query,
     data: query.data?.data,
     updatedAt: query.data?.receivedAt ?? null,
+    serverDate: query.data?.serverDate ?? null,
   } as ApiQueryResult<P>;
 }

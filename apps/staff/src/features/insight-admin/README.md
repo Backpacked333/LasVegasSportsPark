@@ -72,6 +72,11 @@ action), `names.ts` (display names through `GET /v1/person-names`, 100 ids per r
 - Changing organization or facility settings and integration configuration: no API command
   (core.manage_organization_settings, core.manage_facility, core.manage_integration stay
   Proposed, DEC-013); facility addresses wait on DEC-001. Settings are read-only here.
+- A retry of "Create export" whose first attempt succeeded (its answer lost) gets
+  IDEMPOTENCY_SECRET_WITHHELD (§4.14: the token is never stored with the key). The export the API
+  names is listed under "Exports made on this page" without a download, with "Revoke", "Your
+  exports" is read again, and a second export of the run waits until "Make a new export" is
+  chosen. **Verified** in jsdom (`screens/reports/__tests__/ExportsScreen.test.tsx`).
 - An earlier export cannot be downloaded again from the list: its single-use token is returned
   only when it is made and the typed client keeps the download a header (`X-Export-Token`), so a
   new export of the same run is offered instead.

@@ -3,10 +3,16 @@
  * each its own user intent (§4.9): a retry of the same input reuses that intent's idempotency key
  * (a double click or a retry after a timeout never records twice); changed input, or a confirmed
  * success, starts a new intent. Every outcome is kept per key so partial completion is shown per
- * record (SPK-UX-008).
+ * record (SPK-UX-008). The key is kept and ended exactly as in `useApiCommand`
+ * (`CommandIntentTracker.failed`, which keeps it after IDEMPOTENCY_OUTCOME_UNAVAILABLE), decided
+ * on the failure itself: a failure that is not the client's typed error (the request may still
+ * have been sent) keeps the key, even though it is shown as UNEXPECTED_RESPONSE. After an answer
+ * that may have taken effect the `invalidate` queries are read again, as after a success.
  */
 import {
   ApiError,
+  mayHaveTakenEffect,
+  mustNotCreateAgain,
   type CommandIntentTracker,
   type CommandMethod,
   type PathsWithMethod,
@@ -73,9 +79,15 @@ export function useKeyedCommands(options: { invalidate?: readonly (readonly unkn
                 correlationId: null,
                 cause,
               });
-        // A definitive refusal ends this key's intent (the API replays stored 4xx answers).
-        tracker.failed(error);
+        // A definitive refusal ends this key's intent (the API replays stored 4xx answers). The
+        // decision is made on what was thrown: a non-client failure keeps the key.
+        tracker.failed(cause);
         setOutcomes((prev) => ({ ...prev, [key]: { status: 'error', error } }));
+        if (mayHaveTakenEffect(error) || mustNotCreateAgain(error)) {
+          void Promise.all(
+            (invalidate ?? []).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+          );
+        }
         return undefined;
       }
     },
