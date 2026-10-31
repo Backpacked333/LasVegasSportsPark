@@ -280,6 +280,15 @@ notices about the events), with counts in `impact.summary`. Contributors read th
 executor. **Verified**: `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`. Any financial
 adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009).
 
+### Event title bound on every path (R2-TENANCY-INPUT-02, §4.10) — verified
+
+- An event title is 1 to 200 characters on every path that creates an event, not only
+  `POST /v1/events`: `EventSchedulingPort.createEvent` (competition fixtures, catalog sessions,
+  enrollment bookings), `importEvent`, series and schedule drafts all write through
+  `EventWriter.insertEvent`, which refuses with `VALIDATION_FAILED` naming `title`; `createEvent`
+  and `importEvent` check before opening their transaction (`__tests__/event-import.spec.ts`
+  "R2-TENANCY-INPUT-02").
+
 ## Known gaps / pending decisions
 
 - Pending (DEC-001): the roles allowed to create, apply, lift and withdraw closures

@@ -84,6 +84,43 @@ describe('event import (SCH-04: §5.3, §5.4, SPK-AT-024)', () => {
   const importRun = (input: ImportEventInput, principal: Principal = importer) =>
     uow.run(() => port.importEvent(principal, input));
 
+  it('R2-TENANCY-INPUT-02 / §4.10: the port and the import refuse an event title over 200 characters (or blank) with VALIDATION_FAILED naming title, and store nothing', async () => {
+    const overlong = legacyFixture({ title: 'T'.repeat(201) });
+    const refusedImport = await caught(importRun(overlong));
+    expect(refusedImport.code).toBe('VALIDATION_FAILED');
+    expect(refusedImport.details).toEqual([expect.objectContaining({ path: 'title' })]);
+    const blank = await caught(importRun(legacyFixture({ title: '   ' })));
+    expect(blank.code).toBe('VALIDATION_FAILED');
+    const refusedCreate = await caught(
+      createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: facility,
+        resourceIds: [pitch.southHalfId],
+        start: at('2027-03-03', '10:00'),
+        end: at('2027-03-03', '11:00'),
+        title: 'C'.repeat(201),
+      }),
+    );
+    expect(refusedCreate.code).toBe('VALIDATION_FAILED');
+    expect(refusedCreate.details).toEqual([expect.objectContaining({ path: 'title' })]);
+    const stored = await t.db
+      .selectFrom('events')
+      .select('id')
+      .where((eb) => eb(eb.fn('length', ['title']), '>', 200))
+      .execute();
+    expect(stored).toEqual([]);
+    // exactly 200 characters is accepted
+    const longest = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.southHalfId],
+      start: at('2027-03-03', '10:00'),
+      end: at('2027-03-03', '11:00'),
+      title: 'C'.repeat(200),
+    });
+    expect(longest.title).toHaveLength(200);
+  });
+
   it('SPK-AT-024: importing the same event twice creates one draft event', async () => {
     const input = legacyFixture();
     const first = await importRun(input);

@@ -555,8 +555,9 @@ built, waiting on a decision or another module.
   name ends in `…` (`fixtureTitle` in `competition.shared.ts`, `competition.shared.spec.ts`,
   `__tests__/fixtures.spec.ts`, `__tests__/fixture-generation.spec.ts`; R2-TENANCY-INPUT-02). Before
   this, the event took a 403-character title and generation failed with `INTERNAL_ERROR`.
-  Bounding the notice titles communications composes from the event title (a prefix plus the
-  title) is that module's change and is not made here.
+  The notice titles communications composes from the event title (a prefix plus the title) are
+  bounded there (`noticeTitle`, communications `__tests__/notice-titles.spec.ts`), and scheduling
+  refuses an event title over 200 characters on every creating path (stage-6 integration).
 - A result is checked against its fixture's state at submission, resubmission and publication
   (R2-LIFECYCLES-04, §4.6, SPK-RESULT-001, SPK-DISC-002): before this, a `completed` result was
   accepted for an unscheduled or postponed fixture (no start, so no kickoff check) and a result

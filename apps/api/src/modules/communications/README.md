@@ -397,6 +397,22 @@ module's route classification counts once MIG-00 lands.
 - Webhook receipts are authenticated with the fake provider's HMAC secret (`FakeMessagingProvider`);
   a real adapter verifies its own signature scheme before `Inbox.record`.
 
+## Stage-6 integration — verified 2026-10-31
+
+- Notice titles built around stored names (R2-TENANCY-INPUT-02, SPK-COMMS-002, SPK-COMMS-005): an
+  event title or team name may itself be 200 characters, the compose limit for a whole title. The
+  schedule notices ("Schedule changed:", "Canceled:", "Scheduled:"), the activity reminder
+  ("Reminder:") and the competition notices ("Team invitation:", "… are you available?", "Result
+  published:") build their titles with `noticeTitle` (`communications.shared.ts`), which keeps the
+  words around the name and shortens only the name, ending it in `…` and never splitting a
+  surrogate pair. Before this, `ModuleComposeNotificationBody` refused the title inside the handler
+  or the job and the notice was never composed (`__tests__/notice-titles.spec.ts`, a 200-character
+  event moved, reminded and canceled).
+- The activity reminder job composes each due entry in its own transaction and no longer stops at
+  the first failure: a failing entry raises one `communications.activity_reminder_failed`
+  exception for `support_operator` (per event revision), its mark is not claimed so the next run
+  tries it again, and the other entries are reminded (same test file).
+
 ## Known gaps
 
 - Pending: a per-person authority basis for protected notices to explicitly chosen people (an

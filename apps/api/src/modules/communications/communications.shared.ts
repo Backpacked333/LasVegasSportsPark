@@ -241,3 +241,29 @@ export function toCalendarFeed(row: CalendarFeedRow): CalendarFeed {
 }
 
 export const uniqueStrings = (values: Iterable<string>): string[] => [...new Set(values)];
+
+/** The longest notice title the compose contract accepts (`ComposeNotificationBody` Title). */
+export const NOTICE_TITLE_MAX = 200;
+const ELLIPSIS = '…';
+
+/**
+ * R2-TENANCY-INPUT-02 (SPK-COMMS-002, SPK-COMMS-005): a notice title built around stored text (an
+ * event title or a team name of up to 200 characters) is kept within the compose limit by
+ * shortening the name, never the words around it, so the composition never fails inside an event
+ * handler. A shortened name ends in an ellipsis and never splits a surrogate pair.
+ */
+export function noticeTitle(
+  prefix: string,
+  name: string,
+  suffix = '',
+  max: number = NOTICE_TITLE_MAX,
+): string {
+  const full = `${prefix}${name}${suffix}`;
+  if (full.length <= max) return full;
+  const room = max - prefix.length - suffix.length - ELLIPSIS.length;
+  if (room <= 0) return full.slice(0, max);
+  let cut = name.slice(0, room);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${prefix}${cut.trimEnd()}${ELLIPSIS}${suffix}`;
+}

@@ -9,7 +9,7 @@ import {
   type MatchEvents,
   type TeamEntryQueryPort,
 } from '../../competition';
-import { uniqueStrings } from '../communications.shared';
+import { noticeTitle, uniqueStrings } from '../communications.shared';
 import { NotificationsService } from './notifications.service';
 
 type InvitationCreatedPayload = EventPayload<typeof CompetitionEvents.teamInvitationCreated>;
@@ -59,7 +59,7 @@ export class CompetitionNotices {
       category: 'operational',
       subject: { type: 'team_invitation', id: payload.invitationId },
       audience: { subjectPersonIds: [payload.recipientPersonId] },
-      title: `Team invitation: ${team}`,
+      title: noticeTitle('Team invitation: ', team),
       body: `An invitation to join ${team} is waiting for a response. It expires ${formatInstant(payload.expiresAt, 'UTC')} (UTC).`,
       // Who is invited to which team is participant-private: re-checked before dispatch.
       protected: true,
@@ -92,7 +92,7 @@ export class CompetitionNotices {
       ...(facilityId ? { facilityId } : {}),
       subject: { type: 'fixture', id: payload.fixtureId },
       audience: { teamEntryIds: entryIds, facilityId },
-      title: `${corrected ? 'Corrected result' : 'Result'} published: ${matchup}`,
+      title: noticeTitle(`${corrected ? 'Corrected result' : 'Result'} published: `, matchup),
       body: corrected
         ? `The official result of ${matchup} was corrected. Standings reflect the corrected result.`
         : `The official result of ${matchup} is published.`,
@@ -125,7 +125,7 @@ export class CompetitionNotices {
       ...(facility ? { facilityId: facility.id } : {}),
       subject: { type: 'fixture', id: payload.fixtureId },
       audience: { subjectPersonIds: subjects },
-      title: `${team}: are you available?`,
+      title: noticeTitle('', team, ': are you available?'),
       body: `${team} plays ${when}${facility ? ` at ${facility.name}` : ' (UTC)'}. Please answer the availability request in the app.`,
       detailsAfter: {
         requestId: payload.requestId,
