@@ -1,7 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   errors,
   newId,
+  systemPrincipal,
   type Closure,
   type ClosureImpact,
   type ClosureStatus,
@@ -56,6 +58,30 @@ function withImpactDefaults(impact: ClosureImpact | null): ClosureImpact | null 
       messages: impact.summary.messages ?? 0,
     },
   };
+}
+
+/** The Today exception `applyClosure` opens for events it leaves for resolution (scheduler queue). */
+const CLOSURE_RESOLUTION_REQUIRED = 'scheduling.closure_resolution_required';
+
+/** What a lift did to the closure's `closure_resolution_required` exceptions (lift audit details). */
+interface LiftSettlement {
+  /** Left-for-resolution events that still held the closed area between the closure start and the lift. */
+  displacedEventIds: string[];
+  resolvedExceptionIds: string[];
+  keptOpenExceptionIds: string[];
+  /** The narrower exception naming only the displaced events, when the lift raised one. */
+  raisedExceptionId: string | null;
+}
+
+function eventIdsOf(details: unknown): string[] {
+  const ids = (details as { eventIds?: unknown } | null)?.eventIds;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((id) => right.has(id));
 }
 
 const PROGRAM_KINDS = new Set(['session', 'practice', 'pickup']);
@@ -242,7 +268,7 @@ export class ClosuresService implements ClosurePort {
         await this.exceptions.raise(trx, {
           organizationId,
           facilityId: closure.facility_id,
-          category: 'scheduling.closure_resolution_required',
+          category: CLOSURE_RESOLUTION_REQUIRED,
           severity: 'high',
           title: `${unresolved.length} event(s) affected by a closure need resolution`,
           affectedType: 'closure',
@@ -398,13 +424,21 @@ export class ClosuresService implements ClosurePort {
       // SPK-FAC-004: a closure another module backs with its own authority (a facilities
       // restriction) is lifted only through that module's release (ClosureLiftGuards).
       await this.liftGuards.check(trx, organizationId, closureId);
+      const liftedAt = this.clock.now();
       await trx
         .updateTable('closures')
-        .set({ status: next, lifted_at: this.clock.now(), revision: closure.revision + 1 })
+        .set({ status: next, lifted_at: liftedAt, revision: closure.revision + 1 })
         .where('organization_id', '=', organizationId)
         .where('id', '=', closureId)
         .where('revision', '=', closure.revision)
         .execute();
+      const settlement = await this.settleResolutionException(
+        trx,
+        organizationId,
+        closure,
+        liftedAt,
+        input,
+      );
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -415,6 +449,7 @@ export class ClosuresService implements ClosurePort {
         afterRevision: closure.revision + 1,
         reason: input.reason ?? null,
         correlationId: input.correlationId ?? null,
+        details: { ...settlement },
       });
       await this.outbox.enqueue(trx, ClosureLifted, {
         organizationId,
@@ -469,6 +504,164 @@ export class ClosuresService implements ClosurePort {
   }
 
   /**
+   * SPK-AT-021 (authorized reopening), SPK-AT-009, SPK-SCHED-009, §4.12, SPK-UX-006: settles the
+   * `scheduling.closure_resolution_required` exception `applyClosure` opened for the events it left
+   * for resolution, in the lift's own transaction. A lift reopens the area from the lift onward
+   * only: a left-for-resolution event that held the closed area between the closure start and the
+   * lift (or the closure end, if earlier), whether it has finished or is still running, was
+   * blocked and still needs cancelling, refunding or rescheduling. Such events are "displaced".
+   *
+   * - No displaced event (the lift came before any of them, or each was cancelled or moved out of
+   *   the closed area): the exception is resolved, resolution `{ outcome: 'closure_lifted' }`.
+   * - Every event the exception names is displaced: it stays open (or acknowledged) unchanged.
+   * - Some are: it is resolved, resolution `{ outcome: 'narrowed_on_lift', displacedEventIds }`,
+   *   and a narrower exception (dedupe `closure:<id>:displaced`) names only the displaced events.
+   *
+   * The kernel transition runs as the scheduling system actor: the exception belongs to the
+   * `scheduler` queue, and the releasing principal (for example a facilities operator) need not
+   * hold that queue. An exception someone else resolved or closed after it was listed (the list
+   * is not locked; `transition` locks the row and then finds it settled) is skipped, so a lift
+   * never fails over a Today card it did not need to touch. A closure is only ever applied once
+   * (ClosureMachine) and is withdrawn only while pending, so the lift is the only path that ends
+   * an applied closure.
+   */
+  private async settleResolutionException(
+    trx: Trx,
+    organizationId: string,
+    closure: ClosureRow,
+    liftedAt: Date,
+    input: LiftClosureInput,
+  ): Promise<LiftSettlement> {
+    const displaced = await this.displacedAtLift(trx, organizationId, closure, liftedAt);
+    const settlement: LiftSettlement = {
+      displacedEventIds: displaced,
+      resolvedExceptionIds: [],
+      keptOpenExceptionIds: [],
+      raisedExceptionId: null,
+    };
+    const open = await this.exceptions.list(
+      organizationId,
+      {
+        statuses: ['open', 'acknowledged'],
+        category: CLOSURE_RESOLUTION_REQUIRED,
+        affectedType: 'closure',
+        affectedId: closure.id,
+        limit: 200,
+      },
+      trx,
+    );
+    const liftReason = input.reason ? ` Lift reason: ${input.reason}` : '';
+    for (const exception of open.items) {
+      if (displaced.length > 0 && sameIds(eventIdsOf(exception.details), displaced)) {
+        settlement.keptOpenExceptionIds.push(exception.id);
+        continue;
+      }
+      const resolved = await this.resolveIfStillOpen(
+        trx,
+        organizationId,
+        exception.id,
+        displaced.length === 0
+          ? {
+              reason: `Closure lifted: no event it left for resolution held the closed area before the lift.${liftReason}`,
+              resolution: { outcome: 'closure_lifted', closureId: closure.id },
+              correlationId: input.correlationId ?? undefined,
+            }
+          : {
+              reason: `Closure lifted: ${displaced.length} event(s) it left for resolution held the closed area before the lift and still need resolution on a narrower exception.${liftReason}`,
+              resolution: {
+                outcome: 'narrowed_on_lift',
+                closureId: closure.id,
+                displacedEventIds: displaced,
+              },
+              correlationId: input.correlationId ?? undefined,
+            },
+      );
+      if (resolved) settlement.resolvedExceptionIds.push(exception.id);
+    }
+    if (displaced.length > 0 && settlement.resolvedExceptionIds.length > 0) {
+      const impact = withImpactDefaults(closure.impact as ClosureImpact | null);
+      const sourceRecords = (impact?.sourceRecords ?? [])
+        .map((r) => ({ ...r, eventIds: r.eventIds.filter((id) => displaced.includes(id)) }))
+        .filter((r) => r.eventIds.length > 0);
+      const raised = await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: closure.facility_id,
+        category: CLOSURE_RESOLUTION_REQUIRED,
+        severity: 'high',
+        title: `${displaced.length} event(s) blocked by a closure before it was lifted need resolution`,
+        affectedType: 'closure',
+        affectedId: closure.id,
+        ownerQueue: 'scheduler',
+        dedupeKey: `closure:${closure.id}:displaced`,
+        details: {
+          eventIds: displaced,
+          sourceRecords,
+          liftedAt: liftedAt.toISOString(),
+          supersedes: settlement.resolvedExceptionIds,
+        },
+      });
+      settlement.raisedExceptionId = raised.id;
+    }
+    return settlement;
+  }
+
+  /**
+   * The events the closure left for resolution that still hold the closed area (an active
+   * reservation, so neither cancelled nor moved out) during [closure start, min(lift, closure end)),
+   * in the order the closure listed them. Empty when the lift came before the closure started.
+   */
+  private async displacedAtLift(
+    trx: Trx,
+    organizationId: string,
+    closure: ClosureRow,
+    liftedAt: Date,
+  ): Promise<string[]> {
+    const left = (closure.resolution as Closure['resolution'])?.unresolvedEventIds ?? [];
+    if (left.length === 0) return [];
+    const start = new Date(closure.start);
+    const end = new Date(Math.min(new Date(closure.end).getTime(), liftedAt.getTime()));
+    if (!(start.getTime() < end.getTime())) return [];
+    const held = await this.reservationsInside(
+      trx,
+      organizationId,
+      closure.facility_id,
+      closure.resource_id,
+      { start: start.toISOString(), end: end.toISOString() },
+      left,
+    );
+    const heldIds = new Set(held.map((r) => r.event_id));
+    return left.filter((id) => heldIds.has(id));
+  }
+
+  /**
+   * Resolves the exception as the scheduling system actor, or answers false when it was resolved
+   * or closed by someone else after the lift listed it (§4.9: `transition` locks the row, so under
+   * READ COMMITTED it sees the concurrent settlement and refuses `resolved -> resolved`).
+   */
+  private async resolveIfStillOpen(
+    trx: Trx,
+    organizationId: string,
+    exceptionId: string,
+    options: { reason: string; resolution: Record<string, unknown>; correlationId?: string },
+  ): Promise<boolean> {
+    try {
+      await this.exceptions.transition(
+        trx,
+        systemPrincipal(organizationId, 'scheduling.closure_lifted'),
+        exceptionId,
+        'resolved',
+        options,
+      );
+      return true;
+    } catch (error) {
+      if (!DomainError.is(error) || error.code !== 'INVALID_TRANSITION') throw error;
+      const current = await this.exceptions.get(organizationId, exceptionId, trx);
+      if (current && (current.status === 'resolved' || current.status === 'closed')) return false;
+      throw error;
+    }
+  }
+
+  /**
    * SPK-SCHED-009 / SPK-FAC-003 / §4.7: a closure holds no reservation rows, so applying one locks
    * the closed area's conflict units (every unit of the facility for a facility-wide closure)
    * FOR UPDATE, in id order, before the impact is read. A booking that has already share-locked
@@ -501,14 +694,19 @@ export class ClosuresService implements ClosurePort {
     await q.orderBy('id').forUpdate().execute();
   }
 
-  /** Every published event holding space inside the closed area during the interval, with its owning record and parties. */
-  private async computeImpact(
+  /**
+   * Active reservations inside the closed area (the resource and every resource sharing one of its
+   * conflict units, or the whole facility) that overlap the interval, optionally of these events.
+   */
+  private async reservationsInside(
     db: Trx | Db,
     organizationId: string,
     facilityId: string,
     resourceId: string | null,
     interval: Interval,
-  ): Promise<ClosureImpact> {
+    eventIds?: readonly string[],
+  ): Promise<Array<{ reservation_id: string; event_id: string; resource_id: string }>> {
+    if (eventIds && eventIds.length === 0) return [];
     let q = db
       .selectFrom('reservations as r')
       .innerJoin('events as e', (join) =>
@@ -519,6 +717,7 @@ export class ClosuresService implements ClosurePort {
       .where('r.status', '=', 'active')
       .where('e.facility_id', '=', facilityId)
       .where(sql<boolean>`r.occupied && ${tstzrange(interval.start, interval.end)}`);
+    if (eventIds) q = q.where('r.event_id', 'in', [...eventIds]);
     if (resourceId) {
       q = q.where(
         'r.resource_id',
@@ -538,7 +737,24 @@ export class ClosuresService implements ClosurePort {
           ),
       );
     }
-    const reservations = await q.execute();
+    return q.execute();
+  }
+
+  /** Every published event holding space inside the closed area during the interval, with its owning record and parties. */
+  private async computeImpact(
+    db: Trx | Db,
+    organizationId: string,
+    facilityId: string,
+    resourceId: string | null,
+    interval: Interval,
+  ): Promise<ClosureImpact> {
+    const reservations = await this.reservationsInside(
+      db,
+      organizationId,
+      facilityId,
+      resourceId,
+      interval,
+    );
     const eventIds = [...new Set(reservations.map((r) => r.event_id))];
     const events =
       eventIds.length === 0

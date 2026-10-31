@@ -189,7 +189,30 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   (`concurrency.spec.ts`, under PGlite and `TEST_DATABASE_URL`).
   Occurrence indexes are stable, and occurrences that already ended are never changed by an edit.
 - Closure application either cancels affected published events (notices carry the closure id) or
-  leaves them for staff resolution as an operational exception in the `scheduler` queue.
+  leaves them for staff resolution as an operational exception in the `scheduler` queue
+  (`scheduling.closure_resolution_required`, dedupe `closure:<id>`). A lift (the HTTP route, or the
+  facilities release through `CLOSURE_PORT`, SPK-AT-021) reopens the area from the lift onward
+  only, so in the lift's transaction it settles that exception, if still open or acknowledged, by
+  what the closure actually blocked. An event it left for resolution is _displaced_ when it still
+  holds the closed area (an active reservation: neither cancelled nor moved out) between the
+  closure start and the lift, or the closure end if earlier; a finished event and one still running
+  at the lift are both displaced (SPK-AT-009, SPK-SCHED-009):
+  - no displaced event (the lift came first, or each was cancelled or moved): the exception is
+    resolved with `{ outcome: 'closure_lifted', closureId }`;
+  - every event the exception names is displaced: it stays open (or acknowledged) unchanged;
+  - some are: it is resolved with `{ outcome: 'narrowed_on_lift', closureId, displacedEventIds }`
+    and a narrower exception (same category, dedupe `closure:<id>:displaced`, `details.eventIds`
+    the displaced events, `details.supersedes`) keeps them on Today.
+
+  Transitions are audited as the `scheduling.closure_lifted` system actor (the releasing operator
+  need not hold the scheduler queue), and the lift audit records `displacedEventIds` and which
+  exceptions were resolved, kept open or raised. An exception someone else resolved or closed while
+  the lift ran is left as they settled it, and the lift still succeeds (`closures.spec.ts`
+  "closure lift after left-for-resolution events started", the concurrent case under PGlite and
+  `TEST_DATABASE_URL`). A closure is withdrawn only while pending, before any such exception exists.
+  Known gap outside this module (staff client): the closure screen offers its resolution builder
+  only while a closure is active, so after a lift the displaced events are named by the Today
+  exception only.
 
 ### Closure withdrawal and preview (SCH-01: SPK-FAC-003, SPK-SCHED-009) — verified
 

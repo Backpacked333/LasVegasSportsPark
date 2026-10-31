@@ -1,7 +1,8 @@
-import { newId, type Principal } from '@sportspark/contracts';
+import { DomainError, newId, type Principal } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { OperationalExceptions, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { CLOSURE_PORT, type ClosurePort } from '../ports';
 import { ClosuresService } from '../services/closures.service';
@@ -278,6 +279,98 @@ describe('closures: impact preview, apply, lift (SPK-SCHED-009, SPK-FAC-003/004,
     ]);
   });
 
+  it('SPK-AT-021 / §4.12: lifting an applied closure resolves its closure_resolution_required exception and leaves other closures open', async () => {
+    const exceptions = t.app.get(OperationalExceptions);
+    const uow = t.app.get(UnitOfWork);
+    const scheduler = staffPrincipal(org, ['scheduler']);
+    const applyWithEvent = async (day: string, title: string) => {
+      const event = await createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: facility,
+        resourceIds: [pitch.southHalfId],
+        start: at(day, '09:00'),
+        end: at(day, '10:00'),
+        title,
+      });
+      const created = await t.http
+        .post('/v1/closures')
+        .set(auth)
+        .set('Idempotency-Key', key())
+        .send({
+          facilityId: facility,
+          resourceId: pitch.southHalfId,
+          interval: { start: at(day, '08:00'), end: at(day, '20:00') },
+          reason: `Turf repair south half ${day}`,
+          source: 'maintenance',
+        });
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      const applied = await t.http
+        .post(`/v1/closures/${created.body.id}/apply`)
+        .set(auth)
+        .set('Idempotency-Key', key())
+        .send({ mode: 'leave_for_resolution', expectedRevision: 1 });
+      expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+      expect(applied.body.resolution.unresolvedEventIds).toEqual([event.id]);
+      const exception = await t.db
+        .selectFrom('operational_exceptions')
+        .selectAll()
+        .where('organization_id', '=', org)
+        .where('dedupe_key', '=', `closure:${created.body.id}`)
+        .executeTakeFirstOrThrow();
+      expect(exception).toMatchObject({
+        category: 'scheduling.closure_resolution_required',
+        status: 'open',
+      });
+      return { closureId: created.body.id as string, event, exceptionId: exception.id };
+    };
+    const lifting = await applyWithEvent('2026-11-22', 'A v B');
+    const staying = await applyWithEvent('2026-11-23', 'North clinic');
+    // the scheduler has seen the card (acknowledged) before the area is reopened
+    await uow.run(({ trx }) =>
+      exceptions.transition(trx, scheduler, lifting.exceptionId, 'acknowledged'),
+    );
+
+    t.clock.advance(30 * 60_000);
+    const lifted = await t.http
+      .post(`/v1/closures/${lifting.closureId}/lift`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: 2, reason: 'inspection passed' });
+    expect(lifted.status, JSON.stringify(lifted.body)).toBe(200);
+    expect(lifted.body).toMatchObject({ status: 'lifted' });
+
+    // the facilities operator who reopened the area holds no scheduler queue: the exception is
+    // settled by the scheduling system actor in the lift's transaction
+    const settled = await exceptions.get(org, lifting.exceptionId);
+    expect(settled).toMatchObject({
+      status: 'resolved',
+      resolution: { outcome: 'closure_lifted', closureId: lifting.closureId },
+    });
+    expect(new Date(settled!.resolved_at!).toISOString()).toBe(t.clock.now().toISOString());
+    const transitionAudit = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'actor', 'reason'])
+      .where('organization_id', '=', org)
+      .where('target_type', '=', 'operational_exception')
+      .where('target_id', '=', lifting.exceptionId)
+      .where('action', '=', 'exceptions.resolved')
+      .executeTakeFirstOrThrow();
+    expect(transitionAudit).toMatchObject({
+      actor: { kind: 'system', actorLabel: 'scheduling.closure_lifted' },
+      reason:
+        'Closure lifted: no event it left for resolution held the closed area before the lift. Lift reason: inspection passed',
+    });
+    const stillOpen = await exceptions.list(org, {
+      statuses: ['open', 'acknowledged'],
+      category: 'scheduling.closure_resolution_required',
+    });
+    expect(stillOpen.items.map((e) => e.id)).toEqual([staying.exceptionId]);
+
+    // the other closure is still active and its exception still asks for a resolution
+    const otherClosure = await closures.getClosure(facilitiesOperator, staying.closureId);
+    expect(otherClosure.status).toBe('active');
+  });
+
   it('SPK-AT-009: applying a facility closure with cancel_affected cancels every affected event with a notice naming the closure', async () => {
     const game = await createScheduledEvent(events, {
       organizationId: org,
@@ -393,5 +486,336 @@ describe('closures: impact preview, apply, lift (SPK-SCHED-009, SPK-FAC-003/004,
     await expect(
       closures.createClosure(facilitiesOperator, { ...body, facilityId: newId() }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+/**
+ * A lift reopens the area from the lift onward only (staff copy: "bookable again from now"). An
+ * event the closure left for resolution that held the closed area before the lift, finished or
+ * still running, was blocked and still needs a resolution, so Today must keep naming it
+ * (SPK-AT-021, SPK-AT-009, SPK-SCHED-009, SPK-UX-006). The lift also never fails over a Today card
+ * someone else settled while it ran (§4.9, §4.12).
+ */
+describe('closure lift after left-for-resolution events started (SPK-AT-021, SPK-AT-009, SPK-UX-006, §4.12)', () => {
+  let t: TestApp;
+  let events: EventsService;
+  let closures: ClosuresService;
+  let exceptions: OperationalExceptions;
+  let uow: UnitOfWork;
+  let org: string;
+  let pitch: PitchFixture;
+  let facilitiesOperator: Principal;
+  let scheduler: Principal;
+  let auth: { Authorization: string };
+
+  beforeAll(async () => {
+    t = await createTestApp({ imports: [SchedulingModule], clockStart: at('2026-12-06', '07:00') });
+    events = t.app.get(EventsService);
+    closures = t.app.get(ClosuresService);
+    exceptions = t.app.get(OperationalExceptions);
+    uow = t.app.get(UnitOfWork);
+    org = t.organizationId;
+    pitch = await seedPitchWithHalves(t.db, {
+      organizationId: org,
+      facilityId: t.facilityId,
+      name: 'Turf 2',
+    });
+    facilitiesOperator = staffPrincipal(org, ['facilities_operator']);
+    scheduler = staffPrincipal(org, ['scheduler']);
+    auth = await t.authHeader(facilitiesOperator);
+  });
+  afterAll(async () => {
+    await t?.close();
+  });
+
+  const key = () => `key-${newId()}`;
+  const book = (day: string, from: string, to: string, title: string) =>
+    createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.southHalfId],
+      start: at(day, from),
+      end: at(day, to),
+      title,
+    });
+  /** Creates and applies an 08:00-20:00 south-half closure that leaves its events for resolution. */
+  const closeSouthHalf = async (day: string) => {
+    const created = await t.http
+      .post('/v1/closures')
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({
+        facilityId: t.facilityId,
+        resourceId: pitch.southHalfId,
+        interval: { start: at(day, '08:00'), end: at(day, '20:00') },
+        reason: `Turf damage ${day}`,
+        source: 'manual',
+      });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const applied = await t.http
+      .post(`/v1/closures/${created.body.id as string}/apply`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ mode: 'leave_for_resolution', expectedRevision: 1 });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    const closureId = created.body.id as string;
+    const [exception] = await cardsOf(closureId);
+    expect(exception).toMatchObject({ status: 'open', dedupe_key: `closure:${closureId}` });
+    return {
+      closureId,
+      unresolved: applied.body.resolution.unresolvedEventIds as string[],
+      exceptionId: exception!.id,
+    };
+  };
+  /** As the staff UI sends it: no reason. */
+  const lift = (closureId: string) =>
+    t.http
+      .post(`/v1/closures/${closureId}/lift`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: 2 });
+  const cardsOf = (closureId: string) =>
+    t.db
+      .selectFrom('operational_exceptions')
+      .selectAll()
+      .where('organization_id', '=', org)
+      .where('category', '=', 'scheduling.closure_resolution_required')
+      .where('affected_type', '=', 'closure')
+      .where('affected_id', '=', closureId)
+      .orderBy('opened_at')
+      .orderBy('id')
+      .execute();
+  const liftAudit = (closureId: string) =>
+    t.db
+      .selectFrom('audit_records')
+      .select(['details', 'reason'])
+      .where('organization_id', '=', org)
+      .where('target_type', '=', 'closure')
+      .where('target_id', '=', closureId)
+      .where('action', '=', 'scheduling.closure_lifted')
+      .executeTakeFirstOrThrow();
+  const resolvedAudits = (exceptionId: string) =>
+    t.db
+      .selectFrom('audit_records')
+      .select(['actor', 'reason'])
+      .where('organization_id', '=', org)
+      .where('target_type', '=', 'operational_exception')
+      .where('target_id', '=', exceptionId)
+      .where('action', '=', 'exceptions.resolved')
+      .execute();
+  const statusOf = async (eventId: string) =>
+    (
+      await t.db
+        .selectFrom('events')
+        .select('status')
+        .where('organization_id', '=', org)
+        .where('id', '=', eventId)
+        .executeTakeFirstOrThrow()
+    ).status;
+
+  it('SPK-AT-021 / SPK-AT-009: a lift after left-for-resolution events started narrows the exception to the events the closure blocked before the lift', async () => {
+    const day = '2026-12-06';
+    t.clock.set(at(day, '07:00'));
+    const morning = await book(day, '09:00', '10:00', 'Morning game');
+    const moved = await book(day, '11:00', '12:00', 'Late morning game');
+    const afternoon = await book(day, '14:00', '16:00', 'Afternoon clinic');
+    const evening = await book(day, '17:00', '18:00', 'Evening rental');
+    const { closureId, unresolved, exceptionId } = await closeSouthHalf(day);
+    expect(unresolved).toEqual([morning.id, moved.id, afternoon.id, evening.id]);
+
+    // the scheduler resolves one of them while the half is closed
+    t.clock.set(at(day, '08:30'));
+    await events.cancelEvent(scheduler, moved.id, {
+      reason: 'Closure: replayed on another day',
+      expectedRevision: moved.revision,
+    });
+
+    // the turf passes an afternoon inspection: the half is reopened at 15:00, from 15:00 onward
+    t.clock.set(at(day, '15:00'));
+    const lifted = await lift(closureId);
+    expect(lifted.status, JSON.stringify(lifted.body)).toBe(200);
+
+    const displaced = [morning.id, afternoon.id];
+    const [original, narrowed, ...rest] = await cardsOf(closureId);
+    expect(rest).toEqual([]);
+    expect(original).toMatchObject({
+      id: exceptionId,
+      status: 'resolved',
+      resolution: { outcome: 'narrowed_on_lift', closureId, displacedEventIds: displaced },
+    });
+    // Today keeps naming the finished morning game and the clinic that was running at the lift,
+    // not the evening rental the lift reopened the half for, nor the event already cancelled
+    expect(narrowed).toMatchObject({
+      status: 'open',
+      severity: 'high',
+      owner_queue: 'scheduler',
+      facility_id: t.facilityId,
+      dedupe_key: `closure:${closureId}:displaced`,
+      details: { eventIds: displaced, supersedes: [exceptionId] },
+    });
+    expect(narrowed!.title).toBe(
+      '2 event(s) blocked by a closure before it was lifted need resolution',
+    );
+    expect(await resolvedAudits(exceptionId)).toEqual([
+      {
+        actor: expect.objectContaining({ kind: 'system', actorLabel: 'scheduling.closure_lifted' }),
+        reason:
+          'Closure lifted: 2 event(s) it left for resolution held the closed area before the lift and still need resolution on a narrower exception.',
+      },
+    ]);
+    expect((await liftAudit(closureId)).details).toEqual({
+      displacedEventIds: displaced,
+      resolvedExceptionIds: [exceptionId],
+      keptOpenExceptionIds: [],
+      raisedExceptionId: narrowed!.id,
+    });
+    expect(
+      await Promise.all([morning, afternoon, evening, moved].map((e) => statusOf(e.id))),
+    ).toEqual(['published', 'published', 'published', 'canceled']);
+  });
+
+  it('SPK-AT-021 / SPK-AT-009: when every event the exception names was blocked before the lift, the lift leaves the exception as it is', async () => {
+    const day = '2026-12-07';
+    t.clock.set(at(day, '07:00'));
+    const game = await book(day, '09:00', '10:00', 'Morning game');
+    const { closureId, exceptionId } = await closeSouthHalf(day);
+    await uow.run(({ trx }) => exceptions.transition(trx, scheduler, exceptionId, 'acknowledged'));
+
+    t.clock.set(at(day, '15:00'));
+    const lifted = await lift(closureId);
+    expect(lifted.status, JSON.stringify(lifted.body)).toBe(200);
+
+    const cards = await cardsOf(closureId);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      id: exceptionId,
+      status: 'acknowledged',
+      resolution: null,
+      details: { eventIds: [game.id] },
+    });
+    expect(await resolvedAudits(exceptionId)).toEqual([]);
+    expect((await liftAudit(closureId)).details).toEqual({
+      displacedEventIds: [game.id],
+      resolvedExceptionIds: [],
+      keptOpenExceptionIds: [exceptionId],
+      raisedExceptionId: null,
+    });
+    expect(await statusOf(game.id)).toBe('published');
+  });
+
+  it('SPK-AT-021: a lift after the events started resolves the exception when each event was cancelled or moved out of the closed area', async () => {
+    const day = '2026-12-08';
+    t.clock.set(at(day, '07:00'));
+    const canceled = await book(day, '09:00', '10:00', 'Morning game');
+    const relocated = await book(day, '11:00', '12:00', 'Late morning clinic');
+    const { closureId, exceptionId } = await closeSouthHalf(day);
+    t.clock.set(at(day, '08:15'));
+    await events.cancelEvent(scheduler, canceled.id, {
+      reason: 'Closure',
+      expectedRevision: canceled.revision,
+    });
+    // moved to the north half, outside the closed area, before it started
+    await events.moveEvent(scheduler, relocated.id, {
+      scheduledStart: relocated.scheduledStart,
+      scheduledEnd: relocated.scheduledEnd,
+      resourceIds: [pitch.northHalfId],
+      expectedRevision: relocated.revision,
+      reason: 'Closure: moved to the north half',
+    });
+
+    t.clock.set(at(day, '15:00'));
+    expect((await lift(closureId)).status).toBe(200);
+    const cards = await cardsOf(closureId);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      id: exceptionId,
+      status: 'resolved',
+      resolution: { outcome: 'closure_lifted', closureId },
+    });
+    expect((await liftAudit(closureId)).details).toMatchObject({
+      displacedEventIds: [],
+      resolvedExceptionIds: [exceptionId],
+      raisedExceptionId: null,
+    });
+  });
+
+  it('§4.9 / §4.12: a lift that listed the exception before a scheduler resolved it still lifts and leaves the scheduler resolution in place', async () => {
+    const day = '2026-12-09';
+    t.clock.set(at(day, '07:00'));
+    await book(day, '09:00', '10:00', 'Morning game');
+    const { closureId, exceptionId } = await closeSouthHalf(day);
+    const stale = await exceptions.get(org, exceptionId);
+    await uow.run(({ trx }) =>
+      exceptions.transition(trx, scheduler, exceptionId, 'resolved', {
+        reason: 'Moved to Sunday by phone',
+        resolution: { outcome: 'rescheduled_by_phone' },
+      }),
+    );
+    // the lift read the card before the scheduler's resolution committed (READ COMMITTED)
+    const list = exceptions.list.bind(exceptions);
+    exceptions.list = async (...args) => {
+      exceptions.list = list;
+      const page = await list(...args);
+      return { ...page, items: [...page.items, stale!] };
+    };
+    try {
+      t.clock.set(at(day, '07:30'));
+      const lifted = await lift(closureId);
+      expect(lifted.status, JSON.stringify(lifted.body)).toBe(200);
+    } finally {
+      exceptions.list = list;
+    }
+    expect((await cardsOf(closureId))[0]).toMatchObject({
+      status: 'resolved',
+      resolution: { outcome: 'rescheduled_by_phone' },
+    });
+    expect((await resolvedAudits(exceptionId)).map((a) => a.reason)).toEqual([
+      'Moved to Sunday by phone',
+    ]);
+    expect((await liftAudit(closureId)).details).toMatchObject({ resolvedExceptionIds: [] });
+  });
+
+  it('§4.9 / §4.12: a lift that waits on a scheduler resolving the same exception still lifts (PGlite and TEST_DATABASE_URL)', async () => {
+    const day = '2026-12-10';
+    t.clock.set(at(day, '07:00'));
+    await book(day, '09:00', '10:00', 'Morning game');
+    const { closureId, exceptionId } = await closeSouthHalf(day);
+    t.clock.set(at(day, '07:30'));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let reached!: () => void;
+    const transitioned = new Promise<void>((resolve) => (reached = resolve));
+    // the scheduler's resolution holds the exception row until the test releases it
+    const resolving = uow.run(async ({ trx }) => {
+      await exceptions.transition(trx, scheduler, exceptionId, 'resolved', {
+        reason: 'Handled by the scheduler',
+      });
+      reached();
+      await held;
+    });
+    await transitioned;
+    let liftDone = false;
+    const lifting = closures
+      .liftClosure(facilitiesOperator, closureId, { expectedRevision: 2 })
+      .then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      )
+      .finally(() => (liftDone = true));
+    if (t.database.concurrent) {
+      // the lift reaches the exception row lock and waits for the scheduler's transaction
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(liftDone).toBe(false);
+    }
+    release();
+    await resolving;
+    const lifted = await lifting;
+    expect(
+      lifted.ok ? 'OK' : DomainError.is(lifted.error) ? lifted.error.code : String(lifted.error),
+    ).toBe('OK');
+    expect((await closures.getClosure(scheduler, closureId)).status).toBe('lifted');
+    expect((await resolvedAudits(exceptionId)).map((a) => a.reason)).toEqual([
+      'Handled by the scheduler',
+    ]);
   });
 });
