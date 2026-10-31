@@ -4,6 +4,8 @@ import {
   ALL_STATE_MACHINES,
   CheckoutMachine,
   HoldMachine,
+  InboxEventMachine,
+  OutboxEventMachine,
   PaymentAttemptMachine,
   ResultMachine,
   defineStateMachine,
@@ -77,5 +79,16 @@ describe('state machines (§4.6)', () => {
         transitions: { a: { go: 'b' } } as never,
       }),
     ).toThrow(/unknown target state/);
+  });
+
+  it('R3-OPERATIONS-03 / §4.12: a dead-lettered outbox or inbox event returns to processing only by a replay; settled events are final', () => {
+    expect(OutboxEventMachine.next('dead', 'replay')).toBe('pending');
+    expect(() => OutboxEventMachine.next('pending', 'replay')).toThrow(
+      /cannot replay from pending/,
+    );
+    expect(OutboxEventMachine.eventsFrom('dispatched')).toEqual([]);
+    expect(InboxEventMachine.next('dead', 'replay')).toBe('received');
+    expect(() => InboxEventMachine.next('processed', 'replay')).toThrow(DomainError);
+    expect(InboxEventMachine.eventsFrom('ignored')).toEqual([]);
   });
 });

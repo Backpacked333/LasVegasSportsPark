@@ -1,11 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { newId } from '@sportspark/contracts';
+import { InboxEventMachine, newId, type InboxEventState } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import { sql } from 'kysely';
 import type { Clock } from '../clock';
 import type { AppConfig } from '../config';
 import { runWithTransaction } from '../database/transaction-context';
 import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
+import { INBOX_DEAD_LETTER_CATEGORY, resolveReplayedDeadLetter } from '../outbox/dead-letters';
 import { runAfterCommitHooks, type HandlerContext } from '../outbox/event-handler.registry';
 import { retryDelayMs } from '../outbox/outbox-dispatcher';
 import { APP_CONFIG, CLOCK, DATABASE } from '../tokens';
@@ -155,7 +156,7 @@ export class Inbox {
         const ignored = await this.db
           .updateTable('inbox_events')
           .set({
-            status: 'ignored',
+            status: InboxEventMachine.next(row.status, 'ignore'),
             processed_at: this.clock.now(),
             last_error: 'signature not verified; the event was not applied',
             locked_by: null,
@@ -240,27 +241,45 @@ export class Inbox {
           summary.deferred += 1;
         }
       } else if (failures.length === 0) {
-        const updated = await this.db
-          .updateTable('inbox_events')
-          .set({
-            status: 'processed',
-            processed_at: now,
-            attempts: attempt,
-            last_error: null,
-            locked_by: null,
-            locked_until: null,
-          })
-          .where('id', '=', row.id)
-          .where('locked_by', '=', lease)
-          .executeTakeFirst();
-        if (Number(updated.numUpdatedRows) > 0) summary.processed += 1;
+        const settle = async (executor: Db) => {
+          const updated = await executor
+            .updateTable('inbox_events')
+            .set({
+              status: InboxEventMachine.next(row.status, 'process'),
+              processed_at: now,
+              attempts: attempt,
+              last_error: null,
+              locked_by: null,
+              locked_until: null,
+            })
+            .where('id', '=', row.id)
+            .where('locked_by', '=', lease)
+            .executeTakeFirst();
+          return Number(updated.numUpdatedRows) > 0;
+        };
+        const organizationId = row.organization_id;
+        const settled =
+          row.replayed_at && organizationId
+            ? // R3-OPERATIONS-03: a replayed dead letter's exception is resolved with the outcome.
+              await this.db.transaction().execute(async (trx) => {
+                if (!(await settle(trx))) return false;
+                await resolveReplayedDeadLetter(trx, this.exceptions, {
+                  organizationId,
+                  source: 'inbox',
+                  eventId: row.id,
+                  actorLabel: 'kernel.inbox',
+                });
+                return true;
+              })
+            : await settle(this.db);
+        if (settled) summary.processed += 1;
       } else if (attempt >= row.max_attempts) {
         const lastError = failures.join(' | ').slice(0, 4000);
         const deadLettered = await this.db.transaction().execute(async (trx) => {
           const updated = await trx
             .updateTable('inbox_events')
             .set({
-              status: 'dead',
+              status: InboxEventMachine.next(row.status, 'dead_letter'),
               attempts: attempt,
               last_error: lastError,
               failure_owner: INBOX_FAILURE_OWNER,
@@ -275,7 +294,7 @@ export class Inbox {
           if (row.organization_id) {
             await this.exceptions.raise(trx, {
               organizationId: row.organization_id,
-              category: 'reliability.inbox_dead_letter',
+              category: INBOX_DEAD_LETTER_CATEGORY,
               severity: 'high',
               title: `Provider event ${row.provider}/${row.event_type} could not be processed`,
               affectedType: 'inbox_event',
@@ -299,7 +318,7 @@ export class Inbox {
         const updated = await this.db
           .updateTable('inbox_events')
           .set({
-            status: 'failed',
+            status: InboxEventMachine.next(row.status, 'fail'),
             attempts: attempt,
             last_error: failures.join(' | ').slice(0, 4000),
             available_at: new Date(now.getTime() + retryDelayMs(attempt)),
@@ -335,7 +354,8 @@ export class Inbox {
         from claimed
         where i.id = claimed.id
         returning i.id, i.provider, i.provider_event_id, i.organization_id, i.event_type, i.payload,
-                  i.signature_verified, i.received_at, i.attempts, i.max_attempts, i.expected_handlers
+                  i.signature_verified, i.received_at, i.attempts, i.max_attempts, i.expected_handlers,
+                  i.status, i.replayed_at
       `.execute(trx);
       return result.rows;
     });
@@ -360,6 +380,9 @@ interface InboxRow {
   attempts: number;
   max_attempts: number;
   expected_handlers: string[] | null;
+  /** `received` or `failed`: the states a claim selects. */
+  status: Extract<InboxEventState, 'received' | 'failed'>;
+  replayed_at: Date | string | null;
 }
 
 /** The consumption name of an inbox handler (event_consumptions.handler). */

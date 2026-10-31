@@ -3,7 +3,7 @@
 > Generated from code by `apps/api/scripts/emit-permission-matrix.ts`; do not edit by hand.
 > Regenerate with `pnpm build && pnpm permission-matrix` from the repository root.
 
-Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 301 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
+Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 303 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
 
 Columns: **Staff roles** may perform the action within their organization or facility scope; **Self** means a customer may act on themselves as the subject person; **Subject permission** is the grant a customer must hold over every subject person; **Team role** is the role a customer must hold on the target team entry; **Requirements** are the specification ids the action declares.
 
@@ -17,7 +17,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `catalog`        | 16      |
 | `communications` | 11      |
 | `competition`    | 46      |
-| `core`           | 6       |
+| `core`           | 8       |
 | `enrollment`     | 44      |
 | `entry`          | 32      |
 | `exceptions`     | 3       |
@@ -30,7 +30,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `scheduling`     | 8       |
 | `support`        | 8       |
 | `workforce`      | 20      |
-| **Total**        | **301** |
+| **Total**        | **303** |
 
 ## Actions
 
@@ -115,6 +115,8 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `competition.withdraw_dispute`               | Withdraw a dispute (its submitter or a captain of the submitting entry)                                                                                                    | —                                                                                                                                                                                             | yes  | —                  | `captain`    | SPK-RESULT-005, §4.6                                               |
 | `competition.withdraw_team_entry`            | Withdraw a season team entry (captain or staff)                                                                                                                            | `league_manager`, `general_manager`, `system_administrator`                                                                                                                                   | no   | —                  | `captain`    | SPK-COMP-004                                                       |
 | `core.manage_capabilities`                   | Enable or disable a capability for the organization, naming its applicability decision                                                                                     | `system_administrator`                                                                                                                                                                        | no   | —                  | —            | §1.6, §6.5, DEC-016                                                |
+| `core.replay_dead_letter`                    | Replay a dead-lettered outbox or provider event once its cause is fixed (any queue; audited)                                                                               | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §5.11, §4.12, SPK-UX-006                                           |
+| `core.replay_own_dead_letter`                | Replay a dead-lettered event in the queue of one's own staff role (audited)                                                                                                | `front_desk`, `league_manager`, `program_manager`, `scheduler`, `finance_operator`, `facilities_operator`, `general_manager`, `system_administrator`, `support_operator`                      | no   | —                  | —            | §5.11, §4.12, SPK-UX-006                                           |
 | `core.view_audit`                            | Read audited privileged actions (the read is itself audited)                                                                                                               | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §4.14                                                              |
 | `core.view_capabilities`                     | Read the organization's capability switches and their applicability decisions                                                                                              | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §1.6, §6.5, DEC-016                                                |
 | `core.view_integrations`                     | Read the integration register: provider gates, decisions and registered adapters                                                                                           | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §5.1, §5.2                                                         |

@@ -127,6 +127,9 @@ export interface OutboxEventsTable {
    * once each of them has run (or is retired) in the processing build.
    */
   expected_handlers: string[] | null;
+  /** How often the dead letter was replayed, and when last (migration 0014, R3-OPERATIONS-03). */
+  replay_count: Generated<number>;
+  replayed_at: NullableTimestamp;
 }
 
 export type InboxStatus = 'received' | 'processed' | 'failed' | 'ignored' | 'dead';
@@ -154,6 +157,9 @@ export interface InboxEventsTable {
    * provider (migration 0013, R3-OPERATIONS-01); null for rows recorded before.
    */
   expected_handlers: string[] | null;
+  /** How often the dead letter was replayed, and when last (migration 0014, R3-OPERATIONS-03). */
+  replay_count: Generated<number>;
+  replayed_at: NullableTimestamp;
 }
 
 export interface EventConsumptionsTable {

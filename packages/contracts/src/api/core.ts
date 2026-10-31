@@ -333,6 +333,61 @@ openApiRegistry.registerPath({
 });
 
 // ---------------------------------------------------------------------------------------------
+// Dead-letter replay (R3-OPERATIONS-03, §5.11, §4.12, SPK-UX-006)
+// ---------------------------------------------------------------------------------------------
+
+export const ReplayDeadLetterBody = z
+  .object({
+    /** Why the follow-up is re-run now (the fix or the dependency that is back); audited. */
+    reason: z.string().trim().min(1).max(2000),
+    policyReferences: z.array(z.string().min(1).max(200)).max(20).optional(),
+  })
+  .strict()
+  .openapi('ReplayDeadLetterRequest');
+export type ReplayDeadLetterInput = z.infer<typeof ReplayDeadLetterBody>;
+
+export const DeadLetterReplaySchema = z
+  .object({
+    id: z.uuid(),
+    source: z.enum(['outbox', 'inbox']),
+    /** `pending` (outbox) or `received` (inbox): the worker picks it up on its next pass. */
+    status: z.enum(['pending', 'received']),
+    attempts: z.number().int(),
+    availableAt: z.iso.datetime(),
+    replayCount: z.number().int(),
+    replayedAt: z.iso.datetime(),
+    /** The open dead-letter exception, resolved by the worker once the replayed event settles. */
+    exceptionId: z.uuid().nullable(),
+  })
+  .openapi('DeadLetterReplay');
+export type DeadLetterReplayView = z.infer<typeof DeadLetterReplaySchema>;
+
+export const DeadLetterParams = z.object({ id: z.uuid() });
+
+for (const [path, what, permission] of [
+  ['/outbox-events/{id}/replay', 'an outbox event', 'reliability.outbox_dead_letter'],
+  ['/provider-events/{id}/replay', 'a provider (inbox) event', 'reliability.inbox_dead_letter'],
+] as const) {
+  openApiRegistry.registerPath({
+    method: 'post',
+    path,
+    summary: `Replay ${what} that was dead-lettered (${permission}): it returns to the worker with its attempts reset, the handlers that already ran are skipped, and the dead-letter exception is resolved once it settles (core.replay_dead_letter; the queue that owns it, general manager or system administrator; audited)`,
+    tags: [TAG],
+    request: {
+      params: DeadLetterParams,
+      body: { content: { 'application/json': { schema: ReplayDeadLetterBody } } },
+    },
+    responses: {
+      200: ok('The event, back with the worker', DeadLetterReplaySchema),
+      400: err('Validation failed'),
+      403: err('Access denied'),
+      404: err('No such event in the organization'),
+      409: err('INVALID_TRANSITION when the event is not dead-lettered'),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 // Integration register (K-09, §5.1, §5.2)
 // ---------------------------------------------------------------------------------------------
 

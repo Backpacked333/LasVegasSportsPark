@@ -34,6 +34,8 @@ const EXPLICIT: Readonly<Record<string, NavigationAreaId | null>> = {
   // Outcomes and recovery.
   'operations.read': 'today',
   'operations.resume_after_recovery': 'admin',
+  // A queue owner replays its own dead letter from the Today exception (R3-OPERATIONS-03).
+  'core.replay_own_dead_letter': 'today',
   // The assistant answers inside Today; reviewing and applying recommendations is administration.
   'automation.ask': 'today',
   'automation.read_request': 'today',

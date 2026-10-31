@@ -268,6 +268,7 @@ export class OperationalExceptions {
             'revision',
             'category',
             'owner_queue',
+            'dedupe_key',
           ])
           .where('organization_id', '=', principal.organizationId)
           .where('id', '=', id)
@@ -316,6 +317,9 @@ export class OperationalExceptions {
         { details: { code: 'recovery_resume_required' } },
       );
     }
+    if (to === 'resolved') {
+      await this.refuseUnsettledDeadLetter(trx, current);
+    }
     const now = this.clock.now();
     const updated = await trx
       .updateTable('operational_exceptions')
@@ -345,6 +349,56 @@ export class OperationalExceptions {
       reason: options.reason ?? null,
       correlationId: options.correlationId ?? null,
     });
+  }
+
+  /**
+   * R3-OPERATIONS-03 (§5.11, recovery runbook "never mark resolved without the effect happening"):
+   * a dead letter's exception is resolved only once its event has settled (the worker resolves it
+   * itself after a replay). While the event is still dead, or replayed but not yet settled, the
+   * exception can be closed with a reason, not resolved.
+   */
+  private async refuseUnsettledDeadLetter(
+    trx: Trx,
+    current: { organization_id: string; category: string; dedupe_key: string | null },
+  ): Promise<void> {
+    const source =
+      current.category === 'reliability.outbox_dead_letter'
+        ? 'outbox'
+        : current.category === 'reliability.inbox_dead_letter'
+          ? 'inbox'
+          : null;
+    if (!source || !current.dedupe_key?.startsWith(`${source}:`)) return;
+    const eventId = current.dedupe_key.slice(source.length + 1);
+    const event =
+      source === 'outbox'
+        ? await trx
+            .selectFrom('outbox_events')
+            .select('status')
+            .where('organization_id', '=', current.organization_id)
+            .where('id', '=', eventId)
+            .executeTakeFirst()
+        : await trx
+            .selectFrom('inbox_events')
+            .select('status')
+            .where('organization_id', '=', current.organization_id)
+            .where('id', '=', eventId)
+            .executeTakeFirst();
+    if (!event) return;
+    const settled =
+      source === 'outbox' ? event.status === 'dispatched' : event.status === 'processed';
+    if (settled) return;
+    throw new DomainError(
+      'INVALID_TRANSITION',
+      `This follow-up has not happened yet. Replay the event once its cause is fixed (POST /v1/${source === 'outbox' ? 'outbox-events' : 'provider-events'}/${eventId}/replay); the exception is resolved when it settles. Close the exception with a reason instead if the follow-up is no longer wanted.`,
+      {
+        details: {
+          code: 'dead_letter_replay_required',
+          source,
+          eventId,
+          eventStatus: event.status,
+        },
+      },
+    );
   }
 
   async listOpen(

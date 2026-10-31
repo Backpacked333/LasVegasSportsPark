@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { newId, type DomainEvent } from '@sportspark/contracts';
+import { newId, OutboxEventMachine, type DomainEvent } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { sql } from 'kysely';
 import type { Clock } from '../clock';
@@ -7,6 +7,7 @@ import type { AppConfig } from '../config';
 import { runWithTransaction } from '../database/transaction-context';
 import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
 import { APP_CONFIG, CLOCK, DATABASE } from '../tokens';
+import { OUTBOX_DEAD_LETTER_CATEGORY, resolveReplayedDeadLetter } from './dead-letters';
 import {
   EventHandlerRegistry,
   runAfterCommitHooks,
@@ -149,7 +150,7 @@ export class OutboxDispatcher {
         where o.id = claimed.id
         returning o.id, o.organization_id, o.event_type, o.aggregate_type, o.aggregate_id, o.payload,
                   o.occurred_at, o.correlation_id, o.causation_id, o.operation_id, o.attempts, o.max_attempts,
-                  o.failure_owner, o.expected_handlers
+                  o.failure_owner, o.expected_handlers, o.replayed_at
       `.execute(trx);
       return result.rows;
     });
@@ -207,20 +208,36 @@ export class OutboxDispatcher {
       return 'deferred';
     }
     if (failures.length === 0) {
-      const updated = await this.db
-        .updateTable('outbox_events')
-        .set({
-          status: 'dispatched',
-          dispatched_at: now,
-          attempts: attempt,
-          locked_by: null,
-          locked_until: null,
-          last_error: null,
-        })
-        .where('id', '=', row.id)
-        .where('locked_by', '=', lease)
-        .executeTakeFirst();
-      return Number(updated.numUpdatedRows) > 0 ? 'dispatched' : 'superseded';
+      const settle = async (executor: Db) => {
+        const updated = await executor
+          .updateTable('outbox_events')
+          .set({
+            status: OutboxEventMachine.next('pending', 'dispatch'),
+            dispatched_at: now,
+            attempts: attempt,
+            locked_by: null,
+            locked_until: null,
+            last_error: null,
+          })
+          .where('id', '=', row.id)
+          .where('locked_by', '=', lease)
+          .executeTakeFirst();
+        return Number(updated.numUpdatedRows) > 0;
+      };
+      if (!row.replayed_at) return (await settle(this.db)) ? 'dispatched' : 'superseded';
+      // R3-OPERATIONS-03: a replayed dead letter's follow-up happened now; its exception is
+      // resolved with the dispatch, never before.
+      const settled = await this.db.transaction().execute(async (trx) => {
+        if (!(await settle(trx))) return false;
+        await resolveReplayedDeadLetter(trx, this.exceptions, {
+          organizationId: row.organization_id,
+          source: 'outbox',
+          eventId: row.id,
+          actorLabel: 'kernel.outbox_dispatcher',
+        });
+        return true;
+      });
+      return settled ? 'dispatched' : 'superseded';
     }
     const lastError = failures.join(' | ').slice(0, 4000);
     if (attempt >= row.max_attempts) {
@@ -234,7 +251,7 @@ export class OutboxDispatcher {
         const updated = await trx
           .updateTable('outbox_events')
           .set({
-            status: 'dead',
+            status: OutboxEventMachine.next('pending', 'dead_letter'),
             attempts: attempt,
             last_error: lastError,
             locked_by: null,
@@ -248,7 +265,7 @@ export class OutboxDispatcher {
         if (Number(updated.numUpdatedRows) === 0) return false;
         await this.exceptions.raise(trx, {
           organizationId: row.organization_id,
-          category: 'reliability.outbox_dead_letter',
+          category: OUTBOX_DEAD_LETTER_CATEGORY,
           severity: 'high',
           title: `Follow-up for ${event.type} could not be delivered after ${attempt} attempts`,
           affectedType: row.aggregate_type,
@@ -365,4 +382,5 @@ interface ClaimedRow {
   max_attempts: number;
   failure_owner: string | null;
   expected_handlers: string[] | null;
+  replayed_at: Date | string | null;
 }
