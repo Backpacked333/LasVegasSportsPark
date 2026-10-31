@@ -349,14 +349,13 @@ represent reads as the first page, never a server fault (`__tests__/keyset-pagin
 - The IMPL tokens are bound with `useExisting` (the earlier `useValue` workaround is gone).
 - Self authority for a permission is decided by the relationship port
   (`AuthorizationService.decide`), so a child never holds `pay` or `collect` over themselves.
-- Shared files outside this module are left to integration (**Pending**): the migration module's
-  route-classification test (`modules/migration/__tests__/authority.spec.ts`) reads only its
-  static lists on this branch, so it lists the three new write routes (classified here with
-  `@RecordAuthority`, which MIG-00 makes it read, IF-41) as unclassified; `docs/api/openapi.json`
-  and `packages/api-client/src/generated/paths.ts` need `pnpm build && pnpm openapi` and
-  `pnpm api-client:generate` (the clients typecheck against the regenerated client); and
-  `apps/api/src/__tests__/declared-interfaces.spec.ts` still expects
-  `personIdsResolvingTo` to answer its pre-ID-01 default (it now resolves `[]` for an unknown id).
+- The stage-3 integration steps outside this module are closed (**Verified** 2026-10-29): the
+  migration module's route-classification test reads `@RecordAuthority`, so the identity write
+  routes are classified (`modules/migration/__tests__/authority.spec.ts` asserts no unclassified
+  route); `docs/api/openapi.json` and `packages/api-client/src/generated/paths.ts` are regenerated
+  (`apps/api/src/__tests__/openapi-parity.spec.ts`, `packages/api-client/src/__tests__/contract-drift.spec.ts`);
+  and `apps/api/src/__tests__/declared-interfaces.spec.ts` expects `personIdsResolvingTo` to
+  resolve `[]` for an unknown id.
 
 ## Stage-3 integration fixes — verified 2026-10-29
 
