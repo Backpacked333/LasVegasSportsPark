@@ -845,6 +845,8 @@ function command(
   body: z.ZodType | null,
   response: z.ZodType,
   status = 201,
+  /** Operation-specific error responses beyond the common ones (R2-API-CONTRACT-04). */
+  extra: Record<number, ReturnType<typeof err>> = {},
 ) {
   openApiRegistry.registerPath({
     method,
@@ -862,6 +864,7 @@ function command(
       403: err('Access denied'),
       404: err('Not found or not visible'),
       409: err('Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)'),
+      ...extra,
     },
   });
 }
@@ -985,6 +988,11 @@ command(
   LiftClosureBody,
   ClosureSchema,
   200,
+  {
+    422: err(
+      'A restriction still holds the area (ELIGIBILITY_FAILED, details.code restriction_release_required): release the restriction in facilities instead',
+    ),
+  },
 );
 command(
   'post',

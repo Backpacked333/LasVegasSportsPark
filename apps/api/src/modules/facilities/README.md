@@ -9,7 +9,8 @@ escalation), SPK-COND-003 (equipment reserved with a booking, through the asset 
 
 **Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999` (present: `0900`,
 `0901_facilities_task_owner_fk`, `0902_facilities_facility_scoped_keys`,
-`0903_facilities_restriction_withdrawal`, `0904_facilities_restriction_transition_guard`)
+`0903_facilities_restriction_withdrawal`, `0904_facilities_restriction_transition_guard`,
+`0905_facilities_restriction_delete_guard`)
 
 **Depends on:** scheduling (closure port, resources public API) and identity
 (`PERSON_DIRECTORY_PORT`, to check assigned task owners). Restrictions create scheduling closures
@@ -68,7 +69,10 @@ what was approved (area, interval, kind, reason, links) are final, and only the 
 `revision`); the closure link, once recorded, never changes or is cleared; the conflict units are
 final while active. **Verified**: `schema-invariants.spec.ts` "§4.6 RestrictionMachine: the
 database refuses transitions the machine forbids and keeps what was approved final (INTEGRITY-05,
-migration 0904)".
+migration 0904)". Migration `0905` (R2-SCHEMA-01, §4.7 invariant 9) refuses deleting a restriction
+past `proposed` (`restrictions_no_delete`, `restrict_violation`), so who approved closing an area,
+and its release or withdrawal, cannot vanish; a proposed one can still be deleted. **Verified**:
+`schema-invariants.spec.ts` "R2-SCHEMA-01 / §4.7 invariant 9 (migration 0905)".
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/facilities.ts`)
 

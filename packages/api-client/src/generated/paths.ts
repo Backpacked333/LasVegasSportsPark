@@ -11004,6 +11004,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description A restriction still holds the area (ELIGIBILITY_FAILED, details.code restriction_release_required): release the restriction in facilities instead */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
                     headers: {
@@ -13277,6 +13286,15 @@ export type paths = {
                 };
                 /** @description Access denied */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description An offering in the basket is unknown, hidden or not published (NOT_FOUND) */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };

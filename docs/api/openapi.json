@@ -30479,7 +30479,8 @@
               "null"
             ],
             "enum": [
-              "relationship_permission:collect"
+              "relationship_permission:collect",
+              null
             ]
           },
           "authorityGrantId": {
@@ -46193,6 +46194,16 @@
               }
             }
           },
+          "422": {
+            "description": "A restriction still holds the area (ELIGIBILITY_FAILED, details.code restriction_release_required): release the restriction in facilities instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
             "content": {
@@ -54649,6 +54660,16 @@
           },
           "403": {
             "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "An offering in the basket is unknown, hidden or not published (NOT_FOUND)",
             "content": {
               "application/json": {
                 "schema": {

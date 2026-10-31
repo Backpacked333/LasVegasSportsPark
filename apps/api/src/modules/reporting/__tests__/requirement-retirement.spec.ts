@@ -11,30 +11,16 @@ const RESTRICT = '23001';
 
 /**
  * Migration 1303 (REP-03, WRK-02): the requirements view exposes `retired_at`, read from the whole
- * row so it is correct whichever order it and workforce migration 0704 (which adds the column) are
- * applied in. Before 0704 is part of the schema this test adds the bare column to its own database,
- * which is exactly the "column added after the view" case; with 0704 it is the real column and
- * its retirement facts (reason, actor) are written together, as its check constraint requires.
+ * row. Workforce migration 0704 (retired_at, retired_reason, retired_by and the
+ * assignment_requirements_retirement_facts check) is a merged dependency of view 1303, so the
+ * retirement facts are written together as that check requires; a change to 0704's columns fails
+ * this test rather than being patched over here (R2-TESTS-09).
  */
 async function retire(t: TestApp, requirementId: string, at: Date): Promise<void> {
-  const columns = await sql<{ column_name: string }>`
-    select column_name from information_schema.columns
-     where table_schema = current_schema() and table_name = 'assignment_requirements'
-       and column_name in ('retired_at', 'retired_reason', 'retired_by')`.execute(t.db);
-  const present = new Set(columns.rows.map((r) => r.column_name));
-  if (!present.has('retired_at')) {
-    await sql`alter table assignment_requirements add column retired_at timestamptz`.execute(t.db);
-  }
-  if (present.has('retired_reason')) {
-    await sql`update assignment_requirements
-                 set retired_at = ${at}, retired_reason = 'Booking withdrawn',
-                     retired_by = ${JSON.stringify({ kind: 'system', actorLabel: 'tests' })}::jsonb
-               where id = ${requirementId}`.execute(t.db);
-  } else {
-    await sql`update assignment_requirements set retired_at = ${at} where id = ${requirementId}`.execute(
-      t.db,
-    );
-  }
+  await sql`update assignment_requirements
+               set retired_at = ${at}, retired_reason = 'Booking withdrawn',
+                   retired_by = ${JSON.stringify({ kind: 'system', actorLabel: 'tests' })}::jsonb
+             where id = ${requirementId}`.execute(t.db);
 }
 
 describe('retired staffing requirements are not counted (migration 1303, WRK-02)', () => {
