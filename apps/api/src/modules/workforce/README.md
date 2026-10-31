@@ -108,6 +108,14 @@ Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.t
   refuses inserting, or moving into, `proposed/offered/accepted` an assignment whose target and
   role have a retired requirement (it reads the requirement `FOR SHARE`, so a racing retirement
   either sees the assignment or refuses it). The delete guard stays.
+- Assignment identity (`0706_workforce_assignment_identity_immutable.sql`, WRK-02, R2-SCHEMA-06):
+  trigger `assignments_identity_immutable` (every `UPDATE`) refuses any change to the person,
+  kind, target (type, id, fixture, offering session, offering), role, slot or replaced assignment
+  of a row (`check_violation`, constraint `assignments_identity_immutable`). A different person,
+  target, role or slot is a new assignment (the replacement workflow), so the retired-requirement
+  check made at insert and at every status change holds for the row's lifetime. Times,
+  `scheduling_event_id` (a retime follows the activity), facility, title, status facts, access
+  facts and the revision stay updatable (test in `__tests__/workforce-schema.spec.ts`).
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/workforce.ts`)
 
