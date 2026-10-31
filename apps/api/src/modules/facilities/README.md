@@ -122,9 +122,9 @@ values").
   `facilities.restriction_closure_superseded` with `supersededClosureWithdrawn: true`), and an
   approval that finds the restriction already activated with that closure succeeds
   (`alreadyActive` on its operation). The authorized release therefore lifts the only closure that
-  blocks the area, and no orphan closure is left in scheduling (**Verified** on the integrated
-  branch: `restriction-withdrawal.spec.ts` "SPK-FAC-004 / SPK-AT-021: an approval that loses the race
-  for the closure link withdraws the closure it created").
+  blocks the area, and no orphan closure is left in scheduling (**Verified**:
+  `restriction-withdrawal.spec.ts` "SPK-FAC-004 / SPK-AT-021: an approval that loses the race for
+  the closure link withdraws the closure it created").
 - **Withdrawal (FAC-01, SPK-FAC-004, §4.6, §4.9, §4.2).** `POST …/withdraw { reason,
 expectedRevision? }` (authority `facilities.apply_restriction`, the restriction authority that
   proposes and approves) moves `proposed → withdrawn` and `approved → withdrawn` with
@@ -141,10 +141,10 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
   restriction is withdrawn with its reason, audited and announced; it holds nothing and can never
   take effect", "SPK-FAC-004: an approved restriction whose activation never created a closure is
   withdrawn without a scheduling call", "an active restriction cannot be withdrawn", "SPK-FAC-005: a
-  withdrawn preventive occurrence is decided and never materialized again"; and, on the integrated
-  branch with scheduling SCH-01 (migration 0302), "SPK-FAC-004: a proposed restriction is
-  withdrawn; an approved one withdraws its pending closure atomically". Who may withdraw follows the
-  approval roles, which stay **Pending** (DEC-001).
+  withdrawn preventive occurrence is decided and never materialized again"; and "SPK-FAC-004: a
+  proposed restriction is withdrawn; an approved one withdraws its pending closure atomically"
+  (through scheduling SCH-01, migration 0302). Who may withdraw follows the approval roles, which
+  stay **Pending** (DEC-001).
 - **SPK-FAC-004.** Closing a task never touches its restriction (`openRestrictionIds` says so).
   `release` requires `facilities.release_to_service`, and when the task `requires_inspection` the
   latest inspection must be `passed` (`ELIGIBILITY_FAILED`, `details.code = inspection_required`
@@ -246,11 +246,12 @@ Handlers registered in `onModuleInit`: `facilities.escalate_overdue_task` (own t
   **pending** (permission matrix C.10); today the proposer approves in the same request.
 - An `approved` restriction cannot be released before activation completes (`approve` resumes it);
   it can be withdrawn while its closure is still pending (FAC-01).
-- Cross-branch dependencies of stage 3 (**Verified** only once merged): the closure withdrawal path
-  calls scheduling's `ClosurePort.withdrawClosure` (SCH-01, migration 0302); on a branch without it
-  the two tests that need it skip with a note, and the port answers `INTERNAL_ERROR` naming SCH-01.
-  The §5.6 route-classification test reads the `@RecordAuthority` decorator once MIG-00 lands; the
-  withdraw route is classified only by its decorator.
+- Stage-3 cross-module dependencies (**Verified**, merged): the closure withdrawal path calls
+  scheduling's `ClosurePort.withdrawClosure` (SCH-01, migration 0302). The two SPK-FAC-004 tests that
+  exercise it (`restriction-withdrawal.spec.ts`) run unconditionally, with no feature detection, so a
+  change to the closure schema or port fails them instead of skipping them (R2-TESTS-09). The withdraw
+  route is classified for §5.6 only by its `@RecordAuthority('future_schedule', 'unproven')`
+  decorator (MIG-00).
 - Evidence is stored by reference only; file storage is a provider-selection gate (§5.2).
 
 ## Stage-3 integration fixes — verified 2026-10-29
