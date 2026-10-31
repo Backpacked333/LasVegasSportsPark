@@ -11,6 +11,10 @@
  *   fixture the readiness explanation (`GET /v1/fixtures/{id}/readiness`: checks, issues with
  *   the responsible role and required action, and roster counts per side, never player personal
  *   details). Material changes come from the viewer's notices about this activity, old and new.
+ *   The overall status is the dashboard's effective readiness (`features/competition/readiness`,
+ *   as on SCR-S-10; SPK-READY-002): offline, after a failed refresh, or older than the configured
+ *   stale threshold a "ready" answer reads "Unknown or stale evidence" with the reason, and
+ *   "Re-evaluate" asks the API again (busy while it evaluates, disabled offline).
  * - An accepted official of a fixture sees the field-limited player list (MatchSheet.tsx,
  *   `GET /v1/fixtures/{id}/match-sheet`: names, numbers, playing status and team roles only).
  * - The API gives no respond-by deadline on an offer (offer deadlines are DEC-011), so none is
@@ -21,12 +25,14 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import { READINESS_STATUS } from '../../features/competition/labels';
+import { effectiveReadiness } from '../../features/competition/readiness';
 import { activityFromAssignment } from '../../features/operations/activity';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import { TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
 import { formatInstant, formatRange, humanize } from '../../features/operations/format';
 import { FEE_STATUS } from '../../features/operations/labels';
-import { useApp } from '../../providers/AppProviders';
+import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
@@ -182,6 +188,8 @@ const READINESS_TONE: Record<'ready' | 'warning' | 'unknown' | 'blocked', Status
 };
 
 function ActivityDetail({ item }: { item: WorkspaceAssignment }) {
+  const { online, services } = useApp();
+  const now = useNow();
   const a = item.assignment;
   const isFixture = item.activity.targetType === 'fixture';
   const readiness = useApiQuery({
@@ -211,50 +219,75 @@ function ActivityDetail({ item }: { item: WorkspaceAssignment }) {
           agePrefix="Readiness as of"
           empty={{ title: '', description: '' }}
         >
-          {(r) => (
-            <div>
-              <StatusBadge
-                tone={READINESS_TONE[r.status]}
-                label={`Readiness: ${humanize(r.status)}`}
-              />
-              <p className="caption">
-                Evaluated {formatInstant(r.evaluatedAt, activityZone(item))}.
-              </p>
-              <ul className="ops-history" aria-label="Readiness checks">
-                {r.checks.map((c) => (
-                  <li key={c.name}>
-                    <StatusBadge
-                      tone={READINESS_TONE[c.status]}
-                      label={`${humanize(c.name)}: ${humanize(c.status)}`}
-                    />
-                    {c.issueCount > 0 ? ` (${c.issueCount})` : ''}
-                  </li>
-                ))}
-              </ul>
-              {r.issues.length > 0 ? (
-                <ul className="ops-history" aria-label="Readiness issues">
-                  {r.issues.map((issue) => (
-                    <li key={`${issue.code}-${issue.source.id ?? ''}`}>
-                      {issue.message}{' '}
-                      <span className="caption">
-                        ({humanize(issue.responsibleRole)}: {humanize(issue.requiredAction)})
-                      </span>
+          {(r) => {
+            // SPK-READY-002: unknown or stale evidence is never shown as ready.
+            const effective = effectiveReadiness(r, {
+              now,
+              staleThresholdMs: services.config.staleDataThresholdMs,
+              offline: !online,
+              refreshFailed: readiness.error !== null,
+            });
+            const overall = READINESS_STATUS[effective.status];
+            return (
+              <div>
+                <div className="ops-actions">
+                  <span data-testid="readiness-overall">
+                    <StatusBadge tone={overall.tone} label={`Readiness: ${overall.label}`} />
+                  </span>
+                  <Button
+                    variant="secondary"
+                    busy={readiness.fetchStatus === 'fetching'}
+                    disabled={!online}
+                    onClick={() => void readiness.refetch()}
+                  >
+                    Re-evaluate
+                  </Button>
+                </div>
+                {readiness.fetchStatus === 'fetching' ? (
+                  <p className="caption" role="status">
+                    Re-evaluating readiness…
+                  </p>
+                ) : null}
+                {effective.downgradeReason ? <p role="note">{effective.downgradeReason}</p> : null}
+                <p className="caption">
+                  Evaluated {formatInstant(r.evaluatedAt, activityZone(item))}.
+                </p>
+                <ul className="ops-history" aria-label="Readiness checks">
+                  {r.checks.map((c) => (
+                    <li key={c.name}>
+                      <StatusBadge
+                        tone={READINESS_TONE[c.status]}
+                        label={`${humanize(c.name)}: ${humanize(c.status)}`}
+                      />
+                      {c.issueCount > 0 ? ` (${c.issueCount})` : ''}
                     </li>
                   ))}
                 </ul>
-              ) : null}
-              <ul className="ops-history" aria-label="Sides">
-                {r.sides.map((s) => (
-                  <li key={s.teamEntryId}>
-                    {s.teamName}: {s.eligiblePlayers} eligible of {s.rosterSize} on the roster
-                    {s.unknownPlayers > 0
-                      ? `, ${s.unknownPlayers} not yet known`
-                      : ''} (minimum {s.minimumPlayers})
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+                {r.issues.length > 0 ? (
+                  <ul className="ops-history" aria-label="Readiness issues">
+                    {r.issues.map((issue) => (
+                      <li key={`${issue.code}-${issue.source.id ?? ''}`}>
+                        {issue.message}{' '}
+                        <span className="caption">
+                          ({humanize(issue.responsibleRole)}: {humanize(issue.requiredAction)})
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <ul className="ops-history" aria-label="Sides">
+                  {r.sides.map((s) => (
+                    <li key={s.teamEntryId}>
+                      {s.teamName}: {s.eligiblePlayers} eligible of {s.rosterSize} on the roster
+                      {s.unknownPlayers > 0
+                        ? `, ${s.unknownPlayers} not yet known`
+                        : ''} (minimum {s.minimumPlayers})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          }}
         </QueryBoundary>
       ) : null}
       {isFixture &&

@@ -23,7 +23,8 @@ import {
   personNames,
   workspaceItem,
 } from '../../../features/operations/testing';
-import { createTestApp } from '../../../testing/test-app';
+import { TEST_NOW, createTestApp } from '../../../testing/test-app';
+import { formatHistoryStart, workspaceHistoryFrom } from '../MyAssignment';
 
 const BASE = `/workspace/assignments/${ASSIGNMENT_1}`;
 const SESSION_ASSIGNMENT = assignmentRecord({
@@ -422,6 +423,101 @@ describe('SCR-W-08 MyFeesScreen', () => {
       submittedAmountMinor: 3000,
       currency: 'USD',
     });
+  });
+});
+
+describe('SCR-W-08 periods: no fee record drops off after the API default lookback', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  const OLD_ASSIGNMENT = '0192f1a0-0000-7000-8000-0000000005d1';
+  const ME_PERSON_ID = '0192f1a0-0000-7000-8000-0000000000dd';
+  const FROM = workspaceHistoryFrom(TEST_NOW);
+
+  it('SCR-W-08 empty (no completed assignments): reads an explicit period and names it', async () => {
+    const app = createTestApp({
+      routes: routes([], {
+        'GET /fee-submissions': { status: 200, body: { items: [], nextCursor: null } },
+      }),
+    });
+    render(app.at('/workspace/fees'));
+    const since = formatHistoryStart(FROM);
+    expect(
+      await screen.findByRole('heading', { name: `No completed assignments since ${since}` }),
+    ).toBeInTheDocument();
+    // 180 days before 24 Oct 2026, at UTC midnight: never the API's 30-day default.
+    expect(FROM).toBe('2026-04-27T00:00:00.000Z');
+    expect(app.fake.requests.find((r) => r.route === '/me/assignments')?.query).toEqual({
+      status: 'completed',
+      from: FROM,
+    });
+    expect(
+      await screen.findByRole('heading', { name: `No fee records before ${since}` }),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/fee-submissions')?.query).toMatchObject({
+      personId: ME_PERSON_ID,
+    });
+  });
+
+  it('SPK-STAFF-006: an exported fee of an assignment that ended before the period is still listed with its status', async () => {
+    const app = createTestApp({
+      routes: routes([], {
+        'GET /fee-submissions': {
+          status: 200,
+          body: {
+            items: [
+              feeSubmission({
+                id: '0192f1a0-0000-7000-8000-0000000005d2',
+                assignmentId: OLD_ASSIGNMENT,
+                status: 'exported',
+                approvedAmountMinor: 2500,
+                exportBatchId: '0192f1a0-0000-7000-8000-0000000005d3',
+                exportedAt: '2026-04-03T08:00:00.000Z',
+              }),
+            ],
+            nextCursor: null,
+          },
+        },
+        'GET /assignments/{id}': {
+          status: 200,
+          body: assignmentRecord({
+            id: OLD_ASSIGNMENT,
+            status: 'completed',
+            targetTitle: 'U14 Spring final',
+            scheduledStart: '2026-03-01T18:00:00.000Z',
+            scheduledEnd: '2026-03-01T19:30:00.000Z',
+          }),
+        },
+      }),
+    });
+    render(app.at('/workspace/fees'));
+    const record = await screen.findByRole('listitem', { name: 'U14 Spring final' });
+    expect(within(record).getByText('Exported')).toBeInTheDocument();
+    expect(within(record).getByText(/approved \$25\.00/)).toBeInTheDocument();
+    expect(screen.queryByText(/\bPaid\b/)).toBeNull();
+    expect(app.fake.requests.find((r) => r.route === '/assignments/{id}')?.params).toEqual({
+      id: OLD_ASSIGNMENT,
+    });
+  });
+
+  it('opens an assignment older than the default lookback from the workspace history', async () => {
+    const older = workspaceItem(
+      assignmentRecord({ status: 'completed', targetTitle: 'U14 Spring final' }),
+      [],
+    );
+    const app = createTestApp({
+      routes: {
+        ...routes([]),
+        'GET /me/assignments': (request) =>
+          fakeResponse(200, {
+            evaluatedAt: TEST_NOW.toISOString(),
+            items: request.query.from === FROM ? [older] : [],
+          }),
+      },
+    });
+    render(app.at(BASE));
+    expect(
+      await screen.findByRole('heading', { name: 'U14 Spring final', level: 2 }),
+    ).toBeInTheDocument();
   });
 });
 
