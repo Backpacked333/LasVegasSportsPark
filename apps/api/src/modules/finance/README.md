@@ -254,7 +254,11 @@ contribution's amount and status, never a player's payment or method.
   plan's lead time before the new date; nothing is collected while the checkout's own payment is
   pending or its registration is not fulfilled; retry and notice terms come from the policy the
   quote recorded. Once every registration the order made is canceled, the plan is held (MONEY-04):
-  the first collection or notice that finds it records the hold on the plan (`hold` on
+  a registration that was transferred counts as the enrollment it was transferred to, followed
+  along `transferredToEnrollmentId` to the end of its chain (the order line keeps naming the
+  source, R2-LIFECYCLES-01), so a transfer followed by a cancellation holds the plan while a
+  transferred registration that still stands keeps collecting. The first collection or notice that
+  finds it records the hold on the plan (`hold` on
   `GET /installment-plans/{id}`, `0613`) and raises `finance.installment_registration_canceled`
   once (finance operator); enrollment's own cancellation of the registration, with any accepted
   consequence other than `none`, also raises `enrollment.cancellation_consequence_pending` for the

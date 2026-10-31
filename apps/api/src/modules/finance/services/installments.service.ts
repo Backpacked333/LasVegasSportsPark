@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   errors,
   type CollectInstallmentInput,
+  type Enrollment,
   type ExtendInstallmentInput,
   type InstallmentPlan,
   type Principal,
@@ -34,6 +35,9 @@ import {
 } from '../finance.shared';
 import { MoneyFacts } from './money-facts.service';
 import { PaymentsService } from './payments.service';
+
+/** Bound on following one registration's transfers (R2-LIFECYCLES-01); guards a cycle. */
+const MAX_TRANSFER_HOPS = 32;
 
 /** The plan's notice lead time (POL-016), the default three days when it records none. */
 function noticeDaysBefore(plan: InstallmentPlanRow): number {
@@ -285,6 +289,7 @@ export class InstallmentsService {
    * the one exception that gives the finance operator the decision the cancellation consequence
    * asks for (DEC-009 pending). A held plan is never collected and its payer is never told of a
    * coming charge; resolving the exception does not lift the hold, and nothing raises it again.
+   * A transferred enrollment counts as the registration it was transferred to (R2-LIFECYCLES-01).
    * An order line without an enrollment, or one whose enrollment cannot be read, never holds it.
    */
   private async holdIfRegistrationsCanceled(
@@ -303,9 +308,14 @@ export class InstallmentsService {
       .execute();
     if (lines.length === 0 || lines.some((l) => !l.enrollment_id)) return false;
     const enrollmentIds = [...new Set(lines.map((l) => l.enrollment_id as string))];
+    // R2-LIFECYCLES-01: a transfer leaves the order line naming the enrollment it moved from, so
+    // each line is followed to the registration the family holds now; the plan is held only when
+    // every one of those was canceled (a chain ending confirmed or completed keeps collecting).
+    const currentEnrollmentIds: string[] = [];
     for (const enrollmentId of enrollmentIds) {
-      const enrollment = await this.enrollments.getEnrollment(organizationId, enrollmentId, trx);
+      const enrollment = await this.currentEnrollmentOf(trx, organizationId, enrollmentId);
       if (!enrollment || enrollment.status !== 'canceled') return false;
+      currentEnrollmentIds.push(enrollment.id);
     }
     const held = await trx
       .updateTable('installment_plans')
@@ -337,6 +347,7 @@ export class InstallmentsService {
         orderId: plan.order_id,
         installmentId: installment.id,
         enrollmentIds,
+        currentEnrollmentIds,
       },
     });
     await this.exceptions.raise(trx, {
@@ -353,10 +364,35 @@ export class InstallmentsService {
         orderId: plan.order_id,
         installmentId: installment.id,
         enrollmentIds,
+        currentEnrollmentIds,
         correlationId,
       },
     });
     return true;
+  }
+
+  /**
+   * R2-LIFECYCLES-01 (SPK-REG-010 transfer, SPK-PAY-006): the registration an order line's
+   * enrollment became. A transfer moves the source to `transferred` with
+   * `transferred_to_enrollment_id` and confirms the new enrollment under the same order, so the
+   * chain is followed to its end. A chain that cannot be read, is cut, loops or runs longer than
+   * MAX_TRANSFER_HOPS answers null, which never holds a plan (as an unreadable enrollment).
+   */
+  private async currentEnrollmentOf(
+    trx: Trx,
+    organizationId: string,
+    enrollmentId: string,
+  ): Promise<Enrollment | null> {
+    const seen = new Set<string>();
+    let id: string | null = enrollmentId;
+    while (id !== null && !seen.has(id) && seen.size < MAX_TRANSFER_HOPS) {
+      seen.add(id);
+      const enrollment = await this.enrollments.getEnrollment(organizationId, id, trx);
+      if (!enrollment) return null;
+      if (enrollment.status !== 'transferred') return enrollment;
+      id = enrollment.transferredToEnrollmentId;
+    }
+    return null;
   }
 
   /**
