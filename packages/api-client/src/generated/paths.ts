@@ -15450,6 +15450,15 @@ export type paths = {
                         "application/json": components["schemas"]["TransferPreview"];
                     };
                 };
+                /** @description Validation failed (the target is the enrollment’s current offering, or the query is invalid) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
                 /** @description Access denied */
                 403: {
                     headers: {
@@ -15461,6 +15470,15 @@ export type paths = {
                 };
                 /** @description Not found or not visible */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not transferable (RESOURCE_CONFLICT NOT_TRANSFERABLE: a membership, session package, rental or party is canceled and bought or booked anew; transfer rules DEC-009) */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };

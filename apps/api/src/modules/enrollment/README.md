@@ -175,6 +175,15 @@ expiresAt`): expires an active hold once due, gives the place back, emits
   (`session_canceled`), composes a `registration_outcome` notice saying why the family no longer
   waits and what to do instead; withdrawals, staff removals and `equivalent_entitlement` send
   nothing.
+- `enrollment.notify_registration_confirmed` on `enrollment.enrollment_confirmed` (R2-JOURNEYS-04,
+  SPK-COMMS-002 "Registration outcome"): a registration confirmed through its basket (after the
+  checkout's payment, or owing nothing) composes one `registration_outcome` notice ("Registration
+  confirmed", or "Membership confirmed" / "Session package confirmed") for the participant and the
+  holders of `receive_messages`, read from the enrollment as it stands (one canceled meanwhile is
+  not announced; a rental or party is confirmed by its booking's staffing, so it is not announced
+  here). One notice per event (`notifications_source_event_idx`). **Verified**,
+  `follow-ups.spec.ts` "R2-JOURNEYS-04 …". Notices for a checkout that ends in
+  `recovery_required` or is compensated are finance's (finance owns those events).
 - `enrollment.sync_capacity` on `catalog.offering_updated`: commercial pools follow catalog limits;
   staffing pools keep their staff count (SPK-YOUTH-002); a limit below commitments raises an
   operational exception. The event only says the limits changed: the offering's pools are locked
@@ -278,7 +287,9 @@ Payloads carry identifiers only (§4.14).
   Cancellation has the same preview (`cancellation-preview`). A membership, session package,
   rental or party (the intents behind a capability switch) is not transferred: preview and commit
   answer 409 `NOT_TRANSFERABLE`, because a transfer moves none of their lifecycle (term, credits,
-  reservation) and their transfer rules are DEC-009; cancel and buy or book the new one.
+  reservation) and their transfer rules are DEC-009; cancel and buy or book the new one. The
+  read-only `GET /v1/enrollments/{id}/transfer-preview` documents both refusals (400 for the
+  current offering as target, 409 `NOT_TRANSFERABLE`; R2-API-CONTRACT-04).
   **Verified**, `memberships.spec.ts`, `session-packages.spec.ts`.
 - **Placement (SPK-PLACE-002/003):** candidates and proposals reserve nothing; assignment
   re-evaluates eligibility, holds a place in every team-entry roster pool configured for the team

@@ -8,7 +8,10 @@ import {
   createTeamEntryFixture,
 } from '../../competition';
 import { IdentityEvents } from '../../identity';
+import { EnrollmentEvents } from '../enrollment.events';
+import { ENROLLMENT_PORT, type EnrollmentPort } from '../enrollment.ports';
 import { CapacityService } from '../services/capacity.service';
+import { EnrollmentNotices } from '../services/enrollment-notices';
 import { RECONCILE_PLACEMENTS_JOB } from '../services/enrollment-jobs';
 import { createEnrollmentFixture } from '../testing/enrollment-fixtures';
 import {
@@ -20,6 +23,7 @@ import {
   enrollmentTestApp,
   offering,
   post,
+  rejectsWith,
   staff,
   type Actor,
 } from './support';
@@ -399,6 +403,120 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
       .where('subject_id', '=', offerId)
       .execute();
     expect(after).toHaveLength(1);
+  });
+
+  it('R2-JOURNEYS-04 / SPK-COMMS-002 / SPK-AT-023: a registration confirmed after payment is announced once to the guardian; a replay composes nothing new and a registration canceled before the follow-up runs is not announced', async () => {
+    const setup = await offering(t, { basePriceMinor: 12_000 });
+    const guardian = await adult(t);
+    const kid = await child(t, [guardian], {
+      permissions: ['view', 'register', 'pay', 'receive_messages'],
+    });
+    await acknowledge(t, setup, kid, guardian.personId);
+    const basket = await basketWith(t, guardian, [
+      { participantPersonId: kid, offeringId: setup.offeringId },
+    ]);
+    const held = await post(t, `/v1/baskets/${basket.id}/hold`, guardian.header);
+    expect(held.status, JSON.stringify(held.body)).toBe(200);
+    const enrollmentId = held.body.lines[0].enrollmentId as string;
+    // The provider confirmed the payment after the family left the app (finance's finalizer).
+    await t.app.get(UnitOfWork).run(({ trx }) =>
+      t.app
+        .get<EnrollmentPort>(ENROLLMENT_PORT)
+        .confirmEnrollment(trx, t.organizationId, enrollmentId, {
+          actor: systemPrincipal(t.organizationId, 'finance.checkout'),
+          orderRef: `order-${enrollmentId}`,
+        }),
+    );
+    await drain(t);
+    const announced = () =>
+      t.db
+        .selectFrom('notifications')
+        .selectAll()
+        .where('kind', '=', 'registration_outcome')
+        .where('subject_id', '=', enrollmentId)
+        .execute();
+    const notices = await announced();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      title: 'Registration confirmed',
+      protected: true,
+      subject_type: 'enrollment',
+    });
+    const recipients = await t.db
+      .selectFrom('notification_recipients')
+      .select(['person_id', 'resolved_basis'])
+      .where('notification_id', '=', notices[0]!.id)
+      .execute();
+    expect(recipients).toContainEqual({
+      person_id: guardian.personId,
+      resolved_basis: 'receive_messages',
+    });
+    // A replayed confirmation event composes nothing new: redelivered, the handler is not run
+    // twice, and a second composition for the same event is refused by the database.
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', dispatched_at: null, available_at: t.clock.now() })
+      .where('event_type', '=', 'enrollment.enrollment_confirmed')
+      .where('aggregate_id', '=', enrollmentId)
+      .execute();
+    await drain(t);
+    expect(await announced()).toHaveLength(1);
+    const event = await t.db
+      .selectFrom('outbox_events')
+      .selectAll()
+      .where('event_type', '=', 'enrollment.enrollment_confirmed')
+      .where('aggregate_id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(
+      await rejectsWith(
+        t.app.get(UnitOfWork).run(({ trx }) =>
+          t.app.get(EnrollmentNotices).enrollmentConfirmed(trx, {
+            id: event.id,
+            type: event.event_type,
+            organizationId: event.organization_id,
+            aggregateType: event.aggregate_type,
+            aggregateId: event.aggregate_id,
+            occurredAt: new Date(event.occurred_at).toISOString(),
+            payload: event.payload as EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>,
+            correlationId: event.correlation_id,
+            causationId: event.causation_id,
+            operationId: event.operation_id,
+          }),
+        ),
+      ),
+    ).toBe('23505');
+    expect(await announced()).toHaveLength(1);
+
+    // A free registration canceled before its confirmation follow-up runs is not announced.
+    const free = await offering(t, { basePriceMinor: 0 });
+    const other = await child(t, [guardian], {
+      permissions: ['view', 'register', 'pay', 'receive_messages'],
+    });
+    await acknowledge(t, free, other, guardian.personId);
+    const second = await basketWith(t, guardian, [
+      { participantPersonId: other, offeringId: free.offeringId },
+    ]);
+    expect((await post(t, `/v1/baskets/${second.id}/hold`, guardian.header)).status).toBe(200);
+    const completed = await post(t, `/v1/baskets/${second.id}/complete`, guardian.header);
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    const freeId = completed.body.lines[0].enrollmentId as string;
+    const current = await t.http.get(`/v1/enrollments/${freeId}`).set(guardian.header);
+    expect(
+      (
+        await post(t, `/v1/enrollments/${freeId}/cancel`, guardian.header, {
+          reason: 'changed plans',
+          expectedRevision: current.body.revision,
+        })
+      ).status,
+    ).toBe(200);
+    await drain(t);
+    const none = await t.db
+      .selectFrom('notifications')
+      .select('id')
+      .where('kind', '=', 'registration_outcome')
+      .where('subject_id', '=', freeId)
+      .execute();
+    expect(none).toEqual([]);
   });
 
   it('SPK-COMMS-002: application decisions and placements notify the participant’s family', async () => {

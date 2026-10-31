@@ -2,6 +2,7 @@ import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runWithTransaction } from '../../../kernel';
+import { emitOpenApiDocument } from '../../../openapi-document';
 import type { TestApp } from '../../../testing';
 import {
   OFFERING_LOOKUP_PORT,
@@ -701,6 +702,16 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
       .where('participant_person_id', '=', buyer.personId)
       .execute();
     expect(entitlements).toEqual([{ id: entitlementId, status: 'active' }]);
+  });
+
+  it('R2-API-CONTRACT-04 / §4.8: the transfer preview documents the 400 and 409 (NOT_TRANSFERABLE) it answers', () => {
+    const document = emitOpenApiDocument('0.1.0') as unknown as {
+      paths: Record<string, { get?: { responses: Record<string, unknown> } }>;
+    };
+    const responses = document.paths['/enrollments/{id}/transfer-preview']?.get?.responses ?? {};
+    expect(Object.keys(responses)).toEqual(
+      expect.arrayContaining(['200', '400', '403', '404', '409']),
+    );
   });
 
   it('staff list packages in facility scope; a customer list needs a participant', async () => {

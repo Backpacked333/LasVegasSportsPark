@@ -5,6 +5,7 @@ import { OFFERING_LOOKUP_PORT, type OfferingLookupPort } from '../../catalog';
 import { NotificationsService, type ComposeInput } from '../../communications';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
 import type { EnrollmentEvents } from '../enrollment.events';
+import { BOOKING_INTENTS } from '../enrollment.policy';
 import { enrollmentSystem } from '../enrollment.shared';
 
 /** A local date and time in the facility's zone, for notice copy (SPK-SCHED-008). */
@@ -130,6 +131,57 @@ export class EnrollmentNotices {
         protected: true,
         title: 'Team placement confirmed',
         body: `The placement on ${entry?.teamName ?? 'a team'} is confirmed. The team's schedule appears in the app.`,
+      },
+    );
+  }
+
+  /**
+   * R2-JOURNEYS-04 (SPK-COMMS-002 "Registration outcome", SPK-AT-023): enrollment.enrollment_confirmed
+   * → `registration_outcome`. A registration confirmed through its basket (paid through the
+   * checkout, possibly long after the family left the app, or owing nothing) is announced to the
+   * participant and the holders of `receive_messages` over them, once per confirmation event. The
+   * enrollment is read now (deliveries arrive late): one canceled or transferred meanwhile is not
+   * announced as confirmed. A rental or party is not announced here: it is confirmed only when
+   * fully staffed, by its booking's own lifecycle (SPK-COND-003).
+   */
+  async enrollmentConfirmed(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>,
+  ): Promise<void> {
+    const organizationId = event.organizationId;
+    const enrollment = await trx
+      .selectFrom('enrollments')
+      .select(['id', 'intent', 'status', 'participant_person_id', 'offering_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', event.payload.enrollmentId)
+      .executeTakeFirst();
+    if (!enrollment || enrollment.status !== 'confirmed') return;
+    if (BOOKING_INTENTS.includes(enrollment.intent)) return;
+    const offering = await this.offeringFacts(trx, organizationId, enrollment.offering_id);
+    const name = offering?.name ?? 'the activity';
+    const copy =
+      enrollment.intent === 'membership'
+        ? { title: 'Membership confirmed', body: `The membership ${name} is confirmed.` }
+        : enrollment.intent === 'package_purchase'
+          ? {
+              title: 'Session package confirmed',
+              body: `The session package ${name} is confirmed; its sessions can be booked in the app.`,
+            }
+          : {
+              title: 'Registration confirmed',
+              body: `The registration for ${name} is confirmed. Its sessions appear in the family calendar.`,
+            };
+    await this.compose(
+      trx,
+      enrollmentSystem(organizationId, 'enrollment.notify_registration_confirmed'),
+      event,
+      {
+        kind: 'registration_outcome',
+        facilityId: offering?.facilityId,
+        subject: { type: 'enrollment', id: enrollment.id },
+        audience: { subjectPersonIds: [enrollment.participant_person_id] },
+        protected: true,
+        ...copy,
       },
     );
   }

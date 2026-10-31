@@ -560,6 +560,15 @@ export class EnrollmentModule implements OnModuleInit {
         runWithTransaction(ctx.trx, () => this.notices.placementAssigned(ctx.trx, event)),
       { failureOwner: 'league_manager' },
     );
+    // R2-JOURNEYS-04 (SPK-COMMS-002 "Registration outcome", SPK-AT-023): a confirmed registration
+    // is announced once, from the enrollment as it stands when the follow-up runs.
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
+      EnrollmentEvents.enrollmentConfirmed.type,
+      'enrollment.notify_registration_confirmed',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.enrollmentConfirmed(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
     this.registry.on<EventPayload<typeof EnrollmentEvents.applicationDecided>>(
       EnrollmentEvents.applicationDecided.type,
       'enrollment.notify_registration_outcome',
