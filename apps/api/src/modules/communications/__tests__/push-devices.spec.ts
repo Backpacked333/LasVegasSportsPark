@@ -239,8 +239,10 @@ describe('push devices (COM-01: SPK-UX-001, SPK-COMMS-003/004, SPK-AT-025)', () 
       const { accountId } = args[3] as { accountId: string };
       try {
         if (injectLostRace && accountId === second.accountId) {
-          // PGlite runs one transaction at a time: the second registration's first insert is made
-          // to lose the race the way PostgreSQL reports it.
+          // PGlite runs one transaction at a time, so no insert can race there: the second
+          // registration's first pass throws the unique-violation error PostgreSQL would raise,
+          // before it writes anything. Only the retry path is exercised; the race forced by
+          // push_devices_active_token_idx runs under PostgreSQL alone.
           injectLostRace = false;
           throw Object.assign(
             new Error(
