@@ -35,6 +35,7 @@ import {
   type Reader,
 } from '../finance.shared';
 import { LedgerService } from '../ledger/ledger.service';
+import { FinanceCustomerScope } from './customer-scope';
 import { MoneyFacts } from './money-facts.service';
 
 /**
@@ -55,6 +56,7 @@ export class CreditsService {
     private readonly ledger: LedgerService,
     private readonly facts: MoneyFacts,
     @Inject(PERSON_DIRECTORY_PORT) private readonly people: PersonDirectoryPort,
+    private readonly scope: FinanceCustomerScope,
   ) {}
 
   async view(db: Reader, row: CreditRow): Promise<Credit> {
@@ -77,7 +79,8 @@ export class CreditsService {
       type: 'credit',
       id,
       organizationId,
-      subjectPersonIds: [row.owner_person_id],
+      // SPK-IAM-007 (R2-LIFECYCLES-02): a merged owner's credit is read under the survivor.
+      subjectPersonIds: [await this.scope.subjectOf(organizationId, row.owner_person_id)],
       protected: true,
     });
     return this.view(this.db, row);
@@ -91,6 +94,9 @@ export class CreditsService {
       subjectPersonIds: [query.ownerPersonId],
       protected: true,
     });
+    // SPK-IAM-007 (R2-LIFECYCLES-02): the owner's credits include those of every record merged
+    // into it; no credit row is rewritten by a merge.
+    const owners = await this.scope.idsOf(organizationId, query.ownerPersonId);
     // FIN-02 (§4.5): keyset pages in (created_at, id) order.
     const cursor = decodeKeyset(query.cursor);
     let q = this.db
@@ -98,7 +104,7 @@ export class CreditsService {
       .selectAll()
       .select(keysetAt('credits').as('cursor_at'))
       .where('organization_id', '=', organizationId)
-      .where('owner_person_id', '=', query.ownerPersonId)
+      .where('owner_person_id', 'in', owners)
       .orderBy('created_at')
       .orderBy('id')
       .limit(query.limit + 1);
@@ -309,7 +315,8 @@ export class CreditsService {
         type: 'credit',
         id,
         organizationId,
-        subjectPersonIds: [credit.owner_person_id],
+        // SPK-IAM-007 (R2-LIFECYCLES-02): a merged owner's credit is used under the survivor.
+        subjectPersonIds: [await this.scope.subjectOf(organizationId, credit.owner_person_id, trx)],
         protected: true,
       });
       assertExpectedRevision(input.expectedRevision, credit.revision);
@@ -335,7 +342,9 @@ export class CreditsService {
           type: 'obligation',
           id: obligation.id,
           organizationId,
-          subjectPersonIds: subject ? [subject] : [],
+          subjectPersonIds: subject
+            ? [await this.scope.subjectOf(organizationId, subject, trx)]
+            : [],
           teamEntryId:
             obligation.mode === 'team_with_contributions' ? obligation.debtor_team_entry_id : null,
           protected: true,
@@ -352,7 +361,7 @@ export class CreditsService {
         amountMinor: input.amountMinor,
         currency: credit.currency,
         use: 'obligation',
-        ownerPersonId: credit.owner_person_id,
+        ownerPersonIds: [credit.owner_person_id],
         referenceType: 'obligation',
         referenceId: input.obligationId,
         obligationId: input.obligationId,

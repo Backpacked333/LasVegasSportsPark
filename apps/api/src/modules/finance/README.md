@@ -161,7 +161,8 @@ contribution's amount and status, never a player's payment or method.
 - Outbox handlers: `finance.finalize_checkout` on `finance.checkout_payment_received` (§4.11 step 8,
   SPK-AT-023), `finance.abort_expired_checkout` on its timer `finance.checkout_expiry_due`,
   `finance.complete_compensation` on `finance.refund_settled`, `finance.record_installment_notice`
-  on its timer `finance.installment_notice_due`. All are idempotent under replay.
+  on its timer `finance.installment_notice_due`, `finance.follow_person_merge` on
+  `identity.persons_merged` (R2-LIFECYCLES-02, below). All are idempotent under replay.
 - Inbox handler `finance.apply_payment_event` for provider `fake-payments`.
 - `FinanceWorker` (outside any transaction; started in non-test processes, `runOnce()` in tests):
   executes requested refunds (customer and compensation), cancels abandoned payment challenges at
@@ -336,6 +337,21 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
   identity's `personIdsResolvingTo` (ID-01), so a merged duplicate's history shows under the
   survivor without rewriting a financial row. `/me/registration-checkouts` covers checkouts the
   caller pays or started, and shows `recovery_required` ones (SPK-PAY-007, §4.11).
+- SPK-IAM-007 (R2-LIFECYCLES-02): a merge rewrites no credit owner or obligation debtor; finance
+  reads them through the survivor instead (`FinanceCustomerScope.idsOf` / `subjectOf`).
+  `GET /credits?ownerPersonId=` and `GET /obligations?debtorPersonId=` with the survivor include
+  the records merged into it; a merged owner's credit and a merged debtor's obligation are read,
+  redeemed and paid under the survivor as the authorization subject (the merge moved the
+  relationships and grants there; someone without authority over the survivor still gets
+  `NOT_FOUND`); a quote and its checkout accept a credit owned by any record merged into the payer.
+  The handler `finance.follow_person_merge` raises one `finance.merged_person_money` exception
+  (finance operator) per merge whose merged record still holds an active or pending credit with a
+  balance or answers for an open obligation, naming them so anything given or owed twice is
+  reviewed; a merge of a record without money raises nothing, and a replay raises nothing new.
+  A merged payer's payment, refund, checkout, order and installment plan are read under the
+  survivor too, as the `/me` lists show them; commands on a merged payer's checkout or payment
+  (retry, abort, refund request) still name the stored payer and are done by staff.
+  `__tests__/person-merge.spec.ts`.
 - `GET /obligations/{id}` carries `liveAttempt` (`id`, `status` `created`/`action_required`/
   `processing`/`unknown`, amount, currency, `unknownSince`, `createdAt`) or `null`: staff see any
   live charge; a customer sees the one they started (contributions model) or any live charge of a

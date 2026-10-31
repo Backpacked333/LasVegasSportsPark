@@ -33,6 +33,7 @@ import {
   type InstallmentRow,
   type Reader,
 } from '../finance.shared';
+import { FinanceCustomerScope } from './customer-scope';
 import { MoneyFacts } from './money-facts.service';
 import { PaymentsService } from './payments.service';
 
@@ -67,6 +68,7 @@ export class InstallmentsService {
     private readonly payments: PaymentsService,
     private readonly recovery: RecoveryMode,
     private readonly exceptions: OperationalExceptions,
+    private readonly scope: FinanceCustomerScope,
   ) {}
 
   async planView(db: Reader, plan: InstallmentPlanRow): Promise<InstallmentPlan> {
@@ -112,7 +114,8 @@ export class InstallmentsService {
       type: 'installment_plan',
       id,
       organizationId,
-      subjectPersonIds: [plan.payer_person_id],
+      // SPK-IAM-007 (R2-LIFECYCLES-02): a merged payer's plan is read under the survivor.
+      subjectPersonIds: [await this.scope.subjectOf(organizationId, plan.payer_person_id)],
       protected: true,
     });
     return this.planView(this.db, plan);

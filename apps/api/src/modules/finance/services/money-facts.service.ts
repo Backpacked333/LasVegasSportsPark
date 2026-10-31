@@ -88,7 +88,11 @@ export interface RedeemCreditInput {
   amountMinor: number;
   currency: string;
   use: CreditUse;
-  ownerPersonId: string;
+  /**
+   * Whose credit may be redeemed: the payer and every record merged into it (SPK-IAM-007,
+   * R2-LIFECYCLES-02), or the credit's own owner when its owner applies it.
+   */
+  ownerPersonIds: readonly string[];
   referenceType: string;
   referenceId: string;
   obligationId: string;
@@ -732,7 +736,8 @@ export class MoneyFacts {
       });
     }
     const credit = await this.loadCredit(trx, input.organizationId, input.creditId, true);
-    if (!credit || credit.owner_person_id !== input.ownerPersonId) {
+    // SPK-IAM-007 (R2-LIFECYCLES-02): the owner may be any record merged into the payer.
+    if (!credit || !input.ownerPersonIds.includes(credit.owner_person_id)) {
       throw errors.protectedNotFound('credit');
     }
     if (credit.currency !== input.currency) {
@@ -811,13 +816,13 @@ export class MoneyFacts {
         {
           account: 'credits_payable',
           debitMinor: input.amountMinor,
-          personId: input.ownerPersonId,
+          personId: credit.owner_person_id,
           obligationId: input.obligationId,
         },
         {
           account: 'customer_receivable',
           creditMinor: input.amountMinor,
-          personId: input.ownerPersonId,
+          personId: credit.owner_person_id,
           obligationId: input.obligationId,
         },
       ],

@@ -46,6 +46,7 @@ import {
   toReceipt,
   type Reader,
 } from '../finance.shared';
+import { FinanceCustomerScope } from './customer-scope';
 import { MoneyFacts, type ObligationRow } from './money-facts.service';
 import { PaymentsService } from './payments.service';
 
@@ -70,18 +71,25 @@ export class ObligationsService {
     private readonly outbox: Outbox,
     private readonly facts: MoneyFacts,
     private readonly payments: PaymentsService,
+    private readonly scope: FinanceCustomerScope,
   ) {}
 
   // -------------------------------------------------------------------------------------------
   // Reads
   // -------------------------------------------------------------------------------------------
 
-  private readTarget(obligation: ObligationRow): AuthorizationTargetInput {
+  /**
+   * SPK-IAM-007 (R2-LIFECYCLES-02): the debtor subject is the surviving record when the debtor was
+   * merged (its relationships and grants moved there), so the family reads the debt it still owes.
+   */
+  private async readTarget(obligation: ObligationRow): Promise<AuthorizationTargetInput> {
     return {
       type: 'obligation',
       id: obligation.id,
       organizationId: obligation.organization_id,
-      subjectPersonIds: obligation.debtor_person_id ? [obligation.debtor_person_id] : [],
+      subjectPersonIds: obligation.debtor_person_id
+        ? [await this.scope.subjectOf(obligation.organization_id, obligation.debtor_person_id)]
+        : [],
       teamEntryId: obligation.debtor_team_entry_id,
       protected: true,
     };
@@ -99,7 +107,7 @@ export class ObligationsService {
     await this.authorization.require(
       principal,
       FinanceActions.readObligation,
-      this.readTarget(obligation),
+      await this.readTarget(obligation),
     );
   }
 
@@ -234,7 +242,15 @@ export class ObligationsService {
       .orderBy('due_at')
       .orderBy('id')
       .limit(query.limit + 1);
-    if (query.debtorPersonId) q = q.where('debtor_person_id', '=', query.debtorPersonId);
+    // SPK-IAM-007 (R2-LIFECYCLES-02): the debtor's debts include those of every record merged
+    // into it; no obligation row is rewritten by a merge.
+    if (query.debtorPersonId) {
+      q = q.where(
+        'debtor_person_id',
+        'in',
+        await this.scope.idsOf(organizationId, query.debtorPersonId),
+      );
+    }
     if (query.teamEntryId) q = q.where('debtor_team_entry_id', '=', query.teamEntryId);
     if (query.status) q = q.where('status', '=', query.status);
     if (cursor) q = q.where(afterKeysetAsc('obligations', cursor, 'due_at'));
@@ -571,7 +587,8 @@ export class ObligationsService {
         type: 'obligation',
         id: obligationId,
         organizationId,
-        subjectPersonIds: subject ? [subject] : [],
+        // SPK-IAM-007 (R2-LIFECYCLES-02): a merged debtor's debt is paid under the survivor.
+        subjectPersonIds: subject ? [await this.scope.subjectOf(organizationId, subject, trx)] : [],
         // Only the contributions model lets the captain pay the team balance; one responsible
         // payer means exactly that person (SPK-PAY-004).
         teamEntryId:
