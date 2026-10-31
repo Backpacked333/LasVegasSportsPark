@@ -196,6 +196,16 @@ dispatch creates the attempts or suppresses the notice.
   drops the other control characters RFC 5545 §3.3.11 excludes, so a stored string such as a
   captain's team name in a fixture title cannot add content lines to another family's feed
   (R2-TENANCY-INPUT-04; `calendar/ics.spec.ts`, `__tests__/calendar-feeds.spec.ts`).
+- **Request text — verified** (R2-TENANCY-INPUT-04, §4.10; `__tests__/request-text.spec.ts`):
+  PostgreSQL `text` and `jsonb` cannot hold U+0000, so every communications command refuses it
+  as 400 `VALIDATION_FAILED` naming the field instead of failing at the insert with 500.
+  Single-line text (title, feed label, subject type and id, push token, app version) refuses
+  every C0 control character and DEL; multi-line text (body, reasons, acknowledgment note) keeps
+  tab, line feed and carriage return. Practical details are checked for NUL in every key and
+  value; the shared `reason` and `policyReferences`, and the provider receipt's id, message id
+  and error, for NUL only. In-process composition by other modules
+  (`ModuleComposeNotificationBody`) is not checked: it is built from text they already store, and
+  refusing it would lose the notice inside an event handler.
 
 ## Ports (`ports.ts`)
 
@@ -427,9 +437,10 @@ module's route classification counts once MIG-00 lands.
   the survivor's inbox (team membership is checked for the survivor's own id); unprotected ones are.
 - The ICS feed is a projection of `scheduling.event_changed`; it carries the facility zone in the
   description and UTC instants, not VTIMEZONE blocks.
-- Input with a NUL character (`\u0000`) in a communications free-text field (title, body, reason,
-  feed label) passes the zod schemas and is refused by PostgreSQL, so the request answers 500
-  `INTERNAL_ERROR` instead of `VALIDATION_FAILED`. Rejecting control characters for every module
-  belongs to the kernel's `ZodValidationPipe` and the shared string schemas (R2-TENANCY-INPUT-04,
-  **Proposed**, not made here). Whatever is stored, the ICS rendering above never emits a control
-  character.
+- Request text outside this module's contract is not checked here. The shared command metadata
+  (`reason`, `policyReferences` in `packages/contracts/src/commands.ts`) still accepts the C0
+  controls other than NUL in this module's requests, and every other module's request text still
+  reaches PostgreSQL with a NUL and answers 500. Rejecting control characters for every module in
+  the kernel's `ZodValidationPipe` or the shared schemas is R2-TENANCY-INPUT-04b (**Proposed**, a
+  kernel and contracts change, not made here). Whatever is stored, the ICS rendering above never
+  emits a control character.

@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
-  ComposeNotificationBody,
+  ModuleComposeNotificationBody,
   decodeCursor,
   encodeCursor,
   errors,
@@ -71,8 +71,12 @@ import { CHANNEL_PROVIDERS, type ChannelProviderPort } from '../ports';
 import { AudienceResolver } from './audience-resolver';
 import { PreferencesService } from './preferences.service';
 
-/** Input for services composing notices (staff controller or another module's handler). */
-export type ComposeInput = z.input<typeof ComposeNotificationBody> & {
+/**
+ * Input for services composing notices (staff controller or another module's handler). The
+ * controller has already checked the request text (`ComposeNotificationBody`); in-process callers
+ * compose from text they store, read with `ModuleComposeNotificationBody` (R2-TENANCY-INPUT-04).
+ */
+export type ComposeInput = z.input<typeof ModuleComposeNotificationBody> & {
   /** The domain event that triggered the notice; a replay never composes a second one. */
   sourceEventId?: string | null;
   correlationId?: string | null;
@@ -125,7 +129,7 @@ export class NotificationsService {
 
   async composeIn(trx: Trx, principal: Principal, input: ComposeInput): Promise<NotificationRow> {
     const organizationId = organizationOf(principal);
-    const parsed = ComposeNotificationBody.parse(input);
+    const parsed = ModuleComposeNotificationBody.parse(input);
     if (parsed.protected && parsed.audience.personIds.length > 0) {
       // Invariant 10 / SPK-AT-017: protected content reaches people only through a basis that is
       // re-checked before dispatch (subject persons, team entries, staff roles within a facility);
