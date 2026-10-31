@@ -5,8 +5,12 @@ import { BackgroundWorkers } from '../workers/background-workers';
 describe('background worker registry (§4.1, §4.12)', () => {
   const worker = (name: string, log: string[]) => ({
     name,
-    start: () => log.push(`start:${name}`),
-    stop: () => log.push(`stop:${name}`),
+    start: () => {
+      log.push(`start:${name}`);
+    },
+    stop: () => {
+      log.push(`stop:${name}`);
+    },
   });
 
   it('registers without starting; only startAll (worker.ts) starts the loops', () => {
@@ -42,7 +46,9 @@ describe('background worker registry (§4.1, §4.12)', () => {
     const workers = new BackgroundWorkers();
     workers.register({
       name: 'a.slow',
-      start: () => log.push('start:a.slow'),
+      start: () => {
+        log.push('start:a.slow');
+      },
       stop: async () => {
         log.push('stop:a.slow');
         await passDone;
