@@ -191,7 +191,12 @@ pending decisions, in [`src/screens/registration/README.md`](src/screens/registr
 - **Commands.** `const accept = useApiCommand('post', '/assignments/{id}/accept', { invalidate: [['api', '/me/assignments']] })`,
   then `accept.submit({ path: { id }, body: { expectedRevision } })`. The hook keeps one idempotency
   key per unchanged input, so "Try again" never duplicates an effect. Always send `expectedRevision`
-  where the body takes it. Show `accept.error` with `StateView variant="error"`; keep the user's input.
+  where the body takes it. Show `accept.error` with a shared failure view (account `CommandError`,
+  teams or money `CommandFailure`, registration `CommandError`), never with `StateView
+variant="error"` directly: those views decide with `src/api/command-outcome.ts`, so a lost answer
+  reads "No answer yet" with "Check again" instead of "Something went wrong". "Check again" must
+  resend the request that got no answer (same body, so the same key), not an edited one. Keep the
+  user's input.
 - **Status.** `StatusBadge` with the phrase from `docs/package-a/journeys.md` section 3; never
   colour alone. "Payment processing", "Confirmed, awaiting placement" and "Confirmed" use different
   tones, glyphs and words.
