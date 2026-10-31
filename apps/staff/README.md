@@ -14,8 +14,12 @@ tablet and scanner configurations (§6.3) has not happened; jsdom tests are not 
 
 ```bash
 pnpm install
-AUTH_LOCAL_SECRET=$(openssl rand -hex 32) pnpm --filter @sportspark/api dev   # API on :3000
-pnpm --filter @sportspark/staff dev                                            # http://localhost:5173
+# API in development mode (local identity provider, PGlite kept in PGLITE_DATA_DIR). NODE_ENV has
+# no default: the API refuses to start without it.
+export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
+pnpm --filter @sportspark/api seed:dev   # synthetic accounts to sign in with (root README "Local sign-in")
+pnpm --filter @sportspark/api dev        # API on :3000
+pnpm --filter @sportspark/staff dev      # http://localhost:5173
 ```
 
 - The development server proxies `/v1` to `SPORTSPARK_API_ORIGIN` (default `http://localhost:3000`),
@@ -23,7 +27,14 @@ pnpm --filter @sportspark/staff dev                                            #
   points the build at another API base URL.
 - Development builds offer **Development sign-in** (`POST /v1/dev/tokens` with an existing local
   account id; the route exists only when the API runs with `AUTH_MODE=local` outside production).
-  The API has no development seed, so the account and its staff membership must already exist.
+  Use a staff `accountId` that `pnpm --filter @sportspark/api seed:dev` prints (`dev-admin`,
+  `dev-desk`, `dev-league`, `dev-coach`, `dev-official`); keep the same `AUTH_LOCAL_SECRET` and
+  `PGLITE_DATA_DIR` (or `DATABASE_URL`) for the seed and the API.
+- Follow-ups (checkout finalization, notices, expiries, exceptions raised by periodic jobs) run only
+  in the API's worker process, which cannot share a PGlite database with the API. With the commands
+  above none of them runs; to exercise them, run the API and
+  `pnpm --filter @sportspark/api start:worker` against one PostgreSQL database (`DATABASE_URL`;
+  root README "Follow-ups need the worker").
 - `VITE_STALE_DATA_THRESHOLD_MINUTES` sets when shown data is called stale; pending DEC-032/DEC-033,
   unset by default.
 - `VITE_OFFLINE_ROSTER_MAX_AGE_MINUTES` sets the maximum roster age for queuing offline arrival and
