@@ -24,4 +24,6 @@ export const CREDIT_DISPOSITION: Record<Schema<'SessionBookingCreditDisposition'
   retained_by_policy: 'credit kept under the approved cancellation policy',
   retained_pending_policy:
     'credit kept: no approved policy returns it (POL-007, POL-039 pending); staff may reverse the redemption',
+  retained_entitlement_ended:
+    'credit kept: the package or membership has ended, so nothing can be returned to it',
 };

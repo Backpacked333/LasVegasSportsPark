@@ -25601,7 +25601,8 @@
         "enum": [
           "returned",
           "retained_by_policy",
-          "retained_pending_policy"
+          "retained_pending_policy",
+          "retained_entitlement_ended"
         ]
       },
       "SessionBooking": {
@@ -77263,6 +77264,16 @@
               }
             }
           },
+          "400": {
+            "description": "Validation failed (the target is the enrollment’s current offering, or the query is invalid)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Access denied",
             "content": {
@@ -77275,6 +77286,16 @@
           },
           "404": {
             "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not transferable (RESOURCE_CONFLICT NOT_TRANSFERABLE: a membership, session package, rental or party is canceled and bought or booked anew; transfer rules DEC-009)",
             "content": {
               "application/json": {
                 "schema": {

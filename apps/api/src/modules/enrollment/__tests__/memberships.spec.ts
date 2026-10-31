@@ -676,4 +676,142 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
       t.clock.set(new Date(CLOCK_START));
     }
   });
+  it('R2-LIFECYCLES-03 / SPK-COND-001: a suspension, a cancellation and an early completion each raise one owned exception for the booked sessions they leave admitting; nothing is canceled automatically', async () => {
+    const programManager = await staff(t, ['program_manager']);
+    const unlimited = {
+      attendance: { mode: 'unlimited', appliesTo: { offeringIds: [target.offeringId] } },
+      term: { kind: 'offering_dates' },
+      renewal: { noticeLeadDays: null },
+    };
+    const exceptionsOf = (category: string, affectedId: string) =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .select(['owner_queue', 'status', 'details', 'deadline_at'])
+        .where('category', '=', category)
+        .where('affected_id', '=', affectedId)
+        .execute();
+    const statusOf = (id: string) =>
+      t.db
+        .selectFrom('session_bookings')
+        .select('status')
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow()
+        .then((r) => r.status);
+
+    const member = await adult(t);
+    const { enrollmentId } = await join(member, unlimited);
+    const first = await book(member, week1[0]!, enrollmentId);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    const later = await book(member, week2, enrollmentId);
+    expect(later.status, JSON.stringify(later.body)).toBe(201);
+
+    // A suspension added after the bookings, covering the second week only.
+    const suspended = await post(
+      t,
+      `/v1/enrollments/${enrollmentId}/membership-suspensions`,
+      frontDesk.header,
+      { from: '2026-11-23T00:00:00Z', until: '2026-11-30T00:00:00Z', reason: 'injury' },
+    );
+    expect(suspended.status, JSON.stringify(suspended.body)).toBe(201);
+    expect(
+      await exceptionsOf('enrollment.suspended_membership_has_bookings', suspended.body.id),
+    ).toEqual([
+      expect.objectContaining({
+        owner_queue: 'program_manager',
+        status: 'open',
+        details: expect.objectContaining({
+          enrollmentId,
+          sessionBookingIds: [later.body.id],
+        }),
+      }),
+    ]);
+
+    // Cancelling the membership leaves both bookings confirmed and asks a person to decide.
+    const current = await t.http.get(`/v1/enrollments/${enrollmentId}`).set(frontDesk.header);
+    const canceled = await post(t, `/v1/enrollments/${enrollmentId}/cancel`, frontDesk.header, {
+      reason: 'moved away',
+      expectedRevision: current.body.revision,
+    });
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+    await drain(t);
+    const raised = await exceptionsOf('enrollment.ended_membership_has_bookings', enrollmentId);
+    expect(raised).toEqual([
+      expect.objectContaining({
+        owner_queue: 'program_manager',
+        status: 'open',
+        details: expect.objectContaining({
+          ended: 'canceled',
+          sessionBookingIds: [first.body.id, later.body.id],
+        }),
+      }),
+    ]);
+    expect(new Date(raised[0]!.deadline_at!).toISOString()).toBe('2026-11-17T18:00:00.000Z');
+    expect(await statusOf(first.body.id as string)).toBe('confirmed');
+    // A canceled booking of the ended membership gives nothing back to it (R2-LIFECYCLES-06).
+    const dropped = await post(
+      t,
+      `/v1/session-bookings/${first.body.id as string}/cancel`,
+      programManager.header,
+      { reason: 'membership canceled', expectedRevision: first.body.revision },
+    );
+    expect(dropped.status, JSON.stringify(dropped.body)).toBe(200);
+
+    // A membership completed early by staff is followed the same way.
+    const other = await adult(t);
+    const second = await join(other, unlimited);
+    const booked = await book(other, week2, second.enrollmentId);
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const seen = await t.http.get(`/v1/enrollments/${second.enrollmentId}`).set(frontDesk.header);
+    const completed = await post(
+      t,
+      `/v1/enrollments/${second.enrollmentId}/complete`,
+      programManager.header,
+      { reason: 'ended early', expectedRevision: seen.body.revision },
+    );
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    await drain(t);
+    expect(
+      await exceptionsOf('enrollment.ended_membership_has_bookings', second.enrollmentId),
+    ).toEqual([
+      expect.objectContaining({
+        details: expect.objectContaining({
+          ended: 'completed',
+          sessionBookingIds: [booked.body.id],
+        }),
+      }),
+    ]);
+    expect(await statusOf(booked.body.id as string)).toBe('confirmed');
+  });
+
+  it('stage-6 R2-LIFECYCLES-06 / SPK-COND-001: a canceled booking of an ended membership records retained_entitlement_ended and gives no session back to it', async () => {
+    const member = await adult(t);
+    const { enrollmentId } = await join(member, includedWeekly(1));
+    const booked = await book(member, week2, enrollmentId);
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const current = await t.http.get(`/v1/enrollments/${enrollmentId}`).set(frontDesk.header);
+    expect(
+      (
+        await post(t, `/v1/enrollments/${enrollmentId}/cancel`, frontDesk.header, {
+          reason: 'moved away',
+          expectedRevision: current.body.revision,
+        })
+      ).status,
+    ).toBe(200);
+    await drain(t);
+    const canceled = await post(
+      t,
+      `/v1/session-bookings/${booked.body.id as string}/cancel`,
+      member.header,
+      { reason: 'membership ended', expectedRevision: booked.body.revision },
+    );
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+    // Not "kept under the approved cancellation policy": the membership's own end kept it.
+    expect(canceled.body.creditDisposition).toBe('retained_entitlement_ended');
+    const uses = await t.db
+      .selectFrom('membership_benefit_uses')
+      .select(['period_key', 'used_count'])
+      .where('enrollment_id', '=', enrollmentId)
+      .execute();
+    expect(uses).toEqual([{ period_key: 'week:2026-11-23', used_count: 1 }]);
+  });
 });

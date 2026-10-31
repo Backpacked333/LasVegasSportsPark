@@ -1,8 +1,15 @@
 import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { runWithTransaction } from '../../../kernel';
+import { emitOpenApiDocument } from '../../../openapi-document';
 import type { TestApp } from '../../../testing';
-import { createOfferingSessionFixture } from '../../catalog';
+import {
+  OFFERING_LOOKUP_PORT,
+  createOfferingSessionFixture,
+  type OfferingLookupPort,
+} from '../../catalog';
+import { PackageEntitlementsService } from '../services/package-entitlements.service';
 import { EXPIRE_PACKAGES_JOB } from '../services/enrollment-jobs';
 import { adultOffering, cancellationPolicy, packageOffering } from './package-g-support';
 import {
@@ -455,6 +462,160 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
     expect(refused.body.details.code).toBe('PACKAGE_NOT_REDEEMABLE');
   });
 
+  it('R2-LIFECYCLES-06 / SPK-COND-002 / §4.6: canceling a booking of a revoked package returns nothing to it, a staff reversal is refused, and the database rejects the reversal', async () => {
+    const policyId = await cancellationPolicy(t, {
+      text: 'Credits return until a day before the session.',
+      packageCreditReturn: { untilMinutesBeforeStart: 24 * 60 },
+    });
+    const buyer = await adult(t);
+    const { enrollmentId, entitlementId } = await buy(buyer, 3, {
+      cancellationPolicyVersionId: policyId,
+    });
+    const booked = await book(buyer, sessions[4]!, entitlementId);
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const enrollment = await t.http.get(`/v1/enrollments/${enrollmentId}`).set(frontDesk.header);
+    expect(
+      (
+        await post(t, `/v1/enrollments/${enrollmentId}/cancel`, frontDesk.header, {
+          reason: 'refunded at the desk',
+          expectedRevision: enrollment.body.revision,
+        })
+      ).status,
+    ).toBe(200);
+    await drain(t);
+    const counted = () =>
+      t.db
+        .selectFrom('package_entitlements')
+        .select(['status', 'redeemed_count', 'revision'])
+        .where('id', '=', entitlementId)
+        .executeTakeFirstOrThrow();
+    const revoked = await counted();
+    expect(revoked).toMatchObject({ status: 'revoked', redeemed_count: 1 });
+    // Well before the policy's deadline, yet the package has ended: nothing comes back to it.
+    const canceled = await post(
+      t,
+      `/v1/session-bookings/${booked.body.id as string}/cancel`,
+      buyer.header,
+      { reason: 'the package was refunded', expectedRevision: booked.body.revision },
+    );
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+    // No cancellation policy kept the credit: the package's own end did (migration 0518).
+    expect(canceled.body.creditDisposition).toBe('retained_entitlement_ended');
+    expect(await counted()).toEqual(revoked);
+    const redemptions = await t.db
+      .selectFrom('package_redemptions')
+      .select(['id', 'kind'])
+      .where('package_entitlement_id', '=', entitlementId)
+      .execute();
+    expect(redemptions.map((r) => r.kind)).toEqual(['redeem']);
+    // Staff cannot return a credit to it either.
+    const reversed = await post(
+      t,
+      `/v1/package-redemptions/${redemptions[0]!.id}/reverse`,
+      frontDesk.header,
+      { reason: 'goodwill' },
+    );
+    expect(reversed.status).toBe(409);
+    expect(reversed.body.details).toMatchObject({ code: 'PACKAGE_ENDED', status: 'revoked' });
+    // The database refuses a reversal onto an ended package from any writer (migration 0516).
+    expect(
+      await rejectsWith(
+        t.db
+          .insertInto('package_redemptions')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            package_entitlement_id: entitlementId,
+            session_booking_id: booked.body.id,
+            participant_person_id: buyer.personId,
+            kind: 'reversal',
+            reverses_redemption_id: redemptions[0]!.id,
+            reason: 'direct write',
+            actor: json({ kind: 'system' }),
+            redeemed_at: t.clock.now(),
+          })
+          .execute(),
+      ),
+    ).toBe('23514');
+    expect(await counted()).toEqual(revoked);
+  });
+
+  it('R2-RACES-03 / SPK-COND-002: a purchase canceled while its credits are being issued ends with its package revoked (PGlite and TEST_DATABASE_URL)', async () => {
+    const buyer = await adult(t);
+    const pack = await packageOffering(t, {
+      credits: 2,
+      appliesTo: { offeringIds: [target.offeringId] },
+    });
+    await acknowledge(t, pack, buyer.personId, buyer.personId);
+    const basket = await basketWith(t, buyer, [
+      {
+        participantPersonId: buyer.personId,
+        offeringId: pack.offeringId,
+        intent: 'package_purchase',
+      },
+    ]);
+    expect((await post(t, `/v1/baskets/${basket.id}/hold`, buyer.header, {})).status).toBe(200);
+    const done = await post(t, `/v1/baskets/${basket.id}/complete`, buyer.header, {});
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const enrollmentId = done.body.lines[0].enrollmentId as string;
+    // The issue handler is in flight (it has read the purchase and is reading the catalog) when
+    // the desk cancels the purchase and the revoke handler runs. Under TEST_DATABASE_URL the two
+    // really overlap; under PGlite they run one after the other.
+    const port = t.app.get<OfferingLookupPort>(OFFERING_LOOKUP_PORT);
+    const original = port.getOffering.bind(port);
+    let reached!: () => void;
+    const atIssue = new Promise<void>((resolve) => (reached = resolve));
+    let paused = false;
+    const spy = vi.spyOn(port, 'getOffering').mockImplementation(async (...args) => {
+      if (!paused) {
+        paused = true;
+        reached();
+        if (t.database.concurrent) await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return original(...args);
+    });
+    try {
+      const revision = (
+        await t.db
+          .selectFrom('enrollments')
+          .select('revision')
+          .where('id', '=', enrollmentId)
+          .executeTakeFirstOrThrow()
+      ).revision;
+      const issuing = t.db
+        .transaction()
+        .execute((trx) =>
+          runWithTransaction(trx, () =>
+            t.app
+              .get(PackageEntitlementsService)
+              .issueForEnrollment(trx, t.organizationId, enrollmentId, null),
+          ),
+        );
+      const canceling = (async () => {
+        await atIssue;
+        const canceled = await post(t, `/v1/enrollments/${enrollmentId}/cancel`, frontDesk.header, {
+          reason: 'refunded at the desk',
+          expectedRevision: revision,
+        });
+        expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+        await drain(t);
+      })();
+      await Promise.all([issuing, canceling]);
+    } finally {
+      spy.mockRestore();
+    }
+    await drain(t);
+    const rows = await t.db
+      .selectFrom('package_entitlements')
+      .select(['status', 'revoked_reason'])
+      .where('enrollment_id', '=', enrollmentId)
+      .execute();
+    // Either the issue saw the cancellation and issued nothing, or the revoke saw the issue.
+    expect(
+      rows.every((r) => r.status === 'revoked' && r.revoked_reason === 'purchase_canceled'),
+    ).toBe(true);
+  });
+
   it('POL-039: a package expires exactly as its definition chose, through the expiry job', async () => {
     const buyer = await adult(t);
     const { entitlementId } = await buy(buyer, 2, {
@@ -542,6 +703,16 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
       .where('participant_person_id', '=', buyer.personId)
       .execute();
     expect(entitlements).toEqual([{ id: entitlementId, status: 'active' }]);
+  });
+
+  it('R2-API-CONTRACT-04 / §4.8: the transfer preview documents the 400 and 409 (NOT_TRANSFERABLE) it answers', () => {
+    const document = emitOpenApiDocument('0.1.0') as unknown as {
+      paths: Record<string, { get?: { responses: Record<string, unknown> } }>;
+    };
+    const responses = document.paths['/enrollments/{id}/transfer-preview']?.get?.responses ?? {};
+    expect(Object.keys(responses)).toEqual(
+      expect.arrayContaining(['200', '400', '403', '404', '409']),
+    );
   });
 
   it('staff list packages in facility scope; a customer list needs a participant', async () => {

@@ -27,10 +27,23 @@ const AUDIENCE_BOOKING_STATUSES: BookingStatus[] = [
 /** Bookings a closure still affects. */
 const LIVE_BOOKING_STATUSES: BookingStatus[] = ['held', 'awaiting_staff', 'confirmed'];
 
+/** Which participants of a session to include beyond the live ones. */
+interface AudienceOptions {
+  /**
+   * Stage-6 rework of R2-JOURNEYS-01 (ASYNC-01 for session bookings): also the session bookings
+   * that enrollment.follow_session_canceled canceled because the facility canceled the session
+   * (`cancel_cause = 'session_canceled'`, migration 0519), so a change notice reaches them whether
+   * that follow-up committed before or after the notice reads its audience. A booking the family
+   * canceled itself is never included.
+   */
+  endedBySessionCancel: boolean;
+}
+
 /**
  * Who takes part in the catalog sessions behind scheduling events (SPK-AT-009, SPK-SCHED-009,
  * SPK-COMMS-002): participants of the offering's live enrollments (pending or confirmed) and of
- * the session's live bookings (pickup, trial, makeup). Communications addresses cancellation and
+ * the session's live bookings (pickup, trial, makeup; for a notice audience also the bookings
+ * canceled with the session). Communications addresses cancellation and
  * change notices to them (their guardians through `receive_messages`), and a closure preview names
  * them as affected customers with the orders their participation was paid through. Reads go
  * through the caller's executor (an outbox handler's or the closure's transaction).
@@ -44,6 +57,7 @@ export class SessionParticipants {
     organizationId: string,
     eventIds: readonly string[],
     bookingStatuses: readonly BookingStatus[] = LIVE_BOOKING_STATUSES,
+    options: AudienceOptions = { endedBySessionCancel: false },
   ): Promise<SessionParticipant[]> {
     const booked = await this.bookersOf(db, organizationId, eventIds, bookingStatuses);
     const sessions = await this.sessions.sessionsOfSchedulingEvents(db, organizationId, eventIds);
@@ -66,7 +80,14 @@ export class SessionParticipants {
         'in',
         sessions.map((s) => s.id),
       )
-      .where('status', 'in', ['pending', 'confirmed'])
+      .where((eb) =>
+        options.endedBySessionCancel
+          ? eb.or([
+              eb('status', 'in', ['pending', 'confirmed']),
+              eb.and([eb('status', '=', 'canceled'), eb('cancel_cause', '=', 'session_canceled')]),
+            ])
+          : eb('status', 'in', ['pending', 'confirmed']),
+      )
       .orderBy('id')
       .execute();
     const out: SessionParticipant[] = [...booked];
@@ -150,12 +171,14 @@ export class SessionParticipants {
     organizationId: string,
     eventId: string,
   ): Promise<string[]> {
-    // A booking the change itself just ended (a closure) still hears about it.
+    // A booking the change itself just ended (a closure, or the session's cancellation that
+    // followed it) still hears about it, whichever follow-up ran first.
     const rows = await this.ofSchedulingEvents(
       db,
       organizationId,
       [eventId],
       AUDIENCE_BOOKING_STATUSES,
+      { endedBySessionCancel: true },
     );
     return [...new Set(rows.map((r) => r.personId))].sort();
   }

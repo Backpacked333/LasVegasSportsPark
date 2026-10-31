@@ -856,6 +856,131 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
     });
   });
 
+  it('R2-JOURNEYS-07 / SPK-AT-019: a trial converted before its session still records its attendance afterwards, once, and can still give up its seat', async () => {
+    const trialProgram = await createProgramFixture(t, {
+      ageBand: { minAgeYears: 5, maxAgeYears: 12 },
+    });
+    const trial = await offering(t, { kind: 'trial', programId: trialProgram, basePriceMinor: 0 });
+    const start = t.clock.now().getTime() + 48 * 60 * 60_000;
+    const trialSession = await session(trial, new Date(start).toISOString());
+    const term = await offering(t, { programId: trialProgram, basePriceMinor: 18_000 });
+    const trialOf = async (id: string) =>
+      (await t.http.get(`/v1/trial-participations/${id}`).set(parent.header)).body as {
+        status: string;
+        revision: number;
+        attendedAt: string | null;
+        noShowAt: string | null;
+        convertedEnrollmentId: string | null;
+        sessionBookingId: string;
+      };
+    /** A trial converted on the day it is booked, with the term paid (confirmed) right away. */
+    const convertedEarly = async () => {
+      const kid = await child(t, [parent]);
+      await acknowledge(t, trial, kid, parent.personId);
+      await acknowledge(t, term, kid, parent.personId);
+      const created = await post(t, '/v1/trial-participations', parent.header, {
+        offeringId: trial.offeringId,
+        participantPersonId: kid,
+        sessionId: trialSession,
+      });
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      const id = created.body.id as string;
+      const converted = await post(t, `/v1/trial-participations/${id}/convert`, parent.header, {
+        targetOfferingId: term.offeringId,
+        expectedRevision: created.body.revision,
+      });
+      expect(converted.status, JSON.stringify(converted.body)).toBe(201);
+      const held = await post(
+        t,
+        `/v1/baskets/${converted.body.basket.id as string}/hold`,
+        parent.header,
+        {},
+      );
+      expect(held.status, JSON.stringify(held.body)).toBe(200);
+      const enrollmentId = held.body.lines[0].enrollmentId as string;
+      await uow.run(({ trx }) =>
+        t.app
+          .get<EnrollmentPort>(ENROLLMENT_PORT)
+          .confirmEnrollment(trx, t.organizationId, enrollmentId, {
+            actor: systemPrincipal(t.organizationId, 'finance.checkout'),
+            orderRef: `order-${id}`,
+          }),
+      );
+      const row = await trialOf(id);
+      expect(row).toMatchObject({
+        status: 'converted',
+        convertedEnrollmentId: enrollmentId,
+        attendedAt: null,
+        noShowAt: null,
+      });
+      return { id, enrollmentId, row };
+    };
+
+    const attending = await convertedEarly();
+    const leaving = await convertedEarly();
+    // Before the session nothing is observed yet; the family may still give up the trial seat.
+    const early = await post(
+      t,
+      `/v1/trial-participations/${attending.id}/outcome`,
+      frontDesk.header,
+      { outcome: 'attended', expectedRevision: attending.row.revision },
+    );
+    expect(early.status).toBe(400);
+    expect(early.body.details.code).toBe('trial_not_started');
+    const gaveUp = await post(t, `/v1/trial-participations/${leaving.id}/outcome`, parent.header, {
+      outcome: 'canceled',
+      reason: 'Registered already; skipping the trial',
+      expectedRevision: leaving.row.revision,
+    });
+    expect(gaveUp.status, JSON.stringify(gaveUp.body)).toBe(200);
+    expect(gaveUp.body).toMatchObject({
+      status: 'converted',
+      convertedEnrollmentId: leaving.enrollmentId,
+    });
+    const seat = await t.http
+      .get(`/v1/session-bookings/${leaving.row.sessionBookingId}`)
+      .set(parent.header);
+    expect(seat.body.status).toBe('canceled');
+
+    const resumeAt = t.clock.now();
+    t.clock.set(new Date(start + 30 * 60_000));
+    try {
+      const attended = await post(
+        t,
+        `/v1/trial-participations/${attending.id}/outcome`,
+        frontDesk.header,
+        { outcome: 'attended', expectedRevision: attending.row.revision },
+      );
+      expect(attended.status, JSON.stringify(attended.body)).toBe(200);
+      expect(attended.body).toMatchObject({
+        status: 'converted',
+        convertedEnrollmentId: attending.enrollmentId,
+        attendedAt: new Date(start + 30 * 60_000).toISOString(),
+        noShowAt: null,
+      });
+      // Recorded once: a second outcome is refused and changes nothing.
+      const again = await post(
+        t,
+        `/v1/trial-participations/${attending.id}/outcome`,
+        frontDesk.header,
+        { outcome: 'no_show', expectedRevision: attended.body.revision },
+      );
+      expect(again.status).toBe(409);
+      expect(again.body.code).toBe('INVALID_TRANSITION');
+      // The trial whose seat was given up records no attendance.
+      const after = await trialOf(leaving.id);
+      const noSeat = await post(
+        t,
+        `/v1/trial-participations/${leaving.id}/outcome`,
+        frontDesk.header,
+        { outcome: 'attended', expectedRevision: after.revision },
+      );
+      expect(noSeat.status).toBe(409);
+    } finally {
+      t.clock.set(resumeAt);
+    }
+  });
+
   it('GAPS-TRIAGE-01 / SPK-YOUTH-003: a priced trial is refused, with or without a session, and nothing is recorded', async () => {
     const trialProgram = await createProgramFixture(t, {
       ageBand: { minAgeYears: 5, maxAgeYears: 12 },

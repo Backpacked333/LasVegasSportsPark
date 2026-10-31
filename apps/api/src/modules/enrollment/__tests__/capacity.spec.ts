@@ -1,7 +1,7 @@
 import { systemPrincipal } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Outbox, UnitOfWork } from '../../../kernel';
+import { EventHandlerRegistry, UnitOfWork, runWithTransaction } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { CatalogEvents, createProgramFixture } from '../../catalog';
 import {
@@ -50,6 +50,28 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
   afterAll(async () => {
     await t.close();
   });
+
+  const offeringRevision = (offeringId: string) =>
+    t.db
+      .selectFrom('offerings')
+      .select('revision')
+      .where('id', '=', offeringId)
+      .executeTakeFirstOrThrow()
+      .then((r) => r.revision);
+
+  /** A real catalog edit of the offering's seat limit (catalog.offering_updated follows). */
+  const setSeatLimit = async (offeringId: string, limit: number) => {
+    const edited = await t.http
+      .patch(`/v1/offerings/${offeringId}`)
+      .set(programManager.header)
+      .set('Idempotency-Key', `k-${offeringId}-${limit}`)
+      .send({
+        capacityUnits: [{ unit: 'seats', limit }],
+        reason: 'Demand changed',
+        expectedRevision: await offeringRevision(offeringId),
+      });
+    expect(edited.status, JSON.stringify(edited.body)).toBe(200);
+  };
 
   const pool = (offeringId: string) =>
     t.db
@@ -795,28 +817,16 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
       ['staffing', 8],
     ]);
     // Catalog raises the commercial limit; the staffing pool keeps its staff count (2 staff × 4).
-    await uow.run(async ({ trx }) => {
-      await t.app.get(Outbox).enqueue(trx, CatalogEvents.offeringUpdated, {
-        organizationId: t.organizationId,
-        aggregateType: 'offering',
-        aggregateId: setup.offeringId,
-        payload: {
-          offeringId: setup.offeringId,
-          programId: setup.programId,
-          facilityId: setup.facilityId,
-          kind: 'camp',
-          revision: 2,
-          publicationState: 'registration_open',
-          capacityChange: {
-            before: [
-              {
-                unit: 'camp_group_places',
-                limit: 8,
-                groupSize: 8,
-                staffingRatio: { participantsPerStaff: 4 },
-              },
-            ],
-            after: [
+    // The change is a real catalog edit: enrollment sizes its pools from the catalog's current
+    // units, never from the event payload (R2-RACES-01).
+    expect(
+      (
+        await t.http
+          .patch(`/v1/offerings/${setup.offeringId}`)
+          .set(programManager.header)
+          .set('Idempotency-Key', `k-${setup.offeringId}-raise`)
+          .send({
+            capacityUnits: [
               {
                 unit: 'camp_group_places',
                 limit: 20,
@@ -824,13 +834,11 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
                 staffingRatio: { participantsPerStaff: 4 },
               },
             ],
-            requiredStaffBefore: 2,
-            requiredStaffAfter: 5,
             reason: 'More demand',
-          },
-        },
-      });
-    });
+            expectedRevision: await offeringRevision(setup.offeringId),
+          })
+      ).status,
+    ).toBe(200);
     await drain(t);
     const pools = await pool(setup.offeringId);
     expect(pools.map((p) => [p.constraint_kind, p.capacity, p.staff_count])).toEqual([
@@ -892,5 +900,94 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
     );
     expect(shrink.status).toBe(409);
     expect(shrink.body.details.code).toBe('CAPACITY_BELOW_COMMITMENTS');
+  });
+  it('R2-RACES-01 / SPK-REG-005 / §4.12: two successive limit changes delivered out of order leave the pool at the latest catalog limit', async () => {
+    const setup = await offering(t, { capacityUnits: [{ unit: 'seats', limit: 20 }] });
+    const sync = await post(
+      t,
+      `/v1/offerings/${setup.offeringId}/capacity-pools/sync`,
+      programManager.header,
+      {},
+    );
+    expect(sync.status).toBe(200);
+    await setSeatLimit(setup.offeringId, 25);
+    await setSeatLimit(setup.offeringId, 15);
+    const updates = await t.db
+      .selectFrom('outbox_events')
+      .select(['id', 'payload'])
+      .where('event_type', '=', CatalogEvents.offeringUpdated.type)
+      .where('aggregate_id', '=', setup.offeringId)
+      .where('status', '=', 'pending')
+      .orderBy('occurred_at')
+      .orderBy('id')
+      .execute();
+    expect(updates).toHaveLength(2);
+    // The earlier change (25) is delivered last, as a retried delivery would be.
+    await t.db
+      .updateTable('outbox_events')
+      .set({ available_at: new Date(t.clock.now().getTime() + 5 * MINUTE) })
+      .where('id', '=', updates[0]!.id)
+      .execute();
+    await drain(t);
+    expect((await pool(setup.offeringId)).map((p) => p.capacity)).toEqual([15]);
+    t.clock.advance(6 * MINUTE);
+    await drain(t);
+    // The late delivery changes nothing: the pool follows the catalog's current limit.
+    expect((await pool(setup.offeringId)).map((p) => p.capacity)).toEqual([15]);
+  });
+
+  it('R2-RACES-01 / §4.7 invariant 3: two capacity-sync deliveries running at the same time converge on the latest limit (PGlite and TEST_DATABASE_URL)', async () => {
+    const setup = await offering(t, { capacityUnits: [{ unit: 'seats', limit: 20 }] });
+    expect(
+      (
+        await post(
+          t,
+          `/v1/offerings/${setup.offeringId}/capacity-pools/sync`,
+          programManager.header,
+          {},
+        )
+      ).status,
+    ).toBe(200);
+    await setSeatLimit(setup.offeringId, 25);
+    await setSeatLimit(setup.offeringId, 15);
+    const events = await t.db
+      .selectFrom('outbox_events')
+      .selectAll()
+      .where('event_type', '=', CatalogEvents.offeringUpdated.type)
+      .where('aggregate_id', '=', setup.offeringId)
+      .where('status', '=', 'pending')
+      .orderBy('occurred_at')
+      .orderBy('id')
+      .execute();
+    expect(events).toHaveLength(2);
+    // Two workers each run enrollment's handler for one of the two events, concurrently.
+    const handler = t.app
+      .get(EventHandlerRegistry)
+      .handlersFor(CatalogEvents.offeringUpdated.type)
+      .find((h) => h.name === 'enrollment.sync_capacity')!;
+    await Promise.all(
+      events.map((row) =>
+        t.db.transaction().execute((trx) =>
+          runWithTransaction(trx, () =>
+            handler.handler(
+              {
+                id: row.id,
+                type: row.event_type,
+                organizationId: row.organization_id,
+                aggregateType: row.aggregate_type,
+                aggregateId: row.aggregate_id,
+                occurredAt: new Date(row.occurred_at).toISOString(),
+                payload: row.payload,
+                correlationId: row.correlation_id,
+                causationId: row.causation_id,
+                operationId: row.operation_id,
+              },
+              { trx, attempt: 1, afterCommit: () => undefined },
+            ),
+          ),
+        ),
+      ),
+    );
+    expect((await pool(setup.offeringId)).map((p) => p.capacity)).toEqual([15]);
   });
 });

@@ -59,7 +59,31 @@ import type { SessionBookingRow } from './session-bookings.service';
 
 export type PackageEntitlementRow = Selectable<PackageEntitlementsTable>;
 type RedemptionRow = Selectable<PackageRedemptionsTable>;
-export type CreditDisposition = 'returned' | 'retained_by_policy' | 'retained_pending_policy';
+export type CreditDisposition =
+  'returned' | 'retained_by_policy' | 'retained_pending_policy' | 'retained_entitlement_ended';
+
+/**
+ * Stage-6 rework of R2-LIFECYCLES-06 (§4.6 terminal states are final, SPK-COND-002, POL-039): a
+ * package or makeup has ended when its status is terminal, or when its expiry is at or before
+ * `at` even though it was never moved to `expired` (an exhausted entitlement past its expiry stays
+ * `exhausted`: the expiry jobs act on active rows, and the package machine has no exhausted →
+ * expire transition). Nothing is returned to an ended entitlement; the redemption triggers refuse
+ * such a reversal too (migration 0518).
+ */
+export function entitlementEnded(
+  terminal: boolean,
+  expiresAt: Date | string | null,
+  at: Date,
+): boolean {
+  if (terminal) return true;
+  return expiresAt !== null && new Date(expiresAt).getTime() <= at.getTime();
+}
+
+/**
+ * Who ended a session booking: the family (or staff acting for them), or the facility, whose
+ * catalog session was canceled (directly, or by a closure through scheduling; R2-JOURNEYS-01).
+ */
+export type BookingCancellationCause = 'customer' | 'session_canceled';
 
 /**
  * Session packages (ENR-11; §3.16 Session packages row, SPK-COND-002, SPK-AT-020, §4.7
@@ -211,6 +235,11 @@ export class PackageEntitlementsService {
    * Issues the credits of a confirmed package purchase once (unique per enrollment, so a replay
    * is a no-op). A definition whose scope cannot be read issues nothing and raises an owned
    * exception: nothing is guessed (POL-039).
+   *
+   * R2-RACES-03 (SPK-COND-002, §4.12 correct under concurrent delivery): the purchase is read FOR
+   * UPDATE, as `MembershipsService.startForEnrollment` does, so a cancellation of it waits for the
+   * issue to commit (or the issue sees it canceled and issues nothing); the revoke handler that
+   * follows the cancellation then always finds the entitlement it must revoke.
    */
   async issueForEnrollment(
     trx: Trx,
@@ -223,6 +252,7 @@ export class PackageEntitlementsService {
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('id', '=', enrollmentId)
+      .forUpdate()
       .executeTakeFirst();
     if (!enrollment || enrollment.intent !== 'package_purchase') return null;
     if (enrollment.status !== 'confirmed') return null;
@@ -473,6 +503,19 @@ export class PackageEntitlementsService {
    * cancellation policy says so for this notice (`packageCreditReturn.untilMinutesBeforeStart`);
    * a later cancellation keeps it under that policy; without a policy stating it nothing returns
    * automatically (retained pending policy; staff may reverse the redemption).
+   *
+   * R2-JOURNEYS-01: when the facility canceled the session (`cause` `session_canceled`), the
+   * customer notice window is not the family's to meet: a credit the policy would return at this
+   * instant is returned, and any other is `retained_pending_policy` (never `retained_by_policy`),
+   * which the caller turns into an owned decision (POL-007 staff-initiated cancellation, POL-041).
+   *
+   * R2-LIFECYCLES-06 (§4.6 terminal states are final): a package that has ended (revoked,
+   * expired, or past its expiry while still `exhausted`; `entitlementEnded`) can never be redeemed
+   * again, so nothing is returned to it (no reversal, its count unchanged) and the booking records
+   * `retained_entitlement_ended` (not `retained_by_policy`: no cancellation policy kept it; the
+   * package's own end did, its purchase canceled or its definition's expiry, POL-039). A facility
+   * cancellation of such a booking still raises the owned decision (the caller), which then names
+   * no reversal: none is possible.
    */
   async onBookingCanceled(
     trx: Trx,
@@ -481,17 +524,23 @@ export class PackageEntitlementsService {
     actor: Principal,
     reason: string,
     correlationId: string | null,
+    cause: BookingCancellationCause = 'customer',
   ): Promise<CreditDisposition> {
     if (!booking.package_entitlement_id) return 'retained_pending_policy';
     const row = await this.load(trx, organizationId, booking.package_entitlement_id, true);
     if (!row) return 'retained_pending_policy';
     const now = this.clock.now();
+    if (entitlementEnded(PackageEntitlementMachine.isTerminal(row.status), row.expires_at, now)) {
+      return 'retained_entitlement_ended';
+    }
     const snapshot = await this.offerings.getOffering(organizationId, row.offering_id, now, trx);
     const rule = packageCreditReturn(snapshot?.cancellationPolicy ?? null);
     if (!rule) return 'retained_pending_policy';
     const deadline =
       new Date(booking.scheduled_start).getTime() - rule.untilMinutesBeforeStart * 60_000;
-    if (now.getTime() > deadline) return 'retained_by_policy';
+    if (now.getTime() > deadline) {
+      return cause === 'session_canceled' ? 'retained_pending_policy' : 'retained_by_policy';
+    }
     const reversed = await this.reverseIn(
       trx,
       organizationId,
@@ -556,6 +605,22 @@ export class PackageEntitlementsService {
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (redemption.kind !== 'redeem') {
         throw errors.invalidTransition('PackageRedemption', 'reversal', 'reverse');
+      }
+      // R2-LIFECYCLES-06 (§4.6 terminal states are final): a package that has ended (revoked,
+      // expired, or past its expiry while still `exhausted`) can never be redeemed again, so no
+      // credit is returned to it; the reversal trigger refuses it too (migrations 0516, 0518).
+      if (
+        entitlementEnded(
+          PackageEntitlementMachine.isTerminal(row.status),
+          row.expires_at,
+          this.clock.now(),
+        )
+      ) {
+        throw errors.resourceConflict('This package has ended; no credit can be returned to it.', {
+          code: 'PACKAGE_ENDED',
+          status: row.status,
+          expiresAt: isoOrNull(row.expires_at),
+        });
       }
       const reversed = await this.reverseIn(
         trx,

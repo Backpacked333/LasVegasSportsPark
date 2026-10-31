@@ -29,6 +29,7 @@ import {
   CLOCK,
   CapabilityService,
   DATABASE,
+  OperationalExceptions,
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
@@ -45,6 +46,7 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  enrollmentSystem,
   isStaffLike,
   minutesFrom,
   organizationOf,
@@ -62,6 +64,8 @@ import { EnrollmentFacilityScope } from './facility-scope';
 import { MembershipsService, type MembershipUse } from './memberships.service';
 import {
   PackageEntitlementsService,
+  entitlementEnded,
+  type BookingCancellationCause,
   type CreditDisposition,
   type PackageEntitlementRow,
 } from './package-entitlements.service';
@@ -164,6 +168,7 @@ export class SessionBookingsService {
     @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
     private readonly packages: PackageEntitlementsService,
     private readonly memberships: MembershipsService,
+    private readonly exceptions: OperationalExceptions,
   ) {}
 
   async load(
@@ -392,15 +397,21 @@ export class SessionBookingsService {
         );
       }
     } else {
-      const pools = (
-        await this.capacity.ensureSessionPool(
-          trx,
-          organizationId,
-          input.snapshot,
-          input.session,
-          input.actor,
-        )
-      ).filter((p) => p.status === 'active');
+      const sessionPools = await this.capacity.ensureSessionPool(
+        trx,
+        organizationId,
+        input.snapshot,
+        input.session,
+        input.actor,
+      );
+      const pools = sessionPools.filter((p) => p.status === 'active');
+      if (sessionPools.some((p) => p.status === 'closed')) {
+        // R2-JOURNEYS-01: the session was canceled meanwhile (its pools are closed).
+        throw errors.capacityUnavailable('This session was canceled; its seats are closed.', {
+          code: 'SESSION_CANCELED',
+          sessionId: input.session.id,
+        });
+      }
       if (pools.length === 0) {
         // SPK-PLACE-004: a session needs its own capacity before anyone can book it.
         throw errors.validation('This session has no capacity configured.', {
@@ -698,6 +709,18 @@ export class SessionBookingsService {
    * Cancels a pending or confirmed booking: its seat goes back to the session pools, a makeup
    * redemption is reversed while the session has not started (a new history row, never an
    * update), and a linked trial is canceled with it.
+   *
+   * R2-JOURNEYS-01 (SPK-AT-009, SPK-COND-001/002, SPK-YOUTH-004): `cause` `session_canceled` is
+   * the facility's cancellation of the session. The customer notice window does not apply to it:
+   * a makeup redemption is reversed whatever the start time, and a package credit or membership
+   * session that does not come back automatically (no approved policy returns it at this instant,
+   * POL-007 staff-initiated cancellation, POL-041) raises one owned exception per booking for the
+   * program manager (`enrollment.canceled_session_entitlement_pending`) instead of being lost
+   * silently. R2-LIFECYCLES-06: nothing is returned to an entitlement that has ended (a revoked or
+   * expired package or makeup, one past its expiry while still exhausted, an ended membership;
+   * §4.6 terminal states are final); on the facility's cancellation that loss raises the same
+   * exception. The booking records who ended it (`cancel_cause`, migration 0519): the session
+   * audience and the family's own cancellation notice follow it.
    */
   async cancelInTrx(
     trx: Trx,
@@ -706,6 +729,7 @@ export class SessionBookingsService {
     reason: string,
     actor: Principal,
     correlationId: string | null,
+    cause: BookingCancellationCause = 'customer',
   ): Promise<SessionBookingRow> {
     const now = this.clock.now();
     const status = SessionBookingMachine.next(row.status, 'cancel');
@@ -735,6 +759,7 @@ export class SessionBookingsService {
         actor,
         reason,
         correlationId,
+        cause,
       );
     } else if (row.entitlement_basis === 'membership') {
       disposition = await this.memberships.onBookingCanceled(trx, organizationId, row);
@@ -745,6 +770,7 @@ export class SessionBookingsService {
         status,
         canceled_at: now,
         cancel_reason: reason,
+        cancel_cause: cause,
         credit_disposition: disposition,
         revision: row.revision + 1,
       })
@@ -752,32 +778,9 @@ export class SessionBookingsService {
       .where('id', '=', row.id)
       .where('revision', '=', row.revision)
       .execute();
-    if (row.makeup_entitlement_id && new Date(row.scheduled_start).getTime() > now.getTime()) {
-      const redemption = await trx
-        .selectFrom('makeup_redemptions')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('session_booking_id', '=', row.id)
-        .where('kind', '=', 'redeem')
-        .executeTakeFirst();
-      if (redemption) {
-        await trx
-          .insertInto('makeup_redemptions')
-          .values({
-            id: newId(),
-            organization_id: organizationId,
-            makeup_entitlement_id: row.makeup_entitlement_id,
-            session_booking_id: row.id,
-            participant_person_id: row.participant_person_id,
-            kind: 'reversal',
-            reverses_redemption_id: redemption.id,
-            actor: json(actorSnapshot(actor)),
-            redeemed_at: now,
-          })
-          .onConflict((oc) => oc.doNothing())
-          .execute();
-      }
-    }
+    const makeupReversed = row.makeup_entitlement_id
+      ? await this.reverseMakeupRedemption(trx, organizationId, row, actor, now, cause)
+      : null;
     await trx
       .updateTable('trial_participations')
       .set((eb) => ({
@@ -805,8 +808,23 @@ export class SessionBookingsService {
         kind: row.kind,
         entitlementBasis: row.entitlement_basis,
         creditDisposition: disposition,
+        makeupReversed,
+        cause,
       },
     });
+    const kept =
+      (row.entitlement_basis === 'package' || row.entitlement_basis === 'membership') &&
+      disposition !== null &&
+      disposition !== 'returned';
+    if (cause === 'session_canceled' && (kept || makeupReversed === false)) {
+      await this.raiseCanceledSessionEntitlement(
+        trx,
+        organizationId,
+        row,
+        disposition,
+        makeupReversed,
+      );
+    }
     await this.outbox.enqueue(trx, EnrollmentEvents.sessionBookingChanged, {
       organizationId,
       aggregateType: 'session_booking',
@@ -831,6 +849,177 @@ export class SessionBookingsService {
     const updated = await this.load(trx, organizationId, row.id);
     if (!updated) throw errors.internal('session booking vanished');
     return updated;
+  }
+
+  /**
+   * Reverses the makeup redemption of a canceled makeup booking (SPK-YOUTH-004: a new history row,
+   * never an update). A customer cancellation reverses it only before the session starts; the
+   * facility's cancellation of the session reverses it whatever the time (R2-JOURNEYS-01). An
+   * entitlement that has ended (expired or revoked, final, or past its expiry while still
+   * `exhausted`: the expiry job only expires active makeups) gets nothing back (R2-LIFECYCLES-06;
+   * the redemption trigger refuses it too, migrations 0516 and 0518). Answers whether a redemption
+   * was reversed, or null when none was due (no redemption, or a customer cancellation after
+   * start).
+   */
+  private async reverseMakeupRedemption(
+    trx: Trx,
+    organizationId: string,
+    row: SessionBookingRow,
+    actor: Principal,
+    now: Date,
+    cause: BookingCancellationCause,
+  ): Promise<boolean | null> {
+    if (!row.makeup_entitlement_id) return null;
+    if (cause !== 'session_canceled' && new Date(row.scheduled_start).getTime() <= now.getTime()) {
+      return null;
+    }
+    const redemption = await trx
+      .selectFrom('makeup_redemptions')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('session_booking_id', '=', row.id)
+      .where('kind', '=', 'redeem')
+      .executeTakeFirst();
+    if (!redemption) return null;
+    const entitlement = await trx
+      .selectFrom('makeup_entitlements')
+      .select(['status', 'expires_at'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', row.makeup_entitlement_id)
+      .forUpdate()
+      .executeTakeFirst();
+    if (
+      !entitlement ||
+      entitlementEnded(
+        entitlement.status !== 'active' && entitlement.status !== 'exhausted',
+        entitlement.expires_at,
+        now,
+      )
+    ) {
+      return false;
+    }
+    const inserted = await trx
+      .insertInto('makeup_redemptions')
+      .values({
+        id: newId(),
+        organization_id: organizationId,
+        makeup_entitlement_id: row.makeup_entitlement_id,
+        session_booking_id: row.id,
+        participant_person_id: row.participant_person_id,
+        kind: 'reversal',
+        reverses_redemption_id: redemption.id,
+        actor: json(actorSnapshot(actor)),
+        redeemed_at: now,
+      })
+      .onConflict((oc) => oc.doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    return !!inserted;
+  }
+
+  /**
+   * R2-JOURNEYS-01 (§4.12: no required follow-up is lost; POL-007, POL-041, DEC-003 pending): a
+   * booking the facility's session cancellation ended without its package credit, membership
+   * session or makeup coming back. One exception per booking (deduplicated, so a replay raises
+   * nothing new) names what was kept and, where it can still be returned, how
+   * (`packageRedemptionId` for `POST /v1/package-redemptions/{id}/reverse`). When the package,
+   * membership or makeup has ended (`retained_entitlement_ended`, or a makeup not reversed) nothing
+   * can be returned to it: `entitlementEnded` is true and no redemption is named, so staff decide
+   * another remedy (POL-007, DEC-003).
+   */
+  private async raiseCanceledSessionEntitlement(
+    trx: Trx,
+    organizationId: string,
+    row: SessionBookingRow,
+    disposition: CreditDisposition | null,
+    makeupReversed: boolean | null,
+  ): Promise<void> {
+    const ended = disposition === 'retained_entitlement_ended' || makeupReversed === false;
+    const redemption =
+      row.package_entitlement_id && !ended
+        ? await trx
+            .selectFrom('package_redemptions')
+            .select('id')
+            .where('organization_id', '=', organizationId)
+            .where('session_booking_id', '=', row.id)
+            .where('kind', '=', 'redeem')
+            .executeTakeFirst()
+        : undefined;
+    await this.exceptions.raise(trx, {
+      organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+      category: 'enrollment.canceled_session_entitlement_pending',
+      severity: 'warning',
+      title: 'A canceled session kept a package credit, membership session or makeup',
+      affectedType: 'session_booking',
+      affectedId: row.id,
+      ownerQueue: 'program_manager',
+      dedupeKey: `canceled_session_entitlement:${row.id}`,
+      details: {
+        sessionBookingId: row.id,
+        sessionId: row.session_id,
+        offeringId: row.offering_id,
+        participantPersonId: row.participant_person_id,
+        entitlementBasis: row.entitlement_basis,
+        packageEntitlementId: row.package_entitlement_id,
+        packageRedemptionId: redemption?.id ?? null,
+        membershipEnrollmentId: row.membership_enrollment_id,
+        makeupEntitlementId: row.makeup_entitlement_id,
+        creditDisposition: disposition,
+        makeupReversed,
+        entitlementEnded: ended,
+        pendingDecisions: ['POL-007', 'POL-041', 'DEC-003'],
+      },
+    });
+  }
+
+  /**
+   * R2-JOURNEYS-01 (SPK-AT-009 consistent publication, SPK-COND-001/002, SPK-YOUTH-004, §4.12):
+   * the facility canceled the session (catalog.session_canceled, directly or through a closure).
+   * Its live bookings are canceled with that cause (`cancelInTrx`): their seats leave the pools,
+   * linked trials end, and what each paid with is returned or raised for a decision. Runs in the
+   * outbox handler's transaction after the session's pools were closed (`CapacityService.
+   * closeSessionPools`); idempotent under replay (only live bookings move). Bookings are locked in
+   * id order before any pool, as a customer cancellation locks its booking before the pools.
+   */
+  async cancelForCanceledSession(
+    trx: Trx,
+    organizationId: string,
+    sessionId: string,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<number> {
+    const live = await this.lockLiveOfSession(trx, organizationId, sessionId);
+    const actor = enrollmentSystem(organizationId, 'enrollment.follow_session_canceled');
+    for (const row of live) {
+      await this.cancelInTrx(
+        trx,
+        organizationId,
+        row,
+        reason,
+        actor,
+        correlationId,
+        'session_canceled',
+      );
+    }
+    return live.length;
+  }
+
+  /** The session's pending and confirmed bookings, locked in id order. */
+  async lockLiveOfSession(
+    trx: Trx,
+    organizationId: string,
+    sessionId: string,
+  ): Promise<SessionBookingRow[]> {
+    return trx
+      .selectFrom('session_bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('session_id', '=', sessionId)
+      .where('status', 'in', ['pending', 'confirmed'])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
   }
 
   /** Hold-expiry follow-up: a pending (unpaid) booking whose seat expired becomes `expired`. */

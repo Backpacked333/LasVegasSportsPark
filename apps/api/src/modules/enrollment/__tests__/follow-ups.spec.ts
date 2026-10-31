@@ -1,4 +1,4 @@
-import { newId, systemPrincipal } from '@sportspark/contracts';
+import { systemPrincipal, type EventPayload } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperationsService, Outbox, UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -8,7 +8,10 @@ import {
   createTeamEntryFixture,
 } from '../../competition';
 import { IdentityEvents } from '../../identity';
+import { EnrollmentEvents } from '../enrollment.events';
+import { ENROLLMENT_PORT, type EnrollmentPort } from '../enrollment.ports';
 import { CapacityService } from '../services/capacity.service';
+import { EnrollmentNotices, registrationConfirmedCopy } from '../services/enrollment-notices';
 import { RECONCILE_PLACEMENTS_JOB } from '../services/enrollment-jobs';
 import { createEnrollmentFixture } from '../testing/enrollment-fixtures';
 import {
@@ -20,6 +23,7 @@ import {
   enrollmentTestApp,
   offering,
   post,
+  rejectsWith,
   staff,
   type Actor,
 } from './support';
@@ -29,11 +33,13 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
   let t: TestApp;
   let programManager: Actor;
   let leagueManager: Actor;
+  let administrator: Actor;
 
   beforeAll(async () => {
     t = await enrollmentTestApp();
     programManager = await staff(t, ['program_manager']);
     leagueManager = await staff(t, ['league_manager']);
+    administrator = await staff(t, ['system_administrator']);
   });
   afterAll(async () => {
     await t.close();
@@ -43,26 +49,35 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
   // ENR-07
   // -------------------------------------------------------------------------------------------
 
-  async function merge(survivor: string, merged: string, mergeId = newId()) {
-    await t.db
-      .updateTable('persons')
-      .set({ status: 'merged', merged_into_person_id: survivor })
-      .where('id', '=', merged)
-      .execute();
-    await t.app.get(UnitOfWork).run(({ trx }) =>
-      t.app.get(Outbox).enqueue(trx, IdentityEvents.personsMerged, {
-        organizationId: t.organizationId,
-        aggregateType: 'person',
-        aggregateId: survivor,
-        payload: {
-          mergeId,
-          survivorPersonId: survivor,
-          mergedPersonId: merged,
-          operationId: newId(),
-        },
-      }),
+  /**
+   * R2-TESTS-04 (SPK-IAM-007): the merge goes through identity's own command, so the merge row,
+   * the merged person and the `identity.persons_merged` event are exactly what identity produces
+   * and every module's follow-up (communications' included) completes. `drain` fails on any
+   * handler failure (R2-TESTS-01).
+   */
+  async function merge(survivor: string, merged: string) {
+    const flagged = await post(t, '/v1/duplicate-candidates', administrator.header, {
+      personAId: survivor,
+      personBId: merged,
+      reasons: ['same name and date of birth'],
+      score: 90,
+    });
+    expect(flagged.status, JSON.stringify(flagged.body)).toBe(201);
+    const done = await post(
+      t,
+      `/v1/duplicate-candidates/${flagged.body.id as string}/merge`,
+      administrator.header,
+      { survivorPersonId: survivor, reason: 'Confirmed with the family at the desk' },
     );
+    expect(done.status, JSON.stringify(done.body)).toBe(201);
     await drain(t);
+    const mergeId = done.body.id as string;
+    const followed = await t.db
+      .selectFrom('communication_merge_follow_ups')
+      .select('merge_id')
+      .where('merge_id', '=', mergeId)
+      .execute();
+    expect(followed).toHaveLength(1);
     return mergeId;
   }
 
@@ -122,20 +137,23 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
       .where('id', 'in', [kept, second])
       .execute();
     expect(statuses.map((s) => s.status)).toEqual(['confirmed', 'confirmed']);
-    // A second delivery of the same merge raises nothing more (idempotent by merge).
+    // A second delivery of the same merge (the same real merge id) raises nothing more
+    // (idempotent by merge), and no follow-up fails on it (the drain would throw).
+    const original = await t.db
+      .selectFrom('outbox_events')
+      .select(['payload'])
+      .where('event_type', '=', IdentityEvents.personsMerged.type)
+      .where('aggregate_id', '=', survivor.personId)
+      .executeTakeFirstOrThrow();
     await t.app.get(UnitOfWork).run(({ trx }) =>
       t.app.get(Outbox).enqueue(trx, IdentityEvents.personsMerged, {
         organizationId: t.organizationId,
         aggregateType: 'person',
         aggregateId: survivor.personId,
-        payload: {
-          mergeId,
-          survivorPersonId: survivor.personId,
-          mergedPersonId: duplicate.personId,
-          operationId: newId(),
-        },
+        payload: original.payload as EventPayload<typeof IdentityEvents.personsMerged>,
       }),
     );
+    expect((original.payload as { mergeId: string }).mergeId).toBe(mergeId);
     await drain(t);
     expect(await duplicates(survivor.personId)).toHaveLength(1);
   });
@@ -385,6 +403,163 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
       .where('subject_id', '=', offerId)
       .execute();
     expect(after).toHaveLength(1);
+  });
+
+  it('R2-JOURNEYS-04 / SPK-COMMS-002 / SPK-AT-023: a registration confirmed after payment is announced once to the guardian; a replay composes nothing new and a registration canceled before the follow-up runs is not announced', async () => {
+    const setup = await offering(t, { basePriceMinor: 12_000 });
+    const guardian = await adult(t);
+    const kid = await child(t, [guardian], {
+      permissions: ['view', 'register', 'pay', 'receive_messages'],
+    });
+    await acknowledge(t, setup, kid, guardian.personId);
+    const basket = await basketWith(t, guardian, [
+      { participantPersonId: kid, offeringId: setup.offeringId },
+    ]);
+    const held = await post(t, `/v1/baskets/${basket.id}/hold`, guardian.header);
+    expect(held.status, JSON.stringify(held.body)).toBe(200);
+    const enrollmentId = held.body.lines[0].enrollmentId as string;
+    // The provider confirmed the payment after the family left the app (finance's finalizer).
+    await t.app.get(UnitOfWork).run(({ trx }) =>
+      t.app
+        .get<EnrollmentPort>(ENROLLMENT_PORT)
+        .confirmEnrollment(trx, t.organizationId, enrollmentId, {
+          actor: systemPrincipal(t.organizationId, 'finance.checkout'),
+          orderRef: `order-${enrollmentId}`,
+        }),
+    );
+    await drain(t);
+    const announced = () =>
+      t.db
+        .selectFrom('notifications')
+        .selectAll()
+        .where('kind', '=', 'registration_outcome')
+        .where('subject_id', '=', enrollmentId)
+        .execute();
+    const notices = await announced();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      title: 'Registration confirmed',
+      protected: true,
+      subject_type: 'enrollment',
+    });
+    const recipients = await t.db
+      .selectFrom('notification_recipients')
+      .select(['person_id', 'resolved_basis'])
+      .where('notification_id', '=', notices[0]!.id)
+      .execute();
+    expect(recipients).toContainEqual({
+      person_id: guardian.personId,
+      resolved_basis: 'receive_messages',
+    });
+    // A replayed confirmation event composes nothing new: redelivered, the handler is not run
+    // twice, and a second composition for the same event is refused by the database.
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', dispatched_at: null, available_at: t.clock.now() })
+      .where('event_type', '=', 'enrollment.enrollment_confirmed')
+      .where('aggregate_id', '=', enrollmentId)
+      .execute();
+    await drain(t);
+    expect(await announced()).toHaveLength(1);
+    const event = await t.db
+      .selectFrom('outbox_events')
+      .selectAll()
+      .where('event_type', '=', 'enrollment.enrollment_confirmed')
+      .where('aggregate_id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(
+      await rejectsWith(
+        t.app.get(UnitOfWork).run(({ trx }) =>
+          t.app.get(EnrollmentNotices).enrollmentConfirmed(trx, {
+            id: event.id,
+            type: event.event_type,
+            organizationId: event.organization_id,
+            aggregateType: event.aggregate_type,
+            aggregateId: event.aggregate_id,
+            occurredAt: new Date(event.occurred_at).toISOString(),
+            payload: event.payload as EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>,
+            correlationId: event.correlation_id,
+            causationId: event.causation_id,
+            operationId: event.operation_id,
+          }),
+        ),
+      ),
+    ).toBe('23505');
+    expect(await announced()).toHaveLength(1);
+
+    // A free registration canceled before its confirmation follow-up runs is not announced.
+    const free = await offering(t, { basePriceMinor: 0 });
+    const other = await child(t, [guardian], {
+      permissions: ['view', 'register', 'pay', 'receive_messages'],
+    });
+    await acknowledge(t, free, other, guardian.personId);
+    const second = await basketWith(t, guardian, [
+      { participantPersonId: other, offeringId: free.offeringId },
+    ]);
+    expect((await post(t, `/v1/baskets/${second.id}/hold`, guardian.header)).status).toBe(200);
+    const completed = await post(t, `/v1/baskets/${second.id}/complete`, guardian.header);
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    const freeId = completed.body.lines[0].enrollmentId as string;
+    const current = await t.http.get(`/v1/enrollments/${freeId}`).set(guardian.header);
+    expect(
+      (
+        await post(t, `/v1/enrollments/${freeId}/cancel`, guardian.header, {
+          reason: 'changed plans',
+          expectedRevision: current.body.revision,
+        })
+      ).status,
+    ).toBe(200);
+    await drain(t);
+    const none = await t.db
+      .selectFrom('notifications')
+      .select('id')
+      .where('kind', '=', 'registration_outcome')
+      .where('subject_id', '=', freeId)
+      .execute();
+    expect(none).toEqual([]);
+  });
+
+  it('R2-JOURNEYS-04 / SPK-COMMS-002: a league registration is announced with what follows for a league (a team placement, the team schedule), never a family calendar its offering has no sessions for', async () => {
+    const league = await offering(t, {
+      kind: 'season',
+      basePriceMinor: 0,
+      ageBand: { minAgeYears: 18 },
+    });
+    const player = await adult(t);
+    await acknowledge(t, league, player.personId, player.personId);
+    const basket = await basketWith(t, player, [
+      {
+        participantPersonId: player.personId,
+        offeringId: league.offeringId,
+        intent: 'individual_league',
+      },
+    ]);
+    expect((await post(t, `/v1/baskets/${basket.id}/hold`, player.header)).status).toBe(200);
+    const completed = await post(t, `/v1/baskets/${basket.id}/complete`, player.header);
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    await drain(t);
+    const notices = await t.db
+      .selectFrom('notifications')
+      .select(['title', 'body'])
+      .where('kind', '=', 'registration_outcome')
+      .where('subject_id', '=', completed.body.lines[0].enrollmentId as string)
+      .execute();
+    expect(notices).toEqual([
+      {
+        title: 'Registration confirmed',
+        body: expect.stringContaining('You are told when a team placement is made'),
+      },
+    ]);
+    expect(notices[0]!.body).not.toContain('family calendar');
+    // Team intents point at the team's fixtures; a session offering at the family calendar.
+    for (const intent of ['join_team', 'create_team_entry'] as const) {
+      const copy = registrationConfirmedCopy(intent, 'Spring league');
+      expect(copy.body).toContain("The team's fixtures appear in the app");
+      expect(copy.body).not.toContain('family calendar');
+    }
+    expect(registrationConfirmedCopy('youth', 'Saturday skills').body).toContain(
+      'Its sessions appear in the family calendar.',
+    );
   });
 
   it('SPK-COMMS-002: application decisions and placements notify the participant’s family', async () => {

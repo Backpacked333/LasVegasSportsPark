@@ -75,6 +75,7 @@ import { PlacementService } from './services/placement.service';
 import { PackageEntitlementsService } from './services/package-entitlements.service';
 import { RegistrationEvaluator } from './services/registration-evaluator';
 import { SessionBookingsService } from './services/session-bookings.service';
+import { SessionCanceledFollowUp } from './services/session-canceled-follow-up';
 import { SessionParticipants } from './services/session-participants';
 import { TrialsService } from './services/trials.service';
 import { WaitlistService } from './services/waitlist.service';
@@ -132,6 +133,7 @@ const providers: Provider[] = [
   PlacementService,
   FamilyCalendarService,
   SessionParticipants,
+  SessionCanceledFollowUp,
   // SPK-AT-009: communications addresses session change notices to the sessions' participants.
   { provide: SESSION_AUDIENCE_IMPL, useExisting: SessionParticipants },
   { provide: ENROLLMENT_PORT, useExisting: EnrollmentsService },
@@ -221,6 +223,7 @@ export class EnrollmentModule implements OnModuleInit {
     private readonly memberships: MembershipsService,
     private readonly bookingsG: BookingsService,
     private readonly youthProgression: YouthProgressionService,
+    private readonly sessionCanceled: SessionCanceledFollowUp,
   ) {}
 
   onModuleInit(): void {
@@ -373,7 +376,8 @@ export class EnrollmentModule implements OnModuleInit {
         ),
       { failureOwner: 'program_manager' },
     );
-    // ENR-12 (SPK-COND-001): a confirmed membership starts its term; a canceled one says so.
+    // ENR-12 (SPK-COND-001): a confirmed membership starts its term; a canceled one says so and
+    // raises an owned exception for bookings after it ended (R2-LIFECYCLES-03).
     this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
       EnrollmentEvents.enrollmentConfirmed.type,
       'enrollment.start_membership',
@@ -399,6 +403,17 @@ export class EnrollmentModule implements OnModuleInit {
             event.payload.enrollmentId,
             event.correlationId,
           ),
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    // R2-LIFECYCLES-03 (SPK-COND-001): a membership completed early (or at its term end) that
+    // still has booked sessions after it ended raises an owned exception, as a canceled one does.
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentCompleted>>(
+      EnrollmentEvents.enrollmentCompleted.type,
+      'enrollment.membership_completed',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () =>
+          this.memberships.onCompleted(ctx.trx, event.organizationId, event.payload.enrollmentId),
         ),
       { failureOwner: 'program_manager' },
     );
@@ -486,6 +501,16 @@ export class EnrollmentModule implements OnModuleInit {
         ),
       { failureOwner: 'program_manager' },
     );
+    // R2-JOURNEYS-01 (SPK-AT-009, SPK-COND-001/002, SPK-YOUTH-004, SPK-REG-008): a session the
+    // facility canceled (in the catalog, or by a closure through scheduling) takes its live
+    // bookings and waiters with it; what they paid with is returned or raised for a decision.
+    this.registry.on<EventPayload<typeof CatalogEvents.sessionCanceled>>(
+      CatalogEvents.sessionCanceled.type,
+      'enrollment.follow_session_canceled',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.sessionCanceled.onSessionCanceled(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
     // SPK-YOUTH-004: an unused makeup lapses at its expiry.
     this.registry.on<EventPayload<typeof MakeupExpiryDue>>(
       MakeupExpiryDue.type,
@@ -535,6 +560,24 @@ export class EnrollmentModule implements OnModuleInit {
         runWithTransaction(ctx.trx, () => this.notices.placementAssigned(ctx.trx, event)),
       { failureOwner: 'league_manager' },
     );
+    // R2-JOURNEYS-04 (SPK-COMMS-002 "Registration outcome", SPK-AT-023): a confirmed registration
+    // is announced once, from the enrollment as it stands when the follow-up runs.
+    this.registry.on<EventPayload<typeof EnrollmentEvents.enrollmentConfirmed>>(
+      EnrollmentEvents.enrollmentConfirmed.type,
+      'enrollment.notify_registration_confirmed',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.enrollmentConfirmed(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
+    // Stage-6 rework of R2-JOURNEYS-01 (SPK-AT-009, SPK-COMMS-002): a booking canceled because the
+    // facility canceled its session is announced to the family once (its own change event).
+    this.registry.on<EventPayload<typeof EnrollmentEvents.sessionBookingChanged>>(
+      EnrollmentEvents.sessionBookingChanged.type,
+      'enrollment.notify_session_booking_canceled',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.sessionBookingCanceled(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
     this.registry.on<EventPayload<typeof EnrollmentEvents.applicationDecided>>(
       EnrollmentEvents.applicationDecided.type,
       'enrollment.notify_registration_outcome',
@@ -544,18 +587,19 @@ export class EnrollmentModule implements OnModuleInit {
     );
     // SPK-REG-005 / SPK-YOUTH-002: commercial pools follow the catalog limits; staffing pools keep
     // their staff count so a raised commercial limit never bypasses the staffing requirement.
+    // R2-RACES-01: the event only says that the limits changed; the pools are sized from the
+    // catalog's current units read under the pool locks, never from the payload (deliveries arrive
+    // late and out of order).
     this.registry.on<EventPayload<typeof CatalogEvents.offeringUpdated>>(
       CatalogEvents.offeringUpdated.type,
       'enrollment.sync_capacity',
       (event, ctx) =>
         runWithTransaction(ctx.trx, async () => {
-          const change = event.payload.capacityChange;
-          if (!change) return;
+          if (!event.payload.capacityChange) return;
           await this.capacity.syncFromCatalog(
             ctx.trx,
             event.organizationId,
             event.payload.offeringId,
-            change.after,
             event.correlationId,
           );
         }),

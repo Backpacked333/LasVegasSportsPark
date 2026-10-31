@@ -294,7 +294,13 @@ export type SessionBookingKind = 'pickup' | 'trial' | 'makeup' | 'session';
 export type SessionBookingStatusValue = 'pending' | 'confirmed' | 'canceled' | 'expired';
 export type SessionBookingEntitlementBasis = 'purchase' | 'makeup' | 'package' | 'membership';
 export type SessionBookingCreditDisposition =
-  'returned' | 'retained_by_policy' | 'retained_pending_policy';
+  | 'returned'
+  | 'retained_by_policy'
+  | 'retained_pending_policy'
+  /** Migration 0518: the package or membership the credit came from has ended. */
+  | 'retained_entitlement_ended';
+/** Migration 0519 (R2-JOURNEYS-01): who ended a canceled session booking. */
+export type SessionBookingCancelCause = 'customer' | 'session_canceled';
 export interface SessionBookingsTable {
   id: string;
   organization_id: string;
@@ -328,6 +334,8 @@ export interface SessionBookingsTable {
   confirmed_at: NullableTimestamp;
   canceled_at: NullableTimestamp;
   cancel_reason: string | null;
+  /** Migration 0519: set only on a canceled booking; null on one canceled before 0519. */
+  cancel_cause: SessionBookingCancelCause | null;
   expired_at: NullableTimestamp;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
