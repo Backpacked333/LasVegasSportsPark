@@ -1,6 +1,5 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { json, seedOrganization } from '@sportspark/db';
-import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AuditWriter, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
@@ -24,10 +23,8 @@ import { keepFakePrincipals } from './support';
 /**
  * FAC-01 (SPK-FAC-004, §4.6 RestrictionMachine `withdraw`, §4.9, §4.2): a restriction that never
  * took effect is withdrawn with its reason; an approved one withdraws its pending scheduling closure
- * through CLOSURE_PORT.withdrawClosure (IF-11) in the same unit of work.
- *
- * The tests that need scheduling's closure withdrawal (SCH-01, migration 0302) check for it and
- * skip with a note where that work item is not merged yet; they run on the integrated branch.
+ * through CLOSURE_PORT.withdrawClosure (IF-11, scheduling SCH-01, migration 0302) in the same unit
+ * of work. Every test here runs unconditionally: a change to the closure schema or port fails them.
  */
 describe('restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
   let t: TestApp;
@@ -40,9 +37,6 @@ describe('restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
   let operator: Principal;
   let manager: Principal;
   let auth: { Authorization: string };
-  let closureWithdrawal = false;
-  const needsClosureWithdrawal =
-    'needs scheduling closure withdrawal (SCH-01, migration 0302), not merged on this branch';
 
   beforeAll(async () => {
     t = await createTestApp({
@@ -65,10 +59,6 @@ describe('restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
     });
     manager = staffPrincipal(org, ['general_manager']);
     auth = await t.authHeader(operator);
-    const column = await sql<{ one: number }>`
-      select 1 as one from information_schema.columns
-      where table_name = 'closures' and column_name = 'withdrawn_at'`.execute(t.db);
-    closureWithdrawal = column.rows.length > 0;
   });
   afterAll(async () => {
     await t.close();
@@ -250,8 +240,7 @@ describe('restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
     await restrictions.withdraw(operator, again.id, { reason: 'cleanup' });
   });
 
-  it('SPK-FAC-004: a proposed restriction is withdrawn; an approved one withdraws its pending closure atomically', async (ctx) => {
-    if (!closureWithdrawal) ctx.skip(needsClosureWithdrawal);
+  it('SPK-FAC-004: a proposed restriction is withdrawn; an approved one withdraws its pending closure atomically', async () => {
     const proposed = await propose('2026-11-05');
     const withdrawnProposal = await restrictions.withdraw(operator, proposed.id, {
       reason: 'Not needed',
@@ -412,8 +401,7 @@ describe('restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
     }
   });
 
-  it('SPK-FAC-004 / SPK-AT-021: an approval that loses the race for the closure link withdraws the closure it created', async (ctx) => {
-    if (!closureWithdrawal) ctx.skip(needsClosureWithdrawal);
+  it('SPK-FAC-004 / SPK-AT-021: an approval that loses the race for the closure link withdraws the closure it created', async () => {
     const proposed = await propose('2026-11-12');
     const port = t.app.get<ClosurePort>(CLOSURE_PORT);
     const createClosure = port.createClosure.bind(port);
