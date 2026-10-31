@@ -58,7 +58,8 @@ interface ScanCandidate {
 
 /**
  * Passes (SPK-ENTRY-002, SPK-ENTRY-003). A pass is an opaque random reference for a person or a
- * household; only its SHA-256 is stored and the reference is returned once, at issue. Scanning
+ * household; only its SHA-256 is stored and the reference is returned once, at issue (never kept
+ * with the idempotency key: POST /v1/passes withholds it, §4.14). Scanning
  * resolves the holder's people and their sessions today at the facility so staff can select who
  * actually arrived — the scan itself records nobody as present (SPK-AT-015).
  */
@@ -142,7 +143,7 @@ export class PassesService {
         payload: { passId: row.id, holderKind: row.holder_kind },
         correlationId,
       });
-      return { pass: toPass(row), reference };
+      return { id: row.id, pass: toPass(row), reference };
     });
   }
 

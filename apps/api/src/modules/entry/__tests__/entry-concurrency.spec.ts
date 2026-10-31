@@ -1,10 +1,15 @@
 import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { sql } from 'kysely';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture, createRelationshipFixture } from '../../identity';
 import { at } from '../../scheduling';
+import { ActivityResolver } from '../services/activity-resolver';
+import { CheckinsService } from '../services/checkins.service';
 import {
+  drainOutbox,
+  enroll,
   entryTestApp,
   exceptionsOf,
   family,
@@ -24,7 +29,7 @@ import {
  * race, and the outcome must be the same: conflicts preserved for review, departures and releases
  * recorded once, reused batch ids refused. Several rounds make a lost race visible.
  */
-describe('concurrent offline synchronization (§4.15, SPK-AT-018; true concurrency under PostgreSQL)', () => {
+describe('concurrent offline synchronization and admission (§4.15, SPK-AT-018, SPK-AT-009; true concurrency under PostgreSQL)', () => {
   const ROUNDS = 6;
   let t: TestApp;
   let desk: Actor;
@@ -288,5 +293,160 @@ describe('concurrent offline synchronization (§4.15, SPK-AT-018; true concurren
         .execute();
       expect(rows, `round ${round}`).toHaveLength(1);
     }
+  });
+
+  it('R2-RACES-06 / SPK-AT-009: a check-in racing the cancellation of its session (and its follow-up) is never left admitted', async () => {
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const session = await program(t, manager, { from: '13:00', to: '14:00' });
+      const child = await createPersonFixture(t, { kind: 'child' });
+      await enroll(t, session, child, fam.guardian.personId);
+      const [checkin] = await Promise.all([
+        post(t, '/v1/session-checkins', desk, { personId: child, activity: sessionRef(session) }),
+        (async () => {
+          const canceled = await post(t, `/v1/sessions/${session.sessionId}/cancel`, manager, {
+            reason: 'Storm',
+          });
+          expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+          await drainOutbox(t);
+        })(),
+      ]);
+      expect(checkin.status, JSON.stringify(checkin.body)).toBe(201);
+      await drainOutbox(t);
+      const rows = await t.db
+        .selectFrom('session_checkins')
+        .select(['status', 'issues'])
+        .where('activity_id', '=', session.sessionId)
+        .execute();
+      expect(rows, `round ${round}`).toHaveLength(1);
+      const [row] = rows;
+      // Withdrawn by the follow-up (the check-in committed first), or held on the recorded
+      // cancellation (it came after); never admitted to the canceled session.
+      expect(['withdrawn', 'held'], `round ${round}`).toContain(row!.status);
+      if (row!.status === 'held') {
+        expect((row!.issues as Array<{ code: string }>).map((i) => i.code)).toContain(
+          'activity_canceled',
+        );
+      }
+    }
+  });
+
+  /** A promise that stays pending until `open()`; `reached` resolves when someone waits on it. */
+  function gate() {
+    let open!: () => void;
+    let arrive!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    const reached = new Promise<void>((resolve) => (arrive = resolve));
+    return {
+      reached,
+      open,
+      pass: async () => {
+        arrive();
+        await opened;
+      },
+    };
+  }
+  /** Tracks whether a promise has settled. */
+  function tracked<T>(promise: Promise<T>) {
+    const state = { done: false, promise };
+    void promise.then(
+      () => (state.done = true),
+      () => (state.done = true),
+    );
+    return state;
+  }
+  /**
+   * TEST_DATABASE_URL: returns once some backend waits for the activity's admission lock
+   * (`entry_activity_lock_key`, migration 0807); fails if `work` settles first.
+   */
+  async function untilWaitingForActivityLock(work: { done: boolean }, activityId: string) {
+    for (let polls = 0; ; polls += 1) {
+      if (work.done) throw new Error('the check-in finished without waiting for the activity lock');
+      if (polls > 2000) throw new Error('the check-in never waited for the activity lock');
+      const { rows } = await sql<{ waiting: number }>`
+        select count(*)::int as waiting from pg_locks
+        where locktype = 'advisory' and not granted and objsubid = 1
+          and ((classid::bigint << 32) | objid::bigint)
+            = entry_activity_lock_key(${t.organizationId}::uuid, 'session', ${activityId}::uuid)
+      `.execute(t.db);
+      if ((rows[0]?.waiting ?? 0) > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  it('R2-RACES-06 / SPK-AT-009: a check-in whose transaction opens while the cancellation follow-up holds the activity lock waits for it and is held with activity_canceled (PGlite and TEST_DATABASE_URL; the lock wait is asserted under TEST_DATABASE_URL)', async () => {
+    const session = await program(t, manager, { from: '15:00', to: '16:00' });
+    const child = await createPersonFixture(t, { kind: 'child' });
+    await enroll(t, session, child, fam.guardian.personId);
+    const arrived = await post(t, '/v1/visits', desk, {
+      facilityId: t.facilityId,
+      arrivals: [{ personId: child, visitorCategory: 'participant' }],
+    });
+    expect(arrived.status, JSON.stringify(arrived.body)).toBe(201);
+    const resolver = t.app.get(ActivityResolver);
+    const checkins = t.app.get(CheckinsService);
+    // The desk read the session while it was still scheduled; then catalog cancels it.
+    const stale = await resolver.resolve(t.organizationId, sessionRef(session));
+    expect(stale.canceled).toBe(false);
+    const canceled = await post(t, `/v1/sessions/${session.sessionId}/cancel`, manager, {
+      reason: 'Storm',
+    });
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+
+    // entry.withdraw_on_session_canceled pauses inside its transaction, after it took the
+    // activity's lock exclusively, recorded the cancellation (uncommitted) and found no check-in.
+    const followUp = gate();
+    const withdraw = checkins.withdrawForCanceledActivity.bind(checkins);
+    const withdrawSpy = vi
+      .spyOn(checkins, 'withdrawForCanceledActivity')
+      .mockImplementation(async (trx, organizationId, activityType, activityId, ...rest) => {
+        const withdrawn = await withdraw(trx, organizationId, activityType, activityId, ...rest);
+        if (activityId === session.sessionId) {
+          expect(withdrawn).toBe(0);
+          await followUp.pass();
+        }
+        return withdrawn;
+      });
+    const resolve = resolver.resolve.bind(resolver);
+    const resolveSpy = vi
+      .spyOn(resolver, 'resolve')
+      .mockImplementation(async (organizationId, ref) =>
+        ref.type === 'session' && ref.sessionId === session.sessionId
+          ? stale
+          : resolve(organizationId, ref),
+      );
+    try {
+      const drained = drainOutbox(t);
+      await followUp.reached;
+      const checkin = tracked(
+        Promise.resolve(
+          post(t, '/v1/session-checkins', desk, {
+            personId: child,
+            activity: sessionRef(session),
+          }),
+        ),
+      );
+      // PostgreSQL: the check-in's transaction opens and waits for the activity lock the
+      // follow-up holds. PGlite: it waits for the follow-up's transaction to commit.
+      if (t.database.concurrent) await untilWaitingForActivityLock(checkin, session.sessionId);
+      expect(checkin.done).toBe(false);
+      followUp.open();
+      await drained;
+      const res = await checkin.promise;
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(res.body.status).toBe('held');
+      expect(res.body.issues).toContainEqual(
+        expect.objectContaining({ code: 'activity_canceled', severity: 'blocking' }),
+      );
+    } finally {
+      withdrawSpy.mockRestore();
+      resolveSpy.mockRestore();
+    }
+    await drainOutbox(t);
+    const rows = await t.db
+      .selectFrom('session_checkins')
+      .select('status')
+      .where('activity_id', '=', session.sessionId)
+      .execute();
+    expect(rows).toEqual([{ status: 'held' }]);
   });
 });

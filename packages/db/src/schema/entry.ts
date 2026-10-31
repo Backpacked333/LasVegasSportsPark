@@ -7,8 +7,13 @@ import type { GeneratedJson, GeneratedTimestamp, Json, NullableTimestamp, Timest
  * and occupancy snapshots are append-only (the database refuses UPDATE and DELETE).
  */
 
-/** A text[] column written as a plain array (PostgreSQL arrays round-trip through both drivers). */
+/**
+ * A text[] column written as a plain array (PostgreSQL arrays round-trip through both drivers)
+ * that has a database default, so an insert may omit it.
+ */
 export type TextArray<T extends string = string> = ColumnType<T[], T[] | undefined, T[]>;
+/** A `text[] not null` column without a default: every insert names it (R2-SCHEMA-08). */
+export type RequiredTextArray<T extends string = string> = ColumnType<T[], T[], T[]>;
 export type UuidArray = ColumnType<string[], string[] | undefined, string[]>;
 
 export type PassHolderKind = 'person' | 'household';
@@ -277,7 +282,8 @@ export interface AccessPoliciesTable {
   organization_id: string;
   device_id: string;
   facility_id: string;
-  allowed_holder_kinds: TextArray<'person' | 'household'>;
+  /** `text[] not null`, no default (0805): required on insert. */
+  allowed_holder_kinds: RequiredTextArray<'person' | 'household'>;
   allowed_pass_statuses: TextArray<'active'>;
   schedule: Json<unknown[]>;
   status: Generated<AccessPolicyStatus>;
@@ -318,6 +324,23 @@ export interface DeviceCommandsTable {
   updated_at: GeneratedTimestamp;
 }
 
+/**
+ * A cancellation entry has applied (0807, ENT-03, R2-RACES-06): append-only, one row per activity.
+ * Recording it and admitting a check-in serialize on the activity's advisory lock, and the
+ * database refuses to admit a check-in to an activity with a recorded cancellation.
+ */
+export interface ActivityCancellationsTable {
+  id: string;
+  organization_id: string;
+  activity_type: ActivityTypeValue;
+  activity_id: string;
+  offering_session_id: string | null;
+  scheduling_event_id: string | null;
+  recorded_at: Timestamp;
+  source: string;
+  created_at: GeneratedTimestamp;
+}
+
 export interface EntryTables {
   passes: PassesTable;
   offline_sync_batches: OfflineSyncBatchesTable;
@@ -330,4 +353,5 @@ export interface EntryTables {
   access_devices: AccessDevicesTable;
   access_policies: AccessPoliciesTable;
   device_commands: DeviceCommandsTable;
+  activity_cancellations: ActivityCancellationsTable;
 }

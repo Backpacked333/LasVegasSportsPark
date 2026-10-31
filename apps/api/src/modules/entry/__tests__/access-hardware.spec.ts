@@ -25,6 +25,7 @@ import {
 
 const UNIQUE = '23505';
 const CHECK = '23514';
+const NOT_NULL = '23502';
 const FOREIGN_KEY = '23503';
 const ACTOR = { kind: 'system', actorLabel: 'hardware-test' };
 const ALWAYS = [
@@ -910,6 +911,14 @@ describe('access hardware schema invariants (migrations 0805, 0806)', () => {
       t.db.updateTable('access_policies').set({ status: 'active' }).where('id', '=', id).execute(),
       CHECK,
     );
+  });
+
+  it('R2-SCHEMA-08: a policy names the holder kinds it admits — required by the Insertable type and by the database', async () => {
+    const { allowed_holder_kinds: omitted, ...row } = policyRow();
+    expect(omitted).toEqual(['person']);
+    // @ts-expect-error allowed_holder_kinds is `text[] not null` without a default (0805)
+    const insert = t.db.insertInto('access_policies').values(row);
+    await expectPgError(insert.execute(), NOT_NULL);
   });
 
   it('devices: a positive heartbeat timeout, one reference per organization, retirement is final', async () => {

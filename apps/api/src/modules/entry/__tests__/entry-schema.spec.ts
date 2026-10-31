@@ -781,6 +781,119 @@ describe('entry schema invariants (migration 0800)', () => {
     );
   });
 
+  it('R2-RACES-06 / ENT-03 / SPK-AT-009 (migration 0807): the database never admits a check-in to an activity whose cancellation entry recorded', async () => {
+    const canceledSession = await createOfferingSessionFixture(t, {
+      offeringId,
+      scheduledStart: new Date(at(TODAY, '12:00')),
+      scheduledEnd: new Date(at(TODAY, '13:00')),
+    });
+    const cancellation = (overrides: Record<string, unknown> = {}) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      activity_type: 'session' as const,
+      activity_id: canceledSession,
+      offering_session_id: canceledSession,
+      scheduling_event_id: null,
+      recorded_at: t.clock.now(),
+      source: 'schema-test',
+      ...overrides,
+    });
+    // A cancellation names its own organization's offering session or event, consistently.
+    const unknownSession = newId();
+    await expectPgError(
+      t.db
+        .insertInto('activity_cancellations')
+        .values(cancellation({ activity_id: unknownSession, offering_session_id: unknownSession }))
+        .execute(),
+      FOREIGN_KEY,
+    );
+    await expectPgError(
+      t.db
+        .insertInto('activity_cancellations')
+        .values(cancellation({ activity_id: newId() }))
+        .execute(),
+      CHECK,
+    );
+    const recordedId = newId();
+    await t.db
+      .insertInto('activity_cancellations')
+      .values(cancellation({ id: recordedId }))
+      .execute();
+    await expectPgError(
+      t.db.insertInto('activity_cancellations').values(cancellation()).execute(),
+      UNIQUE,
+    );
+    // Append-only: a recorded cancellation is never changed or removed.
+    await expectPgError(
+      t.db
+        .updateTable('activity_cancellations')
+        .set({ source: 'changed' })
+        .where('id', '=', recordedId)
+        .execute(),
+      RESTRICT,
+    );
+    await expectPgError(
+      t.db.deleteFrom('activity_cancellations').where('id', '=', recordedId).execute(),
+      RESTRICT,
+    );
+    const participant = await createPersonFixture(t, { kind: 'child' });
+    const enrollmentId = await createEnrollmentFixture(t, {
+      offeringId,
+      participantPersonId: participant,
+    });
+    const onCanceled = (overrides: Record<string, unknown>) =>
+      checkinRow({
+        person_id: participant,
+        activity_id: canceledSession,
+        offering_session_id: canceledSession,
+        activity_start: new Date(at(TODAY, '12:00')),
+        activity_end: new Date(at(TODAY, '13:00')),
+        basis_kind: 'enrollment',
+        enrollment_id: enrollmentId,
+        ...overrides,
+      });
+    // Admitted directly: refused.
+    await expectPgError(
+      t.db
+        .insertInto('session_checkins')
+        .values(onCanceled({ status: 'admitted', admitted_at: t.clock.now() }))
+        .execute(),
+      CHECK,
+    );
+    // Held is recorded; admitting it afterwards is refused; withdrawing it is not.
+    const heldId = newId();
+    await t.db
+      .insertInto('session_checkins')
+      .values(onCanceled({ id: heldId }))
+      .execute();
+    await expectPgError(
+      t.db
+        .updateTable('session_checkins')
+        .set({ status: 'admitted', admitted_at: t.clock.now() })
+        .where('id', '=', heldId)
+        .execute(),
+      CHECK,
+    );
+    await t.db
+      .updateTable('session_checkins')
+      .set({ status: 'withdrawn', withdrawn_at: t.clock.now(), withdrawn_reason: 'Canceled' })
+      .where('id', '=', heldId)
+      .execute();
+    // Another activity of the same offering is unaffected.
+    await t.db
+      .insertInto('session_checkins')
+      .values(
+        checkinRow({
+          person_id: participant,
+          basis_kind: 'enrollment',
+          enrollment_id: enrollmentId,
+          status: 'admitted',
+          admitted_at: t.clock.now(),
+        }),
+      )
+      .execute();
+  });
+
   it('SPK-ENTRY-002: a revoked pass never becomes active again and its reference never changes', async () => {
     const { passId } = await createPassFixture(t, { personId: adult });
     await expectPgError(
