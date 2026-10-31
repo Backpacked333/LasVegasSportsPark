@@ -5,6 +5,8 @@ import type { TestApp } from '../../../testing';
 import { createPersonFixture, createRelationshipFixture } from '../../identity';
 import { at } from '../../scheduling';
 import {
+  drainOutbox,
+  enroll,
   entryTestApp,
   exceptionsOf,
   family,
@@ -24,7 +26,7 @@ import {
  * race, and the outcome must be the same: conflicts preserved for review, departures and releases
  * recorded once, reused batch ids refused. Several rounds make a lost race visible.
  */
-describe('concurrent offline synchronization (§4.15, SPK-AT-018; true concurrency under PostgreSQL)', () => {
+describe('concurrent offline synchronization and admission (§4.15, SPK-AT-018, SPK-AT-009; true concurrency under PostgreSQL)', () => {
   const ROUNDS = 6;
   let t: TestApp;
   let desk: Actor;
@@ -287,6 +289,41 @@ describe('concurrent offline synchronization (§4.15, SPK-AT-018; true concurren
         .where('person_id', 'in', [c1, c2])
         .execute();
       expect(rows, `round ${round}`).toHaveLength(1);
+    }
+  });
+
+  it('R2-RACES-06 / SPK-AT-009: a check-in racing the cancellation of its session (and its follow-up) is never left admitted', async () => {
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const session = await program(t, manager, { from: '13:00', to: '14:00' });
+      const child = await createPersonFixture(t, { kind: 'child' });
+      await enroll(t, session, child, fam.guardian.personId);
+      const [checkin] = await Promise.all([
+        post(t, '/v1/session-checkins', desk, { personId: child, activity: sessionRef(session) }),
+        (async () => {
+          const canceled = await post(t, `/v1/sessions/${session.sessionId}/cancel`, manager, {
+            reason: 'Storm',
+          });
+          expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+          await drainOutbox(t);
+        })(),
+      ]);
+      expect(checkin.status, JSON.stringify(checkin.body)).toBe(201);
+      await drainOutbox(t);
+      const rows = await t.db
+        .selectFrom('session_checkins')
+        .select(['status', 'issues'])
+        .where('activity_id', '=', session.sessionId)
+        .execute();
+      expect(rows, `round ${round}`).toHaveLength(1);
+      const [row] = rows;
+      // Withdrawn by the follow-up (the check-in committed first), or held on the recorded
+      // cancellation (it came after); never admitted to the canceled session.
+      expect(['withdrawn', 'held'], `round ${round}`).toContain(row!.status);
+      if (row!.status === 'held') {
+        expect((row!.issues as Array<{ code: string }>).map((i) => i.code)).toContain(
+          'activity_canceled',
+        );
+      }
     }
   });
 });

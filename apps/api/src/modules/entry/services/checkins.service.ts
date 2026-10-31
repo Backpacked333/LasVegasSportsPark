@@ -38,6 +38,7 @@ import { SessionCheckinMachine } from '../entry.state-machines';
 import { ActivityResolver, refOf, type ResolvedActivity } from './activity-resolver';
 import { ArrivalChecks, hasBlocking, type ParticipationBasis } from './arrival-checks';
 import { StaffScope, type ActivityAuthority } from './staff-scope';
+import { lockActivity } from './subject-locks';
 import { VisitsService } from './visits.service';
 
 /**
@@ -98,6 +99,7 @@ export class CheckinsService {
       activity,
     );
     return this.uow.run(async ({ trx }) => {
+      const current = await this.lockForAdmission(trx, organizationId, activity);
       const person = await this.people.findPerson(organizationId, body.personId, trx);
       if (!person || person.status !== 'active') throw errors.notFound('person', body.personId);
       const visit = body.visitId
@@ -131,7 +133,7 @@ export class CheckinsService {
         trx,
         organizationId,
         body.personId,
-        activity,
+        current,
         policy,
         visit !== undefined,
       );
@@ -198,6 +200,7 @@ export class CheckinsService {
       activity,
     );
     return this.uow.run(async ({ trx }) => {
+      const checked = await this.lockForAdmission(trx, organizationId, activity);
       const current = await this.load(trx, organizationId, id);
       if (!current) throw errors.notFound('session_checkin', id);
       assertExpectedRevision(body.expectedRevision, current.revision);
@@ -211,7 +214,7 @@ export class CheckinsService {
         trx,
         organizationId,
         current.person_id,
-        activity,
+        checked,
         policyForFacility(this.policy, facility.settings),
         visit !== undefined && visit.status === 'on_site',
       );
@@ -310,6 +313,11 @@ export class CheckinsService {
    * `activity_canceled`, audited as the system and announced (entry.session_checkin_changed).
    * Visits stay open: the people are still on site. Replay-safe: an already withdrawn check-in is
    * not live, so a replayed cancellation changes nothing. Runs in the handler's transaction.
+   *
+   * R2-RACES-06: the cancellation is first recorded (activity_cancellations, once per activity)
+   * under the activity's exclusive lock, so a check-in still in flight is either visible to the
+   * select below (it committed first and is withdrawn here) or sees the record once it gets the
+   * lock (it is held with `activity_canceled`; the database refuses to admit it).
    */
   async withdrawForCanceledActivity(
     trx: Trx,
@@ -319,6 +327,23 @@ export class CheckinsService {
     source: string,
     correlationId: string | null,
   ): Promise<number> {
+    await lockActivity(trx, organizationId, activityType, activityId, 'exclusive');
+    await trx
+      .insertInto('activity_cancellations')
+      .values({
+        id: newId(),
+        organization_id: organizationId,
+        activity_type: activityType,
+        activity_id: activityId,
+        offering_session_id: activityType === 'session' ? activityId : null,
+        scheduling_event_id: activityType === 'event' ? activityId : null,
+        recorded_at: this.clock.now(),
+        source,
+      })
+      .onConflict((oc) =>
+        oc.columns(['organization_id', 'activity_type', 'activity_id']).doNothing(),
+      )
+      .execute();
     const live = await trx
       .selectFrom('session_checkins')
       .selectAll()
@@ -439,6 +464,31 @@ export class CheckinsService {
       },
       correlationId,
     });
+  }
+
+  /**
+   * R2-RACES-06 (ENT-03, SPK-AT-009): the first step of a transaction that may admit a check-in.
+   * Takes the activity's admission lock (shared) and then reads whether entry has recorded the
+   * activity's cancellation. `activity` was resolved from its owning module before the
+   * transaction, so a cancellation whose follow-up ran in between is only known here; it then
+   * yields the blocking `activity_canceled` issue (the check-in is held, never admitted). A
+   * follow-up that runs later waits for this transaction and withdraws what it wrote.
+   */
+  private async lockForAdmission(
+    trx: Trx,
+    organizationId: string,
+    activity: ResolvedActivity,
+  ): Promise<ResolvedActivity> {
+    await lockActivity(trx, organizationId, activity.detail.type, activity.detail.id, 'shared');
+    if (activity.canceled) return activity;
+    const recorded = await trx
+      .selectFrom('activity_cancellations')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('activity_type', '=', activity.detail.type)
+      .where('activity_id', '=', activity.detail.id)
+      .executeTakeFirst();
+    return recorded ? { ...activity, canceled: true } : activity;
   }
 
   private async live(
