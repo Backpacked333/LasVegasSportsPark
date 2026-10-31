@@ -798,7 +798,11 @@ export class PosSalesService {
       id,
       organizationId,
       facilityId: sale.facility_id,
-      subjectPersonIds: sale.customer_person_id ? [sale.customer_person_id] : [],
+      // SPK-IAM-007 (R2-LIFECYCLES-02): the receipt of a merged customer record is the survivor's,
+      // as GET /me/pos-receipts lists it.
+      subjectPersonIds: sale.customer_person_id
+        ? [await this.scope.subjectOf(organizationId, sale.customer_person_id)]
+        : [],
       protected: true,
     });
     if (!(PAID_SALE_STATES as readonly string[]).includes(sale.status)) {

@@ -500,7 +500,9 @@ export class ObligationsService {
       type: 'contribution_request',
       id,
       organizationId,
-      subjectPersonIds: [row.requested_person_id],
+      // SPK-IAM-007 (R2-LIFECYCLES-02): a contribution asked of a merged record is the survivor's,
+      // as GET /me/contribution-requests lists it.
+      subjectPersonIds: [await this.scope.subjectOf(organizationId, row.requested_person_id)],
       teamEntryId: row.team_entry_id,
       protected: true,
     });
@@ -527,7 +529,10 @@ export class ObligationsService {
         type: 'contribution_request',
         id,
         organizationId,
-        subjectPersonIds: [request.requested_person_id],
+        // SPK-IAM-007 (R2-LIFECYCLES-02): paid under the survivor of a merged requested record.
+        subjectPersonIds: [
+          await this.scope.subjectOf(organizationId, request.requested_person_id, trx),
+        ],
         protected: true,
       });
       if (request.status !== 'requested') {

@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0615` and `0680`)
+`0600`–`0616` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -345,12 +345,21 @@ Verified by `__tests__/money-reads.spec.ts`, `standing-notices.spec.ts`, `point-
   relationships and grants there; someone without authority over the survivor still gets
   `NOT_FOUND`); a quote and its checkout accept a credit owned by any record merged into the payer.
   The handler `finance.follow_person_merge` raises one `finance.merged_person_money` exception
-  (finance operator) per merge whose merged record still holds an active or pending credit with a
-  balance or answers for an open obligation, naming them so anything given or owed twice is
-  reviewed; a merge of a record without money raises nothing, and a replay raises nothing new.
+  (finance operator) per merge that brings the survivor an active or pending credit with a
+  balance or an open obligation owed or answered for, each row naming the record that holds it,
+  so anything given or owed twice is reviewed; a merge that brings no money raises nothing, and a
+  replay raises nothing new. Merges chain (A into B, later B into C): the B-into-C exception names
+  A's money too, even when B holds none and A's own exception (raised for B) was resolved. The
+  identity directory gives the survivor's whole merge tree, not the branch that just joined it, so
+  the handler reads every record merged into the survivor and leaves out money an earlier
+  exception of the same survivor already named (**limit:** money issued to a merged record after
+  its own merge, which should not happen, would be named again at the survivor's next merge).
   A merged payer's payment, refund, checkout, order and installment plan are read under the
-  survivor too, as the `/me` lists show them; commands on a merged payer's checkout or payment
-  (retry, abort, refund request) still name the stored payer and are done by staff.
+  survivor too, as the `/me` lists show them, and so are a contribution request asked of a merged
+  record (read and paid) and a merged customer's point-of-sale receipt; the finance operator's
+  `GET /orders?payerPersonId=` and `GET /payments?payerPersonId=` include the records merged into
+  that payer, as `/credits` and `/obligations` do. Commands on a merged payer's checkout or
+  payment (retry, abort, refund request) still name the stored payer and are done by staff.
   `__tests__/person-merge.spec.ts`.
 - `GET /obligations/{id}` carries `liveAttempt` (`id`, `status` `created`/`action_required`/
   `processing`/`unknown`, amount, currency, `unknownSince`, `createdAt`) or `null`: staff see any
@@ -441,7 +450,10 @@ sale whatever the switch, and hides only adding a line while it is off (`SalePag
   concurrent returns cannot both pass, also under PostgreSQL; since `0610` the units one return
   names for the same line are summed first, MONEY-10; since `0615` every `saleLineId` is the
   canonical lower-case uuid text, refused otherwise with `pos_returns_line_id_canonical`, and lines
-  are grouped and matched with earlier returns by uuid value, R2-SCHEMA-04); a cash return names an open drawer
+  are grouped and matched with earlier returns by uuid value, R2-SCHEMA-04; since `0616` every line
+  is an object whose `quantity` is a whole JSON number from 1 and whose `amountMinor` is a whole
+  JSON number from 0, refused otherwise with `pos_returns_line_shape`, so a missing or null value
+  can no longer make the quantity and amount checks pass, R2-SCHEMA-04); a cash return names an open drawer
   session; machine guards refuse every transition the `PosSale`, `PosTender`, `PosRegisterSession`
   machines (`finance.state-machines.ts`) do not allow.
 - Taxes and fees come only from approved catalog `tax_fee` policy versions (CAT-02, DEC-057):
