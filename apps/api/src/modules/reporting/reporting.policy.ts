@@ -1,4 +1,4 @@
-import type { ReportSettingUse } from '@sportspark/contracts';
+import { SEASON_READINESS_MAX_FIXTURES, type ReportSettingUse } from '@sportspark/contracts';
 import {
   REPORTING_SETTING_NAMES,
   type ReportingSettingName,
@@ -8,7 +8,7 @@ import {
 /**
  * The values reports and exports run with (REP-03, rule K-00 (i)). Policy values come from the
  * module settings (`reporting.settings.ts`) and have no default: `null` means not configured, and
- * each consumer applies the conservative behaviour named below. Only the two technical bounds are
+ * each consumer applies the conservative behaviour named below. Only the technical bounds are
  * engineering constants.
  *   - export lifetime (§4.14; DEC-060, Operator/privacy owner; POL-021, POL-047 — "must not be
  *     invented by engineering"): null refuses every export (`EXPORT_LIFETIME_UNCONFIGURED`);
@@ -34,10 +34,20 @@ export interface ReportingPolicy {
   maxPeriodDays: number;
   /** Technical bound: start-time band width in minutes for demand and schedule dimensions. */
   timeBandMinutes: number;
+  /**
+   * Technical bound (R3-PERFORMANCE-03): most fixtures one match-readiness request evaluates. It is
+   * the competition module's own bound on readiness work (SEASON_READINESS_MAX_FIXTURES, CMP-01);
+   * more answers `VALIDATION_FAILED` `TOO_MANY_FIXTURES` (narrow `from` and `to`).
+   */
+  maxReadinessFixtures: number;
 }
 
 /** Technical bounds (not policy): the work of one request and the width of a time band. */
-export const REPORTING_LIMITS = { maxPeriodDays: 366, timeBandMinutes: 60 } as const;
+export const REPORTING_LIMITS = {
+  maxPeriodDays: 366,
+  timeBandMinutes: 60,
+  maxReadinessFixtures: SEASON_READINESS_MAX_FIXTURES,
+} as const;
 
 export function reportingPolicyFrom(settings: ReportingSettingsValue): ReportingPolicy {
   return {

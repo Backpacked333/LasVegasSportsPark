@@ -229,6 +229,25 @@ export interface ReportingResourceStatusChangesView {
   changed_at: V<Date>;
 }
 
+/**
+ * The scheduling module's `scheduling.event_changed` facts (migration 1304, R3-REPORTING-01): one
+ * row per customer-visible change of an event, stamped with the injected clock. A first
+ * publication is `created` or `published`; a change after it is `moved`, `resized`,
+ * `resource_changed`, `updated` or `canceled`. Draft events emit no fact (SPK-SCHED-005). The view
+ * keeps only these facts, so `change` is untyped text.
+ */
+export interface ReportingEventChangesView {
+  change_id: V<string>;
+  organization_id: V<string>;
+  facility_id: V<string>;
+  event_id: V<string>;
+  change: V<string>;
+  changed_at: V<Date>;
+  revision: V<number | null>;
+  publication_id: V<string | null>;
+  closure_id: V<string | null>;
+}
+
 export interface ReportingReservedUnitsView {
   reservation_unit_id: V<string>;
   organization_id: V<string>;
@@ -418,6 +437,8 @@ export interface ReportingTeamEntriesView {
   season_starts_on: V<string>;
   season_ends_on: V<string>;
   roster_min: V<number | null>;
+  /** Migration 1306 (R3-REPORTING-08): when an entry was withdrawn; an approval keeps its instant. */
+  withdrawn_at: V<Date | null>;
 }
 
 export interface ReportingRosterMembershipsView {
@@ -604,6 +625,22 @@ export interface ReportingSettlementsView {
   performed_at: V<Date>;
 }
 
+/**
+ * Point-of-sale money (migration 1305, R3-REPORTING-04; SPK-PAY-011, MET-050): settled tenders by
+ * when they settled, card captures reported after their tender failed by when their journal was
+ * posted, and returns by when they were paid. No receipt records this money.
+ */
+export interface ReportingPosMoneyView {
+  movement_id: V<string>;
+  organization_id: V<string>;
+  facility_id: V<string>;
+  movement: V<'tender' | 'late_capture' | 'return'>;
+  tender_kind: V<string>;
+  currency: V<string>;
+  amount_minor: V<number>;
+  occurred_at: V<Date>;
+}
+
 export interface ReportingOrderLinesView {
   order_line_id: V<string>;
   organization_id: V<string>;
@@ -718,6 +755,7 @@ export interface ReportingTables {
   reporting_operating_hours_v: ReportingOperatingHoursView;
   reporting_closures_v: ReportingClosuresView;
   reporting_resource_status_changes_v: ReportingResourceStatusChangesView;
+  reporting_event_changes_v: ReportingEventChangesView;
   reporting_reserved_units_v: ReportingReservedUnitsView;
   reporting_offerings_v: ReportingOfferingsView;
   reporting_sessions_v: ReportingSessionsView;
@@ -745,6 +783,7 @@ export interface ReportingTables {
   reporting_refund_attempts_v: ReportingRefundAttemptsView;
   reporting_receipts_v: ReportingReceiptsView;
   reporting_settlements_v: ReportingSettlementsView;
+  reporting_pos_money_v: ReportingPosMoneyView;
   reporting_order_lines_v: ReportingOrderLinesView;
   reporting_restrictions_v: ReportingRestrictionsView;
   reporting_maintenance_tasks_v: ReportingMaintenanceTasksView;

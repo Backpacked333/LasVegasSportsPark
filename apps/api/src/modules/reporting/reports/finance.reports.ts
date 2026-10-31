@@ -5,6 +5,9 @@ import { ReportingActions } from '../reporting.actions';
 import { REPORTING_SETTING_NAMES } from '../reporting.settings';
 import { DAY_MS, iso, metricValue } from '../reporting.shared';
 
+/** The payment attempt purpose of a point-of-sale card tender (finance migration 0607). */
+const POS_SALE = 'pos_sale';
+
 const LIVE_NOTE =
   'Evaluated live from the finance subledger at the request instant; a past as-of instant cannot be reconstructed. The stored report run is the reproducible record.';
 
@@ -39,6 +42,17 @@ function sumByCurrency<T>(
     out.set(c, entry);
   }
   return [...out.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+}
+
+/** The scope a reconciliation balances: its provider, or the facility whose cash drawer it counts. */
+function settlementScope(s: {
+  kind: string;
+  provider: string | null;
+  facility_id: string | null;
+}): string {
+  return s.kind === 'cash_drawer'
+    ? `cash_drawer:${s.facility_id ?? 'unknown'}`
+    : `${s.kind}:${s.provider ?? 'unknown'}`;
 }
 
 /**
@@ -89,13 +103,20 @@ export class FinanceReports {
         .where('status', 'in', ['scheduled', 'failed'])
         .where('due_at', '<', ctx.asOf)
         .execute();
-      const credits = await ctx.db
+      // R3-REPORTING-03 (MET-043, SPK-PAY-009): finance never writes an `expired` status; an
+      // active credit lapses at its `expires_at` (finance shows it as expired and refuses to redeem
+      // it, CREDIT_EXPIRED). A lapsed credit is no outstanding liability: it is reported separately.
+      const activeCredits = await ctx.db
         .selectFrom('reporting_credits_v')
-        .select(['remaining_minor', 'currency'])
+        .select(['remaining_minor', 'currency', 'expires_at'])
         .where('organization_id', '=', ctx.organizationId)
         .where('status', '=', 'active')
         .where('remaining_minor', '>', 0)
         .execute();
+      const lapsed = (c: (typeof activeCredits)[number]) =>
+        c.expires_at !== null && new Date(c.expires_at).getTime() <= ctx.asOf.getTime();
+      const credits = activeCredits.filter((c) => !lapsed(c));
+      const expiredCredits = activeCredits.filter(lapsed);
 
       const values: MetricValue[] = [];
       for (const [currency, c] of [...remainingByCurrency.entries()].sort(([a], [b]) =>
@@ -133,7 +154,29 @@ export class FinanceReports {
         values.push(
           metricValue('MET-043', 'Credits outstanding', 'minor_units', c.amount, { currency }),
         );
+        values.push(
+          metricValue('MET-043', 'Credits outstanding (count)', 'count', c.count, { currency }),
+        );
       }
+      if (credits.length === 0)
+        values.push(metricValue('MET-043', 'Credits outstanding (count)', 'count', 0));
+      for (const [currency, c] of sumByCurrency(
+        expiredCredits,
+        (i) => i.currency,
+        (i) => i.remaining_minor,
+      )) {
+        values.push(
+          metricValue('MET-043', 'Expired credits (unredeemed balance)', 'minor_units', c.amount, {
+            currency,
+            dimensions: { state: 'expired' },
+          }),
+        );
+      }
+      values.push(
+        metricValue('MET-043', 'Expired credits (count)', 'count', expiredCredits.length, {
+          dimensions: { state: 'expired' },
+        }),
+      );
       const rows: ReportRow[] = [...groups.entries()]
         .sort(([a], [b]) => (a < b ? -1 : 1))
         .map(([key, g]) => {
@@ -165,6 +208,7 @@ export class FinanceReports {
             : `Aging bands at ${ctx.policy.agingBandDays.join(', ')} days past due, the last open-ended (REPORTING_AGING_BANDS_DAYS, DEC-007).`,
           'Totals are per currency and never converted or combined (SPK-PAY-001).',
           'Contribution requests are not receipts and do not reduce a balance (SPK-PAY-004).',
+          'Credits outstanding are active credits with a balance that have not expired by the as-of instant; an active credit past its expiry can no longer be redeemed and is reported separately as expired (MET-043, SPK-PAY-009).',
         ],
       };
     },
@@ -185,7 +229,7 @@ export class FinanceReports {
       const org = ctx.organizationId;
       const payments = await ctx.db
         .selectFrom('reporting_payment_attempts_v')
-        .select(['status', 'currency', 'provider', 'amount_minor'])
+        .select(['status', 'currency', 'provider', 'purpose', 'amount_minor'])
         .where('organization_id', '=', org)
         .where('submitted_at', '>=', start)
         .where('submitted_at', '<', end)
@@ -205,11 +249,22 @@ export class FinanceReports {
         .where('status', '=', 'unknown')
         .execute();
       const refunds = await ctx.db
-        .selectFrom('reporting_refund_attempts_v')
-        .select(['status', 'currency', 'purpose', 'amount_minor'])
-        .where('organization_id', '=', org)
-        .where('submitted_at', '>=', start)
-        .where('submitted_at', '<', end)
+        .selectFrom('reporting_refund_attempts_v as r')
+        .innerJoin('reporting_payment_attempts_v as p', (j) =>
+          j
+            .onRef('p.organization_id', '=', 'r.organization_id')
+            .onRef('p.payment_attempt_id', '=', 'r.payment_attempt_id'),
+        )
+        .select([
+          'r.status',
+          'r.currency',
+          'r.purpose',
+          'r.amount_minor',
+          'p.purpose as payment_purpose',
+        ])
+        .where('r.organization_id', '=', org)
+        .where('r.submitted_at', '>=', start)
+        .where('r.submitted_at', '<', end)
         .execute();
       const reserved = await ctx.db
         .selectFrom('reporting_refund_attempts_v')
@@ -220,10 +275,25 @@ export class FinanceReports {
         .execute();
       const settlements = await ctx.db
         .selectFrom('reporting_settlements_v')
-        .select(['kind', 'provider', 'currency', 'difference_minor', 'status'])
+        .select([
+          'settlement_id',
+          'kind',
+          'provider',
+          'facility_id',
+          'period_start',
+          'period_end',
+          'currency',
+          'expected_minor',
+          'reported_minor',
+          'difference_minor',
+          'status',
+          'performed_at',
+        ])
         .where('organization_id', '=', org)
         .where('performed_at', '>=', start)
         .where('performed_at', '<', end)
+        .orderBy('performed_at')
+        .orderBy('settlement_id')
         .execute();
       const receipts = await ctx.db
         .selectFrom('reporting_receipts_v')
@@ -231,6 +301,15 @@ export class FinanceReports {
         .where('organization_id', '=', org)
         .where('received_at', '>=', start)
         .where('received_at', '<', end)
+        .execute();
+      // R3-REPORTING-04 (SPK-PAY-011, MET-050): point-of-sale money creates no receipt (migration
+      // 1305): settled tenders, late card captures and returns, each in its own series.
+      const pos = await ctx.db
+        .selectFrom('reporting_pos_money_v')
+        .select(['movement', 'tender_kind', 'currency', 'amount_minor'])
+        .where('organization_id', '=', org)
+        .where('occurred_at', '>=', start)
+        .where('occurred_at', '<', end)
         .execute();
       const sales = await ctx.db
         .selectFrom('reporting_order_lines_v')
@@ -286,12 +365,23 @@ export class FinanceReports {
         (r) => [r.status, r.currency, r.purpose],
         (r) => r.amount_minor,
       );
-      grouped(
-        'settlements',
-        settlements,
-        (s) => [s.status, s.currency, `${s.kind}${s.provider ? `:${s.provider}` : ''}`],
-        (s) => s.difference_minor,
-      );
+      // R3-REPORTING-02 (§5.5, MET-049): one row per reconciliation with its own signed
+      // difference; differences of different reconciliations are never summed into one figure.
+      for (const s of settlements) {
+        rows.push({
+          section: 'settlements',
+          state: s.status,
+          currency: s.currency,
+          detail: settlementScope(s),
+          count: 1,
+          amountMinor: Number(s.difference_minor),
+          recordId: s.settlement_id,
+          periodStart: iso(s.period_start),
+          periodEnd: iso(s.period_end),
+          expectedMinor: Number(s.expected_minor),
+          reportedMinor: Number(s.reported_minor),
+        });
+      }
 
       const values: MetricValue[] = [];
       for (const [currency, c] of sumByCurrency(
@@ -320,6 +410,21 @@ export class FinanceReports {
             currency,
             dimensions: { state: 'succeeded' },
           }),
+        );
+      }
+      for (const [currency, c] of sumByCurrency(
+        payments.filter((p) => p.status === 'succeeded' && p.purpose === POS_SALE),
+        (p) => p.currency,
+        (p) => p.amount_minor,
+      )) {
+        values.push(
+          metricValue(
+            'MET-045',
+            'Succeeded point-of-sale payment attempts (included above)',
+            'minor_units',
+            c.amount,
+            { currency, dimensions: { state: 'succeeded', purpose: POS_SALE } },
+          ),
         );
       }
       values.push(
@@ -372,6 +477,21 @@ export class FinanceReports {
         metricValue('MET-047', 'Refund attempts submitted (count)', 'count', refunds.length),
       );
       for (const [currency, c] of sumByCurrency(
+        refunds.filter((r) => r.payment_purpose === POS_SALE),
+        (r) => r.currency,
+        (r) => r.amount_minor,
+      )) {
+        values.push(
+          metricValue(
+            'MET-047',
+            'Point-of-sale card return refund attempts (included above)',
+            'minor_units',
+            c.amount,
+            { currency, dimensions: { paymentPurpose: POS_SALE } },
+          ),
+        );
+      }
+      for (const [currency, c] of sumByCurrency(
         reserved,
         (r) => r.currency,
         (r) => r.amount_minor,
@@ -390,13 +510,47 @@ export class FinanceReports {
           settlements.filter((s) => s.status === 'discrepancy').length,
         ),
       );
-      for (const [currency, c] of sumByCurrency(
-        settlements,
-        (s) => s.currency,
-        (s) => s.difference_minor,
-      )) {
+      // Unnetted totals per currency, kind and scope (a provider, or a facility's cash drawer): a
+      // shortage and an overage never cancel out (§5.5).
+      const scopes = new Map<
+        string,
+        { currency: string; kind: string; scope: string; short: number; over: number; n: number }
+      >();
+      for (const s of settlements) {
+        const k = JSON.stringify([s.currency, s.kind, settlementScope(s)]);
+        const g = scopes.get(k) ?? {
+          currency: s.currency,
+          kind: s.kind,
+          scope: settlementScope(s),
+          short: 0,
+          over: 0,
+          n: 0,
+        };
+        const difference = Number(s.difference_minor);
+        if (difference < 0) g.short += -difference;
+        if (difference > 0) g.over += difference;
+        if (s.status === 'discrepancy') g.n += 1;
+        scopes.set(k, g);
+      }
+      for (const [, g] of [...scopes.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+        const options = {
+          currency: g.currency,
+          dimensions: { kind: g.kind, scope: g.scope },
+        };
         values.push(
-          metricValue('MET-049', 'Settlement variance', 'minor_units', c.amount, { currency }),
+          metricValue('MET-049', 'Settlement shortages', 'minor_units', g.short, options),
+          metricValue('MET-049', 'Settlement overages', 'minor_units', g.over, options),
+          metricValue(
+            'MET-049',
+            'Settlement absolute discrepancy',
+            'minor_units',
+            g.short + g.over,
+            options,
+          ),
+          metricValue('MET-049', 'Reconciliations with a discrepancy', 'count', g.n, {
+            dimensions: options.dimensions,
+            currency: g.currency,
+          }),
         );
       }
       for (const [currency, c] of sumByCurrency(
@@ -410,6 +564,41 @@ export class FinanceReports {
             dimensions: { series: 'receipts' },
           }),
         );
+      }
+      const posSeries = [
+        {
+          label: 'Point-of-sale card captures',
+          series: 'pos_card',
+          items: pos.filter(
+            (m) =>
+              m.movement === 'late_capture' ||
+              (m.movement === 'tender' && m.tender_kind === 'card'),
+          ),
+        },
+        {
+          label: 'Point-of-sale drawer tenders (cash and external)',
+          series: 'pos_drawer',
+          items: pos.filter((m) => m.movement === 'tender' && m.tender_kind !== 'card'),
+        },
+        {
+          label: 'Point-of-sale returns paid',
+          series: 'pos_returns',
+          items: pos.filter((m) => m.movement === 'return'),
+        },
+      ];
+      for (const { label, series, items } of posSeries) {
+        for (const [currency, c] of sumByCurrency(
+          items,
+          (m) => m.currency,
+          (m) => Number(m.amount_minor),
+        )) {
+          values.push(
+            metricValue('MET-050', label, 'minor_units', c.amount, {
+              currency,
+              dimensions: { series },
+            }),
+          );
+        }
       }
       for (const [currency, c] of sumByCurrency(
         sales,
@@ -436,13 +625,19 @@ export class FinanceReports {
           column('detail', 'Provider, purpose or kind'),
           column('count', 'Count', 'count'),
           column('amountMinor', 'Amount (settlements: difference)', 'minor_units'),
+          column('recordId', 'Reconciliation', 'id'),
+          column('periodStart', 'Settlement period start', 'instant'),
+          column('periodEnd', 'Settlement period end', 'instant'),
+          column('expectedMinor', 'Expected', 'minor_units'),
+          column('reportedMinor', 'Reported', 'minor_units'),
         ],
         rows,
         disclosures: [
           'Receipts and sales are shown side by side and never combined; receipts are not revenue (SPK-PAY-011, rule G6).',
+          'Point-of-sale money creates no receipt, so it is reported in its own series beside customer receipts and never added to them: card captures (settled card tenders by when they settled, and captures reported after a failed tender by when they were posted), drawer tenders (cash and external) and returns paid (MET-050). Point-of-sale card payments and card returns are also payment and refund attempts (purpose pos_sale), shown separately inside MET-045 and MET-047. Point-of-sale product sales are not order lines and are not in the sales series.',
           'An unknown outcome is never resolved by age (SPK-PAY-007).',
           'Payment attempts by state are those submitted to a provider in the period. Attempts never submitted have no submission instant: they are counted over all time at the request instant (section payment_attempts_never_submitted), not as part of the period (MET-045).',
-          'Settlement differences are listed per reconciliation and never netted against unrelated discrepancies (§5.5).',
+          'Settlement differences are listed one row per reconciliation, with its kind and scope (the provider, or the facility of a cash drawer), period, expected and reported amounts. Totals are unnetted per currency, kind and scope: shortages, overages and their absolute sum are separate figures, so a shortage never cancels an overage (§5.5).',
         ],
       };
     },

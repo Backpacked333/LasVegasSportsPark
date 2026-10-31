@@ -71,7 +71,7 @@ export class RetentionReport {
     scope: 'organization',
     pointInTime: 'partial',
     pointInTimeNote:
-      'Approvals, confirmations, cancellations, transfers, fulfilments and refunds after the as-of instant are ignored (their instants are recorded); roster membership status is taken as it stands now.',
+      'Approvals, team-entry withdrawals, confirmations, cancellations, transfers, fulfilments and refunds after the as-of instant are ignored (their instants are recorded); roster membership status and rental booking status are taken as they stand now.',
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
@@ -112,7 +112,7 @@ export class RetentionReport {
         anchor = await this.teamsOf(ctx, params.anchorSeasonId);
         comparison = await this.teamsOf(ctx, params.comparisonSeasonId);
         disclosures.push(
-          'A team is its continuing identity, not its season entry (K5); only approved entries qualify (K3).',
+          'A team is its continuing identity, not its season entry (K5); an entry qualifies when it was approved by the as-of instant and not withdrawn by then (K3; whether an entry withdrawn after acceptance still counts for its season is pending K3).',
         );
       } else {
         anchor = await this.playersOf(ctx, params.anchorSeasonId);
@@ -126,7 +126,9 @@ export class RetentionReport {
       anchorLabel = `${periods.anchor.from}..${periods.anchor.to}`;
       comparisonLabel = `${periods.comparison.from}..${periods.comparison.to}`;
       disclosures.push(
-        `Anchor period ${anchorLabel} and comparison period ${comparisonLabel} by offering start date, named by the request (K2; comparability is DEC-003).`,
+        cohort === 'rental_customers'
+          ? `Anchor period ${anchorLabel} and comparison period ${comparisonLabel} by the first occurrence of each booking, named by the request (K2).`
+          : `Anchor period ${anchorLabel} and comparison period ${comparisonLabel} by offering start date, named by the request (K2; comparability is DEC-003).`,
       );
       if (cohort === 'youth_participants') {
         anchor = await this.youthOf(ctx, periods.anchor, params.programId);
@@ -242,32 +244,37 @@ export class RetentionReport {
     };
   }
 
-  private async teamsOf(ctx: ReportContext, seasonId: string): Promise<Set<string>> {
+  /**
+   * R3-REPORTING-08 (G3, SPK-REPORT-007): the season's entries approved by the as-of instant and
+   * not withdrawn by then. Both instants are recorded (migration 1306), so a withdrawal after the
+   * as-of instant never changes a rerun at that instant. The current status is not the filter: an
+   * approved entry withdrawn later keeps its approval instant (`team_entries_no_stale_approval`).
+   */
+  private async entriesApprovedAt(
+    ctx: ReportContext,
+    seasonId: string,
+  ): Promise<Array<{ team_entry_id: string; team_id: string }>> {
     const rows = await ctx.db
       .selectFrom('reporting_team_entries_v')
-      .select(['team_id', 'approved_at'])
+      .select(['team_entry_id', 'team_id', 'approved_at', 'withdrawn_at'])
       .where('organization_id', '=', ctx.organizationId)
       .where('season_id', '=', seasonId)
-      .where('status', '=', 'approved')
+      .where('approved_at', 'is not', null)
       .execute();
-    return new Set(
-      rows
-        .filter((r) => r.approved_at !== null && new Date(r.approved_at) <= ctx.asOf)
-        .map((r) => r.team_id),
+    return rows.filter(
+      (r) =>
+        r.approved_at !== null &&
+        new Date(r.approved_at) <= ctx.asOf &&
+        (r.withdrawn_at === null || new Date(r.withdrawn_at) > ctx.asOf),
     );
   }
 
+  private async teamsOf(ctx: ReportContext, seasonId: string): Promise<Set<string>> {
+    return new Set((await this.entriesApprovedAt(ctx, seasonId)).map((r) => r.team_id));
+  }
+
   private async playersOf(ctx: ReportContext, seasonId: string): Promise<Set<string>> {
-    const entries = await ctx.db
-      .selectFrom('reporting_team_entries_v')
-      .select(['team_entry_id', 'approved_at'])
-      .where('organization_id', '=', ctx.organizationId)
-      .where('season_id', '=', seasonId)
-      .where('status', '=', 'approved')
-      .execute();
-    const entryIds = entries
-      .filter((e) => e.approved_at !== null && new Date(e.approved_at) <= ctx.asOf)
-      .map((e) => e.team_entry_id);
+    const entryIds = (await this.entriesApprovedAt(ctx, seasonId)).map((e) => e.team_entry_id);
     const players = new Set<string>();
     if (entryIds.length > 0) {
       const roster = await ctx.db
