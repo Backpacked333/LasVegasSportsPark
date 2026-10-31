@@ -37,11 +37,18 @@ const INBOX_FAILURE_OWNER = 'system_administrator';
  * Only authenticated events reach handlers (§4.11 "authenticate provider events"): an event
  * recorded with `signatureVerified: false` (kept for forensics) is marked `ignored` and never
  * applied as if it were authentic.
+ *
+ * R3-OPERATIONS-01 (§4.7 invariant 12, §5.8): an event records the handlers the recording build
+ * registers for its provider (`expected_handlers`, consumption names `inbox:<provider>:<name>`),
+ * and it is processed only once each has run here or is `retire`d; a build that lacks one (a
+ * rollback, a rolling deploy) runs the handlers it has and leaves the event, uncounted, for a build
+ * that has the rest, retried after OUTBOX_MISSING_HANDLER_RETRY_SECONDS.
  */
 @Injectable()
 export class Inbox {
   private readonly logger = new Logger(Inbox.name);
   private readonly handlers = new Map<string, Array<{ name: string; handler: InboxHandler }>>();
+  private readonly retired = new Map<string, Set<string>>();
 
   constructor(
     @Inject(DATABASE) private readonly db: Db,
@@ -54,8 +61,38 @@ export class Inbox {
     const list = this.handlers.get(provider) ?? [];
     if (list.some((h) => h.name === name))
       throw new Error(`inbox handler ${name} already registered for ${provider}`);
+    if (this.retired.get(provider)?.has(name)) {
+      throw new Error(`inbox handler ${name} is retired for ${provider}; use a new name`);
+    }
     list.push({ name, handler });
     this.handlers.set(provider, list);
+  }
+
+  /**
+   * Declares that inbox handler `name` no longer exists for `provider` (R3-OPERATIONS-01): events
+   * recorded while it existed are processed without it. Keep it while such events may be pending.
+   */
+  retire(provider: string, name: string, reason: string): void {
+    if ((this.handlers.get(provider) ?? []).some((h) => h.name === name)) {
+      throw new Error(`inbox handler ${name} is registered for ${provider}; it cannot be retired`);
+    }
+    if (!reason.trim()) throw new Error(`retiring inbox handler ${name} needs a reason`);
+    const names = this.retired.get(provider) ?? new Set<string>();
+    names.add(name);
+    this.retired.set(provider, names);
+  }
+
+  /** The consumption names an event of this provider expects (sorted), recorded with it. */
+  private expectedFor(provider: string): string[] {
+    return (this.handlers.get(provider) ?? []).map((h) => consumptionName(provider, h.name)).sort();
+  }
+
+  /** Expected handlers this build neither registers nor retired (null expectations: none). */
+  private missingFor(provider: string, expected: readonly string[] | null): string[] {
+    if (!expected || expected.length === 0) return [];
+    const known = new Set(this.expectedFor(provider));
+    for (const name of this.retired.get(provider) ?? []) known.add(consumptionName(provider, name));
+    return expected.filter((name) => !known.has(name));
   }
 
   /** Durably records a provider event. Returns `duplicate: true` when it was already recorded. */
@@ -85,6 +122,7 @@ export class Inbox {
         failure_owner: null,
         locked_by: null,
         locked_until: null,
+        expected_handlers: this.expectedFor(input.provider),
       })
       .onConflict((oc) => oc.columns(['provider', 'provider_event_id']).doNothing())
       .returning('id')
@@ -100,13 +138,17 @@ export class Inbox {
   }
 
   /** Processes received/failed events whose retry time has come. Safe to call concurrently. */
-  async runOnce(
-    limit = this.config.OUTBOX_BATCH_SIZE,
-  ): Promise<{ processed: number; failed: number; dead: number; ignored: number }> {
+  async runOnce(limit = this.config.OUTBOX_BATCH_SIZE): Promise<{
+    processed: number;
+    failed: number;
+    dead: number;
+    ignored: number;
+    deferred: number;
+  }> {
     // A token per claim, so overlapping runs in one process are told apart as well.
     const lease = `${this.config.WORKER_ID}:${newId()}`;
     const rows = await this.claim(limit, lease);
-    const summary = { processed: 0, failed: 0, dead: 0, ignored: 0 };
+    const summary = { processed: 0, failed: 0, dead: 0, ignored: 0, deferred: 0 };
     for (const row of rows) {
       if (!row.signature_verified) {
         // §4.11: an unauthenticated provider event is never applied; it stays on record, ignored.
@@ -143,7 +185,7 @@ export class Inbox {
       const attempt = row.attempts + 1;
       const failures: string[] = [];
       for (const { name, handler } of this.handlers.get(row.provider) ?? []) {
-        const handlerName = `inbox:${row.provider}:${name}`;
+        const handlerName = consumptionName(row.provider, name);
         const hooks: Array<() => void | Promise<void>> = [];
         try {
           const ran = await this.db.transaction().execute(async (trx) => {
@@ -176,7 +218,28 @@ export class Inbox {
         }
       }
       const now = this.clock.now();
-      if (failures.length === 0) {
+      const missing = this.missingFor(row.provider, row.expected_handlers);
+      if (failures.length === 0 && missing.length > 0) {
+        // R3-OPERATIONS-01: wait, uncounted, for a build that registers the missing handlers.
+        const waiting = `waiting for handler(s) ${missing.join(', ')}: the build that recorded this event registers them and build ${this.config.APP_VERSION} (worker ${this.config.WORKER_ID}) does not`;
+        const updated = await this.db
+          .updateTable('inbox_events')
+          .set({
+            last_error: waiting.slice(0, 4000),
+            available_at: new Date(
+              now.getTime() + this.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000,
+            ),
+            locked_by: null,
+            locked_until: null,
+          })
+          .where('id', '=', row.id)
+          .where('locked_by', '=', lease)
+          .executeTakeFirst();
+        if (Number(updated.numUpdatedRows) > 0) {
+          this.logger.warn(`inbox event ${row.id} (${row.provider}) left waiting: ${waiting}`);
+          summary.deferred += 1;
+        }
+      } else if (failures.length === 0) {
         const updated = await this.db
           .updateTable('inbox_events')
           .set({
@@ -272,7 +335,7 @@ export class Inbox {
         from claimed
         where i.id = claimed.id
         returning i.id, i.provider, i.provider_event_id, i.organization_id, i.event_type, i.payload,
-                  i.signature_verified, i.received_at, i.attempts, i.max_attempts
+                  i.signature_verified, i.received_at, i.attempts, i.max_attempts, i.expected_handlers
       `.execute(trx);
       return result.rows;
     });
@@ -296,4 +359,10 @@ interface InboxRow {
   received_at: Date | string;
   attempts: number;
   max_attempts: number;
+  expected_handlers: string[] | null;
+}
+
+/** The consumption name of an inbox handler (event_consumptions.handler). */
+function consumptionName(provider: string, name: string): string {
+  return `inbox:${provider}:${name}`;
 }

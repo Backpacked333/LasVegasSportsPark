@@ -121,6 +121,12 @@ export interface OutboxEventsTable {
   locked_until: NullableTimestamp;
   dispatched_at: NullableTimestamp;
   failure_owner: string | null;
+  /**
+   * The handlers the producing build registered for this event type when it was written
+   * (migration 0013, R3-OPERATIONS-01); null for rows written before. The event is settled only
+   * once each of them has run (or is retired) in the processing build.
+   */
+  expected_handlers: string[] | null;
 }
 
 export type InboxStatus = 'received' | 'processed' | 'failed' | 'ignored' | 'dead';
@@ -143,6 +149,11 @@ export interface InboxEventsTable {
   failure_owner: string | null;
   locked_by: string | null;
   locked_until: NullableTimestamp;
+  /**
+   * The consumption names (`inbox:<provider>:<handler>`) the recording build registered for the
+   * provider (migration 0013, R3-OPERATIONS-01); null for rows recorded before.
+   */
+  expected_handlers: string[] | null;
 }
 
 export interface EventConsumptionsTable {

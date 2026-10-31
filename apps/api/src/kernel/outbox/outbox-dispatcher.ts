@@ -20,6 +20,12 @@ export interface DispatchSummary {
   dead: number;
   /** Claimed events whose lease lapsed and another worker took over; this run recorded nothing. */
   superseded: number;
+  /**
+   * Events left pending because the build that recorded them expected a handler this build does
+   * not register (R3-OPERATIONS-01): retried after OUTBOX_MISSING_HANDLER_RETRY_SECONDS, attempts
+   * not counted.
+   */
+  deferred: number;
 }
 
 export function retryDelayMs(attempt: number): number {
@@ -37,6 +43,14 @@ export function retryDelayMs(attempt: number): number {
  * skips it when another worker has taken it over, and every status write is fenced on the token,
  * so a slow run whose lease lapsed can never overwrite the outcome (dispatched, attempts, dead
  * letter) recorded by the worker that owns the event now.
+ *
+ * An event is dispatched only once every handler it expected (`expected_handlers`, recorded by the
+ * producing build, R3-OPERATIONS-01) has run here or is retired. When this build lacks one (an
+ * older build during a software rollback, a worker not yet upgraded in a rolling deploy), it runs
+ * the handlers it has, leaves the event pending without counting an attempt, names the missing
+ * handlers in `last_error` and tries again after OUTBOX_MISSING_HANDLER_RETRY_SECONDS, so a build
+ * that has them runs them (§4.7 invariant 12, §5.8); an event type no handler of this build knows
+ * is no longer settled as if it were a fact without consumers.
  */
 @Injectable()
 export class OutboxDispatcher {
@@ -85,6 +99,7 @@ export class OutboxDispatcher {
       retried: 0,
       dead: 0,
       superseded: 0,
+      deferred: 0,
     };
     // A token per claim, so overlapping runs (also in one process) are told apart.
     const lease = `${this.config.WORKER_ID}:${newId()}`;
@@ -134,7 +149,7 @@ export class OutboxDispatcher {
         where o.id = claimed.id
         returning o.id, o.organization_id, o.event_type, o.aggregate_type, o.aggregate_id, o.payload,
                   o.occurred_at, o.correlation_id, o.causation_id, o.operation_id, o.attempts, o.max_attempts,
-                  o.failure_owner
+                  o.failure_owner, o.expected_handlers
       `.execute(trx);
       return result.rows;
     });
@@ -143,7 +158,7 @@ export class OutboxDispatcher {
   private async process(
     row: ClaimedRow,
     lease: string,
-  ): Promise<'dispatched' | 'retried' | 'dead' | 'superseded'> {
+  ): Promise<'dispatched' | 'retried' | 'dead' | 'superseded' | 'deferred'> {
     const event: DomainEvent = {
       id: row.id,
       type: row.event_type,
@@ -169,6 +184,28 @@ export class OutboxDispatcher {
     }
 
     const now = this.clock.now();
+    const missing = this.registry.missingFor(event.type, row.expected_handlers);
+    if (failures.length === 0 && missing.length > 0) {
+      // R3-OPERATIONS-01: the handlers this build has ran (their consumptions keep them from running
+      // again); the event waits, uncounted, for a build that registers the missing ones.
+      const waiting = `waiting for handler(s) ${missing.join(', ')}: the build that recorded this event registers them and build ${this.config.APP_VERSION} (worker ${this.config.WORKER_ID}) does not`;
+      const updated = await this.db
+        .updateTable('outbox_events')
+        .set({
+          last_error: waiting.slice(0, 4000),
+          available_at: new Date(
+            now.getTime() + this.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000,
+          ),
+          locked_by: null,
+          locked_until: null,
+        })
+        .where('id', '=', row.id)
+        .where('locked_by', '=', lease)
+        .executeTakeFirst();
+      if (Number(updated.numUpdatedRows) === 0) return 'superseded';
+      this.logger.warn(`event ${row.id} (${event.type}) left pending: ${waiting}`);
+      return 'deferred';
+    }
     if (failures.length === 0) {
       const updated = await this.db
         .updateTable('outbox_events')
@@ -327,4 +364,5 @@ interface ClaimedRow {
   attempts: number;
   max_attempts: number;
   failure_owner: string | null;
+  expected_handlers: string[] | null;
 }

@@ -123,6 +123,13 @@ export const ConfigSchema = z
       .min(64 * 1024)
       .max(64 * 1024 * 1024)
       .default(2 * 1024 * 1024),
+    /**
+     * How long an outbox or inbox event waits before it is tried again when the build that
+     * recorded it expected a handler this build does not register (R3-OPERATIONS-01, §4.7
+     * invariant 12: a software rollback or a rolling deploy). The event stays pending, its attempts
+     * are not counted, and a build that registers the handler runs it (technical value).
+     */
+    OUTBOX_MISSING_HANDLER_RETRY_SECONDS: z.coerce.number().int().min(1).default(300),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {
