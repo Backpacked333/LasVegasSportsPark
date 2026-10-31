@@ -53,13 +53,35 @@ export function renderIcs(calendar: IcsCalendar): string {
   return lines.map(fold).join(CRLF) + CRLF;
 }
 
-/** RFC 5545 §3.3.5: backslash, semicolon and comma are escaped; newlines become literal \n. */
+/** A line break of any convention: CRLF, a bare CR or LF, NEL, LINE and PARAGRAPH SEPARATOR. */
+const LINE_BREAK = /\r\n|[\r\n\u0085\u2028\u2029]/g;
+
+/**
+ * RFC 5545 §3.3.11 TEXT: backslash, semicolon and comma are escaped and every line break becomes a
+ * literal `\n`: CRLF, a bare CR or LF, and the Unicode breaks NEL, LINE SEPARATOR and PARAGRAPH
+ * SEPARATOR. TEXT admits no other control character (C0 except tab, DEL, C1), so those are
+ * dropped. Stored strings (a captain's team name in a fixture title, for example) therefore never
+ * end a content line or start a new one in another family's feed (R2-TENANCY-INPUT-04).
+ */
 export function escapeText(value: string): string {
-  return value
-    .replaceAll('\\', '\\\\')
-    .replaceAll(';', '\\;')
-    .replaceAll(',', '\\,')
-    .replaceAll(/\r?\n/g, '\\n');
+  return withoutControls(
+    value
+      .replaceAll('\\', '\\\\')
+      .replaceAll(';', '\\;')
+      .replaceAll(',', '\\,')
+      .replaceAll(LINE_BREAK, '\\n'),
+  );
+}
+
+/** Drops C0 controls other than tab, DEL and C1 controls (RFC 5545 §3.1 CONTROL, §3.3.11). */
+function withoutControls(value: string): string {
+  let out = '';
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if ((code < 0x20 && code !== 0x09) || (code >= 0x7f && code <= 0x9f)) continue;
+    out += char;
+  }
+  return out;
 }
 
 /** UTC date-time form `YYYYMMDDTHHMMSSZ`. */

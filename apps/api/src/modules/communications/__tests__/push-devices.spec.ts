@@ -1,6 +1,8 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { isCheckViolation, isUniqueViolation } from '@sportspark/db';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { AuditWriter } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
   authHeaderForAccount,
@@ -9,8 +11,10 @@ import {
   createPersonFixture,
   createStaffMemberFixture,
 } from '../../identity';
+import { CommunicationsActions } from '../communications.actions';
 import { CommunicationsModule } from '../communications.module';
 import { hashToken } from '../services/calendar-feeds.service';
+import { PUSH_REVOKED_REREGISTERED, PushDevicesService } from '../services/push-devices.service';
 import {
   attemptsOf,
   composeAndDispatch,
@@ -218,22 +222,129 @@ describe('push devices (COM-01: SPK-UX-001, SPK-COMMS-003/004, SPK-AT-025)', () 
     expect(fakes.push.deviceSends.map((d) => d.address)).not.toContain(token);
   });
 
-  it('concurrent registrations of one token by two accounts leave exactly one active registration (PGlite and PostgreSQL)', async () => {
+  it('SPK-AT-025 / SPK-IAM-006 (§4.9): two accounts registering one token at once both answer 201; the loser of the insert race retries, revokes the other registration (reregistered) and leaves one active (PGlite and PostgreSQL)', async () => {
     const first = await customer();
     const second = await customer();
     const token = `race-${newId()}`;
-    const results = await Promise.all([
-      register(first.header, { platform: 'ios', token }),
-      register(second.header, { platform: 'ios', token }),
-    ]);
-    expect(results.map((r) => r.status)).toEqual([201, 201]);
-    const active = await t.db
-      .selectFrom('push_devices')
-      .select(['account_id'])
-      .where('token_hash', '=', hashToken(token))
-      .where('status', '=', 'active')
-      .execute();
-    expect(active).toHaveLength(1);
+    const service = t.app.get(PushDevicesService) as unknown as {
+      registerIn: (...args: unknown[]) => Promise<unknown>;
+    };
+    const audit = t.app.get(AuditWriter);
+    const registerIn = service.registerIn;
+    const record = audit.record;
+    // every pass of the registration's unit of work, by account: 'ok' or the error it ended with
+    const passes: Array<{ accountId: string; outcome: string }> = [];
+    let injectLostRace = false;
+    service.registerIn = async function (this: unknown, ...args: unknown[]) {
+      const { accountId } = args[3] as { accountId: string };
+      try {
+        if (injectLostRace && accountId === second.accountId) {
+          // PGlite runs one transaction at a time, so no insert can race there: the second
+          // registration's first pass throws the unique-violation error PostgreSQL would raise,
+          // before it writes anything. Only the retry path is exercised; the race forced by
+          // push_devices_active_token_idx runs under PostgreSQL alone.
+          injectLostRace = false;
+          throw Object.assign(
+            new Error(
+              'duplicate key value violates unique constraint "push_devices_active_token_idx"',
+            ),
+            { code: '23505' },
+          );
+        }
+        const row = await registerIn.apply(this, args);
+        passes.push({ accountId, outcome: 'ok' });
+        return row;
+      } catch (error) {
+        passes.push({
+          accountId,
+          outcome: isUniqueViolation(error) ? 'unique_violation' : 'error',
+        });
+        throw error;
+      }
+    };
+    // PostgreSQL: the first registration pauses after its insert (its select found no active
+    // row), uncommitted, until the second has issued its own insert and is blocked on the unique
+    // index; then the first commits and the second's insert fails with a real 23505.
+    let pausedPid: number | null = null;
+    let reached: () => void = () => undefined;
+    const pausedFirst = new Promise<void>((resolve) => (reached = resolve));
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let gateArmed = false;
+    audit.record = async function (this: unknown, trx, entry) {
+      if (gateArmed && entry.action === CommunicationsActions.registerPushDevice.id) {
+        gateArmed = false;
+        pausedPid = (await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(trx))
+          .rows[0]!.pid;
+        reached();
+        await released;
+      }
+      return record.call(audit, trx, entry);
+    };
+    const blockedByPaused = async () => {
+      for (let poll = 0; poll < 250; poll += 1) {
+        const { rows } = await sql<{ blocked: number }>`
+          select count(*)::int as blocked from pg_stat_activity
+           where ${pausedPid}::int = any(pg_blocking_pids(pid))`.execute(t.db);
+        if (rows[0]!.blocked > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error('the second registration never waited on the first one');
+    };
+    try {
+      let results;
+      if (t.database.concurrent) {
+        gateArmed = true;
+        // `.then` sends each request now rather than when it is awaited
+        const a = register(first.header, { platform: 'ios', token }).then((r) => r);
+        await pausedFirst;
+        const b = register(second.header, { platform: 'ios', token }).then((r) => r);
+        await blockedByPaused();
+        release();
+        results = await Promise.all([a, b]);
+      } else {
+        injectLostRace = true;
+        results = await Promise.all([
+          register(first.header, { platform: 'ios', token }),
+          register(second.header, { platform: 'ios', token }),
+        ]);
+      }
+      expect(
+        results.map((r) => r.status),
+        JSON.stringify(results.map((r) => r.body)),
+      ).toEqual([201, 201]);
+      // the second registration lost the insert, retried once and then took the token over
+      expect(passes.filter((p) => p.accountId === first.accountId)).toEqual([
+        { accountId: first.accountId, outcome: 'ok' },
+      ]);
+      expect(passes.filter((p) => p.accountId === second.accountId)).toEqual([
+        { accountId: second.accountId, outcome: 'unique_violation' },
+        { accountId: second.accountId, outcome: 'ok' },
+      ]);
+      const rows = await t.db
+        .selectFrom('push_devices')
+        .select(['id', 'account_id', 'status', 'revoked_reason', 'token'])
+        .where('token_hash', '=', hashToken(token))
+        .execute();
+      expect(rows).toHaveLength(2);
+      const active = rows.filter((r) => r.status === 'active');
+      expect(active).toHaveLength(1);
+      const revoked = rows.find((r) => r.status !== 'active');
+      expect(revoked).toMatchObject({
+        status: 'revoked',
+        revoked_reason: PUSH_REVOKED_REREGISTERED,
+        token: null,
+      });
+      if (t.database.concurrent) {
+        // the paused registration committed first; the retry moved the token to the second account
+        expect(active[0]).toMatchObject({ account_id: second.accountId });
+        expect(revoked).toMatchObject({ account_id: first.accountId });
+      }
+    } finally {
+      service.registerIn = registerIn;
+      audit.record = record;
+      release();
+    }
   });
 
   it('the database rejects two active registrations of one device token', async () => {
