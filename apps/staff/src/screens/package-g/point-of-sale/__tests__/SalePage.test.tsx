@@ -242,7 +242,8 @@ describe('SCR-S-55 SalePage', () => {
     await user.click(within(form).getByLabelText('Cash'));
     await user.type(within(form).getByLabelText(/^Amount \(USD\)/), '5.42');
     await user.click(within(form).getByRole('button', { name: 'Record the tender' }));
-    expect(await within(form).findByTestId('state-offline')).toBeInTheDocument();
+    const unknown = await within(form).findByTestId('state-outcome-unknown');
+    expect(unknown).toHaveTextContent('may already have taken effect');
     expect(within(form).getByLabelText(/^Amount \(USD\)/)).toBeDisabled();
     await user.click(within(form).getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('paid')).toBeInTheDocument();

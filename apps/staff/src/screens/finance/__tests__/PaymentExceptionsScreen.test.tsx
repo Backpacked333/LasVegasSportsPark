@@ -174,7 +174,8 @@ describe('SCR-S-36 PaymentExceptionsScreen', () => {
     await user.click(
       await screen.findByRole('button', { name: 'Reconcile from provider evidence' }),
     );
-    expect(await screen.findByText('No connection')).toBeInTheDocument();
+    // SPK-PAY-007: a lost connection after sending is never "nothing changed".
+    expect(await screen.findByText('Outcome not known yet')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText(/Still unresolved/)).toBeInTheDocument();
     const keys = app.fake.requests

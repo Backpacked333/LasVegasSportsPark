@@ -2,16 +2,25 @@
  * Consequential commands from screens (§4.9). One hook instance is one user intent: retrying the
  * same input reuses the idempotency key (a double tap or a retry after a timeout never duplicates
  * an effect); changed input, a confirmed success or a definitive refusal (an answer the API stores
- * and would replay for the same key) starts a new intent with a new key.
+ * and would replay for the same key) starts a new intent with a new key. IDEMPOTENCY_OUTCOME_
+ * UNAVAILABLE keeps the key (`CommandIntentTracker.failed` uses `keepsIntentAfterFailure`): the
+ * command committed, and a new key would run it a second time.
+ *
+ * After an answer that says the command may have taken effect or did (`mayHaveTakenEffect`,
+ * `mustNotCreateAgain`), the `invalidate` queries are read again as after a success, so a list
+ * shows the record the command may have made. `reread()` reads them again on demand (a "Start a
+ * new request" that must look at the current state first) and rejects when the read fails.
  * Pass `expectedRevision` in the body wherever the API takes it; a STALE_REVISION answer is shown
  * with "Reload" and the user's input is kept (SPK-UX-008).
  */
-import type {
-  ApiError,
-  CommandMethod,
-  PathsWithMethod,
-  RequestOptions,
-  ResponseBody,
+import {
+  mayHaveTakenEffect,
+  mustNotCreateAgain,
+  type ApiError,
+  type CommandMethod,
+  type PathsWithMethod,
+  type RequestOptions,
+  type ResponseBody,
 } from '@sportspark/api-client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef } from 'react';
@@ -35,6 +44,16 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
   const api = useApi();
   const queryClient = useQueryClient();
   const tracker = useRef(api.intentTracker());
+  const invalidateKeys = options.invalidate;
+  const reread = useCallback(
+    () =>
+      Promise.all(
+        (invalidateKeys ?? []).map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }, { throwOnError: true }),
+        ),
+      ).then(() => undefined),
+    [invalidateKeys, queryClient],
+  );
 
   const mutation = useMutation<ResponseBody<P, M>, ApiError, CommandRequest<M, P>>({
     mutationFn: (request) => {
@@ -46,6 +65,12 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
     // next attempt (after the user fixed the cause) needs a new key. Unknown outcomes keep it.
     onError: (error) => {
       tracker.current.failed(error);
+      // The command may have made or changed records: show them as they now are.
+      if (error && (mayHaveTakenEffect(error) || mustNotCreateAgain(error))) {
+        void Promise.all(
+          (options.invalidate ?? []).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+        );
+      }
     },
     onSuccess: async () => {
       tracker.current.complete();
@@ -68,6 +93,7 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
       data: mutation.data,
       isProcessing: mutation.isPending,
       reset,
+      reread,
     }),
     [
       mutation.mutateAsync,
@@ -76,6 +102,7 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
       mutation.data,
       mutation.isPending,
       reset,
+      reread,
     ],
   );
 }

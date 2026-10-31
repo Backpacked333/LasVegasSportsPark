@@ -6,13 +6,16 @@
  *   record is not available and never implies that it exists;
  * - stale version (STALE_REVISION, INVALID_TRANSITION): "Reload" fetches the current record; the
  *   form keeps what was typed;
- * - no connection or no response: the outcome may be unknown, and "Try again" resends the same
- *   intent with the same idempotency key, so the effect is never applied twice;
+ * - no definite answer (`mayHaveTakenEffect`: a timeout, a connection lost after sending, the same
+ *   key still running, a 5xx): the outcome may be unknown, and "Try again" resends the same intent
+ *   with the same idempotency key, so the effect is never applied twice;
+ * - IDEMPOTENCY_OUTCOME_UNAVAILABLE and a legacy-authority refusal: `ui/CommandOutcome.tsx`;
  * - validation and eligibility: the code, the API's message, and each field message or reason;
  * - anything else: code, safe message, correlation reference and the API's recovery action.
  */
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import { Button } from '../../ui/Button';
+import { sharedCommandOutcome } from '../../ui/CommandOutcome';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { ISSUE_SEVERITY, humanizeCode } from './labels';
@@ -115,6 +118,10 @@ export function CommandError({ error, onRetry, onReload }: CommandErrorProps) {
     }
     return <StateView variant="unavailable" />;
   }
+  // Commands are not sent while offline (CommandButton), so a network failure happened in
+  // flight: the outcome is unknown, never "not sent" (§4.9).
+  const shared = sharedCommandOutcome(error, { onRetry, onReload });
+  if (shared) return shared;
   if (error.isStale) {
     return (
       <section className="state" aria-live="polite" data-testid="state-stale">
@@ -128,22 +135,6 @@ export function CommandError({ error, onRetry, onReload }: CommandErrorProps) {
           {error.correlationId ? `. Reference: ${error.correlationId}` : ''}
         </p>
         {onReload ? <Button onClick={onReload}>Reload</Button> : null}
-      </section>
-    );
-  }
-  if (error.isOffline) {
-    return (
-      <section className="state" aria-live="polite" data-testid="state-outcome-unknown">
-        {/* Commands are not sent while offline (CommandButton), so a network failure here
-            happened in flight: the outcome is unknown, never "not sent" (§4.9). */}
-        <StatusBadge tone="warning" label="Outcome not known yet" />
-        <p>
-          {error.kind === 'timeout'
-            ? 'No answer arrived in time, so the change may or may not have been made. Trying again is safe: it cannot be applied twice.'
-            : 'The connection was lost before an answer arrived; the change may or may not have been made. Trying again is safe: it cannot be applied twice.'}
-        </p>
-        <p className="caption">Error code: {error.code}</p>
-        {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
       </section>
     );
   }

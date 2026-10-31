@@ -3,18 +3,19 @@
  *
  * - ACCESS_DENIED: "Not available to you", naming the missing permission (staff see which one);
  *   protected NOT_FOUND: "not available" without implying the record exists.
- * - No answer (timeout, or the connection dropped while the request was out): the change may
- *   have been made; "Try again" repeats the same intent with the same idempotency key, so it can
- *   never apply twice (§4.9). Commands cannot be sent while offline, so a network failure here
- *   happened in flight and is never reported as "not sent".
+ * - No definite answer (`mayHaveTakenEffect`: a timeout, the connection dropped while the request
+ *   was out, the same key still running, a 5xx): the change may have been made; "Try again"
+ *   repeats the same intent with the same idempotency key, so it can never apply twice (§4.9).
+ *   Commands cannot be sent while offline, so a network failure here happened in flight and is
+ *   never reported as "not sent". IDEMPOTENCY_OUTCOME_UNAVAILABLE and a legacy-authority refusal
+ *   use the shared views of `ui/CommandOutcome.tsx`.
  * - Validation failure: the field messages the API returned; the user's input stays in the form.
  * - Anything else: code, safe message, correlation reference and the API's recovery action
  *   (`Reload` for STALE_REVISION and INVALID_TRANSITION).
  */
 import type { ApiError } from '@sportspark/api-client';
-import { Button } from '../../ui/Button';
+import { sharedCommandOutcome } from '../../ui/CommandOutcome';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge } from '../../ui/StatusBadge';
 import { fieldIssues, missingPermission } from './error-details';
 
 export interface CommandErrorProps {
@@ -50,21 +51,8 @@ export function CommandError({ error, onRetry, onReload, action }: CommandErrorP
       />
     );
   }
-  if (error.isOffline) {
-    return (
-      <section className="state" aria-live="polite" data-testid="state-outcome-unknown">
-        <StatusBadge tone="warning" label="Outcome unknown" />
-        <p>
-          {error.kind === 'timeout'
-            ? 'No answer arrived in time'
-            : 'The connection was lost before an answer arrived'}
-          , so the change may or may not have been made. Trying again sends the same request, which
-          the service will not apply twice.
-        </p>
-        {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
-      </section>
-    );
-  }
+  const shared = sharedCommandOutcome(error, { onRetry, onReload });
+  if (shared) return shared;
   const fields = fieldIssues(error);
   return (
     <div>

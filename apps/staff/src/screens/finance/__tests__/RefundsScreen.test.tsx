@@ -92,6 +92,80 @@ describe('SCR-S-37 RefundsScreen', () => {
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 
+  it('SPK-PAY-007: a connection lost after the refund was sent says it may already have taken effect, never "Nothing changed"; a new request re-reads the payment and its refunds first', async () => {
+    const user = userEvent.setup();
+    let refundReads = 0;
+    let paymentReads = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /payments/{id}': () => {
+          paymentReads += 1;
+          return fakeResponse(200, paymentDetail());
+        },
+        'GET /refunds': () => {
+          refundReads += 1;
+          return fakeResponse(200, { items: [], nextCursor: null });
+        },
+        // The API committed the refund, then the connection reset before the answer arrived.
+        'POST /payments/{id}/refunds': () => Promise.reject(new TypeError('Failed to fetch')),
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    await requestRefund(user, '25');
+    const unknown = await screen.findByTestId('state-outcome-unknown');
+    expect(unknown).toHaveTextContent('may already have taken effect');
+    expect(screen.queryByText(/Nothing changed/)).toBeNull();
+    expect(screen.queryByText('No connection')).toBeNull();
+    const form = screen.getByRole('form', { name: 'Request a refund' });
+    expect(within(form).getByLabelText(/^Refund amount \(USD\)/)).toBeDisabled();
+    const paymentBefore = paymentReads;
+    const refundsBefore = refundReads;
+    await user.click(screen.getByRole('button', { name: 'Start a new request' }));
+    await waitFor(() =>
+      expect(within(form).getByLabelText(/^Refund amount \(USD\)/)).toBeEnabled(),
+    );
+    // The payment (what is still refundable) and its refunds were read again before unlocking.
+    expect(paymentReads).toBeGreaterThan(paymentBefore);
+    expect(refundReads).toBeGreaterThan(refundsBefore);
+  });
+
+  it('§4.9: IDEMPOTENCY_OUTCOME_UNAVAILABLE keeps the form locked and the key, so the unchanged refund is never sent under a new key', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /payments/{id}/refunds': () => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new TypeError('connection dropped'));
+          return fakeResponse(409, {
+            code: 'IDEMPOTENCY_OUTCOME_UNAVAILABLE',
+            message:
+              'An earlier attempt with this key changed data; its response was not recorded.',
+            correlationId: 'corr-lost',
+            nextAction: 'reload_current_state',
+          });
+        },
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    await requestRefund(user, '25');
+    await user.click(await screen.findByRole('button', { name: 'Try again' }));
+    const lost = await screen.findByTestId('state-outcome-lost');
+    expect(lost).toHaveTextContent('This may already have been done');
+    expect(within(lost).getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: 'Request a refund' });
+    expect(within(form).getByLabelText(/^Refund amount \(USD\)/)).toBeDisabled();
+    expect(
+      within(form).getByRole('button', { name: 'Reserve and request the refund' }),
+    ).toBeDisabled();
+    expect(screen.getByTestId('request-locked')).toBeInTheDocument();
+    const keys = app.fake.requests
+      .filter((r) => r.route === '/payments/{id}/refunds')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
   it('refuses an amount that is not a positive amount before sending, and shows an over-refund with the available amount', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

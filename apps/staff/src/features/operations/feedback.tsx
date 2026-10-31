@@ -4,13 +4,17 @@
  * - ACCESS_DENIED and PARTICIPANT_AUTHORITY_REQUIRED: "Not available" with the API's safe message,
  *   so staff see which permission is missing; never retried.
  * - NOT_FOUND: "Not available" without implying that the record exists (§4.10, §4.14).
- * - No response (timeout): the outcome is unknown; "Try again" resends the same intent with the
- *   same idempotency key, so nothing is recorded twice.
+ * - No definite answer (`mayHaveTakenEffect`: a timeout, a connection lost after sending, the same
+ *   key still running, a 5xx): "Outcome not known yet", never "Something went wrong"; "Try again"
+ *   resends the same intent with the same idempotency key, so nothing is recorded twice. A changed
+ *   input would be a new key, so the view says not to make it again as a new request.
+ * - IDEMPOTENCY_OUTCOME_UNAVAILABLE, IDEMPOTENCY_SECRET_WITHHELD and a legacy-authority refusal:
+ *   the shared views of `ui/CommandOutcome.tsx`.
  * - Anything else: the error code, safe message, correlation reference and the API's next action.
  */
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
-import { Button } from '../../ui/Button';
+import { sharedCommandOutcome } from '../../ui/CommandOutcome';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 
@@ -44,19 +48,8 @@ export function CommandError({
       </div>
     );
   }
-  if (error.outcomeUnknown) {
-    return (
-      <div role="alert" className="state" data-testid="command-unknown">
-        <StatusBadge tone="warning" label="Outcome not known yet" />
-        <p>
-          No response arrived, so it is not known whether this was recorded. Try again sends the
-          same request; it is never recorded twice.
-        </p>
-        <p className="caption">Error code: {error.code}</p>
-        {onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
-      </div>
-    );
-  }
+  const shared = sharedCommandOutcome(error, { onRetry, onReload });
+  if (shared) return <div role="alert">{shared}</div>;
   return (
     <div role="alert">
       <StateView variant="error" error={error} onRetry={onRetry} onAction={onReload} />
