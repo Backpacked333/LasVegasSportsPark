@@ -593,7 +593,7 @@ describe('fixtures and availability (§4.4 Matches, SPK-FIX-005, SPK-CAP-003, §
     expect(summary.dead).toBe(0);
   });
 
-  it('R2-TENANCY-INPUT-02 / SPK-COMMS-005: two 200-character team names give a fixture event title within the scheduling title limit, so the notices built from it stay valid', async () => {
+  it('R2-TENANCY-INPUT-02: two 200-character team names give a fixture event title within the scheduling title limit (the notice titles communications builds from it are not covered here)', async () => {
     const longPitch = await seedPitchWithHalves(t.db, {
       organizationId: t.organizationId,
       facilityId: t.facilityId,
