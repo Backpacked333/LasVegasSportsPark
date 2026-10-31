@@ -474,6 +474,15 @@ function register(input: {
       409: errorResponse(
         'Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)',
       ),
+      // §5.8, SPK-AT-028 (R2-API-CONTRACT-03): the controllers are @RefusedDuringRecovery(), so
+      // every command answers 503 while the organization recovers from a restore; reads do not.
+      ...(input.method === 'get'
+        ? {}
+        : {
+            503: errorResponse(
+              'Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)',
+            ),
+          }),
     },
   });
 }

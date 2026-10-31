@@ -309,8 +309,10 @@ taxes and fees rounded half up per line (DEC-007).
   settlement reconciliation stay allowed; installment collection starts no new charge; the
   `finance.provider_facts` recovery check blocks resuming until no payment or refund outcome is
   unresolved and a processor settlement since the restore balances.
-  `apps/api/src/__tests__/journeys/spk-at-028.spec.ts`. A provider feed that recreates post-backup
-  facts is **Pending decision** (DEC-019).
+  `apps/api/src/__tests__/journeys/spk-at-028.spec.ts`. Every refused finance command, the
+  point-of-sale and accounting ones included, publishes that 503 in its contract
+  (`__tests__/recovery-contract.spec.ts`, R2-API-CONTRACT-03). A provider feed that recreates
+  post-backup facts is **Pending decision** (DEC-019).
 
 ## Stage 3 (FIN-01..FIN-07)
 
