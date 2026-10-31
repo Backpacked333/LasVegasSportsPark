@@ -1,4 +1,4 @@
-import { newId, type DomainEvent } from '@sportspark/contracts';
+import { newId, systemPrincipal, type DomainEvent } from '@sportspark/contracts';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -22,8 +22,8 @@ import {
   createRelationshipFixture,
   createStaffMemberFixture,
 } from '../../identity';
-import { at, seedPitchWithHalves } from '../../scheduling';
-import { SessionsService } from '../services/sessions.service';
+import { at, createScheduledEvent, EventsService, seedPitchWithHalves } from '../../scheduling';
+import { SESSION_CANCELED_EVENT_REASON, SessionsService } from '../services/sessions.service';
 import { createOfferingFixture, createProgramFixture } from '../testing/catalog-fixtures';
 
 const DAY = '2027-01-16';
@@ -170,7 +170,7 @@ describe('catalog sessions follow their scheduling events (assembled application
       .get(UnitOfWork)
       .run(({ trx }) => t.app.get(SessionsService).followSchedulingEvent(trx, delivery));
 
-  it('R2-JOURNEYS-02 / SPK-AT-009 / SPK-COMMS-002: a session canceled in the catalog cancels its scheduling event: the space is released, the family is told once, no reminder follows and a replacement session can take the slot', async () => {
+  it('R2-JOURNEYS-02 / SPK-AT-009 / SPK-COMMS-002 / §4.14: a session canceled in the catalog cancels its scheduling event: the space is released, the family is told once without the staff-only reason, no reminder follows and a replacement session can take the slot', async () => {
     const pitch = await seedPitchWithHalves(t.db, {
       organizationId: t.organizationId,
       facilityId: t.facilityId,
@@ -183,20 +183,34 @@ describe('catalog sessions follow their scheduling events (assembled application
     const family = await enrolledFamily(offering.offeringId);
     await drain(t);
 
+    // a staff-only reason (the child-safe session view hides it, §4.14)
+    const internalReason = 'Coach Smith suspended; Emma (age 7) injured';
     const canceled = await ok<{ status: string; cancelReason: string }>(
       post(t, `/v1/sessions/${session.id}/cancel`, manager.header, {
-        reason: 'Coach ill',
+        reason: internalReason,
         expectedRevision: session.revision,
       }),
     );
-    expect(canceled).toMatchObject({ status: 'canceled', cancelReason: 'Coach ill' });
+    expect(canceled).toMatchObject({ status: 'canceled', cancelReason: internalReason });
     await drain(t);
 
-    // scheduling: the event and its reservations are released with the catalog's reason
+    // scheduling: the event and its reservations are released with a customer-safe reason; the
+    // staff reason stays with the catalog session and its audit record
     expect(await eventRow(eventId)).toMatchObject({
       status: 'canceled',
-      cancel_reason: 'Coach ill',
+      cancel_reason: SESSION_CANCELED_EVENT_REASON,
     });
+    const reasons = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'reason'])
+      .where('target_id', 'in', [session.id, eventId])
+      .where('action', 'in', ['catalog.session_canceled', 'scheduling.event_canceled'])
+      .orderBy('action')
+      .execute();
+    expect(reasons).toEqual([
+      { action: 'catalog.session_canceled', reason: internalReason },
+      { action: 'scheduling.event_canceled', reason: SESSION_CANCELED_EVENT_REASON },
+    ]);
     const reservations = await t.db
       .selectFrom('reservations')
       .select('status')
@@ -219,13 +233,23 @@ describe('catalog sessions follow their scheduling events (assembled application
     });
     expect(await replay(await changeDelivery(eventId, 'canceled'))).toBe(0);
 
-    // the guardian is told once, with the reason
+    // the guardian is told once, never with the staff-only reason
     const inbox = await ok<{ items: Array<{ title: string; body: string }> }>(
       get(t, '/v1/me/inbox', family.header),
     );
     const notices = inbox.items.filter((n) => n.title.startsWith('Canceled: U10 clinic'));
     expect(notices).toHaveLength(1);
-    expect(notices[0]?.body).toContain('Coach ill');
+    expect(notices[0]?.body).toContain(SESSION_CANCELED_EVENT_REASON);
+    const delivered = await t.db
+      .selectFrom('notifications')
+      .selectAll()
+      .where('subject_id', '=', eventId)
+      .execute();
+    expect(delivered.length).toBeGreaterThan(0);
+    for (const text of [JSON.stringify(inbox), JSON.stringify(delivered)]) {
+      expect(text).not.toContain('Emma');
+      expect(text).not.toContain('suspended');
+    }
 
     // no reminder is composed for the canceled activity
     await t.runPeriodicJobs([COMPOSE_ACTIVITY_REMINDERS_JOB]);
@@ -588,5 +612,204 @@ describe('catalog sessions follow their scheduling events (assembled application
     const canceled = await sessionRow(dropped.id);
     expect(canceled.status).toBe('canceled');
     expect(new Date(canceled.scheduled_start).toISOString()).toBe(at(DAY, '10:00'));
+  });
+
+  it('R2-JOURNEYS-03 / SPK-AT-009: a session linked to a draft event that is moved while still a draft, then published through a schedule draft, ends up at the published times', async () => {
+    const pitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch R2-03 draft',
+    });
+    const offering = await youthOffering();
+    const events = t.app.get(EventsService);
+    const draft = await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.northHalfId],
+      start: at(DAY, '10:00'),
+      end: at(DAY, '11:00'),
+      kind: 'session',
+      title: 'U10 clinic (draft)',
+      sourceType: 'offering',
+      sourceId: offering.offeringId,
+      status: 'draft',
+    });
+    const session = await linkedSession(offering.offeringId, draft.id, DAY, 1);
+
+    // a move of a draft event emits no event_changed: the session keeps its time for now
+    await t.app.get(UnitOfWork).run(() =>
+      events.moveEvent(systemPrincipal(t.organizationId, 'tests'), draft.id, {
+        scheduledStart: at(DAY, '12:00'),
+        scheduledEnd: at(DAY, '13:30'),
+        reason: 'Draft reshuffle',
+      }),
+    );
+    await drain(t);
+    expect(new Date((await sessionRow(session.id)).scheduled_start).toISOString()).toBe(
+      at(DAY, '10:00'),
+    );
+
+    // publication of the draft ('published', not 'moved') gives the session the published times
+    const scheduleDraft = await ok<{ id: string }>(
+      post(t, '/v1/schedule-drafts', scheduler.header, {
+        facilityId: t.facilityId,
+        name: 'Publish the clinic',
+        changes: [{ kind: 'create', targetEventId: draft.id }],
+      }),
+      201,
+    );
+    await ok(post(t, `/v1/schedule-drafts/${scheduleDraft.id}/publish`, scheduler.header, {}));
+    await drain(t);
+    const published = await eventRow(draft.id);
+    expect(published.status).toBe('published');
+    const followed = await sessionRow(session.id);
+    expect(new Date(followed.scheduled_start).toISOString()).toBe(at(DAY, '12:00'));
+    expect(new Date(followed.scheduled_end).toISOString()).toBe(at(DAY, '13:30'));
+    expect(followed).toMatchObject({ status: 'scheduled', revision: 2 });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['details'])
+      .where('target_id', '=', session.id)
+      .where('action', '=', 'catalog.session_retimed')
+      .execute();
+    expect(audit.map((a) => a.details)).toEqual([
+      expect.objectContaining({
+        previousStart: at(DAY, '10:00'),
+        scheduledStart: at(DAY, '12:00'),
+        scheduledEnd: at(DAY, '13:30'),
+        change: 'published',
+      }),
+    ]);
+    // replaying the publication changes nothing
+    expect(await replay(await changeDelivery(draft.id, 'published'))).toBe(0);
+  });
+
+  it("R2-JOURNEYS-03 / SPK-AT-009: a linked session is created at its event's times; other times, an unknown event and a canceled event are refused and nothing is written", async () => {
+    const pitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch R2-03 link',
+    });
+    const offering = await youthOffering();
+    const series = await weeklyEvents(offering.offeringId, pitch.northHalfId, 1);
+    const eventId = series.eventIds[0] as string;
+    const attempt = (body: Record<string, unknown>) =>
+      post(t, `/v1/offerings/${offering.offeringId}/sessions`, scheduler.header, {
+        scheduledStart: at(DAY, '10:00'),
+        scheduledEnd: at(DAY, '11:00'),
+        schedulingEventId: eventId,
+        sequence: 1,
+        ...body,
+      });
+
+    // part of the booking (10:30-11:00 inside 10:00-11:00), or a longer one, would be overwritten
+    // with the event's whole span on its next change
+    for (const times of [
+      { scheduledStart: at(DAY, '10:30') },
+      { scheduledEnd: at(DAY, '12:00') },
+    ]) {
+      const refused = await attempt(times);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+      expect(refused.body).toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: {
+          path: 'scheduledStart',
+          eventScheduledStart: at(DAY, '10:00'),
+          eventScheduledEnd: at(DAY, '11:00'),
+        },
+      });
+    }
+    const unknown = await attempt({ schedulingEventId: newId() });
+    expect(unknown.status, JSON.stringify(unknown.body)).toBe(400);
+    expect(unknown.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { path: 'schedulingEventId' },
+    });
+    const sessionsOf = () =>
+      t.db
+        .selectFrom('offering_sessions')
+        .select('id')
+        .where('offering_id', '=', offering.offeringId)
+        .execute();
+    expect(await sessionsOf()).toEqual([]);
+
+    // at the event's times the session is created; once it is canceled with its event, no new
+    // session can be linked to the canceled event
+    const session = await ok<{ id: string; revision: number }>(attempt({}), 201);
+    await ok(
+      post(t, `/v1/sessions/${session.id}/cancel`, manager.header, {
+        reason: 'Clinic dropped',
+        expectedRevision: session.revision,
+      }),
+    );
+    expect((await eventRow(eventId)).status).toBe('canceled');
+    const onCanceled = await attempt({ sequence: 2 });
+    expect(onCanceled.status, JSON.stringify(onCanceled.body)).toBe(400);
+    expect(onCanceled.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { path: 'schedulingEventId', eventStatus: 'canceled' },
+    });
+    expect(await sessionsOf()).toHaveLength(1);
+  });
+
+  it('R2-JOURNEYS-03: a session created while its event is being moved ends at the moved times (PGlite and TEST_DATABASE_URL)', async () => {
+    const pitch = await seedPitchWithHalves(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: 'Pitch R2-03 race',
+    });
+    const offering = await youthOffering();
+    const series = await weeklyEvents(offering.offeringId, pitch.southHalfId, 1);
+    const eventId = series.eventIds[0] as string;
+    const seriesRevision = async () =>
+      (
+        await t.db
+          .selectFrom('event_series')
+          .select('revision')
+          .where('id', '=', series.id)
+          .executeTakeFirstOrThrow()
+      ).revision;
+
+    // The creation checks the event's times (10:00) and then stays uncommitted while the event is
+    // moved and the move's delivery is handled. Under PostgreSQL that overlap is real: without the
+    // per-event lock the handler would find no session yet and the new session would keep the old
+    // time for good; with it the handler waits for the creation and then retimes it.
+    const audit = t.app.get(AuditWriter);
+    const record = audit.record.bind(audit);
+    let checked!: () => void;
+    const creationChecked = new Promise<void>((resolve) => (checked = resolve));
+    let moved!: () => void;
+    const eventMoved = new Promise<void>((resolve) => (moved = resolve));
+    const spy = vi.spyOn(audit, 'record').mockImplementation(async (trx, input) => {
+      if (input.action === 'catalog.session_created' && t.database.concurrent) {
+        checked();
+        await eventMoved;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return record(trx, input);
+    });
+    let created: { id: string };
+    try {
+      const creation = linkedSession(offering.offeringId, eventId, DAY, 1);
+      // PGlite runs one transaction at a time, so there the move simply follows the creation
+      await (t.database.concurrent ? creationChecked : creation);
+      await ok(
+        post(t, `/v1/event-series/${series.id}/edits`, scheduler.header, {
+          scope: 'one',
+          occurrenceIndex: 0,
+          changes: { localStartTime: '15:00' },
+          expectedRevision: await seriesRevision(),
+        }),
+      );
+      moved();
+      await drain(t);
+      created = await creation;
+    } finally {
+      spy.mockRestore();
+    }
+    await drain(t);
+    const row = await sessionRow(created.id);
+    expect(new Date(row.scheduled_start).toISOString()).toBe(at(DAY, '15:00'));
+    expect(new Date(row.scheduled_end).toISOString()).toBe(at(DAY, '16:00'));
   });
 });

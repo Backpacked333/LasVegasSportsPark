@@ -106,8 +106,8 @@ export const CatalogEvents = {
   ),
   /**
    * R2-JOURNEYS-03 (SPK-AT-009 consistent publication, SPK-COMMS-005, SPK-YOUTH-007): the
-   * scheduling event behind the session was moved or resized and the session now carries the
-   * event's times. Deliveries are not ordered per session, so a consumer copies the session's
+   * published times of the scheduling event behind the session changed (moved, resized, or a draft
+   * published at times that changed while it was a draft) and the session now carries them. Deliveries are not ordered per session, so a consumer copies the session's
    * CURRENT times (`SessionsService.sessionsOfSchedulingEvents` through its own transaction) or
    * compares `revision`, never applying an older delivery over a newer one (§4.12, §4.6).
    */
