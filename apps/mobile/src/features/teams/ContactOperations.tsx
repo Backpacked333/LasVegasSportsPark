@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
@@ -90,16 +91,22 @@ export function ContactOperations({ workspace }: { workspace: Workspace }) {
 
   if (send.data) {
     const sent = send.data;
+    const status = supportCaseStatus(sent.status);
+    const summary = `Request sent ${formatInstant(sent.createdAt)}: "${sent.title}". The operating team answers through Support.`;
     return (
-      <View style={styles.group} testID="support-request-sent" accessibilityLiveRegion="polite">
-        <StatusBadge {...supportCaseStatus(sent.status)} />
-        <Body>{`Request sent ${formatInstant(sent.createdAt)}: "${sent.title}". The operating team answers through Support.`}</Body>
+      <LiveRegion
+        style={styles.group}
+        testID="support-request-sent"
+        announcement={sentences(status.label, summary)}
+      >
+        <StatusBadge {...status} />
+        <Body>{summary}</Body>
         <Button
           label="See your support requests"
           variant="secondary"
           onPress={() => router.push('/support')}
         />
-      </View>
+      </LiveRegion>
     );
   }
 

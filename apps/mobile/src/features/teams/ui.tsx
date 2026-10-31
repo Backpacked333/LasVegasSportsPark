@@ -16,6 +16,7 @@ import {
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
+import { LiveRegion, LiveText, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { StateView } from '../../ui/StateView';
@@ -187,9 +188,9 @@ export function TextField({
         testID={testID}
       />
       {error ? (
-        <Text style={styles.error} accessibilityLiveRegion="polite">
+        <LiveText style={styles.error} announcement={error}>
           {`▲ ${error}`}
-        </Text>
+        </LiveText>
       ) : null}
     </View>
   );
@@ -334,22 +335,23 @@ export function CommandFailure({
   const rule = detailCodeOf(error);
   const unknown = !read && mayHaveTakenEffect(error);
   const withheld = !read && secretWithheldOf(error) !== null;
+  const label = unknown
+    ? 'No answer yet: this may already have been recorded'
+    : withheld
+      ? 'Done, but the link cannot be shown again'
+      : stale
+        ? 'This changed since you opened it'
+        : read
+          ? 'Not loaded'
+          : 'Not done';
   return (
-    <View style={styles.failure} testID={testID} accessibilityLiveRegion="polite">
-      <StatusBadge
-        tone={unknown || withheld ? 'warning' : 'danger'}
-        label={
-          unknown
-            ? 'No answer yet: this may already have been recorded'
-            : withheld
-              ? 'Done, but the link cannot be shown again'
-              : stale
-                ? 'This changed since you opened it'
-                : read
-                  ? 'Not loaded'
-                  : 'Not done'
-        }
-      />
+    <LiveRegion
+      style={styles.failure}
+      testID={testID}
+      announcement={sentences(label, error.message, ...issues)}
+      occurrence={error}
+    >
+      <StatusBadge tone={unknown || withheld ? 'warning' : 'danger'} label={label} />
       <Text style={styles.body}>{error.message}</Text>
       {issues.map((issue) => (
         <Text key={issue} style={styles.body}>{`▲ ${issue}`}</Text>
@@ -371,7 +373,7 @@ export function CommandFailure({
       ) : (
         <Text style={styles.body}>{recovery.label}</Text>
       )}
-    </View>
+    </LiveRegion>
   );
 }
 

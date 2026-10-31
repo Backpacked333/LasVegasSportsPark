@@ -46,6 +46,7 @@ import { Caption, Section, SectionQueryState } from '../../features/today/Sectio
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
@@ -62,6 +63,9 @@ export const REPLACE_REASON = 'Replaced by the holder in the app';
 export const WITHDRAW_REASON = 'Withdrawn by the holder in the app: reference not on this device';
 
 const MY_PASSES_KEY = ['api', '/me/passes'] as const;
+
+const REPLACE_QUESTION =
+  'Replace this pass? The new pass works straight away and the current one stops working.';
 
 /** A refused issue (ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED, NOT_FOUND), without the code. */
 const ISSUE_NOT_AVAILABLE: NotAvailableCopy = {
@@ -317,11 +321,8 @@ function PassContent() {
             />
           ) : null}
           {pass && held.kind !== 'revoked' && confirmReplace ? (
-            <View style={styles.confirm} accessibilityLiveRegion="polite">
-              <Text style={styles.body}>
-                Replace this pass? The new pass works straight away and the current one stops
-                working.
-              </Text>
+            <LiveRegion style={styles.confirm} announcement={REPLACE_QUESTION}>
+              <Text style={styles.body}>{REPLACE_QUESTION}</Text>
               <Button
                 label="Replace"
                 busy={issue.isProcessing || revoke.isProcessing}
@@ -334,7 +335,7 @@ function PassContent() {
                 variant="secondary"
                 onPress={() => setConfirmReplace(false)}
               />
-            </View>
+            </LiveRegion>
           ) : null}
           {!pass ? (
             <Button
@@ -509,9 +510,9 @@ function OtherPass({
       <Text style={styles.body}>Pass issued {formatWhen(pass.issuedAt, zone)}</Text>
       {withdraw.status !== 'success' ? <StatusBadge tone="success" label="Active" /> : null}
       {withdraw.status === 'success' ? (
-        <View accessibilityLiveRegion="polite">
+        <LiveRegion announcement="Withdrawn">
           <StatusBadge tone="neutral" label="Withdrawn" />
-        </View>
+        </LiveRegion>
       ) : confirming ? (
         <View style={styles.confirm}>
           <Text style={styles.body}>

@@ -24,9 +24,10 @@
 import { ApiError, formatAge } from '@sportspark/api-client';
 import { notifyManager, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { receivedAtOf } from '../api/useApiQuery';
 import { useApp, useConnectivity, useNow } from '../providers/AppProviders';
+import { LiveRegion, sentences } from '../ui/announce';
 import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
 import { colors, spacing, type } from '../ui/theme';
@@ -132,10 +133,13 @@ export function ConnectivityBanner() {
 
   if (reachable === false) {
     return (
-      <View
+      <LiveRegion
         style={styles.banner}
         accessibilityRole="alert"
-        accessibilityLiveRegion="polite"
+        announcement={sentences(
+          'You are offline',
+          `Needs a connection: ${OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}`,
+        )}
         testID="connectivity-banner"
       >
         <StatusBadge tone="warning" label="You are offline" />
@@ -143,24 +147,31 @@ export function ConnectivityBanner() {
           {age ? `Showing information from ${age}.` : 'Nothing has been loaded yet.'} Needs a
           connection: {OFFLINE_UNAVAILABLE_ACTIONS.join(', ')}.
         </Text>
-      </View>
+      </LiveRegion>
     );
   }
 
   if (reconnecting) {
     return (
-      <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
+      <LiveRegion
+        style={styles.banner}
+        announcement="Back online. Refreshing"
+        testID="connectivity-banner"
+      >
         <StatusBadge tone="info" label="Back online. Refreshing" />
-      </View>
+      </LiveRegion>
     );
   }
 
   if (failure) {
     return (
-      <View
+      <LiveRegion
         style={styles.banner}
         accessibilityRole="alert"
-        accessibilityLiveRegion="polite"
+        announcement={sentences(
+          'Some information could not be refreshed',
+          `The service did not answer (error code ${failure}). Actions that need the service may fail until it does`,
+        )}
         testID="connectivity-banner"
       >
         <StatusBadge tone="warning" label="Some information could not be refreshed" />
@@ -169,26 +180,35 @@ export function ConnectivityBanner() {
           {failure}). Actions that need the service may fail until it does.
         </Text>
         <Button label="Try again" variant="secondary" onPress={refreshNow} />
-      </View>
+      </LiveRegion>
     );
   }
 
   if (refreshedAt !== null && now.getTime() - refreshedAt < REFRESHED_NOTICE_MS) {
     return (
-      <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
+      <LiveRegion
+        style={styles.banner}
+        // The age in the badge changes while it is shown; the announcement does not.
+        announcement="Back online. Information updated"
+        testID="connectivity-banner"
+      >
         <StatusBadge tone="success" label={`Back online. Updated ${formatAge(refreshedAt, now)}`} />
-      </View>
+      </LiveRegion>
     );
   }
 
   const threshold = services.config.staleDataThresholdMs;
   if (threshold !== null && oldest !== null && now.getTime() - oldest > threshold) {
     return (
-      <View style={styles.banner} accessibilityLiveRegion="polite" testID="connectivity-banner">
+      <LiveRegion
+        style={styles.banner}
+        announcement="Some information may be out of date"
+        testID="connectivity-banner"
+      >
         <StatusBadge tone="warning" label="Some information may be out of date" />
         <Text style={styles.text}>Updated {age}.</Text>
         <Button label="Refresh" variant="secondary" onPress={refreshNow} />
-      </View>
+      </LiveRegion>
     );
   }
 

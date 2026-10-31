@@ -48,6 +48,7 @@ import { noticeStatus } from '../../features/today/status';
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -196,9 +197,9 @@ function NoticeDetail({
         <CommandError error={acknowledge.error} onRetry={acknowledgeNow} onReload={reload} />
       ) : null}
       {acknowledge.status === 'success' ? (
-        <View accessibilityLiveRegion="polite">
+        <LiveRegion announcement="Acknowledged">
           <StatusBadge tone="success" label="Acknowledged" />
-        </View>
+        </LiveRegion>
       ) : null}
     </View>
   );

@@ -29,6 +29,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
+import { LiveText } from '../../ui/announce';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
@@ -54,6 +55,11 @@ export interface RsvpControlProps {
   /** Called after a stale or closed answer so the screen reloads the fixture. */
   onReload?: () => void;
 }
+
+const NEEDS_CONNECTION =
+  'Answering needs a connection. Nothing is saved until you are back online.';
+const SAVING = 'Saving your answer…';
+const recordedText = (state: RsvpState) => `Answer recorded: ${rsvpStatus(state).label}.`;
 
 /** `details.code` of the API's refusal of an answer after kickoff (CMP-04). */
 export const AVAILABILITY_CLOSED = 'AVAILABILITY_CLOSED';
@@ -180,19 +186,23 @@ export function RsvpControl({
         </Text>
       ) : null}
       {offline && open ? (
-        <Text style={styles.caption} accessibilityLiveRegion="polite">
-          Answering needs a connection. Nothing is saved until you are back online.
-        </Text>
+        <LiveText style={styles.caption} announcement={NEEDS_CONNECTION}>
+          {NEEDS_CONNECTION}
+        </LiveText>
       ) : null}
       {rsvp.isProcessing ? (
-        <Text style={styles.caption} accessibilityLiveRegion="polite">
-          Saving your answer…
-        </Text>
+        <LiveText style={styles.caption} announcement={SAVING}>
+          {SAVING}
+        </LiveText>
       ) : null}
       {rsvp.status === 'success' && rsvp.data ? (
-        <Text style={styles.caption} accessibilityLiveRegion="polite" testID="rsvp-recorded">
-          Answer recorded: {rsvpStatus(rsvp.data.state as RsvpState).label}.
-        </Text>
+        <LiveText
+          style={styles.caption}
+          announcement={recordedText(rsvp.data.state as RsvpState)}
+          testID="rsvp-recorded"
+        >
+          {recordedText(rsvp.data.state as RsvpState)}
+        </LiveText>
       ) : null}
       {rsvp.error
         ? rsvpErrorView(

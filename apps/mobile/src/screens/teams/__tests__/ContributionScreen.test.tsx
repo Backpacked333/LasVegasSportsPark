@@ -6,6 +6,7 @@
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import {
   IDS,
   contributionRequest,
@@ -163,6 +164,27 @@ describe('SCR-C-25 ContributionScreen', () => {
       { paymentMethodToken: 'pm_fake_visa' },
     ]);
     expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
+    await app.settle();
+  });
+
+  it('SPK-UX-009: a VoiceOver user who pays and gets no answer hears "No answer yet" (iOS has no live regions)', async () => {
+    const app = renderContribution(
+      {
+        'POST /contribution-requests/{id}/pay': { status: 201, body: outcome('processing') },
+        'GET /payments/{id}': { status: 200, body: paymentAttempt({ status: 'processing' }) },
+        'GET /me/payments': { status: 200, body: { items: [], nextCursor: null } },
+      },
+      (created) => dropAnswers(created, 'POST', PAY_URL),
+    );
+    fireEvent.press(await screen.findByRole('radio', { name: 'Development payment: succeeds' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    await screen.findByLabelText('No answer yet: this may already have been recorded');
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      expect.stringMatching(/^No answer yet: this may already have been recorded\./),
+      { queue: true },
+    );
     await app.settle();
   });
 

@@ -19,16 +19,22 @@
  *
  * Pass `read` for the failure of a read (a GET, such as the transfer preview or the re-read before
  * canceling): it changed nothing, so it is shown as a read that did not load, with "Try again".
+ *
+ * Every answer is announced to screen readers when it appears (`ui/announce`: a live region on
+ * Android, an announcement on iOS), "No answer yet" included (SPK-UX-009).
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
+
+const STALE_LABEL = 'This changed since you opened it';
 
 export interface CommandFailureProps {
   error: ApiError;
@@ -74,13 +80,16 @@ export function CommandFailure({
   }
   const recovery = recoveryActionFor(error);
   if (mayHaveTakenEffect(error)) {
+    const body = `We did not get a definite answer about ${what}. It may already have been made. Checking again is safe: it cannot apply ${what} twice.`;
     return (
-      <View style={styles.box} accessibilityLiveRegion="polite" testID="command-no-answer">
+      <LiveRegion
+        style={styles.box}
+        announcement={sentences('No answer yet', body)}
+        occurrence={error}
+        testID="command-no-answer"
+      >
         <StatusBadge tone="warning" label="No answer yet" />
-        <Text style={styles.body}>
-          We did not get a definite answer about {what}. It may already have been made. Checking
-          again is safe: it cannot apply {what} twice.
-        </Text>
+        <Text style={styles.body}>{body}</Text>
         <Text style={styles.caption} selectable>
           Error code: {error.code}
           {error.correlationId ? `. Reference: ${error.correlationId}` : ''}
@@ -90,20 +99,25 @@ export function CommandFailure({
         ) : (
           <Text style={styles.body}>{recovery.label}</Text>
         )}
-      </View>
+      </LiveRegion>
     );
   }
   if (error.isStale) {
     return (
-      <View style={styles.box} accessibilityLiveRegion="polite" testID="command-stale">
-        <StatusBadge tone="warning" label="This changed since you opened it" />
+      <LiveRegion
+        style={styles.box}
+        announcement={sentences(STALE_LABEL, error.message)}
+        occurrence={error}
+        testID="command-stale"
+      >
+        <StatusBadge tone="warning" label={STALE_LABEL} />
         <Text style={styles.body}>{error.message}</Text>
         <Text style={styles.caption}>
           Error code: {error.code}
           {error.correlationId ? `. Reference: ${error.correlationId}` : ''}
         </Text>
         {onReload ? <Button label="Reload" onPress={onReload} /> : null}
-      </View>
+      </LiveRegion>
     );
   }
   // A retryable failure repeats the same intent; otherwise the permitted next action is shown as

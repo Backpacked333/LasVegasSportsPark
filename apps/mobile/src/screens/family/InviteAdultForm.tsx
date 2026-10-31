@@ -30,11 +30,12 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Share, StyleSheet, Text, View } from 'react-native';
+import { Share, StyleSheet, View } from 'react-native';
 import { mustNotCreateAgain, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { buildAppLink } from '../../links/link-targets';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
+import { LiveText } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StateView } from '../../ui/StateView';
@@ -203,15 +204,15 @@ export function InviteAdultForm({
           );
         })}
         {attempted && permissionsError ? (
-          <Text
+          <LiveText
             style={styles.error}
             accessibilityRole="alert"
-            accessibilityLiveRegion="polite"
+            announcement={permissionsError}
             testID="invite-permissions-error"
           >
             {'✕ '}
             {permissionsError}
-          </Text>
+          </LiveText>
         ) : null}
       </View>
       {pickup === null ? (

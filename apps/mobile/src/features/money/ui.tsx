@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { LiveText } from '../../ui/announce';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 import type { AccountPerson } from './people';
 
@@ -131,7 +132,10 @@ export function PersonPicker({
   );
 }
 
-/** A labelled text field; the error is announced and kept next to the field (SPK-UX-008). */
+/**
+ * A labelled text field; the error is kept next to the field, announced when it appears
+ * (`ui/announce`) and part of the input's hint, so it is read with the field (SPK-UX-008, SPK-UX-009).
+ */
 export function TextField({
   label,
   value,
@@ -151,13 +155,14 @@ export function TextField({
   editable?: boolean;
   testID?: string;
 }) {
+  const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
     <View style={styles.fieldBox}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {hint ? <Text style={styles.caption}>{hint}</Text> : null}
       <TextInput
         accessibilityLabel={label}
-        accessibilityHint={hint}
+        accessibilityHint={describedBy || undefined}
         accessibilityState={{ disabled: !editable }}
         value={value}
         onChangeText={onChangeText}
@@ -167,9 +172,9 @@ export function TextField({
         testID={testID}
       />
       {error ? (
-        <Text style={styles.error} accessibilityLiveRegion="polite" accessibilityRole="alert">
+        <LiveText style={styles.error} announcement={error} accessibilityRole="alert">
           ▲ {error}
-        </Text>
+        </LiveText>
       ) : null}
     </View>
   );

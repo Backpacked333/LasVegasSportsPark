@@ -21,6 +21,7 @@ import { presentationForError, recoveryActionFor, type ApiError } from '@sportsp
 import { StyleSheet, Text, View } from 'react-native';
 import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { Button } from '../../ui/Button';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -86,22 +87,22 @@ export function CommandError({
   const recovery = recoveryActionFor(error);
   if (mayHaveTakenEffect(error)) {
     const payment = error.code === 'PAYMENT_OUTCOME_UNKNOWN';
+    const label = payment
+      ? 'Payment outcome being confirmed. Do not pay again.'
+      : 'No answer yet: this may already have been recorded';
+    const body = payment
+      ? error.message
+      : 'There was no definite answer, so this may already have gone through. Checking again is safe: it sends the same request, so nothing happens twice.';
     return (
       <View testID={testID}>
-        <View style={styles.box} accessibilityLiveRegion="polite" testID="command-no-answer">
-          <StatusBadge
-            tone="warning"
-            label={
-              payment
-                ? 'Payment outcome being confirmed. Do not pay again.'
-                : 'No answer yet: this may already have been recorded'
-            }
-          />
-          <Text style={styles.body}>
-            {payment
-              ? error.message
-              : 'There was no definite answer, so this may already have gone through. Checking again is safe: it sends the same request, so nothing happens twice.'}
-          </Text>
+        <LiveRegion
+          style={styles.box}
+          announcement={sentences(label, body)}
+          occurrence={error}
+          testID="command-no-answer"
+        >
+          <StatusBadge tone="warning" label={label} />
+          <Text style={styles.body}>{body}</Text>
           <Text style={styles.caption} selectable>
             {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
           </Text>
@@ -110,7 +111,7 @@ export function CommandError({
           ) : (
             <Text style={styles.body}>{recovery.label}</Text>
           )}
-        </View>
+        </LiveRegion>
       </View>
     );
   }

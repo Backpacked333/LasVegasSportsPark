@@ -20,6 +20,7 @@ import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -54,16 +55,33 @@ export function AvailabilityClosed({
   what: string;
 }) {
   const at = availabilityClosedAt(error);
+  const closed = at
+    ? `${what} closed at kickoff, ${formatInstant(at, timeZone)}.`
+    : `${what} closed for this game.`;
   return (
-    <View style={styles.group} testID="availability-closed" accessibilityLiveRegion="polite">
+    <LiveRegion
+      style={styles.group}
+      testID="availability-closed"
+      announcement={sentences('Availability closed', closed)}
+      occurrence={error}
+    >
       <StatusBadge tone="neutral" label="Availability closed" />
-      <Body>
-        {at
-          ? `${what} closed at kickoff, ${formatInstant(at, timeZone)}.`
-          : `${what} closed for this game.`}
-      </Body>
+      <Body>{closed}</Body>
       <Body muted>{`Error code: ${error.code}`}</Body>
-    </View>
+    </LiveRegion>
+  );
+}
+
+/** The answer to "Ask again": who was asked, announced when it appears (`ui/announce`). */
+function SentNotice({ recipientCount }: { recipientCount: number }) {
+  const label =
+    recipientCount === 0
+      ? 'Everyone has answered: nobody was asked'
+      : `Asked ${plural(recipientCount, 'person', 'people')} without an answer`;
+  return (
+    <LiveRegion announcement={label}>
+      <StatusBadge tone="success" label={label} />
+    </LiveRegion>
   );
 }
 
@@ -140,18 +158,7 @@ export function AvailabilityRequests({
           </View>
         )}
       </QueryBoundary>
-      {send.data ? (
-        <View accessibilityLiveRegion="polite">
-          <StatusBadge
-            tone="success"
-            label={
-              send.data.recipientCount === 0
-                ? 'Everyone has answered: nobody was asked'
-                : `Asked ${plural(send.data.recipientCount, 'person', 'people')} without an answer`
-            }
-          />
-        </View>
-      ) : null}
+      {send.data ? <SentNotice recipientCount={send.data.recipientCount} /> : null}
       <TextField
         label="Message to the players (optional)"
         value={message}

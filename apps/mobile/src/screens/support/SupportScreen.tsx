@@ -68,6 +68,7 @@ import { enrollmentStatus } from '../../features/today/status';
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
@@ -142,6 +143,9 @@ const REQUEST_DENIED: NotAvailableCopy = {
   description:
     'You cannot open a request about this person or team. Choose another, or contact the facility.',
 };
+
+const sentSummary = (sent: CustomerCase) =>
+  `“${sent.title}” is with the facility team. Its status shows under Your requests.`;
 
 /** A request as sent: the draft it came from and the body, for "Check again" (same key, §4.9). */
 interface SentRequest {
@@ -243,17 +247,19 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
   return (
     <Section title="Contact the operating team" testID="support-request">
       {sent ? (
-        <View style={styles.gap} accessibilityLiveRegion="polite" testID="support-sent">
+        <LiveRegion
+          style={styles.gap}
+          announcement={sentences('Request sent', sentSummary(sent))}
+          testID="support-sent"
+        >
           <StatusBadge tone="success" label="Request sent" />
-          <Body>
-            “{sent.title}” is with the facility team. Its status shows under Your requests.
-          </Body>
+          <Body>{sentSummary(sent)}</Body>
           <Button
             label="View this request"
             variant="secondary"
             onPress={() => router.push(supportRoutes.request(sent.id) as Href)}
           />
-        </View>
+        </LiveRegion>
       ) : null}
 
       <View accessibilityRole="radiogroup" accessibilityLabel="Who is this about">

@@ -25,6 +25,9 @@
  * is there, is revoked from its list. In both cases the screen holds back creating again; "Start a
  * new one" (`onStartOver`, offered only where the record could not be named) ends the intent once
  * the person has looked, so the next create is theirs to choose.
+ *
+ * Each answer is announced to screen readers when it appears (`ui/announce`), and so is what the
+ * revoke answers later inside the box (no answer yet, already accepted or declined).
  */
 import type { ApiError } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -37,6 +40,7 @@ import {
 } from '../api/command-outcome';
 import { useApiCommand } from '../api/useApiCommand';
 import { useConnectivity } from '../providers/AppProviders';
+import { LiveRegion, sentences, useAnnouncement } from './announce';
 import { Button } from './Button';
 import { OUTCOME_LOST_LABEL } from './OutcomeLost';
 import { StateView } from './StateView';
@@ -127,12 +131,16 @@ export function SecretWithheld({
   ) : null;
 
   if (lost) {
+    const lostBody = `Your earlier request reached the service and may have created the ${what}, but its answer was lost, so its one-time link cannot be shown. Nothing new is created until you have looked.`;
     return (
-      <View style={styles.box} accessibilityLiveRegion="polite" testID={testID}>
+      <LiveRegion
+        style={styles.box}
+        announcement={sentences(OUTCOME_LOST_LABEL, lostBody, findIt)}
+        occurrence={error}
+        testID={testID}
+      >
         <StatusBadge tone="warning" label={OUTCOME_LOST_LABEL} />
-        <Text style={styles.body}>
-          {`Your earlier request reached the service and may have created the ${what}, but its answer was lost, so its one-time link cannot be shown. Nothing new is created until you have looked.`}
-        </Text>
+        <Text style={styles.body}>{lostBody}</Text>
         <Text style={styles.body}>{findIt}</Text>
         <Text style={styles.caption} selectable>
           {reference}
@@ -144,7 +152,7 @@ export function SecretWithheld({
           accessibilityHint={`Reads "${listName}" again`}
         />
         {startOver}
-      </View>
+      </LiveRegion>
     );
   }
 
@@ -170,21 +178,34 @@ export function SecretWithheld({
     answered === null ? null : answeredShownAt ? answeredShownAt(answered) : `under "${listName}"`;
   // Revoked or expired already: the create is being sent again; nothing to show for the revoke.
   const revokeError = answered !== null && !used ? null : revoke.error;
+  const usedText = `It can no longer be revoked: it was ${answered} already. ${
+    usedAt ? `It is shown ${usedAt}.` : `It no longer appears under "${listName}".`
+  } Nothing new was created.`;
+  const revokeUnknown = revokeError !== null && !used && mayHaveTakenEffect(revokeError);
+  const revokeUnknownBody = `Nothing new is created until the first ${what} is known to be revoked. Checking again is safe: it cannot revoke twice.`;
+  const revokeUnknownText = sentences(REVOKE_UNKNOWN_LABEL, revokeUnknownBody);
 
+  const withheldBody = `Your earlier request went through: the ${what} was created. Its one-time link is shown only in the first answer, which did not reach this device, so it cannot be shown again.`;
   return (
-    <View style={styles.box} accessibilityLiveRegion="polite" testID={testID}>
-      <StatusBadge tone="warning" label="Created, but the link cannot be shown again" />
-      <Text style={styles.body}>
-        {`Your earlier request went through: the ${what} was created. Its one-time link is shown only in the first answer, which did not reach this device, so it cannot be shown again.`}
-      </Text>
+    <LiveRegion
+      style={styles.box}
+      announcement={sentences(WITHHELD_LABEL, withheldBody)}
+      occurrence={error}
+      testID={testID}
+    >
+      <WithheldOutcomes
+        usedText={used ? usedText : null}
+        revokeUnknownText={revokeUnknown ? revokeUnknownText : null}
+        occurrence={revoke.error}
+      />
+      <StatusBadge tone="warning" label={WITHHELD_LABEL} />
+      <Text style={styles.body}>{withheldBody}</Text>
       <Text style={styles.caption} selectable>
         {reference}
       </Text>
       {used ? (
         <Text style={styles.body} testID={`${testID}-used`}>
-          {`It can no longer be revoked: it was ${answered} already. ${
-            usedAt ? `It is shown ${usedAt}.` : `It no longer appears under "${listName}".`
-          } Nothing new was created.`}
+          {usedText}
         </Text>
       ) : resourceId ? (
         <>
@@ -210,12 +231,10 @@ export function SecretWithheld({
         </>
       )}
       {revokeError && !used ? (
-        mayHaveTakenEffect(revokeError) ? (
+        revokeUnknown ? (
           <View style={styles.inner} testID={`${testID}-revoke-unknown`}>
-            <StatusBadge tone="warning" label="No answer yet: the revoke may already be recorded" />
-            <Text style={styles.body}>
-              {`Nothing new is created until the first ${what} is known to be revoked. Checking again is safe: it cannot revoke twice.`}
-            </Text>
+            <StatusBadge tone="warning" label={REVOKE_UNKNOWN_LABEL} />
+            <Text style={styles.body}>{revokeUnknownBody}</Text>
             <Text style={styles.caption}>{`Error code: ${revokeError.code}`}</Text>
           </View>
         ) : revokeError.isNotFound || revokeError.isPermissionRestriction ? (
@@ -224,8 +243,29 @@ export function SecretWithheld({
           <StateView variant="error" error={revokeError} onRetry={() => void reissue()} />
         )
       ) : null}
-    </View>
+    </LiveRegion>
   );
+}
+
+const WITHHELD_LABEL = 'Created, but the link cannot be shown again';
+const REVOKE_UNKNOWN_LABEL = 'No answer yet: the revoke may already be recorded';
+
+/**
+ * What appears later inside the (already live) withheld box: announced on iOS only, since on
+ * Android the box's live region reads the change (`ui/announce`).
+ */
+function WithheldOutcomes({
+  usedText,
+  revokeUnknownText,
+  occurrence,
+}: {
+  usedText: string | null;
+  revokeUnknownText: string | null;
+  occurrence: unknown;
+}) {
+  useAnnouncement(usedText);
+  useAnnouncement(revokeUnknownText, occurrence);
+  return null;
 }
 
 const styles = StyleSheet.create({
