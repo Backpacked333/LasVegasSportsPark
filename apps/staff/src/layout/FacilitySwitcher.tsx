@@ -2,10 +2,11 @@
  * Facility switcher limited to the principal's facility scope as the API answers it (§4.3). Names
  * and scope come from the facility directory, `GET /v1/facilities` (K-04; `inStaffScope` is the
  * API's answer for this staff principal), within `GET /v1/me` `principal.facilityIds` when that is
- * not empty: one cached read of configuration shared with every screen. The shell never reads the Today feed: that read computes every operational source and
- * belongs to the Today screen alone (§4.5 bounded reads). While the directory has not answered, or
- * when it fails, the scope from `GET /v1/me` (`principal.facilityIds`, empty = the whole
- * organization) is offered, and an unnamed facility shows a short reference.
+ * not empty: one cached read of configuration shared with every screen. The shell never reads the
+ * Today feed: that read computes every operational source and belongs to the Today screen alone
+ * (§4.5 bounded reads). While the directory has not answered, or when it fails, the scope from
+ * `GET /v1/me` (`principal.facilityIds`, empty = the whole organization) is offered, and an
+ * unnamed facility shows a short reference.
  */
 import { useEffect, useId, useMemo } from 'react';
 import { hasAnswered, useFacilityDirectory } from '../api/facility-directory';

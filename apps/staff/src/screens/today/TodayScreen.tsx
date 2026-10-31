@@ -416,7 +416,7 @@ export function TodayScreen() {
   const { facilityId } = useApp();
   const now = useNow();
   const [showAssistant, setShowAssistant] = useState(false);
-  // Without a facility the request (and cache entry) is the one the facility switcher reads.
+  // §4.5: the only Today read in the dashboard; scoped to the facility chosen in the header.
   const today = useApiQuery({
     path: '/today',
     request: facilityId ? { query: { facilityId } } : undefined,
