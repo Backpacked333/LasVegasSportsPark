@@ -25601,7 +25601,8 @@
         "enum": [
           "returned",
           "retained_by_policy",
-          "retained_pending_policy"
+          "retained_pending_policy",
+          "retained_entitlement_ended"
         ]
       },
       "SessionBooking": {

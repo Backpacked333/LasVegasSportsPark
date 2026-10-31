@@ -782,4 +782,36 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
     ]);
     expect(await statusOf(booked.body.id as string)).toBe('confirmed');
   });
+
+  it('stage-6 R2-LIFECYCLES-06 / SPK-COND-001: a canceled booking of an ended membership records retained_entitlement_ended and gives no session back to it', async () => {
+    const member = await adult(t);
+    const { enrollmentId } = await join(member, includedWeekly(1));
+    const booked = await book(member, week2, enrollmentId);
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const current = await t.http.get(`/v1/enrollments/${enrollmentId}`).set(frontDesk.header);
+    expect(
+      (
+        await post(t, `/v1/enrollments/${enrollmentId}/cancel`, frontDesk.header, {
+          reason: 'moved away',
+          expectedRevision: current.body.revision,
+        })
+      ).status,
+    ).toBe(200);
+    await drain(t);
+    const canceled = await post(
+      t,
+      `/v1/session-bookings/${booked.body.id as string}/cancel`,
+      member.header,
+      { reason: 'membership ended', expectedRevision: booked.body.revision },
+    );
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+    // Not "kept under the approved cancellation policy": the membership's own end kept it.
+    expect(canceled.body.creditDisposition).toBe('retained_entitlement_ended');
+    const uses = await t.db
+      .selectFrom('membership_benefit_uses')
+      .select(['period_key', 'used_count'])
+      .where('enrollment_id', '=', enrollmentId)
+      .execute();
+    expect(uses).toEqual([{ period_key: 'week:2026-11-23', used_count: 1 }]);
+  });
 });

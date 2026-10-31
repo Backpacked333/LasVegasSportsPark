@@ -58222,7 +58222,7 @@ export type components = {
             updatedAt: string;
         };
         /** @enum {string} */
-        SessionBookingCreditDisposition: "returned" | "retained_by_policy" | "retained_pending_policy";
+        SessionBookingCreditDisposition: "returned" | "retained_by_policy" | "retained_pending_policy" | "retained_entitlement_ended";
         /** @enum {string} */
         SessionBookingEntitlementBasis: "purchase" | "makeup" | "package" | "membership";
         /** @enum {string} */

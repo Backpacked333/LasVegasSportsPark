@@ -5,7 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { CatalogEvents, createOfferingSessionFixture } from '../../catalog';
+import { CapacityService } from '../services/capacity.service';
+import { EXPIRE_PACKAGES_JOB } from '../services/enrollment-jobs';
+import { MakeupsService } from '../services/makeups.service';
 import { SessionCanceledFollowUp } from '../services/session-canceled-follow-up';
+import { SessionParticipants } from '../services/session-participants';
 import { createMakeupEntitlementFixture } from '../testing/enrollment-fixtures';
 import {
   adultOffering,
@@ -84,12 +88,26 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
       .where('affected_id', '=', bookingId)
       .execute();
 
+  /** The notices enrollment composed about a session booking. */
+  const bookingNotices = (bookingId: string) =>
+    t.db
+      .selectFrom('notifications')
+      .select(['id', 'kind', 'title', 'body', 'protected'])
+      .where('subject_type', '=', 'session_booking')
+      .where('subject_id', '=', bookingId)
+      .execute();
+
   /** A free package purchase confirmed through the basket, with its issued entitlement. */
-  async function buyPackage(buyer: Actor, cancellationPolicyVersionId?: string) {
+  async function buyPackage(
+    buyer: Actor,
+    cancellationPolicyVersionId?: string,
+    options: { credits?: number; expiry?: Record<string, unknown> } = {},
+  ) {
     const pack = await packageOffering(t, {
-      credits: 3,
+      credits: options.credits ?? 3,
       appliesTo: { offeringIds: [target.offeringId] },
       cancellationPolicyVersionId,
+      expiry: options.expiry,
     });
     await acknowledge(t, pack, buyer.personId, buyer.personId);
     await acknowledge(t, target, buyer.personId, buyer.personId);
@@ -182,6 +200,15 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
       expect(pools.every((p) => p.status === 'closed' && p.committed === 0 && p.held === 0)).toBe(
         true,
       );
+      // The family is told, and what happens to the credit (stage-6 rework, SPK-COMMS-002).
+      expect(await bookingNotices(near.body.id as string)).toEqual([
+        expect.objectContaining({
+          kind: 'cancellation',
+          title: 'Session canceled',
+          protected: true,
+          body: expect.stringContaining('Staff review what happens to the package credit.'),
+        }),
+      ]);
       // Staff return the credit through the redemption the exception names.
       const reversed = await post(
         t,
@@ -214,6 +241,12 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
       });
       expect(await raisedFor(far.body.id as string)).toEqual([]);
       expect(await redeemedCount(entitlementId)).toBe(0);
+      expect(await bookingNotices(far.body.id as string)).toEqual([
+        expect.objectContaining({
+          kind: 'cancellation',
+          body: expect.stringContaining('The package credit was given back.'),
+        }),
+      ]);
     } finally {
       t.clock.set(new Date('2026-11-02T15:00:00Z'));
     }
@@ -444,6 +477,24 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
     await cancelSession(seat, 'Gym double-booked');
 
     expect((await bookingRow(booked.body.id as string)).status).toBe('canceled');
+    // The booked family is told too: a catalog cancellation emits no scheduling change, so
+    // enrollment composes the notice (stage-6 rework of R2-JOURNEYS-01, SPK-COMMS-002).
+    const bookerNotices = await bookingNotices(booked.body.id as string);
+    expect(bookerNotices).toEqual([
+      expect.objectContaining({
+        kind: 'cancellation',
+        title: 'Session canceled',
+        protected: true,
+        body: expect.stringContaining('was canceled by the facility, so the booking is canceled.'),
+      }),
+    ]);
+    // A free pickup booking used nothing, so nothing more is said.
+    expect(bookerNotices[0]!.body).not.toMatch(/Staff review|given back|makeup/);
+    const inbox = await t.http.get('/v1/me/inbox').set(booker.header);
+    expect(inbox.status).toBe(200);
+    expect(inbox.body.items.map((i: { notificationId: string }) => i.notificationId)).toContain(
+      bookerNotices[0]!.id,
+    );
     const entry = await t.db
       .selectFrom('waitlist_entries')
       .select(['status', 'removal_reason', 'offer_count'])
@@ -478,13 +529,353 @@ describe('a canceled session ends its bookings and waiters (R2-JOURNEYS-01, SPK-
       sessionId: seat,
       participantPersonId: late.personId,
     });
-    expect(rebook.status).not.toBe(201);
+    // The catalog reads the session as canceled, so eligibility refuses the booking before any
+    // seat is looked at.
+    expect(rebook.status, JSON.stringify(rebook.body)).toBe(422);
+    expect(rebook.body.code).toBe('ELIGIBILITY_FAILED');
+    expect(rebook.body.details.reasons.map((r: { code: string }) => r.code)).toContain(
+      'session_not_bookable',
+    );
     const rejoin = await post(t, '/v1/waitlist-entries', late.header, {
       offeringId: pickup.offeringId,
       participantPersonId: late.personId,
       intent: 'pickup',
       sessionId: seat,
     });
-    expect(rejoin.status).not.toBe(201);
+    expect(rejoin.status, JSON.stringify(rejoin.body)).toBe(409);
+    expect(rejoin.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: { code: 'SESSION_CANCELED' },
+    });
+  });
+
+  it('R2-JOURNEYS-01 / §4.7 invariant 3: a booking whose session was read as scheduled after its pools were closed is refused by the closed-pool guard (409 CAPACITY_UNAVAILABLE SESSION_CANCELED)', async () => {
+    const pickup = await offering(t, {
+      kind: 'pickup',
+      basePriceMinor: 0,
+      capacityUnits: [{ unit: 'seats', limit: 5 }],
+      ageBand: { minAgeYears: 18 },
+    });
+    const seat = await sessionAt(pickup, '2026-11-21T02:00:00Z');
+    const [first, second] = [await adult(t), await adult(t)];
+    for (const actor of [first, second]) {
+      await acknowledge(t, pickup, actor.personId, actor.personId);
+    }
+    const booked = await post(t, '/v1/session-bookings', first.header, {
+      offeringId: pickup.offeringId,
+      sessionId: seat,
+      participantPersonId: first.personId,
+    });
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    // enrollment.follow_session_canceled closed the session's pools, while the booking below still
+    // reads the catalog session as scheduled (the read that happens before its transaction).
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        t.app
+          .get(CapacityService)
+          .closeSessionPools(trx, t.organizationId, pickup.offeringId, seat, 'Gym flooded', null),
+      );
+    const refused = await post(t, '/v1/session-bookings', second.header, {
+      offeringId: pickup.offeringId,
+      sessionId: seat,
+      participantPersonId: second.personId,
+    });
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'CAPACITY_UNAVAILABLE',
+      details: { code: 'SESSION_CANCELED', sessionId: seat },
+    });
+    const live = await t.db
+      .selectFrom('session_bookings')
+      .select('participant_person_id')
+      .where('session_id', '=', seat)
+      .execute();
+    expect(live.map((b) => b.participant_person_id)).toEqual([first.personId]);
+  });
+
+  it('stage-6 R2-LIFECYCLES-06 / SPK-YOUTH-004: an exhausted makeup past its expiry gets nothing back when its session is canceled; the decision is raised naming no reversal and the database refuses one', async () => {
+    const owner = await adult(t);
+    await acknowledge(t, target, owner.personId, owner.personId);
+    const makeupId = await createMakeupEntitlementFixture(t, {
+      participantPersonId: owner.personId,
+      eligibleOfferingIds: [target.offeringId],
+      redemptionLimit: 1,
+      expiresAt: new Date('2026-11-07T00:00:00Z'),
+    });
+    const thursday = await sessionAt(target, '2026-11-12T18:00:00Z');
+    const redeemed = await post(t, `/v1/makeup-entitlements/${makeupId}/redeem`, owner.header, {
+      offeringId: target.offeringId,
+      sessionId: thursday,
+    });
+    expect(redeemed.status, JSON.stringify(redeemed.body)).toBe(201);
+    const entitlement = () =>
+      t.db
+        .selectFrom('makeup_entitlements')
+        .select(['status', 'redeemed_count'])
+        .where('id', '=', makeupId)
+        .executeTakeFirstOrThrow();
+    t.clock.set(new Date('2026-11-08T12:00:00Z'));
+    try {
+      // Its expiry has passed, but an exhausted makeup is never moved to `expired`.
+      await t.app
+        .get(UnitOfWork)
+        .run(({ trx }) =>
+          t.app.get(MakeupsService).expireIfDue(trx, t.organizationId, makeupId, null),
+        );
+      expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 1 });
+      await cancelSession(thursday, 'Coach unavailable');
+      const booking = await t.db
+        .selectFrom('session_bookings')
+        .select(['status', 'cancel_cause'])
+        .where('id', '=', redeemed.body.id as string)
+        .executeTakeFirstOrThrow();
+      expect(booking).toEqual({ status: 'canceled', cancel_cause: 'session_canceled' });
+      // Nothing comes back to it: it stays exhausted, never `active` with a past expiry.
+      expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 1 });
+      const redemptions = await t.db
+        .selectFrom('makeup_redemptions')
+        .select(['id', 'kind'])
+        .where('makeup_entitlement_id', '=', makeupId)
+        .execute();
+      expect(redemptions.map((r) => r.kind)).toEqual(['redeem']);
+      expect(await raisedFor(redeemed.body.id as string)).toEqual([
+        expect.objectContaining({
+          owner_queue: 'program_manager',
+          details: expect.objectContaining({
+            makeupEntitlementId: makeupId,
+            makeupReversed: false,
+            entitlementEnded: true,
+            packageRedemptionId: null,
+          }),
+        }),
+      ]);
+      expect(await bookingNotices(redeemed.body.id as string)).toEqual([
+        expect.objectContaining({
+          kind: 'cancellation',
+          body: expect.stringContaining('Staff review what happens to the makeup.'),
+        }),
+      ]);
+      // The database refuses the reversal onto it from any writer (migration 0518).
+      expect(
+        await rejectsWith(
+          t.db
+            .insertInto('makeup_redemptions')
+            .values({
+              id: newId(),
+              organization_id: t.organizationId,
+              makeup_entitlement_id: makeupId,
+              session_booking_id: redeemed.body.id as string,
+              participant_person_id: owner.personId,
+              kind: 'reversal',
+              reverses_redemption_id: redemptions[0]!.id,
+              actor: json({ kind: 'system' }),
+              redeemed_at: t.clock.now(),
+            })
+            .execute(),
+        ),
+      ).toBe('23514');
+      expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 1 });
+    } finally {
+      t.clock.set(new Date('2026-11-02T15:00:00Z'));
+    }
+  });
+
+  it('stage-6 R2-LIFECYCLES-06 / SPK-COND-002 / POL-039: an exhausted package past its expiry gets nothing back from a family or a facility cancellation; the booking records retained_entitlement_ended, the decision names no reversal, and a staff reversal and a direct write are refused', async () => {
+    const buyer = await adult(t);
+    // Issued now (2026-11-02 15:00Z), it expires two days later; both credits are used first.
+    const entitlementId = await buyPackage(buyer, undefined, {
+      credits: 2,
+      expiry: { kind: 'days_after_issue', days: 2 },
+    });
+    const first = await sessionAt(target, '2026-11-12T17:00:00Z');
+    const second = await sessionAt(target, '2026-11-13T17:00:00Z');
+    const book = (sessionId: string) =>
+      post(t, '/v1/session-bookings', buyer.header, {
+        offeringId: target.offeringId,
+        sessionId,
+        participantPersonId: buyer.personId,
+        packageEntitlementId: entitlementId,
+      });
+    const familyCanceled = await book(first);
+    expect(familyCanceled.status, JSON.stringify(familyCanceled.body)).toBe(201);
+    const facilityCanceled = await book(second);
+    expect(facilityCanceled.status, JSON.stringify(facilityCanceled.body)).toBe(201);
+    const entitlement = () =>
+      t.db
+        .selectFrom('package_entitlements')
+        .select(['status', 'redeemed_count'])
+        .where('id', '=', entitlementId)
+        .executeTakeFirstOrThrow();
+    expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 2 });
+    t.clock.set(new Date('2026-11-05T12:00:00Z'));
+    try {
+      // The expiry job expires active packages only: this one stays exhausted.
+      await t.runPeriodicJobs([EXPIRE_PACKAGES_JOB]);
+      expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 2 });
+
+      const canceled = await post(
+        t,
+        `/v1/session-bookings/${familyCanceled.body.id as string}/cancel`,
+        buyer.header,
+        { reason: 'away that week', expectedRevision: familyCanceled.body.revision },
+      );
+      expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+      expect(canceled.body.creditDisposition).toBe('retained_entitlement_ended');
+      expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 2 });
+
+      await cancelSession(second, 'Floodlights failed');
+      expect(await bookingRow(facilityCanceled.body.id as string)).toEqual({
+        status: 'canceled',
+        credit_disposition: 'retained_entitlement_ended',
+        cancel_reason: 'Floodlights failed',
+      });
+      expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 2 });
+      // The loss is raised for a decision, without pointing staff at a reversal that cannot happen.
+      expect(await raisedFor(facilityCanceled.body.id as string)).toEqual([
+        expect.objectContaining({
+          owner_queue: 'program_manager',
+          details: expect.objectContaining({
+            entitlementBasis: 'package',
+            packageEntitlementId: entitlementId,
+            packageRedemptionId: null,
+            creditDisposition: 'retained_entitlement_ended',
+            entitlementEnded: true,
+          }),
+        }),
+      ]);
+      expect(await bookingNotices(facilityCanceled.body.id as string)).toEqual([
+        expect.objectContaining({
+          body: expect.stringContaining('Staff review what happens to the package credit.'),
+        }),
+      ]);
+      const redemption = await t.db
+        .selectFrom('package_redemptions')
+        .select('id')
+        .where('session_booking_id', '=', facilityCanceled.body.id as string)
+        .where('kind', '=', 'redeem')
+        .executeTakeFirstOrThrow();
+      const reversed = await post(
+        t,
+        `/v1/package-redemptions/${redemption.id}/reverse`,
+        frontDesk.header,
+        { reason: 'goodwill' },
+      );
+      expect(reversed.status, JSON.stringify(reversed.body)).toBe(409);
+      expect(reversed.body.details).toMatchObject({ code: 'PACKAGE_ENDED', status: 'exhausted' });
+      // The database refuses it from any writer (migration 0518).
+      expect(
+        await rejectsWith(
+          t.db
+            .insertInto('package_redemptions')
+            .values({
+              id: newId(),
+              organization_id: t.organizationId,
+              package_entitlement_id: entitlementId,
+              session_booking_id: facilityCanceled.body.id as string,
+              participant_person_id: buyer.personId,
+              kind: 'reversal',
+              reverses_redemption_id: redemption.id,
+              reason: 'direct write',
+              actor: json({ kind: 'system' }),
+              redeemed_at: t.clock.now(),
+            })
+            .execute(),
+        ),
+      ).toBe('23514');
+      expect(await entitlement()).toEqual({ status: 'exhausted', redeemed_count: 2 });
+    } finally {
+      t.clock.set(new Date('2026-11-02T15:00:00Z'));
+    }
+  });
+
+  it('stage-6 R2-JOURNEYS-01 / SPK-AT-009 / SPK-COMMS-002: the session audience keeps the bookings canceled with the session whichever follow-up runs first, never a booking the family canceled itself; each booked family is told once', async () => {
+    const pickup = await offering(t, {
+      kind: 'pickup',
+      basePriceMinor: 0,
+      capacityUnits: [{ unit: 'seats', limit: 5 }],
+      ageBand: { minAgeYears: 18 },
+    });
+    const schedulingEventId = newId();
+    const seat = await createOfferingSessionFixture(t, {
+      offeringId: pickup.offeringId,
+      scheduledStart: new Date('2026-11-22T02:00:00Z'),
+      scheduledEnd: new Date('2026-11-22T03:00:00Z'),
+      schedulingEventId,
+    });
+    const [stayer, leaver] = [await adult(t), await adult(t)];
+    const bookings: Record<string, { id: string; revision: number }> = {};
+    for (const actor of [stayer, leaver]) {
+      await acknowledge(t, pickup, actor.personId, actor.personId);
+      const booked = await post(t, '/v1/session-bookings', actor.header, {
+        offeringId: pickup.offeringId,
+        sessionId: seat,
+        participantPersonId: actor.personId,
+      });
+      expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+      bookings[actor.personId] = { id: booked.body.id, revision: booked.body.revision };
+    }
+    const left = bookings[leaver.personId]!;
+    expect(
+      (
+        await post(t, `/v1/session-bookings/${left.id}/cancel`, leaver.header, {
+          reason: 'cannot make it',
+          expectedRevision: left.revision,
+        })
+      ).status,
+    ).toBe(200);
+    const audience = () =>
+      t.app
+        .get(SessionParticipants)
+        .participantsOfSchedulingEvent(t.db, t.organizationId, schedulingEventId);
+    // Before the session's cancellation is followed (communications reading first).
+    expect(await audience()).toEqual([stayer.personId]);
+    await cancelSession(seat, 'Hall closed');
+    // After it (enrollment's follow-up committed first): the canceled booking is still in it.
+    expect(await audience()).toEqual([stayer.personId]);
+    const stayed = bookings[stayer.personId]!.id;
+    const causes = await t.db
+      .selectFrom('session_bookings')
+      .select(['id', 'cancel_cause'])
+      .where('session_id', '=', seat)
+      .orderBy('id')
+      .execute();
+    expect(Object.fromEntries(causes.map((c) => [c.id, c.cancel_cause]))).toEqual({
+      [stayed]: 'session_canceled',
+      [left.id]: 'customer',
+    });
+    // Live participants only for a closure's impact: nobody is still booked.
+    const impact = await t.app.get(SessionParticipants).closureImpact(t.db, t.organizationId, [
+      {
+        eventId: schedulingEventId,
+        kind: 'session',
+        scheduledStart: '2026-11-22T02:00:00.000Z',
+        sourceType: null,
+        sourceId: null,
+        commitments: [],
+      },
+    ]);
+    expect(impact.customers).toEqual([]);
+    // Enrollment tells the family it canceled, once; the family that left is not told.
+    const notices = await bookingNotices(stayed);
+    expect(notices).toEqual([
+      expect.objectContaining({ kind: 'cancellation', title: 'Session canceled' }),
+    ]);
+    expect(await bookingNotices(left.id)).toEqual([]);
+    const recipients = await t.db
+      .selectFrom('notification_recipients')
+      .select('person_id')
+      .where('notification_id', '=', notices[0]!.id)
+      .execute();
+    expect(recipients.map((r) => r.person_id)).toEqual([stayer.personId]);
+    // A redelivered change event composes nothing new.
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', dispatched_at: null, available_at: t.clock.now() })
+      .where('event_type', '=', 'enrollment.session_booking_changed')
+      .where('aggregate_id', '=', stayed)
+      .execute();
+    await drain(t);
+    expect(await bookingNotices(stayed)).toHaveLength(1);
   });
 });

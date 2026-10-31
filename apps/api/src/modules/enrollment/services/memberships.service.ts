@@ -469,7 +469,8 @@ export class MembershipsService {
    * (`returned`); later it stays used (`retained_pending_policy`: no policy returns it). An
    * unlimited membership counts nothing. A membership that has ended (canceled, completed or
    * transferred: final, §4.6) can never book again, so nothing is given back to it and the
-   * booking records `retained_by_policy` (R2-LIFECYCLES-06, the membership variant).
+   * booking records `retained_entitlement_ended` (R2-LIFECYCLES-06, the membership variant; no
+   * cancellation policy kept it, the membership's own end did).
    */
   async onBookingCanceled(
     trx: Trx,
@@ -482,7 +483,7 @@ export class MembershipsService {
       organizationId,
       booking.membership_enrollment_id,
     );
-    if (!membership || membership.status !== 'confirmed') return 'retained_by_policy';
+    if (!membership || membership.status !== 'confirmed') return 'retained_entitlement_ended';
     if (new Date(booking.scheduled_start).getTime() <= this.clock.now().getTime()) {
       return 'retained_pending_policy';
     }

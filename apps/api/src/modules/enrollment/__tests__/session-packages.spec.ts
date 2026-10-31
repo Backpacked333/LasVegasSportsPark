@@ -499,7 +499,8 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
       { reason: 'the package was refunded', expectedRevision: booked.body.revision },
     );
     expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
-    expect(canceled.body.creditDisposition).toBe('retained_by_policy');
+    // No cancellation policy kept the credit: the package's own end did (migration 0518).
+    expect(canceled.body.creditDisposition).toBe('retained_entitlement_ended');
     expect(await counted()).toEqual(revoked);
     const redemptions = await t.db
       .selectFrom('package_redemptions')

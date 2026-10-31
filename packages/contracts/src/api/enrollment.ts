@@ -937,11 +937,13 @@ export const SessionBookingEntitlementBasisSchema = z
   .openapi('SessionBookingEntitlementBasis');
 /**
  * What happened to a package credit or membership session when the booking was canceled:
- * returned, kept under the approved cancellation policy, or kept because no policy decides
- * (POL-007, POL-039: no automatic return without one).
+ * returned, kept under the approved cancellation policy, kept because no policy decides
+ * (POL-007, POL-039: no automatic return without one), or kept because the package or membership
+ * it came from has ended (revoked, expired or past its expiry; a membership canceled, completed or
+ * transferred: nothing can be returned to it, §4.6; migration 0518).
  */
 export const SessionBookingCreditDispositionSchema = z
-  .enum(['returned', 'retained_by_policy', 'retained_pending_policy'])
+  .enum(['returned', 'retained_by_policy', 'retained_pending_policy', 'retained_entitlement_ended'])
   .openapi('SessionBookingCreditDisposition');
 
 export const SessionBookingSchema = z

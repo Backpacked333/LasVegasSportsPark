@@ -64,6 +64,7 @@ import { EnrollmentFacilityScope } from './facility-scope';
 import { MembershipsService, type MembershipUse } from './memberships.service';
 import {
   PackageEntitlementsService,
+  entitlementEnded,
   type BookingCancellationCause,
   type CreditDisposition,
   type PackageEntitlementRow,
@@ -716,7 +717,10 @@ export class SessionBookingsService {
    * POL-007 staff-initiated cancellation, POL-041) raises one owned exception per booking for the
    * program manager (`enrollment.canceled_session_entitlement_pending`) instead of being lost
    * silently. R2-LIFECYCLES-06: nothing is returned to an entitlement that has ended (a revoked or
-   * expired package or makeup, an ended membership; §4.6 terminal states are final).
+   * expired package or makeup, one past its expiry while still exhausted, an ended membership;
+   * §4.6 terminal states are final); on the facility's cancellation that loss raises the same
+   * exception. The booking records who ended it (`cancel_cause`, migration 0519): the session
+   * audience and the family's own cancellation notice follow it.
    */
   async cancelInTrx(
     trx: Trx,
@@ -766,6 +770,7 @@ export class SessionBookingsService {
         status,
         canceled_at: now,
         cancel_reason: reason,
+        cancel_cause: cause,
         credit_disposition: disposition,
         revision: row.revision + 1,
       })
@@ -850,9 +855,11 @@ export class SessionBookingsService {
    * Reverses the makeup redemption of a canceled makeup booking (SPK-YOUTH-004: a new history row,
    * never an update). A customer cancellation reverses it only before the session starts; the
    * facility's cancellation of the session reverses it whatever the time (R2-JOURNEYS-01). An
-   * entitlement that has ended (expired or revoked, final) gets nothing back (R2-LIFECYCLES-06;
-   * the redemption trigger refuses it too, migration 0516). Answers whether a redemption was
-   * reversed, or null when none was due (no redemption, or a customer cancellation after start).
+   * entitlement that has ended (expired or revoked, final, or past its expiry while still
+   * `exhausted`: the expiry job only expires active makeups) gets nothing back (R2-LIFECYCLES-06;
+   * the redemption trigger refuses it too, migrations 0516 and 0518). Answers whether a redemption
+   * was reversed, or null when none was due (no redemption, or a customer cancellation after
+   * start).
    */
   private async reverseMakeupRedemption(
     trx: Trx,
@@ -876,12 +883,19 @@ export class SessionBookingsService {
     if (!redemption) return null;
     const entitlement = await trx
       .selectFrom('makeup_entitlements')
-      .select('status')
+      .select(['status', 'expires_at'])
       .where('organization_id', '=', organizationId)
       .where('id', '=', row.makeup_entitlement_id)
       .forUpdate()
       .executeTakeFirst();
-    if (!entitlement || (entitlement.status !== 'active' && entitlement.status !== 'exhausted')) {
+    if (
+      !entitlement ||
+      entitlementEnded(
+        entitlement.status !== 'active' && entitlement.status !== 'exhausted',
+        entitlement.expires_at,
+        now,
+      )
+    ) {
       return false;
     }
     const inserted = await trx
@@ -907,8 +921,11 @@ export class SessionBookingsService {
    * R2-JOURNEYS-01 (§4.12: no required follow-up is lost; POL-007, POL-041, DEC-003 pending): a
    * booking the facility's session cancellation ended without its package credit, membership
    * session or makeup coming back. One exception per booking (deduplicated, so a replay raises
-   * nothing new) names what was kept and how staff return it (`POST /v1/package-redemptions/{id}
-   * /reverse` for a package credit).
+   * nothing new) names what was kept and, where it can still be returned, how
+   * (`packageRedemptionId` for `POST /v1/package-redemptions/{id}/reverse`). When the package,
+   * membership or makeup has ended (`retained_entitlement_ended`, or a makeup not reversed) nothing
+   * can be returned to it: `entitlementEnded` is true and no redemption is named, so staff decide
+   * another remedy (POL-007, DEC-003).
    */
   private async raiseCanceledSessionEntitlement(
     trx: Trx,
@@ -917,15 +934,17 @@ export class SessionBookingsService {
     disposition: CreditDisposition | null,
     makeupReversed: boolean | null,
   ): Promise<void> {
-    const redemption = row.package_entitlement_id
-      ? await trx
-          .selectFrom('package_redemptions')
-          .select('id')
-          .where('organization_id', '=', organizationId)
-          .where('session_booking_id', '=', row.id)
-          .where('kind', '=', 'redeem')
-          .executeTakeFirst()
-      : undefined;
+    const ended = disposition === 'retained_entitlement_ended' || makeupReversed === false;
+    const redemption =
+      row.package_entitlement_id && !ended
+        ? await trx
+            .selectFrom('package_redemptions')
+            .select('id')
+            .where('organization_id', '=', organizationId)
+            .where('session_booking_id', '=', row.id)
+            .where('kind', '=', 'redeem')
+            .executeTakeFirst()
+        : undefined;
     await this.exceptions.raise(trx, {
       organizationId,
       facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
@@ -948,6 +967,7 @@ export class SessionBookingsService {
         makeupEntitlementId: row.makeup_entitlement_id,
         creditDisposition: disposition,
         makeupReversed,
+        entitlementEnded: ended,
         pendingDecisions: ['POL-007', 'POL-041', 'DEC-003'],
       },
     });

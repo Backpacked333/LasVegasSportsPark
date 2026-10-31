@@ -569,6 +569,15 @@ export class EnrollmentModule implements OnModuleInit {
         runWithTransaction(ctx.trx, () => this.notices.enrollmentConfirmed(ctx.trx, event)),
       { failureOwner: 'program_manager' },
     );
+    // Stage-6 rework of R2-JOURNEYS-01 (SPK-AT-009, SPK-COMMS-002): a booking canceled because the
+    // facility canceled its session is announced to the family once (its own change event).
+    this.registry.on<EventPayload<typeof EnrollmentEvents.sessionBookingChanged>>(
+      EnrollmentEvents.sessionBookingChanged.type,
+      'enrollment.notify_session_booking_canceled',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.sessionBookingCanceled(ctx.trx, event)),
+      { failureOwner: 'program_manager' },
+    );
     this.registry.on<EventPayload<typeof EnrollmentEvents.applicationDecided>>(
       EnrollmentEvents.applicationDecided.type,
       'enrollment.notify_registration_outcome',

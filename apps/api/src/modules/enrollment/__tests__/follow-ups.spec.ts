@@ -11,7 +11,7 @@ import { IdentityEvents } from '../../identity';
 import { EnrollmentEvents } from '../enrollment.events';
 import { ENROLLMENT_PORT, type EnrollmentPort } from '../enrollment.ports';
 import { CapacityService } from '../services/capacity.service';
-import { EnrollmentNotices } from '../services/enrollment-notices';
+import { EnrollmentNotices, registrationConfirmedCopy } from '../services/enrollment-notices';
 import { RECONCILE_PLACEMENTS_JOB } from '../services/enrollment-jobs';
 import { createEnrollmentFixture } from '../testing/enrollment-fixtures';
 import {
@@ -517,6 +517,49 @@ describe('enrollment follow-ups (ENR-07, ENR-08, ENR-09)', () => {
       .where('subject_id', '=', freeId)
       .execute();
     expect(none).toEqual([]);
+  });
+
+  it('R2-JOURNEYS-04 / SPK-COMMS-002: a league registration is announced with what follows for a league (a team placement, the team schedule), never a family calendar its offering has no sessions for', async () => {
+    const league = await offering(t, {
+      kind: 'season',
+      basePriceMinor: 0,
+      ageBand: { minAgeYears: 18 },
+    });
+    const player = await adult(t);
+    await acknowledge(t, league, player.personId, player.personId);
+    const basket = await basketWith(t, player, [
+      {
+        participantPersonId: player.personId,
+        offeringId: league.offeringId,
+        intent: 'individual_league',
+      },
+    ]);
+    expect((await post(t, `/v1/baskets/${basket.id}/hold`, player.header)).status).toBe(200);
+    const completed = await post(t, `/v1/baskets/${basket.id}/complete`, player.header);
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    await drain(t);
+    const notices = await t.db
+      .selectFrom('notifications')
+      .select(['title', 'body'])
+      .where('kind', '=', 'registration_outcome')
+      .where('subject_id', '=', completed.body.lines[0].enrollmentId as string)
+      .execute();
+    expect(notices).toEqual([
+      {
+        title: 'Registration confirmed',
+        body: expect.stringContaining('You are told when a team placement is made'),
+      },
+    ]);
+    expect(notices[0]!.body).not.toContain('family calendar');
+    // Team intents point at the team's fixtures; a session offering at the family calendar.
+    for (const intent of ['join_team', 'create_team_entry'] as const) {
+      const copy = registrationConfirmedCopy(intent, 'Spring league');
+      expect(copy.body).toContain("The team's fixtures appear in the app");
+      expect(copy.body).not.toContain('family calendar');
+    }
+    expect(registrationConfirmedCopy('youth', 'Saturday skills').body).toContain(
+      'Its sessions appear in the family calendar.',
+    );
   });
 
   it('SPK-COMMS-002: application decisions and placements notify the participant’s family', async () => {
