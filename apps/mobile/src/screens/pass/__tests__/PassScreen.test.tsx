@@ -6,9 +6,10 @@
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import * as SecureStore from 'expo-secure-store';
+import { AccessibilityInfo } from 'react-native';
 import type { ReactNode } from 'react';
 import { me, ok, SELF } from '../../../features/today/__tests__/fixtures';
-import { createTestApp, dropAnswers, TEST_SESSION } from '../../../testing/test-app';
+import { createTestApp, dropAnswers, TEST_SESSION, waitForAbsent } from '../../../testing/test-app';
 import {
   MemoryPassStore,
   PassStoreContext,
@@ -19,6 +20,7 @@ import {
 import {
   groupReference,
   heldPassState,
+  ISSUE_WITHHELD_LABEL,
   otherActivePasses,
   PassScreen,
   REPLACE_REASON,
@@ -222,6 +224,69 @@ describe('SCR-C-05 PassScreen', () => {
     expect((await store.load(ACCOUNT))?.pendingRevoke).toBeNull();
   });
 
+  it('§4.9: a replace whose withdrawal of the previous pass committed with its answer lost reads "This may already have been done", never "still active"; Reload settles it from the list', async () => {
+    let revoked = false;
+    const { store } = setup(
+      {
+        'GET /me': ok(me()),
+        'GET /me/passes': () =>
+          fakeResponse(200, [
+            listed(PASS_ONE, revoked ? { status: 'revoked', revision: 2 } : {}),
+            listed(PASS_TWO, { issuedAt: '2026-10-24T11:00:00.000Z' }),
+          ]),
+        'POST /passes': { status: 201, body: issued(PASS_TWO, REF_TWO) },
+        'POST /passes/{id}/revoke': () => {
+          revoked = true;
+          return fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', { nextAction: 'reload_current_state' }),
+          );
+        },
+      },
+      { stored: STORED },
+    );
+    fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
+    const lost = await screen.findByTestId('pass-revoke-outcome-lost');
+    expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(
+      within(lost).getByText(/the withdrawal of your previous pass may already/),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Previous pass still active')).toBeNull();
+    expect(screen.queryByText(/Ask the front desk to revoke it/)).toBeNull();
+    // The pending withdrawal is kept (and its key) until the list says the pass is revoked.
+    expect((await store.load(ACCOUNT))?.pendingRevoke).toEqual({ passId: PASS_ONE, revision: 1 });
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      expect.stringMatching(/^This may already have been done\./),
+      { queue: true },
+    );
+    await act(async () => {
+      fireEvent.press(within(lost).getByRole('button', { name: 'Reload' }));
+    });
+    await waitForAbsent(() => screen.queryByTestId('pass-revoke-outcome-lost'));
+    expect((await store.load(ACCOUNT))?.pendingRevoke).toBeNull();
+    expect(screen.getByText(groupReference(REF_TWO))).toBeOnTheScreen();
+  });
+
+  it('SPK-UX-009: a withdrawal of the previous pass that is refused is announced as "Previous pass still active"', async () => {
+    setup(
+      {
+        'GET /me': ok(me()),
+        'POST /passes': { status: 201, body: issued(PASS_TWO, REF_TWO) },
+        'POST /passes/{id}/revoke': () =>
+          fakeResponse(403, apiErrorBody('ACCESS_DENIED', { nextAction: 'contact_support' })),
+      },
+      { stored: STORED },
+    );
+    fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
+    expect(await screen.findByTestId('pass-revoke-problem')).toBeOnTheScreen();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Previous pass still active. Your new pass is ready, but the previous one could not be withdrawn. Ask the front desk to revoke it.',
+      { queue: true },
+    );
+  });
+
   it('never revokes the previous pass when the new one could not be saved on the device', async () => {
     const { app, store } = setup(
       {
@@ -301,12 +366,31 @@ describe('SCR-C-05 PassScreen', () => {
     expect(posts[0]?.headers['idempotency-key']).toBe(posts[1]?.headers['idempotency-key']);
   });
 
-  it('SPK-UX-008 / §4.9: an issue whose answer was lost reads "No answer yet", never "Something went wrong"; "Check again" gets the same pass under the same key', async () => {
+  it('SPK-UX-008 / §4.9, §4.14: an issue whose answer was lost reads "No answer yet"; "Check again" under the same key gets IDEMPOTENCY_SECRET_WITHHELD, read as issued with its reference not shown again, and the pass is listed to withdraw', async () => {
+    let issues = 0;
+    let passes: unknown[] = [];
     const { app, store } = setup(
       {
         'GET /me': ok(me()),
-        'GET /me/passes': myPasses(),
-        'POST /passes': { status: 201, body: issued(PASS_ONE, REF_ONE) },
+        'GET /me/passes': () => fakeResponse(200, passes),
+        'POST /passes': () => {
+          issues += 1;
+          if (issues === 1) {
+            // The pass is issued, and the answer carrying its reference is lost (below).
+            passes = [listed(PASS_ONE, { issuedAt: '2026-10-24T11:00:00.000Z' })];
+            return fakeResponse(201, issued(PASS_ONE, REF_ONE));
+          }
+          // The replay: the reference is a one-time secret and never rests in the idempotency
+          // store, so the API names the pass without it (SPK-ENTRY-002, §4.14).
+          return fakeResponse(
+            409,
+            apiErrorBody('IDEMPOTENCY_SECRET_WITHHELD', {
+              message: 'The request succeeded; its one-time secret is not shown again.',
+              nextAction: 'revoke_and_reissue',
+              details: { resourceId: PASS_ONE },
+            }),
+          );
+        },
       },
       { drop: { method: 'POST', url: /\/passes$/ } },
     );
@@ -318,8 +402,19 @@ describe('SCR-C-05 PassScreen', () => {
     // Nothing was saved from a request without an answer.
     expect(store.values.get(ACCOUNT)).toBeUndefined();
     fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
-    expect(await screen.findByText(groupReference(REF_ONE))).toBeOnTheScreen();
-    expect(store.values.get(ACCOUNT)?.passId).toBe(PASS_ONE);
+    expect(await screen.findByLabelText(ISSUE_WITHHELD_LABEL)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Done, but the link cannot be shown again')).toBeNull();
+    expect(
+      screen.getByText(/It is listed under "Other active passes": withdraw it there/),
+    ).toBeOnTheScreen();
+    expect(store.values.get(ACCOUNT)).toBeUndefined();
+    // The passes are read again, so the pass it made can be withdrawn.
+    const row = await screen.findByTestId(`pass-other-${PASS_ONE}`);
+    expect(within(row).getByRole('button', { name: 'Withdraw this pass' })).toBeOnTheScreen();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      expect.stringMatching(/^Pass issued, but its reference cannot be shown again\./),
+      { queue: true },
+    );
     const keys = app.fake.requests
       .filter((r) => r.route === '/passes')
       .map((r) => r.headers['idempotency-key']);
@@ -455,14 +550,13 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
   });
 
   it('after a reinstall, lists the active pass whose reference is not on this device and withdraws it with reason and revision', async () => {
-    let passes: unknown[] = [listed(PASS_ONE, { revision: 4 })];
     const { app } = setup({
       'GET /me': ok(me()),
-      'GET /me/passes': () => fakeResponse(200, passes),
-      'POST /passes/{id}/revoke': () => {
-        passes = [listed(PASS_ONE, { status: 'revoked', revision: 5 })];
-        return fakeResponse(200, { ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' });
-      },
+      // The list keeps the pass, so its row stays to show the outcome (the re-read is covered by
+      // "a withdrawn pass shows only Withdrawn").
+      'GET /me/passes': myPasses(listed(PASS_ONE, { revision: 4 })),
+      'POST /passes/{id}/revoke': () =>
+        fakeResponse(200, { ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' }),
     });
     const others = await screen.findByTestId('pass-others');
     expect(within(others).getByRole('header', { name: 'Other active passes' })).toBeOnTheScreen();
@@ -472,7 +566,8 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
     fireEvent.press(within(others).getByRole('button', { name: 'Withdraw this pass' }));
     expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
     fireEvent.press(within(others).getByRole('button', { name: 'Withdraw' }));
-    await waitFor(() => expect(screen.queryByTestId('pass-others')).toBeNull());
+    const row = within(others).getByTestId(`pass-other-${PASS_ONE}`);
+    expect(await within(row).findByLabelText('Withdrawn')).toBeOnTheScreen();
     const revoke = app.fake.requests.find((r) => r.route === '/passes/{id}/revoke');
     expect(revoke?.params.id).toBe(PASS_ONE);
     expect(revoke?.body).toEqual({ reason: WITHDRAW_REASON, expectedRevision: 4 });
