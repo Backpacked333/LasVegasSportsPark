@@ -44,6 +44,7 @@ import {
   displayNameOf,
   displayNamesOf,
   lockPersonsForShare,
+  requireStaffAssignmentScope,
   toStaffMembership,
 } from '../identity.shared';
 
@@ -56,7 +57,11 @@ const WORKFORCE_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>(['coach', 'of
 /**
  * Staff memberships (§2.1, §4.14). Time-bounded role assignments managed only by system
  * administrators; the principal resolver reads them at request time, so ending a membership
- * removes staff authority on the next request without touching any guardian grant.
+ * removes staff authority on the next request without touching any guardian grant. An
+ * administrator acts only within its own facility scope (§2.1, §4.3, R3-SECURITY-01): the
+ * membership's requested facilities and the ones it has now must all be facilities it
+ * administers, and an organization-wide membership (`facilityIds: []`) needs an
+ * organization-wide administrator (`requireStaffAssignmentScope`).
  */
 @Injectable()
 export class StaffMembershipsService implements StaffDirectoryPort {
@@ -80,6 +85,8 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       type: 'staff_membership',
       organizationId,
     });
+    // §2.1, §4.3, §4.14: never a scope wider than the administrator's own (R3-SECURITY-01).
+    requireStaffAssignmentScope(principal, [input.facilityIds]);
     return runInTransaction(this.uow, async ({ trx }) => {
       await lockPersonsForShare(trx, organizationId, [input.personId]);
       const person = await trx
@@ -165,6 +172,12 @@ export class StaffMembershipsService implements StaffDirectoryPort {
         .forUpdate()
         .executeTakeFirst();
       if (!current) throw errors.notFound('staff_membership', id);
+      // §2.1, §4.3, §4.14 (R3-SECURITY-01): the membership as it is and as requested must both lie
+      // within the facilities this administrator administers.
+      requireStaffAssignmentScope(principal, [
+        current.facility_ids,
+        ...(input.facilityIds ? [input.facilityIds] : []),
+      ]);
       assertExpectedRevision(input.expectedRevision, current.revision);
       if (current.status !== 'active') {
         throw errors.invalidTransition('StaffMembership', current.status, 'update');
@@ -247,6 +260,8 @@ export class StaffMembershipsService implements StaffDirectoryPort {
         .forUpdate()
         .executeTakeFirst();
       if (!current) throw errors.notFound('staff_membership', id);
+      // §2.1, §4.3, §4.14 (R3-SECURITY-01): only an administrator of every facility it covers.
+      requireStaffAssignmentScope(principal, [current.facility_ids]);
       assertExpectedRevision(input.expectedRevision, current.revision);
       const next = StaffMembershipMachine.next(current.status, 'end');
       const now = this.clock.now();

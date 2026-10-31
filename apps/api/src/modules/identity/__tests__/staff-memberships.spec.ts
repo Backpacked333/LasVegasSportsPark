@@ -4,6 +4,7 @@ import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import { StaffMembershipsService } from '../services/staff-memberships.service';
 import {
+  authHeaderForAccount,
   authHeaderForPerson,
   createAccountFixture,
   createOrganizationPeople,
@@ -259,5 +260,311 @@ describe('staff memberships (§2.1, §4.14) and households (§4.5)', () => {
     expect(me.body.authorities).toEqual([
       { subjectPersonId: people.child.personId, permissions: ['view'] },
     ]);
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // R3-SECURITY-01: a system administrator acts only within its own facility scope (§2.1 staff
+  // assignment scope, §4.3 facility boundaries, §4.14 least privilege).
+  // ------------------------------------------------------------------------------------------
+
+  /** A second facility of the organization. */
+  const seedFacility = async (): Promise<string> => {
+    const id = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id,
+        organization_id: t.organizationId,
+        slug: `annex-${id.slice(-12)}`,
+        name: 'Annex',
+        timezone: 'America/Los_Angeles',
+        address: null,
+      })
+      .execute();
+    return id;
+  };
+
+  it('§2.1 / §4.14: a facility-scoped system administrator cannot widen its own scope or grant roles elsewhere', async () => {
+    const f1 = t.facilityId;
+    const f2 = await seedFacility();
+    const alice = await createStaffMemberFixture(t, {
+      roles: ['system_administrator'],
+      facilityIds: [f1],
+    });
+    const header = await authHeaderForPerson(t, alice.personId);
+    const widen = (facilityIds: string[], personId = alice.personId) =>
+      t.http
+        .post('/v1/staff-memberships')
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({
+          personId,
+          roles: ['system_administrator', 'general_manager', 'finance_operator'],
+          facilityIds,
+        });
+    for (const facilityIds of [[], [f2], [f1, f2]]) {
+      const refused = await widen(facilityIds);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+      expect(refused.body.code).toBe('ACCESS_DENIED');
+    }
+    const someone = await createPersonFixture(t, { kind: 'adult' });
+    await createAccountFixture(t, { personId: someone });
+    expect((await widen([], someone)).status).toBe(403);
+    expect((await widen([f2], someone)).status).toBe(403);
+    expect(
+      await t.db
+        .selectFrom('staff_memberships')
+        .select('id')
+        .where('person_id', 'in', [alice.personId, someone])
+        .where('id', '<>', alice.membershipId)
+        .execute(),
+    ).toEqual([]);
+    const me = await t.http.get('/v1/me').set(header);
+    expect(me.body.principal).toMatchObject({
+      staffRoles: ['system_administrator'],
+      facilityIds: [f1],
+    });
+
+    // within its own facility it still administers staff
+    const atF1 = await widen([f1], someone);
+    expect(atF1.status, JSON.stringify(atF1.body)).toBe(201);
+    expect(atF1.body).toMatchObject({ personId: someone, facilityIds: [f1] });
+    // an organization-wide administrator may assign organization-wide roles
+    const root = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const wide = await t.http
+      .post('/v1/staff-memberships')
+      .set(await authHeaderForPerson(t, root.personId))
+      .set('Idempotency-Key', key())
+      .send({ personId: someone, roles: ['general_manager'], facilityIds: [] });
+    expect(wide.status, JSON.stringify(wide.body)).toBe(201);
+  });
+
+  it('§2.1 / §4.14: a facility-scoped system administrator cannot change or end memberships reaching another facility', async () => {
+    const f1 = t.facilityId;
+    const f2 = await seedFacility();
+    const alice = await createStaffMemberFixture(t, {
+      roles: ['system_administrator'],
+      facilityIds: [f1],
+    });
+    const header = await authHeaderForPerson(t, alice.personId);
+    const bob = await createStaffMemberFixture(t, {
+      roles: ['system_administrator'],
+      facilityIds: [f2],
+    });
+    const gm = await createStaffMemberFixture(t, { roles: ['general_manager'] });
+    const desk = await createStaffMemberFixture(t, { roles: ['front_desk'], facilityIds: [f1] });
+    const patch = (id: string, body: Record<string, unknown>) =>
+      t.http
+        .patch(`/v1/staff-memberships/${id}`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ expectedRevision: 1, ...body });
+    const end = (id: string) =>
+      t.http
+        .post(`/v1/staff-memberships/${id}/end`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ reason: 'not yours to end', expectedRevision: 1 });
+
+    // another facility's administrator and an organization-wide manager are out of reach
+    for (const id of [bob.membershipId, gm.membershipId]) {
+      expect((await end(id)).status).toBe(403);
+      expect((await patch(id, { roles: ['coach'] })).status).toBe(403);
+    }
+    // its own membership and an F1 membership cannot be widened beyond F1
+    expect((await patch(alice.membershipId, { facilityIds: [] })).status).toBe(403);
+    expect((await patch(alice.membershipId, { facilityIds: [f1, f2] })).status).toBe(403);
+    expect((await patch(desk.membershipId, { facilityIds: [f2] })).status).toBe(403);
+    const rows = await t.db
+      .selectFrom('staff_memberships')
+      .select(['status', 'revision'])
+      .where('id', 'in', [alice.membershipId, bob.membershipId, gm.membershipId, desk.membershipId])
+      .orderBy('id')
+      .execute();
+    expect(rows.every((r) => r.status === 'active' && r.revision === 1)).toBe(true);
+    // nothing refused was audited (the fixtures write memberships without an audit record)
+    expect(
+      await t.db
+        .selectFrom('audit_records')
+        .select('id')
+        .where('target_id', 'in', [
+          alice.membershipId,
+          bob.membershipId,
+          gm.membershipId,
+          desk.membershipId,
+        ])
+        .execute(),
+    ).toEqual([]);
+
+    // within F1 it changes and ends memberships
+    const changed = await patch(desk.membershipId, { roles: ['front_desk', 'scheduler'] });
+    expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+    expect(changed.body).toMatchObject({ roles: ['front_desk', 'scheduler'], facilityIds: [f1] });
+    const ended = await t.http
+      .post(`/v1/staff-memberships/${desk.membershipId}/end`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ reason: 'left the desk', expectedRevision: 2 });
+    expect(ended.status, JSON.stringify(ended.body)).toBe(200);
+  });
+
+  it('§4.14 / SPK-AT-025: a facility-scoped system administrator cannot take over staff logins outside its facilities', async () => {
+    const f1 = t.facilityId;
+    const f2 = await seedFacility();
+    const alice = await createStaffMemberFixture(t, {
+      roles: ['system_administrator'],
+      facilityIds: [f1],
+    });
+    const header = await authHeaderForPerson(t, alice.personId);
+    const root = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const rootHeader = await authHeaderForPerson(t, root.personId);
+    const relink = (accountId: string) =>
+      t.http
+        .post(`/v1/accounts/${accountId}/relink`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({
+          issuer: t.config.AUTH_ISSUER,
+          subject: `attacker-${newId()}`,
+          reason: 'lost phone',
+          expectedRevision: 1,
+        });
+
+    // recovery: an organization-wide manager and another facility's staff are refused, F1 staff not
+    const gm = await createStaffMemberFixture(t, { roles: ['general_manager'] });
+    const atF2 = await createStaffMemberFixture(t, { roles: ['front_desk'], facilityIds: [f2] });
+    const both = await createStaffMemberFixture(t, { roles: ['front_desk'], facilityIds: [f1] });
+    await createStaffMemberFixture(t, {
+      personId: both.personId,
+      roles: ['coach'],
+      facilityIds: [f2],
+    });
+    for (const accountId of [gm.accountId, atF2.accountId, both.accountId]) {
+      const refused = await relink(accountId);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+      expect(refused.body.code).toBe('ACCESS_DENIED');
+    }
+    const subjects = await t.db
+      .selectFrom('accounts')
+      .select(['revision'])
+      .where('id', 'in', [gm.accountId, atF2.accountId, both.accountId])
+      .execute();
+    expect(subjects.every((a) => a.revision === 1)).toBe(true);
+    const deskF1 = await createStaffMemberFixture(t, { roles: ['front_desk'], facilityIds: [f1] });
+    expect((await relink(deskF1.accountId)).status).toBe(200);
+
+    // provisioning: the login of an organization-wide manager without an account
+    const newHire = await createPersonFixture(t, { kind: 'adult' });
+    const hired = await t.http
+      .post('/v1/staff-memberships')
+      .set(rootHeader)
+      .set('Idempotency-Key', key())
+      .send({ personId: newHire, roles: ['general_manager'], facilityIds: [] });
+    expect(hired.status).toBe(201);
+    const provisioned = await t.http
+      .post('/v1/accounts')
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ issuer: t.config.AUTH_ISSUER, subject: `attacker-${newId()}`, personId: newHire });
+    expect(provisioned.status, JSON.stringify(provisioned.body)).toBe(403);
+    // self claim at issue
+    const claimed = await t.http
+      .post(`/v1/people/${newHire}/claims`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self' });
+    expect(claimed.status, JSON.stringify(claimed.body)).toBe(403);
+    expect(
+      await t.db.selectFrom('accounts').select('id').where('person_id', '=', newHire).execute(),
+    ).toEqual([]);
+
+    // self claim issued before the person became organization-wide staff: refused at acceptance
+    const walkIn = await createPersonFixture(t, { kind: 'adult' });
+    const issued = await t.http
+      .post(`/v1/people/${walkIn}/claims`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self' });
+    expect(issued.status).toBe(201);
+    const promoted = await t.http
+      .post('/v1/staff-memberships')
+      .set(rootHeader)
+      .set('Idempotency-Key', key())
+      .send({ personId: walkIn, roles: ['finance_operator'], facilityIds: [] });
+    expect(promoted.status).toBe(201);
+    const claimant = await createAccountFixture(t, { personId: null });
+    const accepted = await t.http
+      .post('/v1/claims/accept')
+      .set(await authHeaderForAccount(t, claimant.id))
+      .set('Idempotency-Key', key())
+      .send({ token: issued.body.token });
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(403);
+    const unlinked = await t.db
+      .selectFrom('accounts')
+      .select('person_id')
+      .where('id', '=', claimant.id)
+      .executeTakeFirstOrThrow();
+    expect(unlinked.person_id).toBeNull();
+
+    // the same claim issued by that administrator for a person who becomes F1 staff is honoured
+    const local = await createPersonFixture(t, { kind: 'adult' });
+    const localClaim = await t.http
+      .post(`/v1/people/${local}/claims`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'self' });
+    expect(localClaim.status).toBe(201);
+    const localHire = await t.http
+      .post('/v1/staff-memberships')
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ personId: local, roles: ['front_desk'], facilityIds: [f1] });
+    expect(localHire.status).toBe(201);
+    const localClaimant = await createAccountFixture(t, { personId: null });
+    const localAccepted = await t.http
+      .post('/v1/claims/accept')
+      .set(await authHeaderForAccount(t, localClaimant.id))
+      .set('Idempotency-Key', key())
+      .send({ token: localClaim.body.token });
+    expect(localAccepted.status, JSON.stringify(localAccepted.body)).toBe(200);
+    expect(localAccepted.body).toMatchObject({ personId: local });
+  });
+
+  it('§4.14 / SPK-IAM-007: a facility-scoped system administrator cannot merge away an organization-wide staff record', async () => {
+    const alice = await createStaffMemberFixture(t, {
+      roles: ['system_administrator'],
+      facilityIds: [t.facilityId],
+    });
+    const header = await authHeaderForPerson(t, alice.personId);
+    const gm = await createStaffMemberFixture(t, { roles: ['general_manager'] });
+    const mine = await createPersonFixture(t, { kind: 'adult' });
+    await createAccountFixture(t, { personId: mine });
+    const flagged = await t.http
+      .post('/v1/duplicate-candidates')
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ personAId: gm.personId, personBId: mine, reasons: ['same name'] });
+    expect(flagged.status, JSON.stringify(flagged.body)).toBe(201);
+    for (const survivorPersonId of [mine, gm.personId]) {
+      const merged = await t.http
+        .post(`/v1/duplicate-candidates/${flagged.body.id}/merge`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ survivorPersonId, reason: 'same person' });
+      expect(merged.status, JSON.stringify(merged.body)).toBe(403);
+      expect(merged.body.code).toBe('ACCESS_DENIED');
+    }
+    const membership = await t.db
+      .selectFrom('staff_memberships')
+      .select('person_id')
+      .where('id', '=', gm.membershipId)
+      .executeTakeFirstOrThrow();
+    expect(membership.person_id).toBe(gm.personId);
+    const persons = await t.db
+      .selectFrom('persons')
+      .select('status')
+      .where('id', 'in', [gm.personId, mine])
+      .execute();
+    expect(persons.map((p) => p.status)).toEqual(['active', 'active']);
   });
 });

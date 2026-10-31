@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import {
   errors,
+  staffFacilityScope,
   type AccessGrant,
   type AccessReview,
   type Account,
@@ -158,35 +159,86 @@ export async function staffAuthorityApplies(
 }
 
 /**
- * §4.14, SPK-AT-025: whether a person holds a staff membership that is in force or scheduled to
- * start (`effective_from` is deliberately not compared with now, so a future-dated assignment
- * counts too).
+ * §4.14, SPK-AT-025: the facility lists of a person's staff memberships that are in force or
+ * scheduled to start (`effective_from` is deliberately not compared with now, so a future-dated
+ * assignment counts too). An empty list in the result is an organization-wide membership.
  */
-export async function holdsStaffMembership(
+export async function staffMembershipFacilityLists(
   db: Db,
   organizationId: string,
   personId: string,
   now: Date,
-): Promise<boolean> {
-  const row = await db
+): Promise<string[][]> {
+  const rows = await db
     .selectFrom('staff_memberships')
-    .select('id')
+    .select('facility_ids')
     .where('organization_id', '=', organizationId)
     .where('person_id', '=', personId)
     .where('status', '=', 'active')
     .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', now)]))
-    .executeTakeFirst();
-  return row !== undefined;
+    .orderBy('id')
+    .execute();
+  return rows.map((r) => [...r.facility_ids]);
+}
+
+/**
+ * §2.1 (staff assignment scope), §4.3, §4.14 (least privilege): the facilities over which a
+ * principal may assign staff roles and take over staff logins. It is the facility scope of the
+ * principal's roles that hold `identity.manage_staff_membership` (`staffFacilityScope`), so a
+ * system administrator scoped to F1 administers F1 only, whatever other roles it holds elsewhere.
+ * `null` is organization-wide (a system principal, or an unscoped administrator membership).
+ */
+export function staffAssignmentScope(principal: Principal): readonly string[] | null {
+  if (principal.kind === 'system') return null;
+  return staffFacilityScope(principal, IdentityActions.manageStaffMembership.staffRoles);
+}
+
+/**
+ * Whether an assignment scope covers one membership's facility list. An empty list is an
+ * organization-wide membership, which only an organization-wide scope covers.
+ */
+export function assignmentScopeCovers(
+  scope: readonly string[] | null,
+  facilityIds: readonly string[],
+): boolean {
+  if (scope === null) return true;
+  if (facilityIds.length === 0) return false;
+  return facilityIds.every((facility) => scope.includes(facility));
+}
+
+/**
+ * §2.1, §4.3, §4.14 (R3-SECURITY-01): refuses with ACCESS_DENIED unless the principal's assignment
+ * scope covers every facility list given (a membership's requested scope and the scope it has now,
+ * or the memberships of a person whose login is handed over). The kernel check of
+ * `identity.manage_staff_membership` runs against an organization-level target, which passes any
+ * facility scope, so without this an administrator scoped to one facility could grant itself, or
+ * anyone, organization-wide roles.
+ */
+export function requireStaffAssignmentScope(
+  principal: Principal,
+  facilityLists: readonly (readonly string[])[],
+): void {
+  const scope = staffAssignmentScope(principal);
+  if (facilityLists.every((list) => assignmentScopeCovers(scope, list))) return;
+  throw errors.accessDenied(
+    'This change reaches staff roles outside the facilities you administer.',
+    {
+      action: IdentityActions.manageStaffMembership.id,
+      reason: 'facility scope mismatch',
+    },
+  );
 }
 
 /**
  * §4.14 (least privilege, privileged staff), SPK-AT-025, SPK-IAM-002: taking control of the login
  * of a person who holds a staff membership (provisioning an account linked to them, recovering
  * theirs onto another provider identity, or issuing a self claim on them) needs the authority that
- * assigns staff roles (`identity.manage_staff_membership`). Otherwise a role that cannot grant
- * staff roles (support, front desk) could take over an account that can, and then grant itself
- * more. Verification evidence, rate limits and a second approver for recovery stay pending
- * (DEC-018 recovery, DEC-091 privileged multifactor authentication).
+ * assigns staff roles (`identity.manage_staff_membership`), held over every facility of those
+ * memberships (§2.1, §4.3, R3-SECURITY-01: an organization-wide membership needs an
+ * organization-wide administrator). Otherwise a role that cannot grant staff roles (support, front
+ * desk), or the administrator of another facility, could take over an account that can, and then
+ * grant itself more. Verification evidence, rate limits and a second approver for recovery stay
+ * pending (DEC-018 recovery, DEC-091 privileged multifactor authentication).
  */
 export async function requireStaffLoginAuthority(
   authorization: Pick<AuthorizationService, 'require'>,
@@ -196,11 +248,14 @@ export async function requireStaffLoginAuthority(
   personId: string | null | undefined,
   now: Date,
 ): Promise<void> {
-  if (!personId || !(await holdsStaffMembership(db, organizationId, personId, now))) return;
+  if (!personId) return;
+  const memberships = await staffMembershipFacilityLists(db, organizationId, personId, now);
+  if (memberships.length === 0) return;
   await authorization.require(principal, IdentityActions.manageStaffMembership, {
     type: 'staff_membership',
     organizationId,
   });
+  requireStaffAssignmentScope(principal, memberships);
 }
 
 /**
@@ -228,19 +283,49 @@ export async function lockPersonsForShare(
 }
 
 /**
- * SPK-AT-025, §4.14: a self claim on a person who holds a staff membership is honoured only when
- * whoever issued it held a role that assigns staff roles (a membership may be added after a support
- * or front-desk claim was issued).
+ * The issuer snapshot stored on a claim (`claims.issued_by`): the audit actor plus the facility
+ * scope over which the issuer assigned staff roles at issue (`staffAssignmentScope`;
+ * R3-SECURITY-01), so acceptance can tell whether the issuer could have handed over the subject's
+ * staff login.
  */
-export function claimIssuerAssignsStaffRoles(issuedBy: unknown): boolean {
-  const roles = (issuedBy as { kind?: unknown; staffRoles?: unknown } | null)?.staffRoles;
-  if ((issuedBy as { kind?: unknown } | null)?.kind === 'system') return true;
-  return (
+export function claimIssuerSnapshot(
+  actor: Record<string, unknown>,
+  principal: Principal,
+): Record<string, unknown> {
+  const scope = staffAssignmentScope(principal);
+  return { ...actor, staffAssignmentScope: scope === null ? null : [...scope] };
+}
+
+/**
+ * SPK-AT-025, §4.14, §2.1: a self claim on a person who holds staff memberships is honoured only
+ * when whoever issued it held a role that assigns staff roles over every facility of those
+ * memberships (a membership may be added after a support, front-desk or facility-scoped
+ * administrator's claim was issued). A snapshot without a recorded assignment scope fails closed.
+ */
+export function claimIssuerCoversStaffLogin(
+  issuedBy: unknown,
+  memberships: readonly (readonly string[])[],
+): boolean {
+  const snapshot = (issuedBy ?? {}) as {
+    kind?: unknown;
+    staffRoles?: unknown;
+    staffAssignmentScope?: unknown;
+  };
+  if (snapshot.kind === 'system') return true;
+  const roles = snapshot.staffRoles;
+  const assigns =
     Array.isArray(roles) &&
     roles.some((role) =>
       (IdentityActions.manageStaffMembership.staffRoles as readonly unknown[]).includes(role),
-    )
-  );
+    );
+  if (!assigns || !('staffAssignmentScope' in snapshot)) return false;
+  const recorded = snapshot.staffAssignmentScope;
+  let scope: readonly string[] | null;
+  if (recorded === null) scope = null;
+  else if (Array.isArray(recorded) && recorded.every((f) => typeof f === 'string')) {
+    scope = recorded as string[];
+  } else return false;
+  return memberships.every((list) => assignmentScopeCovers(scope, list));
 }
 
 export function normalizeContactValue(kind: 'email' | 'phone', value: string): string {

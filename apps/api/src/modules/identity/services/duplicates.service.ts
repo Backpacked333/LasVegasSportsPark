@@ -46,6 +46,8 @@ import {
 import {
   displayNameOf,
   personColumns,
+  requireStaffAssignmentScope,
+  staffMembershipFacilityLists,
   toDuplicateCandidate,
   toPersonMerge,
   type PersonRow,
@@ -288,6 +290,15 @@ export class DuplicatesService {
         );
       }
       const now = this.clock.now();
+      // §2.1, §4.3, §4.14 (R3-SECURITY-01): a merge moves the merged person's staff memberships
+      // onto the survivor and may hand the survivor's record to the merged person's login, so it
+      // takes over staff logins; both persons' memberships in force or scheduled must lie within
+      // the facilities this administrator administers (an organization-wide one needs an
+      // organization-wide administrator).
+      requireStaffAssignmentScope(principal, [
+        ...(await staffMembershipFacilityLists(trx, organizationId, survivorId, now)),
+        ...(await staffMembershipFacilityLists(trx, organizationId, mergedId, now)),
+      ]);
       const operationId = await this.operations.create(trx, {
         organizationId,
         kind: 'identity.merge_persons',
