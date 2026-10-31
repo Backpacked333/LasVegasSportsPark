@@ -534,3 +534,14 @@ built, waiting on a decision or another module.
   `fixtureStatus`, so the caller schedules that fixture elsewhere instead of creating a second one
   (`__tests__/fixtures.spec.ts`; found by `apps/api/src/__tests__/journeys/tournaments.spec.ts`,
   where the duplicate kept pool standings pending).
+
+## Stage-6 review fixes — verified 2026-10-31
+
+- A fixture's scheduling event title (`"{home} v {away}"`, from the fixture command and from the
+  generated draft) is bounded to scheduling's 200-character title limit: when two team names
+  (each up to 200 characters, chosen by captains) do not fit, the longer one gives way and a cut
+  name ends in `…` (`fixtureTitle` in `competition.shared.ts`, `competition.shared.spec.ts`,
+  `__tests__/fixtures.spec.ts`, `__tests__/fixture-generation.spec.ts`; R2-TENANCY-INPUT-02). Before
+  this, the event took a 403-character title and generation failed with `INTERNAL_ERROR`.
+  Bounding the notice titles communications composes from the event title (a prefix plus the
+  title) is that module's change and is not made here.

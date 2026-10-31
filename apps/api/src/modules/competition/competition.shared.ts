@@ -453,3 +453,43 @@ export function emptySummary(): AvailabilitySummary {
 export function hoursFromNow(now: Date, hours: number): Date {
   return new Date(now.getTime() + hours * 3600_000);
 }
+
+/**
+ * The longest scheduling event title (scheduling's `title` bound, max 200, as `POST /v1/events`
+ * enforces). A fixture's title is composed from two captain-chosen team names of up to 200
+ * characters each, so it is bounded here (R2-TENANCY-INPUT-02, SPK-COMMS-005).
+ */
+export const FIXTURE_TITLE_MAX = 200;
+const FIXTURE_TITLE_SEPARATOR = ' v ';
+
+/** `text` cut to at most `max` UTF-16 units, ending with an ellipsis when it was cut. */
+function clipTitlePart(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let out = '';
+  for (const char of text) {
+    if (out.length + char.length > max - 1) break;
+    out += char;
+  }
+  return `${out.trimEnd()}…`;
+}
+
+/**
+ * `"{home} v {away}"`, never longer than {@link FIXTURE_TITLE_MAX}: when the names do not fit,
+ * the longer one gives way first (each keeps at least half the room) and a cut name ends in `…`.
+ * Lengths count UTF-16 units, as the contract's `max` does; a surrogate pair is never split.
+ */
+export function fixtureTitle(home: string, away: string, max: number = FIXTURE_TITLE_MAX): string {
+  const full = `${home}${FIXTURE_TITLE_SEPARATOR}${away}`;
+  if (full.length <= max) return full;
+  const room = max - FIXTURE_TITLE_SEPARATOR.length;
+  let homeRoom = Math.ceil(room / 2);
+  let awayRoom = room - homeRoom;
+  if (home.length < homeRoom) {
+    homeRoom = home.length;
+    awayRoom = room - homeRoom;
+  } else if (away.length < awayRoom) {
+    awayRoom = away.length;
+    homeRoom = room - awayRoom;
+  }
+  return `${clipTitlePart(home, homeRoom)}${FIXTURE_TITLE_SEPARATOR}${clipTitlePart(away, awayRoom)}`;
+}
