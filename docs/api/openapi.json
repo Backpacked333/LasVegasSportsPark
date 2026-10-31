@@ -38823,7 +38823,14 @@
             "format": "uuid"
           },
           "scope": {
-            "$ref": "#/components/schemas/AuthorityScope"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuthorityScope"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "effectiveFrom": {
             "type": [

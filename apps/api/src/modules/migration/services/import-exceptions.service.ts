@@ -3,6 +3,7 @@ import {
   errors,
   newId,
   RelationshipEvidenceImportPayloadSchema,
+  systemPrincipal,
   type DecideImportExceptionInput,
   type ImportException,
   type ImportExceptionKindValue,
@@ -17,6 +18,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  OperationalExceptions,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -30,6 +32,7 @@ import { MIGRATION_POLICY, type MigrationPolicy } from '../migration.policy';
 import {
   afterKeyset,
   createdAtText,
+  IMPORT_REVIEW_CARD,
   keysetPage,
   organizationOf,
   readKeysetCursor,
@@ -43,6 +46,16 @@ const AMBIGUOUS: readonly ImportExceptionKindValue[] = [
   'ambiguous_relationship',
   'ambiguous_balance',
 ];
+
+/** Why the batch's Today card no longer has rows awaiting review (R2-LIFECYCLES-07). */
+export type ReviewCardSettlement =
+  'review_completed' | 'batch_aborted' | 'apply_exceptions_decided';
+
+const SETTLEMENT_REASONS: Record<ReviewCardSettlement, string> = {
+  review_completed: 'The import review completed: every exception of the batch is decided.',
+  batch_aborted: 'The import batch was aborted: its open exceptions were withdrawn.',
+  apply_exceptions_decided: 'Every exception the apply left on the batch is decided.',
+};
 
 /**
  * Import review queues (§5.4 "ambiguous relationships and balances enter review queues"; "each
@@ -63,6 +76,7 @@ export class ImportExceptionsService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly operationalExceptions: OperationalExceptions,
   ) {}
 
   /** Opens (or refreshes the reasons of) the exception of this kind for the row. */
@@ -139,23 +153,69 @@ export class ImportExceptionsService {
       .where('batch_id', '=', batch.id)
       .where('status', '=', 'open')
       .execute();
+    const status = ImportExceptionMachine.next('open', 'withdraw');
     let withdrawn = 0;
     for (const exception of open) {
       if (keep.has(exception.id)) continue;
-      ImportExceptionMachine.next('open', 'withdraw');
-      await trx
+      // An exception decided meanwhile keeps its decision (`status = 'open'` re-checked). Callers
+      // hold the batch lock, which decide() takes first, so this is defence in depth.
+      const updated = await trx
         .updateTable('import_exceptions')
-        .set({
-          status: 'withdrawn',
-          withdrawn_at: this.clock.now(),
-          revision: exception.revision + 1,
-        })
+        .set({ status, withdrawn_at: this.clock.now(), revision: exception.revision + 1 })
+        .where('organization_id', '=', batch.organization_id)
         .where('id', '=', exception.id)
+        .where('status', '=', 'open')
         .where('revision', '=', exception.revision)
-        .execute();
-      withdrawn += 1;
+        .executeTakeFirst();
+      withdrawn += Number(updated.numUpdatedRows);
     }
     return withdrawn;
+  }
+
+  /**
+   * Withdraws every open exception of a batch that is being aborted (R2-LIFECYCLES-07, §4.6):
+   * an aborted batch is terminal, so nothing could decide them any more and they would stay in
+   * each review owner's queue for good. Runs in the abort's transaction, which holds the batch
+   * lock; an exception a reviewer decided first keeps its decision.
+   */
+  async withdrawAllOpen(trx: Trx, batch: BatchRow): Promise<number> {
+    return this.withdrawOthers(trx, batch, new Set());
+  }
+
+  /**
+   * Resolves the batch's open Today card (`migration.import_review`, §5.11, SPK-UX-006) once no
+   * row awaits review any more: the review completed, the batch was aborted, or the last exception
+   * an apply left was decided (R2-LIFECYCLES-07). Its queue (`migration`) is not a staff role, so
+   * the K-10 own-queue grant never settles it; the module does, in the caller's transaction, as
+   * the system (the command that caused it is audited with its own actor and correlation id).
+   * Returns how many cards it resolved (0 or 1: the card is deduplicated per batch).
+   */
+  async settleReviewCard(
+    trx: Trx,
+    organizationId: string,
+    batchId: string,
+    settlement: ReviewCardSettlement,
+    correlationId: string | null,
+  ): Promise<number> {
+    const open = await this.operationalExceptions.list(
+      organizationId,
+      {
+        category: IMPORT_REVIEW_CARD.category,
+        affectedType: IMPORT_REVIEW_CARD.affectedType,
+        affectedId: batchId,
+        statuses: ['open', 'acknowledged'],
+      },
+      trx,
+    );
+    const system = systemPrincipal(organizationId, IMPORT_REVIEW_CARD.category);
+    for (const card of open.items) {
+      await this.operationalExceptions.transition(trx, system, card.id, 'resolved', {
+        reason: SETTLEMENT_REASONS[settlement],
+        resolution: { settlement, batchId },
+        correlationId: correlationId ?? undefined,
+      });
+    }
+    return open.items.length;
   }
 
   async counts(
@@ -229,14 +289,31 @@ export class ImportExceptionsService {
   ): Promise<ImportException> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const current: ExceptionRow | undefined = await trx
+      const located = await trx
+        .selectFrom('import_exceptions')
+        .select('batch_id')
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (!located) throw errors.protectedNotFound('import exception');
+      // R2-LIFECYCLES-07 (§4.6, §4.9): the batch row first, then the exception — the order
+      // validation and abort take them. Decisions of one batch, its abort and its validation
+      // serialize on the batch row: an abort never interleaves with a decision, and the last
+      // decision on an applied batch sees every other one committed, so it settles the card.
+      const batch = await trx
+        .selectFrom('import_batches')
+        .select(['status'])
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', located.batch_id)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      const current: ExceptionRow = await trx
         .selectFrom('import_exceptions')
         .selectAll()
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
         .forUpdate()
-        .executeTakeFirst();
-      if (!current) throw errors.protectedNotFound('import exception');
+        .executeTakeFirstOrThrow();
       await this.authorization.require(principal, MigrationActions.decideException, {
         type: 'import_exception',
         id,
@@ -257,12 +334,6 @@ export class ImportExceptionsService {
         throw errors.staleRevision(input.expectedRevision, current.revision);
       }
       ImportExceptionMachine.next(current.status, 'decide');
-      const batch = await trx
-        .selectFrom('import_batches')
-        .select(['status'])
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', current.batch_id)
-        .executeTakeFirstOrThrow();
       if (batch.status === 'aborted') {
         throw errors.invalidTransition('ImportBatch', 'aborted', 'decide_exception');
       }
@@ -301,6 +372,20 @@ export class ImportExceptionsService {
         .where('id', '=', id)
         .where('revision', '=', current.revision)
         .execute();
+      if (batch.status === 'applied') {
+        // An applied batch has no review step left: the decision on the last exception its
+        // apply left settles the card that announced them (R2-LIFECYCLES-07).
+        const counts = await this.counts(trx, organizationId, current.batch_id);
+        if (counts.open === 0) {
+          await this.settleReviewCard(
+            trx,
+            organizationId,
+            current.batch_id,
+            'apply_exceptions_decided',
+            correlationId,
+          );
+        }
+      }
       await this.audit.record(trx, {
         organizationId,
         actor: principal,

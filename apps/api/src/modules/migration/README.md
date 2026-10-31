@@ -126,9 +126,15 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
 - **Validation (dry run):** seals the batch (computed checksum must equal the declared one;
   declared row count must match), plans every row with the same rules the apply uses, stores
   planned outcomes and reasons, opens review exceptions, withdraws exceptions whose cause is gone,
-  compares control totals without netting, and raises one owned operational exception
-  (`migration.import_review`, queue `migration`) while rows await review. A conflict only the
-  owning module can see (a schedule clash at the moment of import) is found at apply.
+  compares control totals without netting, and raises one owned operational exception (the
+  batch's Today card: `migration.import_review`, queue `migration`) when rows await review. The
+  module settles that card itself — the queue is not a staff role, so the K-10 own-queue grant
+  never applies: it is resolved, as the system and in the same transaction, when the review
+  completes or the batch is aborted. An apply that leaves open exceptions raises a card of its
+  own (the review settled the first), resolved by the decision on the last of them
+  (R2-LIFECYCLES-07). A card's title states the count when it was raised; a re-validation while
+  it is open does not retitle it. A conflict only the owning module can see (a schedule clash at
+  the moment of import) is found at apply.
 - **Review queues (§5.4):** ambiguous relationships (evidence basis other than `documented`, the
   `collect` permission, guardianship of an adult, conflicting evidence for the same two people,
   changed evidence) → `support_operator`; ambiguous balances (negative, disputed,
@@ -137,7 +143,14 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
   manager may decide any. Accept may narrow staged permissions or state the amount finance
   approved, never widen; validation errors and conflicts can only be rejected or deferred. The
   review completes when no exception is open. An exception about a balance states the staged
-  amount and its currency.
+  amount and its currency. Aborting a batch withdraws its open exceptions in the same
+  transaction (the abort's audit record counts them) and resolves the batch's Today card, so
+  neither a review queue nor Today keeps an item nothing can settle; an exception decided before
+  the abort keeps its decision (R2-LIFECYCLES-07, §4.6). A decision takes the batch row lock
+  before the exception's, the order validation and abort take them, so a decision and an abort
+  of the same batch never interleave: whichever commits first wins. A decision that comes second
+  is refused — STALE_REVISION for the revision it read, INVALID_TRANSITION once re-read, since a
+  withdrawn exception is final.
 - **Apply (§5.4, SPK-AT-024):** idempotent per external id — a mapped, unchanged record is
   `matched`. Rows are applied in dependency order (persons; programs; households and
   relationships; balances; seasons; teams before their entries; rosters; events; preferences).
@@ -179,7 +192,8 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
     the batch row while it runs, so a takeover waits for it), and resumes after an interruption.
 - **Authority matrix (§5.6):** assignments per category and scope; a transfer names the
   assignment in effect and its revision, ends it and starts the next one at the same instant;
-  never retroactive. Without an assignment SportsPark is authoritative; importing a category
+  never retroactive. Without an assignment SportsPark is authoritative (a `default` matrix entry,
+  `scope: null`, published as `anyOf [$ref AuthorityScope, null]`); importing a category
   needs legacy authority in effect at the row's scope (a mapped program's program; a season's,
   team entry's or roster's competition; a future event's facility; otherwise the organization),
   else the row is a `sportspark_authoritative` conflict.

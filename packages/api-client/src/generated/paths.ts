@@ -50295,7 +50295,7 @@ export type components = {
             /** Format: date-time */
             effectiveTo: string | null;
             recordCategory: components["schemas"]["ImportEntityType"];
-            scope: components["schemas"]["AuthorityScope"];
+            scope: components["schemas"]["AuthorityScope"] | null;
         };
         AuthorityScope: {
             /** @enum {string} */
