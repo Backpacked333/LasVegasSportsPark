@@ -122,9 +122,9 @@ values").
   `facilities.restriction_closure_superseded` with `supersededClosureWithdrawn: true`), and an
   approval that finds the restriction already activated with that closure succeeds
   (`alreadyActive` on its operation). The authorized release therefore lifts the only closure that
-  blocks the area, and no orphan closure is left in scheduling (**Verified** on the integrated
-  branch: `restriction-withdrawal.spec.ts` "SPK-FAC-004 / SPK-AT-021: an approval that loses the race
-  for the closure link withdraws the closure it created").
+  blocks the area, and no orphan closure is left in scheduling (**Verified**:
+  `restriction-withdrawal.spec.ts` "SPK-FAC-004 / SPK-AT-021: an approval that loses the race for
+  the closure link withdraws the closure it created").
 - **Withdrawal (FAC-01, SPK-FAC-004, §4.6, §4.9, §4.2).** `POST …/withdraw { reason,
 expectedRevision? }` (authority `facilities.apply_restriction`, the restriction authority that
   proposes and approves) moves `proposed → withdrawn` and `approved → withdrawn` with
@@ -141,10 +141,10 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
   restriction is withdrawn with its reason, audited and announced; it holds nothing and can never
   take effect", "SPK-FAC-004: an approved restriction whose activation never created a closure is
   withdrawn without a scheduling call", "an active restriction cannot be withdrawn", "SPK-FAC-005: a
-  withdrawn preventive occurrence is decided and never materialized again"; and, on the integrated
-  branch with scheduling SCH-01 (migration 0302), "SPK-FAC-004: a proposed restriction is
-  withdrawn; an approved one withdraws its pending closure atomically". Who may withdraw follows the
-  approval roles, which stay **Pending** (DEC-001).
+  withdrawn preventive occurrence is decided and never materialized again"; and "SPK-FAC-004: a
+  proposed restriction is withdrawn; an approved one withdraws its pending closure atomically"
+  (through scheduling SCH-01, migration 0302). Who may withdraw follows the approval roles, which
+  stay **Pending** (DEC-001).
 - **SPK-FAC-004.** Closing a task never touches its restriction (`openRestrictionIds` says so).
   `release` requires `facilities.release_to_service`, and when the task `requires_inspection` the
   latest inspection must be `passed` (`ELIGIBILITY_FAILED`, `details.code = inspection_required`
