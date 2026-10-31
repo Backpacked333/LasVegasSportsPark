@@ -1,4 +1,4 @@
-import { systemPrincipal, type Principal } from '@sportspark/contracts';
+import { encodeCursor, newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
@@ -159,5 +159,31 @@ describe('keyset paging of notices and the inbox (§4.5, R2-API-CONTRACT-01)', (
       (i) => i['attemptId'] as string,
     );
     expect(paged).toEqual(expected);
+  });
+
+  it('§4.5 / §4.10: a cursor whose instant PostgreSQL cannot represent (year 0000) reads as the first page on GET /notifications and GET /me/inbox, never a server fault', async () => {
+    await composeAndDispatch(t.app, system, notice('Before the odd cursor'));
+    // ISO-8601 (and z.iso.datetime) accept year 0000; PostgreSQL has no year 0 and refuses the
+    // `::timestamptz` cast (22008). Shapes the server never writes read as the first page too.
+    const unusable = [
+      encodeCursor({ createdAt: '0000-06-01T00:00:00Z', id: newId() }),
+      encodeCursor({ createdAt: '0000-01-01T00:00:00.000000Z', id: newId() }),
+      encodeCursor({ createdAt: '2026-10-23T12:00:00.1234567Z', id: newId() }),
+    ];
+    for (const [path, header] of [
+      ['/v1/notifications?limit=5', staff],
+      ['/v1/me/inbox?limit=5', parent],
+    ] as const) {
+      const first = await t.http.get(path).set(header);
+      expect(first.status).toBe(200);
+      expect(first.body.items.length).toBeGreaterThan(0);
+      for (const cursor of unusable) {
+        const response = await t.http
+          .get(`${path}&cursor=${encodeURIComponent(cursor)}`)
+          .set(header);
+        expect(response.status, JSON.stringify(response.body)).toBe(200);
+        expect(response.body).toEqual(first.body);
+      }
+    }
   });
 });

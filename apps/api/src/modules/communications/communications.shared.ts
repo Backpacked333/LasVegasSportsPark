@@ -48,8 +48,26 @@ export const isoOrNull = (value: Date | string | null): string | null =>
 // all the rows one transaction wrote among them (R2-API-CONTRACT-01).
 // ---------------------------------------------------------------------------------------------
 
-/** A keyset cursor: the boundary row's instant (ISO-8601 UTC, up to microseconds) and id. */
-export const CreatedCursor = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
+/**
+ * The instant shape `cursorInstant` writes: whole seconds, up to six fraction digits, UTC `Z`.
+ * The millisecond cursors issued before R2-API-CONTRACT-01 have the same shape.
+ */
+const CURSOR_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
+
+/**
+ * A keyset cursor: the boundary row's instant (ISO-8601 UTC, up to microseconds) and id. Only an
+ * instant PostgreSQL can represent decodes: the calendar date is checked (`z.iso.datetime`), and
+ * year 0000, which ISO-8601 allows but PostgreSQL rejects (there is no year 0), is refused. Any
+ * other cursor decodes to null, the first page, instead of failing the `::timestamptz` cast in
+ * `afterCursor` as a server fault.
+ */
+export const CreatedCursor = z.object({
+  createdAt: z.iso
+    .datetime()
+    .regex(CURSOR_INSTANT)
+    .refine((value) => !value.startsWith('0000-')),
+  id: z.uuid(),
+});
 export type CreatedKeyset = z.infer<typeof CreatedCursor>;
 
 /**
