@@ -138,19 +138,37 @@ export class Inbox {
     return { id: existing.id, duplicate: true };
   }
 
-  /** Processes received/failed events whose retry time has come. Safe to call concurrently. */
-  async runOnce(limit = this.config.OUTBOX_BATCH_SIZE): Promise<{
+  /**
+   * Processes received/failed events whose retry time has come. Safe to call concurrently.
+   * `shouldStop` (the worker stopping, R3-OPERATIONS-10): once it answers true, the event in hand
+   * finishes, the rest of the claimed batch is handed back (lease cleared) and nothing more is
+   * claimed.
+   */
+  async runOnce(
+    limit = this.config.OUTBOX_BATCH_SIZE,
+    options: { shouldStop?: () => boolean } = {},
+  ): Promise<{
     processed: number;
     failed: number;
     dead: number;
     ignored: number;
     deferred: number;
+    released: number;
   }> {
+    const summary = { processed: 0, failed: 0, dead: 0, ignored: 0, deferred: 0, released: 0 };
+    const shouldStop = options.shouldStop ?? (() => false);
+    if (shouldStop()) return summary;
     // A token per claim, so overlapping runs in one process are told apart as well.
     const lease = `${this.config.WORKER_ID}:${newId()}`;
     const rows = await this.claim(limit, lease);
-    const summary = { processed: 0, failed: 0, dead: 0, ignored: 0, deferred: 0 };
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
+      if (shouldStop()) {
+        summary.released = await this.release(
+          rows.slice(index).map((r) => r.id),
+          lease,
+        );
+        break;
+      }
       if (!row.signature_verified) {
         // §4.11: an unauthenticated provider event is never applied; it stays on record, ignored.
         const ignored = await this.db
@@ -332,6 +350,19 @@ export class Inbox {
       }
     }
     return summary;
+  }
+
+  /** Hands claimed, unprocessed events back (lease cleared) so another worker takes them now. */
+  private async release(ids: string[], lease: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const released = await this.db
+      .updateTable('inbox_events')
+      .set({ locked_by: null, locked_until: null })
+      .where('id', 'in', ids)
+      .where('status', 'in', ['received', 'failed'])
+      .where('locked_by', '=', lease)
+      .executeTakeFirst();
+    return Number(released.numUpdatedRows);
   }
 
   /** Claims due events with a lease, mirroring the outbox dispatcher (§4.12). */

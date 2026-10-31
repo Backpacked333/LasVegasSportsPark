@@ -27,6 +27,11 @@ export interface DispatchSummary {
    * not counted.
    */
   deferred: number;
+  /**
+   * Claimed events handed back unprocessed because the worker is stopping (R3-OPERATIONS-10):
+   * their lease is cleared, so another worker takes them at once instead of after the lease.
+   */
+  released: number;
 }
 
 export function retryDelayMs(attempt: number): number {
@@ -52,12 +57,18 @@ export function retryDelayMs(attempt: number): number {
  * handlers in `last_error` and tries again after OUTBOX_MISSING_HANDLER_RETRY_SECONDS, so a build
  * that has them runs them (§4.7 invariant 12, §5.8); an event type no handler of this build knows
  * is no longer settled as if it were a fact without consumers.
+ *
+ * Stopping (R3-OPERATIONS-10, recovery runbook §4 "stop workers cleanly"): `stop()` ends the poll
+ * loop, lets the event in hand finish (its handler transaction and status write), hands the rest
+ * of the claimed batch back (lease cleared) and claims nothing more; it resolves once that drain
+ * is over, so `worker.ts` awaits it (bounded by WORKER_SHUTDOWN_TIMEOUT_MS) before it exits.
  */
 @Injectable()
 export class OutboxDispatcher {
   private readonly logger = new Logger(OutboxDispatcher.name);
   private timer: NodeJS.Timeout | null = null;
-  private running = false;
+  private stopping = false;
+  private inFlight: Promise<void> | null = null;
 
   constructor(
     @Inject(DATABASE) private readonly db: Db,
@@ -69,31 +80,50 @@ export class OutboxDispatcher {
 
   start(): void {
     if (this.timer) return;
-    const tick = async () => {
-      if (this.running) return;
-      this.running = true;
-      try {
-        let summary = await this.runOnce();
-        while (summary.claimed > 0) summary = await this.runOnce();
-      } catch (error) {
-        this.logger.error(`dispatch loop failed: ${String(error)}`);
-      } finally {
-        this.running = false;
-      }
-    };
-    this.timer = setInterval(() => void tick(), this.config.OUTBOX_POLL_INTERVAL_MS);
-    void tick();
+    this.stopping = false;
+    this.timer = setInterval(() => this.tick(), this.config.OUTBOX_POLL_INTERVAL_MS);
+    this.tick();
   }
 
-  stop(): void {
+  /**
+   * Ends the poll loop and resolves once the batch in hand is drained (the event being handled
+   * finishes, the rest is handed back); nothing is claimed after it is called.
+   */
+  async stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.stopping = true;
+    await this.inFlight;
+  }
+
+  /** One poll: drain due events batch by batch, unless a drain is still running or stopping. */
+  private tick(): void {
+    if (this.inFlight || this.stopping) return;
+    this.inFlight = this.drain().finally(() => {
+      this.inFlight = null;
+    });
+  }
+
+  private async drain(): Promise<void> {
+    const shouldStop = () => this.stopping;
+    try {
+      let summary = await this.runBatch(this.config.OUTBOX_BATCH_SIZE, shouldStop);
+      while (summary.claimed > 0 && !this.stopping) {
+        summary = await this.runBatch(this.config.OUTBOX_BATCH_SIZE, shouldStop);
+      }
+    } catch (error) {
+      this.logger.error(`dispatch loop failed: ${String(error)}`);
+    }
   }
 
   /** Processes one batch; returns counts. Safe to call concurrently from several workers. */
-  async runOnce(batchSize: number = this.config.OUTBOX_BATCH_SIZE): Promise<DispatchSummary> {
+  runOnce(batchSize: number = this.config.OUTBOX_BATCH_SIZE): Promise<DispatchSummary> {
+    return this.runBatch(batchSize, () => false);
+  }
+
+  private async runBatch(batchSize: number, shouldStop: () => boolean): Promise<DispatchSummary> {
     const summary: DispatchSummary = {
       claimed: 0,
       dispatched: 0,
@@ -101,18 +131,40 @@ export class OutboxDispatcher {
       dead: 0,
       superseded: 0,
       deferred: 0,
+      released: 0,
     };
+    if (shouldStop()) return summary;
     // A token per claim, so overlapping runs (also in one process) are told apart.
     const lease = `${this.config.WORKER_ID}:${newId()}`;
     const events = await this.claim(batchSize, lease);
     summary.claimed = events.length;
-    for (const row of events) {
+    for (const [index, row] of events.entries()) {
+      if (shouldStop()) {
+        summary.released = await this.release(
+          events.slice(index).map((e) => e.id),
+          lease,
+        );
+        break;
+      }
       const outcome = (await this.renewLease(row.id, lease))
         ? await this.process(row, lease)
         : 'superseded';
       summary[outcome] += 1;
     }
     return summary;
+  }
+
+  /** Hands claimed, unprocessed events back (lease cleared) so another worker takes them now. */
+  private async release(ids: string[], lease: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const released = await this.db
+      .updateTable('outbox_events')
+      .set({ locked_by: null, locked_until: null })
+      .where('id', 'in', ids)
+      .where('status', '=', 'pending')
+      .where('locked_by', '=', lease)
+      .executeTakeFirst();
+    return Number(released.numUpdatedRows);
   }
 
   /** Extends this run's lease on one event; false when another worker owns the event now. */

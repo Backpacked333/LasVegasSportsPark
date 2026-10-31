@@ -31,7 +31,7 @@ import {
 import { CapabilityService } from './capabilities/capability.service';
 import { SystemClock } from './clock';
 import { loadConfig, type AppConfig } from './config';
-import { databaseProvider } from './database/database.provider';
+import { DatabaseLifecycle, databaseProvider } from './database/database.provider';
 import { UnitOfWork } from './database/unit-of-work';
 import {
   AdminController,
@@ -132,6 +132,7 @@ export class KernelModule implements OnModuleInit {
     const providers: Provider[] = [
       { provide: APP_CONFIG, useValue: config },
       options.database ? { provide: DATABASE, useValue: options.database } : databaseProvider,
+      DatabaseLifecycle,
       { provide: CLOCK, useClass: SystemClock },
       {
         provide: IDENTITY_PROVIDER,

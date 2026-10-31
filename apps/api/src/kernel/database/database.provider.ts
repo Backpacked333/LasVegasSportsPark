@@ -1,4 +1,10 @@
-import { Logger, type FactoryProvider } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type FactoryProvider,
+  type OnApplicationShutdown,
+} from '@nestjs/common';
 import { createPgDatabase, createPgliteDatabase, migrateToLatest, type Db } from '@sportspark/db';
 import type { AppConfig } from '../config';
 import { APP_CONFIG, DATABASE } from '../tokens';
@@ -49,3 +55,18 @@ export const databaseProvider: FactoryProvider<Db> = {
   inject: [APP_CONFIG],
   useFactory: async (config: AppConfig) => (await openDatabase(config)).db,
 };
+
+/**
+ * Closes the database the kernel opened when the application shuts down (R3-OPERATIONS-10):
+ * `app.close()` in `worker.ts` and in the API's shutdown hooks ends the pool after every module's
+ * own shutdown hooks ran, instead of leaving it to the process exit. A database handed in by the
+ * caller (tests) is not the kernel's to close and is left open.
+ */
+@Injectable()
+export class DatabaseLifecycle implements OnApplicationShutdown {
+  constructor(@Inject(DATABASE) private readonly db: Db) {}
+
+  async onApplicationShutdown(): Promise<void> {
+    await closeDatabase(this.db);
+  }
+}

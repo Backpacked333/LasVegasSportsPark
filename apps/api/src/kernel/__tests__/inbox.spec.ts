@@ -103,6 +103,7 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
         dead: 0,
         ignored: 0,
         deferred: 0,
+        released: 0,
       });
       expect((await row()).attempts).toBe(attempt);
       t.clock.advance(retryDelayMs(attempt));
@@ -209,6 +210,7 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
       dead: 0,
       ignored: 0,
       deferred: 0,
+      released: 0,
     });
     t.clock.advance(t.config.OUTBOX_LOCK_LEASE_SECONDS * 1000 + 1);
     expect(await inbox.runOnce()).toMatchObject({ processed: 1 });

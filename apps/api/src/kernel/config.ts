@@ -130,6 +130,14 @@ export const ConfigSchema = z
      * are not counted, and a build that registers the handler runs it (technical value).
      */
     OUTBOX_MISSING_HANDLER_RETRY_SECONDS: z.coerce.number().int().min(1).default(300),
+    /**
+     * How long the worker waits on SIGTERM or SIGINT for the work in flight (the outbox and inbox
+     * event in hand, a background worker pass, a periodic job pass, an idempotency sweep) before it
+     * closes the application and the database and exits (R3-OPERATIONS-10; technical value: keep it
+     * under the host's termination grace period). Work still running then is retried once its
+     * lease lapses.
+     */
+    WORKER_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {
