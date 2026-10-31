@@ -39,6 +39,7 @@ import {
   redactSessionBooking,
   toMakeupEntitlement,
   toSessionBooking,
+  viewerOf,
   type Reader,
 } from '../enrollment.shared';
 import { CatalogSessions } from './catalog-sessions';
@@ -292,14 +293,21 @@ export class MakeupsService {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('makeup_entitlement');
       // §4.3: the redemption books a seat at the replacement offering's facility.
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.redeemMakeup, {
         type: 'makeup_entitlement',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.redeemMakeup,
+        organizationId,
+        facilityId,
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'active' || new Date(row.expires_at).getTime() <= now.getTime()) {
         throw errors.resourceConflict(
@@ -354,6 +362,7 @@ export class MakeupsService {
         evaluation,
         payerPersonId: null,
         actor: principal,
+        actingAsStaff: staff,
         free: true,
         makeupEntitlementId: id,
         correlationId,
@@ -411,7 +420,7 @@ export class MakeupsService {
           redemptionLimit: row.redemption_limit,
         },
       });
-      return redactSessionBooking(principal, toSessionBooking(booking));
+      return redactSessionBooking(viewerOf(principal, staff), toSessionBooking(booking));
     });
   }
 

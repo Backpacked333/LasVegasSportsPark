@@ -67,14 +67,12 @@ export function organizationOf(principal: Principal): string {
   return principal.organizationId;
 }
 
-export function isStaffLike(principal: Principal): boolean {
-  return principal.kind === 'staff' || principal.kind === 'system';
-}
-
 /**
- * §4.10: should a denied staff-only command on a customer-private record read as NOT_FOUND? Yes
- * for a customer who may not even read the record (another household), so its existence never
- * leaks; a customer who may read it (their own child's) and staff get the honest ACCESS_DENIED.
+ * R3-TRACE-A-02 (§2.1, §4.10, §4.14, SPK-IAM-001/003): should a denied staff-only command on a
+ * customer-private record read as NOT_FOUND? Yes for anyone who may not even read the record
+ * (another household, or a staff member whose roles and own relationships do not reach it), so its
+ * existence never leaks; whoever may read it (their own child's, or a staff reader in scope) gets
+ * the honest ACCESS_DENIED. The decision is the kernel's, never the principal's kind.
  */
 export async function hiddenFrom(
   authorization: AuthorizationService,
@@ -82,7 +80,7 @@ export async function hiddenFrom(
   readAction: ActionDefinition,
   target: AuthorizationTargetInput,
 ): Promise<boolean> {
-  if (isStaffLike(principal)) return false;
+  if (principal.kind === 'system') return false;
   return !(await authorization.decide(principal, readAction, target)).allowed;
 }
 
@@ -92,18 +90,20 @@ export function enrollmentSystem(organizationId: string, label = 'enrollment'): 
 }
 
 /**
- * §4.7 (1), §4.14, SPK-REG-009: the payer a command may name. Staff may name another payer (an
- * assisted registration); a customer may name only an adult in `allowed` (themselves, or the
- * basket owner they already hold authority over). Finance lets only the payer quote and pay, so
- * a customer naming an unrelated adult would also leave the registration unpayable.
+ * §4.7 (1), §4.14, SPK-REG-009: the payer a command may name. Staff acting on their role (an
+ * assisted registration, `staff` from `EnrollmentFacilityScope.actsAsStaff`) may name another
+ * payer; anyone else, including a staff member acting for their own family (R3-TRACE-A-02), may
+ * name only an adult in `allowed` (themselves, or the basket owner they already hold authority
+ * over). Finance lets only the payer quote and pay, so naming an unrelated adult would also leave
+ * the registration unpayable.
  */
 export function resolveCustomerPayer(
-  principal: Principal,
+  staff: boolean,
   requested: string | null | undefined,
   allowed: ReadonlyArray<string | null | undefined>,
 ): string | null {
   if (requested === undefined || requested === null) return null;
-  if (isStaffLike(principal)) return requested;
+  if (staff) return requested;
   if (!allowed.includes(requested)) {
     throw errors.participantAuthorityRequired(
       'A customer may name only themselves as payer; staff may name another payer (SPK-REG-009).',
@@ -139,13 +139,31 @@ const REDACTED_ACTOR: RegistrationActorSnapshot = {
   actorLabel: 'another authorized adult',
 };
 
-function seesPrivateFacts(principal: Principal, personIds: ReadonlyArray<string | null>): boolean {
-  if (isStaffLike(principal)) return true;
-  return principal.personId !== null && personIds.includes(principal.personId);
+/**
+ * Who reads a registration record, for payer privacy: their person, and whether a staff role that
+ * reads the record at its facility (or the system) is what lets them read it. A staff member who
+ * reads their own child's record through a relationship is a family reader (R3-TRACE-A-02).
+ */
+export interface RecordViewer {
+  personId: string | null;
+  staff: boolean;
 }
 
-export function redactApplication(principal: Principal, application: Application): Application {
-  if (seesPrivateFacts(principal, [application.payerPersonId, application.submittedByPersonId])) {
+/** The viewer of a record read by `principal`; `staff` comes from `EnrollmentFacilityScope.actsAsStaff`. */
+export function viewerOf(principal: Principal, staff: boolean): RecordViewer {
+  return {
+    personId: principal.personId,
+    staff: principal.kind === 'system' || (principal.kind === 'staff' && staff),
+  };
+}
+
+function seesPrivateFacts(viewer: RecordViewer, personIds: ReadonlyArray<string | null>): boolean {
+  if (viewer.staff) return true;
+  return viewer.personId !== null && personIds.includes(viewer.personId);
+}
+
+export function redactApplication(viewer: RecordViewer, application: Application): Application {
+  if (seesPrivateFacts(viewer, [application.payerPersonId, application.submittedByPersonId])) {
     return application;
   }
   return {
@@ -157,8 +175,8 @@ export function redactApplication(principal: Principal, application: Application
   };
 }
 
-export function redactEnrollment(principal: Principal, enrollment: Enrollment): Enrollment {
-  if (seesPrivateFacts(principal, [enrollment.payerPersonId, enrollment.registeredBy.personId])) {
+export function redactEnrollment(viewer: RecordViewer, enrollment: Enrollment): Enrollment {
+  if (seesPrivateFacts(viewer, [enrollment.payerPersonId, enrollment.registeredBy.personId])) {
     return enrollment;
   }
   return {
@@ -175,11 +193,10 @@ export function redactEnrollment(principal: Principal, enrollment: Enrollment): 
 }
 
 export function redactSessionBooking(
-  principal: Principal,
+  viewer: RecordViewer,
   booking: SessionBooking,
 ): SessionBooking {
-  if (seesPrivateFacts(principal, [booking.payerPersonId, booking.bookedBy.personId]))
-    return booking;
+  if (seesPrivateFacts(viewer, [booking.payerPersonId, booking.bookedBy.personId])) return booking;
   return {
     ...booking,
     bookedBy: booking.bookedBy.kind === 'staff' ? booking.bookedBy : REDACTED_ACTOR,
@@ -188,11 +205,11 @@ export function redactSessionBooking(
 }
 
 export function redactWaitlistEntry(
-  principal: Principal,
+  viewer: RecordViewer,
   entry: WaitlistEntry,
   requestedByPersonId: string | null,
 ): WaitlistEntry {
-  if (seesPrivateFacts(principal, [entry.payerPersonId, requestedByPersonId])) return entry;
+  if (seesPrivateFacts(viewer, [entry.payerPersonId, requestedByPersonId])) return entry;
   return { ...entry, payerPersonId: null };
 }
 
@@ -202,10 +219,10 @@ export function redactWaitlistEntry(
  * staff registrant (an assisted booking) stays visible, as on the sibling records.
  */
 export function redactTrialParticipation(
-  principal: Principal,
+  viewer: RecordViewer,
   trial: TrialParticipation,
 ): TrialParticipation {
-  if (seesPrivateFacts(principal, [trial.registeredBy.personId, trial.participantPersonId])) {
+  if (seesPrivateFacts(viewer, [trial.registeredBy.personId, trial.participantPersonId])) {
     return trial;
   }
   if (trial.registeredBy.kind === 'staff') return trial;
@@ -268,6 +285,27 @@ export function actorSnapshot(principal: Principal): RegistrationActorSnapshot {
     staffRoles: [...principal.staffRoles],
     actorLabel: String(snapshot['actorLabel'] ?? principal.actorLabel),
   };
+}
+
+/**
+ * The registrant snapshot of a family-facing record (who registered, booked, queued or opened it;
+ * SPK-REG-009, SPK-AT-004). A staff member acting through their own self or guardian authority
+ * (`staff` false, R3-TRACE-A-02) is recorded as the customer they acted as, so the record is not
+ * shown as staff-assisted and payer privacy hides them from the other adults as it hides any
+ * family registrant. The audit record keeps the full principal.
+ */
+export function registrantSnapshot(
+  principal: Principal,
+  staff: boolean,
+): RegistrationActorSnapshot {
+  const snapshot = actorSnapshot(principal);
+  if (staff || principal.kind !== 'staff') return snapshot;
+  return { ...snapshot, kind: 'customer', staffRoles: [] };
+}
+
+/** SPK-REG-009: the staff actor of an assisted record, apart from participant and payer. */
+export function assistedBy(principal: Principal, staff: boolean): string | null {
+  return staff ? principal.personId : null;
 }
 
 function toActor(value: Record<string, unknown>): RegistrationActorSnapshot {

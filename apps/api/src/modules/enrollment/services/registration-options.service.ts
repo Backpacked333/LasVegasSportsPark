@@ -9,11 +9,11 @@ import {
   type RegistrationIntent,
   type RegistrationOptions,
 } from '@sportspark/contracts';
-import { AuthorizationService, CapabilityService } from '../../../kernel';
+import { CapabilityService } from '../../../kernel';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
 import { EnrollmentActions } from '../enrollment.actions';
 import { INTENT_CAPABILITIES, INTENT_OFFERING_KINDS } from '../enrollment.policy';
-import { isStaffLike, organizationOf } from '../enrollment.shared';
+import { organizationOf } from '../enrollment.shared';
 import { CustomerScope } from './customer-scope';
 import { EnrollmentFacilityScope } from './facility-scope';
 import { RegistrationEvaluator } from './registration-evaluator';
@@ -33,7 +33,6 @@ import { RegistrationEvaluator } from './registration-evaluator';
 @Injectable()
 export class RegistrationOptionsService {
   constructor(
-    private readonly authorization: AuthorizationService,
     private readonly evaluator: RegistrationEvaluator,
     private readonly customers: CustomerScope,
     private readonly scope: EnrollmentFacilityScope,
@@ -58,15 +57,12 @@ export class RegistrationOptionsService {
     const facilityId = snapshot.offering.facilityId;
     // Staff with the apply roles (at the offering's facility) may name anyone; otherwise only the
     // people the caller holds `register` over, and a published offering.
-    const staffMayApply =
-      isStaffLike(principal) &&
-      (
-        await this.authorization.decide(principal, EnrollmentActions.apply, {
-          type: 'application',
-          organizationId,
-          facilityId,
-        })
-      ).allowed;
+    const staffMayApply = await this.scope.actsAsStaff(
+      principal,
+      EnrollmentActions.apply,
+      organizationId,
+      facilityId,
+    );
     if (!staffMayApply && !PUBLIC_PUBLICATION_STATES.includes(snapshot.offering.publicationState)) {
       throw errors.protectedNotFound('offering');
     }

@@ -46,14 +46,16 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  assistedBy,
   enrollmentSystem,
-  isStaffLike,
   minutesFrom,
   organizationOf,
   owesNothing as owesNothingFor,
   redactSessionBooking,
+  registrantSnapshot,
   resolveCustomerPayer,
   toSessionBooking,
+  viewerOf,
   type Reader,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
@@ -81,6 +83,12 @@ export interface CreateBookingInTrx {
   evaluation: Evaluation;
   payerPersonId: string | null;
   actor: Principal;
+  /**
+   * R3-TRACE-A-02 (SPK-REG-009): the actor acts on a staff role at the offering's facility
+   * (`EnrollmentFacilityScope.actsAsStaff`), so the booking is staff-assisted; a staff member
+   * booking for their own family is recorded as the customer they acted as.
+   */
+  actingAsStaff: boolean;
   /** Holds already reserving the seat (an accepted waitlist offer); otherwise new holds are taken. */
   existingHoldIds?: readonly string[];
   /** Makeups are never money (SPK-YOUTH-004): no price, confirmed at once. */
@@ -203,12 +211,19 @@ export class SessionBookingsService {
         organizationId,
         input.participantPersonId,
       );
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.bookSession, {
         type: 'session_booking',
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [person.id],
       });
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.bookSession,
+        organizationId,
+        facilityId,
+      );
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
       const basis = input.packageEntitlementId
         ? 'package'
@@ -288,9 +303,10 @@ export class SessionBookingsService {
         payerPersonId:
           basis !== 'purchase'
             ? null
-            : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
-              (isStaffLike(principal) ? null : principal.personId)),
+            : (resolveCustomerPayer(staff, input.payerPersonId, [principal.personId]) ??
+              (staff ? null : principal.personId)),
         actor: principal,
+        actingAsStaff: staff,
         free: basis !== 'purchase',
         basis: entitlement
           ? { kind: 'package', packageEntitlementId: entitlement.id }
@@ -314,7 +330,7 @@ export class SessionBookingsService {
         );
       }
       if (membershipUse) await this.memberships.consume(trx, organizationId, membershipUse);
-      return redactSessionBooking(principal, toSessionBooking(row));
+      return redactSessionBooking(viewerOf(principal, staff), toSessionBooking(row));
     });
   }
 
@@ -474,10 +490,10 @@ export class SessionBookingsService {
           membership_period_key: input.basis?.kind === 'membership' ? input.basis.periodKey : null,
           scheduled_start: input.session.scheduledStart,
           scheduled_end: input.session.scheduledEnd,
-          booked_by: json(actorSnapshot(input.actor)),
+          booked_by: json(registrantSnapshot(input.actor, input.actingAsStaff)),
           booked_by_person_id: input.actor.personId,
           // SPK-REG-009: the staff actor is recorded apart from participant and payer.
-          assisted_by_person_id: isStaffLike(input.actor) ? input.actor.personId : null,
+          assisted_by_person_id: assistedBy(input.actor, input.actingAsStaff),
           payer_person_id: input.payerPersonId,
           price_snapshot: price ? json(price) : null,
           policy_references: json(
@@ -517,7 +533,7 @@ export class SessionBookingsService {
         offeringId: input.snapshot.offering.id,
         sessionId: input.session.id,
         holdIds: holds.map((h) => h.id),
-        assistedByStaff: isStaffLike(input.actor),
+        assistedByStaff: input.actingAsStaff,
         priceRuleId: price?.priceRuleId ?? null,
       },
     });
@@ -569,15 +585,24 @@ export class SessionBookingsService {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('session_booking');
+    const facilityId = await this.scope.facilityOf(organizationId, row.offering_id);
     await this.authorization.require(principal, EnrollmentActions.readSessionBooking, {
       type: 'session_booking',
       id,
       organizationId,
-      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
+      facilityId,
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return redactSessionBooking(principal, toSessionBooking(row));
+    return redactSessionBooking(
+      await this.scope.viewer(
+        principal,
+        EnrollmentActions.readSessionBooking,
+        organizationId,
+        facilityId,
+      ),
+      toSessionBooking(row),
+    );
   }
 
   async list(principal: Principal, query: ListSessionBookingsQuery): Promise<SessionBooking[]> {
@@ -599,11 +624,12 @@ export class SessionBookingsService {
       });
     }
     // §4.3, §4.14: facility-scoped staff list only their facilities' bookings.
+    const listAction = query.participantPersonId
+      ? EnrollmentActions.readSessionBooking
+      : EnrollmentActions.readCapacity;
     const offerings = await this.scope.listOfferings(
       principal,
-      query.participantPersonId
-        ? EnrollmentActions.readSessionBooking
-        : EnrollmentActions.readCapacity,
+      listAction,
       organizationId,
       query.participantPersonId,
     );
@@ -619,7 +645,14 @@ export class SessionBookingsService {
     if (query.sessionId) q = q.where('session_id', '=', query.sessionId);
     if (offerings) q = q.where('offering_id', 'in', offerings);
     if (query.status) q = q.where('status', '=', query.status);
-    return (await q.execute()).map((r) => redactSessionBooking(principal, toSessionBooking(r)));
+    const rows = await q.execute();
+    const viewerFor = await this.scope.viewersByOffering(
+      principal,
+      listAction,
+      organizationId,
+      rows.map((r) => r.offering_id),
+    );
+    return rows.map((r) => redactSessionBooking(viewerFor(r.offering_id), toSessionBooking(r)));
   }
 
   // -------------------------------------------------------------------------------------------
@@ -636,11 +669,12 @@ export class SessionBookingsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('session_booking');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.bookSession, {
         type: 'session_booking',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -670,7 +704,15 @@ export class SessionBookingsService {
         actor: principal,
         correlationId,
       });
-      return redactSessionBooking(principal, booking);
+      return redactSessionBooking(
+        await this.scope.viewer(
+          principal,
+          EnrollmentActions.bookSession,
+          organizationId,
+          facilityId,
+        ),
+        booking,
+      );
     });
   }
 
@@ -684,11 +726,12 @@ export class SessionBookingsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('session_booking');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.bookSession, {
         type: 'session_booking',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -701,7 +744,15 @@ export class SessionBookingsService {
         principal,
         correlationId,
       );
-      return redactSessionBooking(principal, toSessionBooking(updated));
+      return redactSessionBooking(
+        await this.scope.viewer(
+          principal,
+          EnrollmentActions.bookSession,
+          organizationId,
+          facilityId,
+        ),
+        toSessionBooking(updated),
+      );
     });
   }
 

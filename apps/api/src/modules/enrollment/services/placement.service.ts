@@ -56,10 +56,10 @@ import {
   cursorAt,
   decodeCreatedCursor,
   hiddenFrom,
-  isStaffLike,
   keysetPage,
   minutesFrom,
   organizationOf,
+  registrantSnapshot,
   toPlacementRequest,
   type Reader,
 } from '../enrollment.shared';
@@ -160,12 +160,19 @@ export class PlacementService {
         organizationId,
         input.participantPersonId,
       );
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.requestPlacement, {
         type: 'placement_request',
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [person.id],
       });
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.requestPlacement,
+        organizationId,
+        facilityId,
+      );
       if (input.applicationId) {
         const application = await trx
           .selectFrom('applications')
@@ -207,7 +214,7 @@ export class PlacementService {
             position_preferences: json(input.positionPreferences),
             requested_teammate_person_ids: json(input.requestedTeammatePersonIds),
             notes: input.notes ?? null,
-            requested_by: json(actorSnapshot(principal)),
+            requested_by: json(registrantSnapshot(principal, staff)),
             requested_by_person_id: principal.personId,
             proposed_team_entry_id: null,
             proposed_at: null,
@@ -243,7 +250,7 @@ export class PlacementService {
         targetId: id,
         afterRevision: 1,
         correlationId,
-        details: { seasonId: input.seasonId, assistedByStaff: isStaffLike(principal) },
+        details: { seasonId: input.seasonId, assistedByStaff: staff },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.placementRequested, {
         organizationId,

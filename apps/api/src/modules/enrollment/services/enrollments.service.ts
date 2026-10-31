@@ -58,17 +58,18 @@ import {
   type ParticipationSummary,
 } from '../enrollment.ports';
 import {
-  actorSnapshot,
+  assistedBy,
   beforeCursor,
   cursorAt,
   decodeCreatedCursor,
-  isStaffLike,
   keysetPage,
   organizationOf,
   redactEnrollment,
+  registrantSnapshot,
   toEnrollment,
   toHold,
   toSessionBooking,
+  viewerOf,
   type Reader,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
@@ -87,6 +88,12 @@ export interface CreatePendingEnrollmentInput {
   equivalenceKey: string | null;
   payerPersonId: string | null;
   actor: Principal;
+  /**
+   * R3-TRACE-A-02 (SPK-REG-009): the actor acts on a staff role at the offering's facility
+   * (`EnrollmentFacilityScope.actsAsStaff`); a staff member registering their own family is
+   * recorded as the customer they acted as, not as an assisted registration.
+   */
+  actingAsStaff: boolean;
   sourceApplicationId?: string | null;
   basketId?: string | null;
   basketLineId?: string | null;
@@ -202,20 +209,38 @@ export class EnrollmentsService implements EnrollmentPort {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('enrollment');
+    const facilityId = await this.scope.facilityOf(organizationId, row.offering_id);
     await this.authorization.require(principal, EnrollmentActions.readEnrollment, {
       type: 'enrollment',
       id,
       organizationId,
-      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
+      facilityId,
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return this.views.view(this.db, organizationId, principal, row);
+    return this.views.view(
+      this.db,
+      organizationId,
+      await this.scope.viewer(
+        principal,
+        EnrollmentActions.readEnrollment,
+        organizationId,
+        facilityId,
+      ),
+      row,
+    );
   }
 
   async list(principal: Principal, query: ListEnrollmentsQuery): Promise<Page<Enrollment>> {
     const organizationId = organizationOf(principal);
-    if (!isStaffLike(principal) && !query.participantPersonId) {
+    // R3-TRACE-A-02 (§4.14): only a role holding read_enrollment lists without a participant; a
+    // staff member reading their own child is a family reader (NOT_FOUND when not allowed).
+    const holdsReadRole = await this.scope.actsAsStaff(
+      principal,
+      EnrollmentActions.readEnrollment,
+      organizationId,
+    );
+    if (!holdsReadRole && !query.participantPersonId) {
       throw errors.validation('participantPersonId is required.');
     }
     await this.authorization.require(principal, EnrollmentActions.readEnrollment, {
@@ -223,7 +248,7 @@ export class EnrollmentsService implements EnrollmentPort {
       organizationId,
       facilityId: await this.scope.facilityOf(organizationId, query.offeringId),
       subjectPersonIds: query.participantPersonId ? [query.participantPersonId] : undefined,
-      protected: !isStaffLike(principal),
+      protected: !holdsReadRole,
     });
     // §4.3, §4.14: facility-scoped staff list only their facilities' registrations.
     const offerings = await this.scope.listOfferings(
@@ -251,7 +276,17 @@ export class EnrollmentsService implements EnrollmentPort {
     if (cursor) q = q.where(beforeCursor('enrollments', cursor));
     const page = keysetPage(await q.execute(), query.limit);
     return {
-      items: await this.views.views(this.db, organizationId, principal, page.rows),
+      items: await this.views.views(
+        this.db,
+        organizationId,
+        await this.scope.viewersByOffering(
+          principal,
+          EnrollmentActions.readEnrollment,
+          organizationId,
+          page.rows.map((r) => r.offering_id),
+        ),
+        page.rows,
+      ),
       nextCursor: page.nextCursor,
     };
   }
@@ -296,9 +331,9 @@ export class EnrollmentsService implements EnrollmentPort {
           equivalence_key: input.equivalenceKey,
           status: 'pending',
           payer_person_id: input.payerPersonId,
-          registered_by: json(actorSnapshot(input.actor)),
+          registered_by: json(registrantSnapshot(input.actor, input.actingAsStaff)),
           registered_by_person_id: input.actor.personId,
-          assisted_by_person_id: isStaffLike(input.actor) ? input.actor.personId : null,
+          assisted_by_person_id: assistedBy(input.actor, input.actingAsStaff),
           source_application_id: input.sourceApplicationId ?? null,
           basket_id: input.basketId ?? null,
           basket_line_id: input.basketLineId ?? null,
@@ -899,11 +934,12 @@ export class EnrollmentsService implements EnrollmentPort {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('enrollment');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.cancelEnrollment, {
         type: 'enrollment',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -977,7 +1013,17 @@ export class EnrollmentsService implements EnrollmentPort {
           },
         });
       }
-      return this.views.view(trx, organizationId, principal, updated);
+      return this.views.view(
+        trx,
+        organizationId,
+        await this.scope.viewer(
+          principal,
+          EnrollmentActions.cancelEnrollment,
+          organizationId,
+          facilityId,
+        ),
+        updated,
+      );
     });
   }
 
@@ -1236,15 +1282,12 @@ export class EnrollmentsService implements EnrollmentPort {
         throw error;
       });
     if (!PUBLIC_PUBLICATION_STATES.includes(target.offering.publicationState)) {
-      const staffMayTransfer =
-        isStaffLike(principal) &&
-        (
-          await this.authorization.decide(principal, EnrollmentActions.transferEnrollment, {
-            type: 'enrollment',
-            organizationId,
-            facilityId: target.offering.facilityId,
-          })
-        ).allowed;
+      const staffMayTransfer = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.transferEnrollment,
+        organizationId,
+        target.offering.facilityId,
+      );
       if (!staffMayTransfer) throw errors.protectedNotFound('offering');
     }
   }
@@ -1445,7 +1488,17 @@ export class EnrollmentsService implements EnrollmentPort {
           },
         );
       }
-      if (evaluation.requiresApproval && !isStaffLike(principal)) {
+      // R3-TRACE-A-02 (SPK-REG-007, SPK-REG-010, §2.1): a required approval is skipped only by a
+      // staff role that may transfer at both offerings' facilities (the transfer it commits is
+      // the human decision); a staff member moving their own child through `register` is a
+      // customer here and asks staff, as any family does.
+      const staffTransfer = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.transferEnrollment,
+        organizationId,
+        await this.scope.facilitiesOf(organizationId, [row.offering_id, target.offering.id], trx),
+      );
+      if (evaluation.requiresApproval && !staffTransfer) {
         throw errors.resourceConflict(
           'The target offering requires staff approval; ask staff to transfer.',
           {
@@ -1479,6 +1532,7 @@ export class EnrollmentsService implements EnrollmentPort {
         equivalenceKey: null,
         payerPersonId: row.payer_person_id,
         actor: principal,
+        actingAsStaff: staffTransfer,
         sourceApplicationId: row.source_application_id,
         priceSnapshot: targetPrice,
         policyReferences: this.evaluator.policyReferences(target, evaluation.approvalPolicy),
@@ -1624,8 +1678,11 @@ export class EnrollmentsService implements EnrollmentPort {
       return {
         ...preview,
         committed: true,
-        previousEnrollment: redactEnrollment(principal, toEnrollment(previous)),
-        newEnrollment: redactEnrollment(principal, toEnrollment(next)),
+        previousEnrollment: redactEnrollment(
+          viewerOf(principal, staffTransfer),
+          toEnrollment(previous),
+        ),
+        newEnrollment: redactEnrollment(viewerOf(principal, staffTransfer), toEnrollment(next)),
       };
     });
   }

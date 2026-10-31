@@ -105,8 +105,9 @@ Every consequential POST is `@Idempotent()` and zod-validated; every write runs 
 `UnitOfWork.run` with an audit record and outbox follow-ups. Customer-private records answer
 `NOT_FOUND` to anyone without authority (§4.10); organization scope comes from the token. A
 staff-only command (override, review, placement, waitlist removal, makeup revocation) answers
-`NOT_FOUND` to a customer who may not read the record and `ACCESS_DENIED` to one who may (their
-own child's record) and to staff without the role. Adding a basket line needs `register` over both
+`NOT_FOUND` to anyone who may not read the record (another household, or a staff member whose roles
+and own relationships do not reach it) and `ACCESS_DENIED` to whoever may read it (their own
+child's record, or a staff reader without the command's role). Adding a basket line needs `register` over both
 the basket's household adult and the participant, so authority over a shared child never opens
 another household's basket.
 
@@ -262,6 +263,18 @@ Payloads carry identifiers only (§4.14).
   makeup at its eligible offerings'. Pools and placement requests without an offering stay
   organization-wide. A staff member who is also the participant or a guardian keeps that own
   authority at every facility (SPK-IAM-001/003). **Verified**, `__tests__/facility-scope.spec.ts`.
+- **Staff acting as a guardian (R3-TRACE-A-02; §2.1, SPK-IAM-001/003):** every staff-only branch
+  follows a staff role that holds the command's action at the offering's facility
+  (`EnrollmentFacilityScope.actsAsStaff`, the kernel's decision without subject persons), never the
+  principal's kind. A scheduler, coach or other staff member acting for their own child through
+  `register` is a customer for that command: they cannot set a waitlist priority (only a role
+  holding `enrollment.manage_waitlist` does, SPK-REG-008), skip the approval a transfer target
+  requires (SPK-REG-007/010; a role holding `enrollment.transfer_enrollment` at both offerings may),
+  record trial attendance (SPK-YOUTH-003), name another payer or basket owner (SPK-REG-009), or list
+  without naming a participant; their records carry no staff-assisted actor and a registrant
+  snapshot of kind `customer`, and their reads are redacted for payer privacy as any guardian's
+  are (SPK-AT-004, decided per record at its facility). The audit keeps the full principal.
+  **Verified**, `__tests__/staff-guardian-authority.spec.ts`, `enrollment.shared.spec.ts`.
 - **Eligibility (SPK-REG-002):** pure evaluation (`eligibility/registration-eligibility.ts`) of the
   catalog's versioned eligibility policy at the offering's configured reference date, from the
   identity date of birth (never a stored age); unknown evidence is never a pass; outstanding forms
@@ -285,8 +298,8 @@ Payloads carry identifiers only (§4.14).
   `register` grant stops the hold (a partial basket fails only that line) and the completion.
   Accepting a waitlist offer requires the same authority over the basket owner it names. A
   customer names only themselves (or the basket owner) as payer on baskets, applications,
-  waitlist entries, offer acceptance, session bookings, trials and trial conversion; staff may
-  name another payer (SPK-REG-009). Unnamed, the payer of an accepted offer is its basket owner,
+  waitlist entries, offer acceptance, session bookings, trials and trial conversion; staff acting
+  on their role may name another payer (SPK-REG-009). Unnamed, the payer of an accepted offer is its basket owner,
   and staff must name the owner of a staff-joined entry. **Verified**,
   `__tests__/registration-authority.spec.ts`.
 - **Approval (SPK-REG-007):** the eligibility policy, then the organization's `approval` policy
