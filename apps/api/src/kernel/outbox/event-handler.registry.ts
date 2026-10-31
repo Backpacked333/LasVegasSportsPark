@@ -61,7 +61,9 @@ export interface HandlerOptions {
  * of them has run, so a build that lacks a handler (an older build during a rollback, or a worker
  * not yet upgraded in a rolling deploy) leaves the event for a build that has it. A handler that
  * is removed on purpose must be declared `retire`d under the same name, so events recorded while
- * it existed do not wait for it forever.
+ * it existed do not wait for it forever. Handlers are registered unconditionally in
+ * `onModuleInit` (never by process role or environment), so the API processes that record events
+ * and the workers that dispatch them expect the same handlers.
  */
 @Injectable()
 export class EventHandlerRegistry {
