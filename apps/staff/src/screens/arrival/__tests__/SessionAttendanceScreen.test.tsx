@@ -3,7 +3,12 @@
  * with actor, time and a required reason), SPK-ENTRY-008 (counts are not verified occupancy),
  * conflicts kept for review, protected NOT_FOUND shown as not available, §4.15 offline queueing.
  */
-import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import {
+  apiErrorBody,
+  fakeResponse,
+  type FakeHandler,
+  type FakeRequest,
+} from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -20,8 +25,9 @@ import {
   nameEntry,
   oneFacilityMe,
   personNames,
+  syncBatch,
 } from '../../../features/operations/testing';
-import { FACILITY_A, createTestApp } from '../../../testing/test-app';
+import { FACILITY_A, TEST_NOW, createTestApp } from '../../../testing/test-app';
 
 const OBS_1 = '0192f1a0-0000-7000-8000-0000000000a1';
 const OBS_2 = '0192f1a0-0000-7000-8000-0000000000a2';
@@ -291,7 +297,91 @@ describe('SCR-S-29 SessionAttendanceScreen', () => {
       window.localStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY) ?? '{}',
     ) as OfflineQueueState;
     expect(stored.pending[0]?.snapshot.takenAt).toBe('2026-10-24T11:53:00.000Z');
+    // The observation is on the same clock: the device's 12:00 is the service's 11:53.
+    expect(stored.pending[0]?.item.observedAt).toBe('2026-10-24T11:53:00.000Z');
   });
+
+  /**
+   * The API's own clock checks of a batch (apps/api entry offline-sync.service, tolerance 5
+   * minutes): a snapshot after its receipt is refused; an item after its receipt or before the
+   * snapshot is rejected.
+   */
+  function clockCheckingSync(serviceNow: () => Date, outcomes: string[]) {
+    const tolerance = 5 * 60_000;
+    return (request: FakeRequest) => {
+      const body = request.body as {
+        snapshot: { takenAt: string };
+        items: { clientObservationId: string; kind: string; observedAt: string }[];
+      };
+      const received = serviceNow().getTime();
+      const snapshotAt = Date.parse(body.snapshot.takenAt);
+      if (snapshotAt > received + tolerance) {
+        outcomes.push('refused: snapshot_in_future');
+        return fakeResponse(
+          400,
+          apiErrorBody('VALIDATION_FAILED', { details: { code: 'snapshot_in_future' } }),
+        );
+      }
+      const items = body.items.map((i) => {
+        const at = Date.parse(i.observedAt);
+        const reason =
+          at > received + tolerance
+            ? 'observed_in_future'
+            : at < snapshotAt - tolerance
+              ? 'observed_before_snapshot'
+              : null;
+        outcomes.push(reason ?? 'accepted');
+        return {
+          clientObservationId: i.clientObservationId,
+          kind: i.kind,
+          outcome: reason ? 'rejected' : 'accepted',
+          reason,
+        };
+      });
+      return fakeResponse(201, syncBatch(items));
+    };
+  }
+
+  it.each([
+    ['10 minutes slow', 10],
+    ['10 minutes fast', -10],
+  ])(
+    '§4.15 / SPK-AT-018: with a device clock %s, an observation queued offline is accepted by the service’s clock checks',
+    async (_label, serviceAheadMinutes) => {
+      const user = userEvent.setup();
+      let device = TEST_NOW;
+      const serviceNow = () => new Date(device.getTime() + serviceAheadMinutes * 60_000);
+      const outcomes: string[] = [];
+      const app = createTestApp({
+        now: () => device,
+        routes: routes({
+          'GET /attendance': () =>
+            fakeResponse(200, attendance([ALEX_PRESENT]).body, {
+              Date: serviceNow().toUTCString(),
+            }),
+          'POST /offline-sync': clockCheckingSync(serviceNow, outcomes),
+        }),
+      });
+      render(app.at(SESSION_URL));
+      const blake = await screen.findByRole('listitem', { name: 'Blake Rivera' });
+      act(() => app.connectivity.set(false));
+      device = new Date(TEST_NOW.getTime() + 2 * 60_000);
+      await user.click(within(blake).getByRole('button', { name: 'Late: Blake Rivera' }));
+      await within(blake).findByText('Queued on this device: Late (not yet recorded)');
+      device = new Date(TEST_NOW.getTime() + 5 * 60_000);
+      act(() => app.connectivity.set(true));
+      await waitFor(() => expect(outcomes).toHaveLength(1));
+      expect(outcomes).toEqual(['accepted']);
+      const sent = app.fake.requests.find((r) => r.route === '/offline-sync')?.body as {
+        snapshot: { takenAt: string };
+        items: { observedAt: string }[];
+      };
+      // Both times are the service's: the roster read and the tap two minutes later.
+      const serviceAtLoad = TEST_NOW.getTime() + serviceAheadMinutes * 60_000;
+      expect(sent.snapshot.takenAt).toBe(new Date(serviceAtLoad).toISOString());
+      expect(sent.items[0]?.observedAt).toBe(new Date(serviceAtLoad + 2 * 60_000).toISOString());
+    },
+  );
 
   it('lists today’s events to choose from when no activity is given', async () => {
     const app = createTestApp({

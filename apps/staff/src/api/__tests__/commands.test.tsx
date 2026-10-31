@@ -8,8 +8,9 @@ import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { useKeyedCommands } from '../../features/operations/commands';
-import { createTestApp } from '../../testing/test-app';
+import { createTestApp, staffMe } from '../../testing/test-app';
 import { useApiCommand } from '../useApiCommand';
+import { useApiQuery } from '../useApiQuery';
 
 const ID = '0192f1a0-0000-7000-8000-000000000501';
 
@@ -114,5 +115,70 @@ describe('useKeyedCommands (§4.9)', () => {
     expect(keys).toHaveLength(3);
     expect(keys[1]).not.toBe(keys[0]);
     expect(keys[2]).toBe(keys[1]);
+  });
+});
+
+describe('reread before a new request (SPK-PAY-007, SPK-PAY-008)', () => {
+  function readsOf(app: ReturnType<typeof createTestApp>) {
+    return app.fake.requests.filter((r) => r.route === '/me').length;
+  }
+
+  function mount(app: ReturnType<typeof createTestApp>, invalidate: (readonly unknown[])[]) {
+    return renderHook(
+      () => ({
+        shown: useApiQuery({ path: '/me' }),
+        command: useApiCommand('post', '/maintenance-restrictions/{id}/release', { invalidate }),
+      }),
+      { wrapper: app.wrapper },
+    );
+  }
+
+  it('resolves only after the shown record was read again', async () => {
+    const app = createTestApp();
+    const { result } = mount(app, [['api', '/me']]);
+    await waitFor(() => expect(result.current.shown.data).toBeDefined());
+    const before = readsOf(app);
+    await act(() => result.current.command.reread());
+    expect(readsOf(app)).toBe(before + 1);
+  });
+
+  it('offline, the read cannot start (TanStack pauses it): reread rejects and nothing was read', async () => {
+    const app = createTestApp();
+    const { result } = mount(app, [['api', '/me']]);
+    await waitFor(() => expect(result.current.shown.data).toBeDefined());
+    const before = readsOf(app);
+    act(() => app.connectivity.set(false));
+    let outcome: unknown = 'resolved';
+    await act(async () => {
+      await result.current.command.reread().catch((e: unknown) => (outcome = e));
+    });
+    expect(outcome).toBeInstanceOf(Error);
+    expect(readsOf(app)).toBe(before);
+  });
+
+  it('a read that fails, or no shown record to read, rejects', async () => {
+    let reads = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () => {
+          reads += 1;
+          return reads === 1
+            ? fakeResponse(200, staffMe().body)
+            : fakeResponse(500, apiErrorBody('INTERNAL_ERROR'));
+        },
+      },
+    });
+    const { result } = mount(app, [['api', '/me']]);
+    await waitFor(() => expect(result.current.shown.data).toBeDefined());
+    await act(async () => {
+      await expect(result.current.command.reread()).rejects.toBeTruthy();
+    });
+
+    const nothingShown = mount(createTestApp(), [['api', '/refunds']]);
+    await act(async () => {
+      await expect(nothingShown.result.current.command.reread()).rejects.toThrow(
+        'Nothing on screen to read again.',
+      );
+    });
   });
 });

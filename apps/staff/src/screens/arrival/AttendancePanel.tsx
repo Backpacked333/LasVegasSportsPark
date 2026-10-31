@@ -14,7 +14,8 @@
  *   never resolved silently; each conflicting observation can be corrected with a reason.
  * - Counts are observed attendance, never verified occupancy (SPK-ENTRY-008).
  * - Offline, observations are queued against the roster as last loaded (its age shown) and
- *   synchronised once on reconnection; corrections need a connection.
+ *   synchronised once on reconnection; corrections need a connection. The snapshot and observed
+ *   times are on the service's clock as seen at that load (`offline/clock.ts`).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useCallback, useMemo, useState } from 'react';
@@ -30,6 +31,7 @@ import { CommandError } from '../../features/operations/feedback';
 import { TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
 import { formatInstant } from '../../features/operations/format';
 import { OBSERVED_STATE, OBSERVED_STATES } from '../../features/operations/labels';
+import { serviceClockOf } from '../../features/operations/offline/clock';
 import { useOfflineQueue } from '../../features/operations/offline/OfflineQueueProvider';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -115,17 +117,19 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
     [people, labelOf],
   );
 
-  // One snapshot per roster load: queued items name the roster they were observed against. Its
-  // time is the service's time of the read when the response states it (the API refuses a
-  // snapshot dated after its own clock, so a device clock that runs ahead must not date it); the
-  // roster's age on this screen is measured on the device clock it was received by.
+  // One snapshot per roster load: queued items name the roster they were observed against. The
+  // snapshot and every observation queued against it are dated on one clock, the service's as
+  // seen at this read (its Date header; the device clock when that is not readable), because the
+  // API compares the two with its own clock (`offline/clock.ts`). The roster's age on this screen
+  // is measured on the device clock it was received by.
   const takenAt = attendance.updatedAt;
   const servedAt = attendance.serverDate;
-  const snapshot = useMemo(
-    () => (takenAt ? queue.newSnapshot(servedAt ?? takenAt) : null),
+  const roster = useMemo(() => {
+    if (!takenAt) return null;
+    const clock = serviceClockOf(servedAt, takenAt);
+    return { clock, snapshot: queue.newSnapshot(clock.at(takenAt)) };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a new reference only per load
-    [takenAt?.getTime()],
-  );
+  }, [takenAt?.getTime()]);
   const maxAge = services.config.offlineRosterMaxAgeMs ?? null;
   const rosterTooOld =
     maxAge !== null && takenAt !== null && now.getTime() - takenAt.getTime() > maxAge;
@@ -136,19 +140,19 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
 
   const record = (personId: string, observedState: ObservedState) => {
     if (!online) {
-      if (!snapshot || !facilityId || rosterTooOld) return;
+      if (!roster || !facilityId || rosterTooOld) return;
       queue.enqueue([
         {
           item: {
             kind: 'attendance',
             clientObservationId: queue.newObservationId(),
-            observedAt: services.now().toISOString(),
+            observedAt: roster.clock.at(services.now()),
             personId,
             activity,
             observedState,
           },
           facilityId,
-          snapshot,
+          snapshot: roster.snapshot,
           context: title,
         },
       ]);
@@ -231,7 +235,7 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
                   record={rec}
                   timezone={timezone}
                   online={online}
-                  queueDisabled={!online && (rosterTooOld || !snapshot || !facilityId)}
+                  queueDisabled={!online && (rosterTooOld || !roster || !facilityId)}
                   queued={queuedHere
                     .filter((q) => q.item.kind === 'attendance' && q.item.personId === personId)
                     .map((q) => (q.item.kind === 'attendance' ? q.item.observedState : 'present'))}

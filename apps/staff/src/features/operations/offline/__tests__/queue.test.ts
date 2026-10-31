@@ -4,14 +4,22 @@
  * over each other's queued observations, and a batch the API refuses outright is kept for review
  * with its reason instead of being replayed for ever and blocking every later batch.
  */
-import { ApiError, networkError, type Schema } from '@sportspark/api-client';
+import {
+  ApiError,
+  createCommandIntent,
+  networkError,
+  type CommandIntent,
+  type Schema,
+} from '@sportspark/api-client';
 import { describe, expect, it } from 'vitest';
 import { syncBatch } from '../../testing';
+import { serviceClockOf } from '../clock';
 import {
   MAX_BATCH_ITEMS,
   OFFLINE_QUEUE_STORAGE_KEY,
   OfflineQueueStore,
   OfflineSyncRunner,
+  batchSender,
   type KeyValueStorage,
   type PendingBatch,
   type QueuedItem,
@@ -254,5 +262,102 @@ describe('a batch the API refuses (§4.15 "preserve conflicting observations for
     await runner.run(ACCOUNT, () => Promise.reject(refusal('AUTHENTICATION_REQUIRED', 401)), NOW);
     expect(store.getState().pending).toHaveLength(1);
     expect(store.getState().review).toHaveLength(0);
+  });
+});
+
+describe('a batch whose answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE, §4.9)', () => {
+  const outcomeLost = () =>
+    new ApiError({
+      kind: 'api',
+      status: 409,
+      code: 'IDEMPOTENCY_OUTCOME_UNAVAILABLE',
+      message: 'An earlier attempt with this key changed data; its response was not recorded.',
+      nextAction: 'reload_current_state',
+      correlationId: 'corr-lost',
+    });
+
+  it('SPK-AT-018: the batch is sent again under a new key with the same client batch id, its stored outcome is applied and later batches still go', async () => {
+    const store = new OfflineQueueStore(null, keys());
+    store.enqueue([queued('f1'), queued('f1'), queued('f2')]);
+    // The fake API: the f1 batch committed under its first key, whose answer was never recorded;
+    // the batch is stored by device and client batch id, so a new key gets the stored batch.
+    const lostKeys = new Set<string>();
+    const stored = new Map<string, Schema<'OfflineSyncBatch'>>();
+    const posts: { clientBatchId: string; key: string }[] = [];
+    let n = 0;
+    const newIntent = (): CommandIntent =>
+      createCommandIntent(() => `intent-${String(++n).padStart(4, '0')}`);
+    const post = (batch: PendingBatch, _deviceId: string, intent: CommandIntent) => {
+      posts.push({ clientBatchId: batch.batchId, key: intent.key });
+      if (lostKeys.has(intent.key)) return Promise.reject(outcomeLost());
+      const known = stored.get(batch.batchId);
+      if (known) return Promise.resolve(known);
+      const result = accepted(batch);
+      stored.set(batch.batchId, result);
+      if (batch.facilityId === 'f1' && lostKeys.size === 0) {
+        lostKeys.add(intent.key);
+        return Promise.reject(outcomeLost());
+      }
+      return Promise.resolve(result);
+    };
+    const runner = new OfflineSyncRunner(store);
+    const summary = await runner.run(ACCOUNT, batchSender(post, newIntent), NOW);
+
+    const f1 = posts.filter((p) => p.clientBatchId === posts[0]?.clientBatchId);
+    expect(f1).toHaveLength(2);
+    expect(f1[1]?.key).not.toBe(f1[0]?.key);
+    // Every item left the queue; nothing is kept for review and nothing stops the run.
+    expect(store.getState().pending).toHaveLength(0);
+    expect(store.getState().review).toHaveLength(0);
+    expect(posts.map((p) => p.clientBatchId)).toHaveLength(3);
+    expect(summary).toMatchObject({ synchronised: 3 });
+    expect(runner.getRuntime().error).toBeNull();
+  });
+
+  it('§4.9: if the second send gets no answer, the run stops and the next run reuses the new key, never the lost one', async () => {
+    const store = new OfflineQueueStore(null, keys());
+    store.enqueue([queued('f1')]);
+    const keysSent: string[] = [];
+    let n = 0;
+    const newIntent = () => createCommandIntent(() => `intent-${String(++n).padStart(4, '0')}`);
+    let calls = 0;
+    const post = (batch: PendingBatch, _deviceId: string, intent: CommandIntent) => {
+      keysSent.push(intent.key);
+      calls += 1;
+      if (calls === 1) return Promise.reject(outcomeLost());
+      if (calls === 2) return Promise.reject(networkError(new TypeError('Failed to fetch')));
+      return Promise.resolve(accepted(batch));
+    };
+    const runner = new OfflineSyncRunner(store);
+    const send = batchSender(post, newIntent);
+    await runner.run(ACCOUNT, send, NOW);
+    expect(store.getState().pending).toHaveLength(1);
+    expect(runner.getRuntime().error).toBeInstanceOf(ApiError);
+    await runner.run(ACCOUNT, send, NOW);
+    expect(keysSent).toEqual(['intent-0001', 'intent-0002', 'intent-0002']);
+    expect(store.getState().pending).toHaveLength(0);
+  });
+});
+
+describe('the service clock of a roster (§4.15)', () => {
+  const receipt = new Date('2026-10-24T11:50:00.000Z');
+
+  it('dates the snapshot and later observations on the service clock, whichever way the device is off', () => {
+    // Device 10 minutes slow: the service answered at 12:00 when the device read 11:50.
+    const slow = serviceClockOf(new Date('2026-10-24T12:00:00.000Z'), receipt);
+    expect(slow.offsetMs).toBe(10 * 60_000);
+    expect(slow.at(receipt)).toBe('2026-10-24T12:00:00.000Z');
+    expect(slow.at(new Date('2026-10-24T11:52:00.000Z'))).toBe('2026-10-24T12:02:00.000Z');
+    // Device 10 minutes fast.
+    const fast = serviceClockOf('2026-10-24T11:40:00.000Z', receipt);
+    expect(fast.at(new Date('2026-10-24T11:52:00.000Z'))).toBe('2026-10-24T11:42:00.000Z');
+  });
+
+  it('without a readable service time both stay on the device clock', () => {
+    for (const unknown of [null, undefined, 'not a date']) {
+      const clock = serviceClockOf(unknown, receipt);
+      expect(clock.offsetMs).toBe(0);
+      expect(clock.at(receipt)).toBe(receipt.toISOString());
+    }
   });
 });

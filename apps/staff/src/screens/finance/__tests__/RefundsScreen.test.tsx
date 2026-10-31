@@ -7,7 +7,7 @@
  * may not read never shows its refunds (§4.10); owners found by name (ID-03).
  */
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { createTestApp } from '../../../testing/test-app';
@@ -127,6 +127,85 @@ describe('SCR-S-37 RefundsScreen', () => {
     // The payment (what is still refundable) and its refunds were read again before unlocking.
     expect(paymentReads).toBeGreaterThan(paymentBefore);
     expect(refundReads).toBeGreaterThan(refundsBefore);
+  });
+
+  it('SPK-PAY-007: a refund answered 201 with a truncated body may have taken effect: the form stays locked and Try again keeps the key', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /payments/{id}/refunds': () => {
+          calls += 1;
+          // The API committed the refund; its answer arrived cut short.
+          if (calls === 1) return new Response('{"id":"refund-1","status":', { status: 201 });
+          return fakeResponse(201, refund());
+        },
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    await requestRefund(user, '25');
+    const unknown = await screen.findByTestId('state-outcome-unknown');
+    expect(unknown).toHaveTextContent('may already have taken effect');
+    expect(screen.queryByText('Contact support')).toBeNull();
+    const form = screen.getByRole('form', { name: 'Request a refund' });
+    expect(within(form).getByLabelText(/^Refund amount \(USD\)/)).toBeDisabled();
+    expect(screen.getByTestId('request-locked')).toBeInTheDocument();
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/\$100\.00 still refundable/)).toBeInTheDocument();
+    const keys = app.fake.requests
+      .filter((r) => r.route === '/payments/{id}/refunds')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('SPK-AT-028: a refund refused while the organization recovers from a restore shows the API message and leaves the form open', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /payments/{id}/refunds': apiError(503, 'INTEGRATION_UNAVAILABLE', {
+          message:
+            'Payments are paused while the service recovers from a restore. Try again later.',
+          nextAction: 'retry_later',
+          details: { reason: 'recovery_mode' },
+        }),
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    await requestRefund(user, '25');
+    const refused = await screen.findByTestId('state-refused-before-running');
+    expect(refused).toHaveTextContent(
+      'Payments are paused while the service recovers from a restore. Try again later.',
+    );
+    expect(screen.queryByTestId('state-outcome-unknown')).toBeNull();
+    // Nothing ran: the form is not locked and the amount can be changed.
+    expect(screen.queryByTestId('request-locked')).toBeNull();
+    const form = screen.getByRole('form', { name: 'Request a refund' });
+    expect(within(form).getByLabelText(/^Refund amount \(USD\)/)).toBeEnabled();
+    expect(
+      within(form).getByRole('button', { name: 'Reserve and request the refund' }),
+    ).toBeEnabled();
+  });
+
+  it('SPK-PAY-007: offline, Start a new request is not offered and the form stays locked (no read can start)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /payments/{id}/refunds': () => Promise.reject(new TypeError('Failed to fetch')),
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    await requestRefund(user, '25');
+    await screen.findByTestId('state-outcome-unknown');
+    act(() => app.connectivity.set(false));
+    const locked = screen.getByTestId('request-locked');
+    const start = within(locked).getByRole('button', { name: 'Start a new request' });
+    expect(start).toBeDisabled();
+    expect(locked).toHaveTextContent('Starting a new request needs a connection');
+    await user.click(start);
+    const form = screen.getByRole('form', { name: 'Request a refund' });
+    expect(within(form).getByLabelText(/^Refund amount \(USD\)/)).toBeDisabled();
+    expect(screen.getByTestId('request-locked')).toBeInTheDocument();
   });
 
   it('§4.9: IDEMPOTENCY_OUTCOME_UNAVAILABLE keeps the form locked and the key, so the unchanged refund is never sent under a new key', async () => {

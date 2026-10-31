@@ -10,17 +10,15 @@
  * intent and is reused when the same batch is retried in this tab while its outcome is unknown;
  * after a reload the API still recognises the batch by device and client batch id and returns its
  * stored outcome. A batch the API refuses outright ends its intent and its items go to review
- * (`OfflineSyncRunner`), so a later run is never stuck replaying the stored refusal.
+ * (`OfflineSyncRunner`), so a later run is never stuck replaying the stored refusal. After
+ * IDEMPOTENCY_OUTCOME_UNAVAILABLE the batch is sent once more under a new key with the same client
+ * batch id, which the API answers with the stored batch (`batchSender`), so the queue never stops
+ * at it.
  *
  * Every tab of the browser profile shares the queue: the store follows the other tabs' writes
  * (`storage` event) and one tab at a time synchronises (Web Locks, where the browser has them).
  */
-import {
-  ApiError,
-  keepsIntentAfterFailure,
-  type CommandIntent,
-  type Schema,
-} from '@sportspark/api-client';
+import { ApiError, type CommandIntent, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   createContext,
@@ -38,6 +36,7 @@ import type { StaffServices } from '../../../providers/services';
 import {
   OfflineQueueStore,
   OfflineSyncRunner,
+  batchSender,
   browserStorage,
   browserSyncLock,
   type OfflineQueueState,
@@ -117,9 +116,7 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
 
   const sync = useCallback(async () => {
     if (!accountId) return null;
-    const send = async (batch: PendingBatch, deviceId: string) => {
-      const intent = intents.current.get(batch.batchId) ?? api.newIntent();
-      intents.current.set(batch.batchId, intent);
+    const post = (batch: PendingBatch, deviceId: string, intent: CommandIntent) => {
       const body: SyncBody = {
         deviceId,
         clientBatchId: batch.batchId,
@@ -127,16 +124,9 @@ export function OfflineQueueProvider({ children }: { children: ReactNode }) {
         snapshot: batch.snapshot,
         items: batch.items.map((q) => q.item),
       };
-      try {
-        const result = await api.post('/offline-sync', { body, intent });
-        intents.current.delete(batch.batchId);
-        return result;
-      } catch (error) {
-        // A definitive answer is stored under the key and would be replayed: the intent ends.
-        if (!keepsIntentAfterFailure(error)) intents.current.delete(batch.batchId);
-        throw error;
-      }
+      return api.post('/offline-sync', { body, intent });
     };
+    const send = batchSender(post, () => api.newIntent(), intents.current);
     const summary = await runner.run(accountId, send, services.now);
     if (summary) {
       await Promise.all([

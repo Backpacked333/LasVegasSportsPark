@@ -11,10 +11,12 @@
  *
  * Not available from the API: device approval and a server-issued, encrypted roster snapshot
  * (entry module known gaps; DEC-023, DEC-032, DEC-033 pending). The snapshot reference stays the
- * device's own label for the read it queued against. Its time is the service's time of that read
- * when the response's `Date` header is readable (same origin, or the API exposes it), and
- * otherwise the time this device received it, by the device clock; the API refuses a snapshot
- * dated more than its clock-skew tolerance after its own clock (`snapshot_in_future`).
+ * device's own label for the read it queued against. Its time, and every observed time queued
+ * against it, is on the service's clock when the read's `Date` header is readable (same origin, or
+ * the API exposes it): the device clock moved by the offset seen at that read
+ * (`offline/clock.ts`). Otherwise both are the device clock. The API refuses a snapshot dated more
+ * than its clock-skew tolerance after its own clock (`snapshot_in_future`); a requeued item keeps
+ * the times it was queued with, so the hint says when queuing it again can succeed.
  *
  * A batch the API refuses outright (a 4xx such as VALIDATION_FAILED or ACCESS_DENIED: nothing in
  * it was recorded) is not retried under the same key for ever: its items move to "Kept for
@@ -137,7 +139,13 @@ export function OfflineQueueScreen({
         ) : null}
         {queue.syncing ? <StatusBadge tone="pending" label="Synchronising" /> : null}
         {queue.syncError ? (
-          <CommandError error={queue.syncError} onRetry={() => void queue.sync()} />
+          // A lost answer is read again by synchronising: the batch goes under a new key with its
+          // client batch id, and the API answers the stored batch (`batchSender`).
+          <CommandError
+            error={queue.syncError}
+            onRetry={() => void queue.sync()}
+            onReload={() => void queue.sync()}
+          />
         ) : null}
         {last ? (
           <p data-testid="sync-summary">
@@ -190,9 +198,14 @@ export function OfflineQueueScreen({
                       : '. The conflict is raised in the Today workspace for review.'}
                   </span>
                   {r.outcome === 'refused' && r.flags.includes('snapshot_in_future') ? (
-                    <span className="caption">
-                      The roster time is later than the service&apos;s clock: this device&apos;s
-                      clock may be ahead. Correct the clock, then queue it again.
+                    <span className="caption" data-testid="snapshot-in-future-hint">
+                      The roster time stored with it ({formatInstant(r.queued.snapshot.takenAt)}) is
+                      later than the service&apos;s clock: this device&apos;s clock was ahead when
+                      it was queued. The stored times are sent unchanged, so correcting the clock
+                      now does not fix them. Queue it again only after{' '}
+                      {formatInstant(r.queued.snapshot.takenAt)} by the service&apos;s time (the
+                      service allows a few minutes&apos; difference), or discard it and record the
+                      observation again while online.
                     </span>
                   ) : null}
                 </div>

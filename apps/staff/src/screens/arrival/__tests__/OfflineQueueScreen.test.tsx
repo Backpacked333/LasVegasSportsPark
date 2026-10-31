@@ -201,7 +201,7 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     expect(app.fake.requests.filter((r) => r.route === '/offline-sync')).toHaveLength(1);
   });
 
-  it('§4.15: a batch refused because the device clock is ahead can be queued again under a new batch, or discarded', async () => {
+  it('§4.15: a batch refused because the device clock was ahead says the stored times are sent unchanged; queued again it goes under a new batch with the original times', async () => {
     const user = userEvent.setup();
     seed();
     let calls = 0;
@@ -231,11 +231,12 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     });
     render(app.at('/arrival/offline'));
     const review = await screen.findByRole('list', { name: 'Observations kept for review' });
-    expect(
-      within(review).getByText(
-        /this device’s\s+clock may be ahead|this device's clock may be ahead/,
-      ),
-    ).toBeInTheDocument();
+    const hint = within(review).getByTestId('snapshot-in-future-hint');
+    // Never "correct the clock, then queue it again": the stored times do not change.
+    expect(hint).toHaveTextContent('The stored times are sent unchanged');
+    expect(hint).toHaveTextContent('correcting the clock now does not fix them');
+    expect(hint).toHaveTextContent('discard it and record the observation again while online');
+    expect(hint).not.toHaveTextContent(/Correct the clock, then queue it again/);
     expect(
       within(review).getByText(/VALIDATION_FAILED \(snapshot_in_future\)/),
     ).toBeInTheDocument();
@@ -247,6 +248,11 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
       (first?.body as { clientBatchId: string }).clientBatchId,
     );
     expect(second?.headers['idempotency-key']).not.toBe(first?.headers['idempotency-key']);
+    // The times stored with the observation are sent again exactly as queued.
+    type Sent = { snapshot: { takenAt: string }; items: { observedAt: string }[] };
+    expect((second?.body as Sent).snapshot.takenAt).toBe('2026-10-24T11:30:00.000Z');
+    expect((second?.body as Sent).items[0]?.observedAt).toBe('2026-10-24T11:45:00.000Z');
+    expect((second?.body as Sent).snapshot).toEqual((first?.body as Sent).snapshot);
     expect(await screen.findByRole('heading', { name: 'Nothing to review' })).toBeInTheDocument();
   });
 

@@ -6,15 +6,19 @@
  * - "Try again" resends exactly the request that was sent (same body, so the same
  *   Idempotency-Key), never one rebuilt from fields edited since;
  * - while that outcome is unknown the form is locked (`outcomePending`, which follows
- *   `keepsIntentAfterFailure`: the hook keeps the key exactly as long);
+ *   `keepsIntentAfterFailure`: the hook keeps the key exactly as long), except after a refusal
+ *   before running (`refusedBeforeRunning`), which changed nothing;
  * - "Start a new request" first reads the record again (the payment and its refunds, the
- *   obligation, the credits) and unlocks only once that read succeeded, so the next request is
- *   decided from the current state, never beside a refund or tender that already happened.
+ *   obligation, the credits) and unlocks only once that read succeeded (`rereadQueries`: every
+ *   shown query fetched afresh), so the next request is decided from the current state, never
+ *   beside a refund or tender that already happened. It is not offered offline, where no read can
+ *   start.
  */
-import { keepsIntentAfterFailure, type ApiError } from '@sportspark/api-client';
+import { outcomeStillOpen, type ApiError } from '@sportspark/api-client';
 import { useRef, useState } from 'react';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { useOnline } from './offline';
 
 export function useSameRequest<R>(submit: (request: R) => Promise<unknown>) {
   const last = useRef<R | null>(null);
@@ -32,9 +36,13 @@ export function useSameRequest<R>(submit: (request: R) => Promise<unknown>) {
   };
 }
 
-/** The outcome of the last attempt may still be applied (or was): the form stays locked. */
+/**
+ * The outcome of the last attempt may still be applied (or was): the form stays locked. Not after
+ * a refusal before running (payments paused during a restore's recovery, SPK-AT-028): nothing
+ * happened, so the form may change (`outcomeStillOpen`).
+ */
 export function outcomePending(error: ApiError | null | undefined): boolean {
-  return !!error && keepsIntentAfterFailure(error);
+  return outcomeStillOpen(error);
 }
 
 export function LockedNote({
@@ -48,6 +56,7 @@ export function LockedNote({
   /** Unlocks the form for a new request (after `reread` succeeded). */
   onNewRequest: () => void;
 }) {
+  const online = useOnline();
   const [checking, setChecking] = useState(false);
   const [readFailed, setReadFailed] = useState(false);
   if (!outcomePending(error)) return null;
@@ -79,9 +88,15 @@ export function LockedNote({
           connection is back.
         </p>
       ) : null}
-      <Button variant="secondary" busy={checking} onClick={start}>
+      {/* The record can only be read again online: offline the fields stay locked. */}
+      <Button variant="secondary" busy={checking} disabled={!online} onClick={start}>
         Start a new request
       </Button>
+      {!online ? (
+        <p className="caption">
+          Starting a new request needs a connection: the record is read again first.
+        </p>
+      ) : null}
     </div>
   );
 }

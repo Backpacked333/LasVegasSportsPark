@@ -6,9 +6,15 @@
  *
  * - `OutcomeUnknown` (`mayHaveTakenEffect`): no definite answer. A lost connection is one of them:
  *   commands are not sent while the dashboard is offline, so a network failure happened after the
- *   request left, and the client cannot tell whether the API committed it. Never "nothing
- *   changed" and never "something went wrong": "Try again" resends the same request with the same
- *   idempotency key, which the API answers with the stored outcome or runs once.
+ *   request left, and the client cannot tell whether the API committed it. So is a success status
+ *   whose answer could not be read (RESPONSE_UNREADABLE). Never "nothing changed" and never
+ *   "something went wrong": "Try again" resends the same request with the same idempotency key,
+ *   which the API answers with the stored outcome or runs once. The API's own message is shown
+ *   when it sent one.
+ * - `RefusedBeforeRunningNotice` (`refusedBeforeRunning`): INTEGRATION_UNAVAILABLE from a guard
+ *   that answers before the key is claimed (payments paused while the organization recovers from a
+ *   restore, SPK-AT-028; the assistant turned off, SPK-AUTO-005). Nothing ran: the API's message
+ *   says why, and the form is not locked (`outcomeStillOpen`).
  * - `OutcomeLost` (IDEMPOTENCY_OUTCOME_UNAVAILABLE): the command committed under this key but its
  *   answer was lost. "Reload" reads the record again; the command hooks keep the key, so an
  *   unchanged resubmission gets the same answer instead of running a second time.
@@ -20,8 +26,10 @@
  *   here, so it is never shown as "not available to you".
  */
 import {
+  RESPONSE_UNREADABLE_CODE,
   mayHaveTakenEffect,
   recoveryActionFor,
+  refusedBeforeRunning,
   secretWithheldOf,
   tookEffectOutcomeLost,
   type ApiError,
@@ -46,6 +54,8 @@ export function noAnswerReason(error: ApiError): string {
   if (error.code === 'IDEMPOTENCY_IN_PROGRESS') return 'The same request is still being processed';
   if (error.code === 'PAYMENT_OUTCOME_UNKNOWN') return 'The outcome of a payment is not known yet';
   if (error.code === 'INTEGRATION_UNAVAILABLE') return 'A provider this depends on did not answer';
+  if (error.code === RESPONSE_UNREADABLE_CODE)
+    return 'The service answered that it succeeded, but its answer could not be read';
   return 'The service failed while it handled this request';
 }
 
@@ -61,8 +71,31 @@ export function OutcomeUnknown({ error, onRetry }: { error: ApiError; onRetry?: 
           ? 'Try again sends the same request with the same key, so it is never applied twice.'
           : recovery.label}
       </p>
+      {/* The API's safe message, when it sent one (§4.10). */}
+      {error.kind === 'api' ? <p className="caption">The service said: {error.message}</p> : null}
       <Reference error={error} />
       {recovery.retry && onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
+    </section>
+  );
+}
+
+/** The service refused the request before running it: nothing changed (SPK-AT-028, SPK-AUTO-005). */
+export function RefusedBeforeRunningNotice({
+  error,
+  onRetry,
+}: {
+  error: ApiError;
+  onRetry?: () => void;
+}) {
+  const recovery = recoveryActionFor(error);
+  return (
+    <section className="state" aria-live="polite" data-testid="state-refused-before-running">
+      <StatusBadge tone="warning" label="Not done: the service is not accepting this now" />
+      <p>
+        {error.message} Nothing was changed: the service refused this request before running it.
+      </p>
+      <Reference error={error} />
+      {recovery.retry && onRetry ? <Button onClick={onRetry}>{recovery.label}</Button> : null}
     </section>
   );
 }
@@ -147,6 +180,8 @@ export function sharedCommandOutcome(
   actions: { onRetry?: () => void; onReload?: () => void },
 ): ReactNode | null {
   if (error.isLegacyAuthority) return <LegacyAuthorityNotice error={error} />;
+  if (refusedBeforeRunning(error))
+    return <RefusedBeforeRunningNotice error={error} onRetry={actions.onRetry} />;
   if (tookEffectOutcomeLost(error))
     return <OutcomeLost error={error} onReload={actions.onReload} />;
   if (secretWithheldOf(error)) {

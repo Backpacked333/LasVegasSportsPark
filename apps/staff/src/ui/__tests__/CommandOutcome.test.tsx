@@ -5,7 +5,9 @@
  * same-key "Try again", never "Something went wrong" or "Nothing changed"; a failed read is not.
  * IDEMPOTENCY_OUTCOME_UNAVAILABLE is "This may already have been done" with "Reload"; a
  * legacy-authority refusal (K-11, §5.6) says to make the change in the system of record, never
- * "not available to you".
+ * "not available to you"; a guard's refusal before the key was claimed (restore recovery,
+ * SPK-AT-028; assistant off, SPK-AUTO-005) shows the API's message and "Nothing was changed"; a
+ * 2xx whose answer could not be read is an unknown outcome.
  */
 import { ApiError, networkError, timeoutError } from '@sportspark/api-client';
 import { render, screen, within } from '@testing-library/react';
@@ -138,6 +140,79 @@ describe('staff command failure views (§4.9, SPK-PAY-007, SPK-UX-008)', () => {
       expect(screen.queryByText(/not permitted/)).toBeNull();
     },
   );
+
+  it.each(VIEWS)(
+    'SPK-AT-028: %s shows a refusal during restore recovery (before the key was claimed) with the API message, never as an unknown outcome',
+    async (_name, View) => {
+      const user = userEvent.setup();
+      const onRetry = vi.fn();
+      const error = api('INTEGRATION_UNAVAILABLE', 503, 'retry_later', { reason: 'recovery_mode' });
+      Object.assign(error, {
+        message: 'Payments are paused while the service recovers from a restore. Try again later.',
+      });
+      show(View, error, { onRetry });
+      const refused = screen.getByTestId('state-refused-before-running');
+      expect(refused).toHaveTextContent(
+        'Payments are paused while the service recovers from a restore. Try again later.',
+      );
+      expect(refused).toHaveTextContent('Nothing was changed');
+      expect(screen.queryByTestId('state-outcome-unknown')).toBeNull();
+      expect(screen.queryByText(/may already have taken effect/)).toBeNull();
+      expect(screen.queryByText(/A provider this depends on/)).toBeNull();
+      await user.click(within(refused).getByRole('button', { name: 'Try again' }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(VIEWS)(
+    'SPK-AUTO-005: %s shows the assistant turned off (refused before running) with the API message',
+    (_name, View) => {
+      show(
+        View,
+        api('INTEGRATION_UNAVAILABLE', 503, 'retry_later', {
+          capability: 'automation',
+          reason: 'disabled',
+        }),
+        {},
+      );
+      expect(screen.getByTestId('state-refused-before-running')).toHaveTextContent(
+        'Safe message for INTEGRATION_UNAVAILABLE.',
+      );
+      expect(screen.queryByTestId('state-outcome-unknown')).toBeNull();
+    },
+  );
+
+  it.each(VIEWS)(
+    'SPK-PAY-007: %s shows a 2xx whose answer could not be read as an unknown outcome with a same-key Try again',
+    (_name, View) => {
+      const unreadable = sent(
+        new ApiError({
+          kind: 'unexpected_response',
+          status: 201,
+          code: 'RESPONSE_UNREADABLE',
+          message: 'The service answered, but its answer could not be read.',
+          nextAction: 'retry_with_same_key',
+          correlationId: 'corr-u',
+        }),
+      );
+      show(View, unreadable, { onRetry: () => undefined });
+      const unknown = screen.getByTestId('state-outcome-unknown');
+      expect(unknown).toHaveTextContent('its answer could not be read');
+      expect(unknown).toHaveTextContent('may already have taken effect');
+      expect(within(unknown).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    },
+  );
+
+  it('§4.10: an unknown outcome the API answered shows the API’s own message', () => {
+    show(
+      SharedCommandError as View,
+      api('INTEGRATION_UNAVAILABLE', 503, 'retry_later', { reason: 'provider_timeout' }),
+      { onRetry: () => undefined },
+    );
+    expect(screen.getByTestId('state-outcome-unknown')).toHaveTextContent(
+      'The service said: Safe message for INTEGRATION_UNAVAILABLE.',
+    );
+  });
 
   it('a failed read changed nothing: it is never shown as an unknown outcome', () => {
     show(SharedCommandError as View, sent(networkError(new TypeError('Failed to fetch')), 'get'), {

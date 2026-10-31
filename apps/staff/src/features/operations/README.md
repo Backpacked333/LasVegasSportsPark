@@ -93,6 +93,16 @@ the actual devices of §6.3.
   the same key still running) stops the run and keeps the batch and its key; a signed-out session
   or a turned-off capability keeps the items queued. **Verified** in jsdom
   (`offline/__tests__/queue.test.ts`, `screens/arrival/__tests__/OfflineQueueScreen.test.tsx`).
+- IDEMPOTENCY_OUTCOME_UNAVAILABLE for a batch (it committed under its key, the answer was lost) is
+  answered the same way for that key for ever, so the batch is sent once more at once under a new
+  key with the same client batch id and items; the API finds the stored batch by device and client
+  batch id before running anything and answers its per-item outcome (`batchSender`). The run goes
+  on and later batches are sent. **Verified** (`queue.test.ts`).
+- "Queue again" sends a refused item with the times it was queued with (snapshot and observed
+  times are never rewritten on the device). For `snapshot_in_future` the review says so: correcting
+  the clock does not fix them; queue it again only after the stored roster time by the service's
+  clock, or discard it and record the observation again online. **Verified**
+  (`OfflineQueueScreen.test.tsx`).
 - Tabs of one browser profile share the queue: every change is applied to the queue as last
   stored, never to a stale copy of the tab, the other tabs follow it through the `storage` event,
   and where the browser has Web Locks one tab at a time synchronises. **Verified** for two stores
@@ -107,12 +117,22 @@ the actual devices of §6.3.
   hours) and the API flags stale snapshots for review.
 - Device approval and an encrypted, scoped roster download are not implemented by the API
   (DEC-023, DEC-032 **pending decision**): the snapshot reference is the device's own label of the
-  read it queued against; the device id is generated per browser. The snapshot time of an
-  attendance roster is the service's time of the read (the response's `Date` header) when it is
-  readable, so a device clock that runs ahead does not date it in the future (the API refuses a
-  snapshot dated beyond its clock-skew tolerance); a cross-origin deployment exposes that header
-  only once the API lists it in Access-Control-Expose-Headers, and until then the device's receipt
-  time is used. A scan snapshot uses the scan's `scannedAt`, the API's time.
+  read it queued against; the device id is generated per browser.
+- Queued times are on one clock (`offline/clock.ts`). The API compares a batch's snapshot time and
+  every observed time with its own clock (clock-skew tolerance 5 minutes: `snapshot_in_future`,
+  `observed_in_future`, `observed_before_snapshot`). The offset between the service's time of the
+  roster read (the attendance response's `Date` header; a scan's `scannedAt`) and the device's
+  receipt time dates the snapshot and every observation queued against it, so a device clock that
+  runs slow or fast by more than the tolerance moves neither. **Verified** for an attendance roster
+  with the device 10 minutes slow and 10 minutes fast, sent through a fake that applies the API's
+  checks (`SessionAttendanceScreen.test.tsx`), and for a scan (`ArrivalScannerScreen.test.tsx`).
+  The roster's age is measured on the device clock it was received by.
+- Without a readable `Date` header the offset is zero and the snapshot and observations stay on the
+  device clock together (as before this correction). A cross-origin deployment can read the header
+  only once the API lists `Date` in Access-Control-Expose-Headers, which `CORS_EXPOSED_HEADERS`
+  (apps/api kernel app-setup.ts) does not do today; the development server proxies `/v1`, so the
+  header is readable there. Recorded as a follow-up for the API kernel; the origin model is DEC-021
+  (**pending decision**).
 
 ## API gaps rendered as not available — Proposed handling
 
@@ -146,10 +166,12 @@ the actual devices of §6.3.
   client's typed error.
 - `feedback.tsx` `CommandError`: ACCESS_DENIED as "Not available" with the API's message,
   NOT_FOUND without implying existence, any answer that may have taken effect (a timeout, a
-  connection lost after sending, IDEMPOTENCY_IN_PROGRESS, a 5xx) as "Outcome not known yet" with a
-  same-key retry, IDEMPOTENCY_OUTCOME_UNAVAILABLE as "This may already have been done", a
-  legacy-authority refusal as "Make this change in the system of record" (`ui/CommandOutcome.tsx`),
-  CAPABILITY_DISABLED as "turned off".
+  connection lost after sending, IDEMPOTENCY_IN_PROGRESS, a 5xx, a 2xx whose answer could not be
+  read) as "Outcome not known yet" with a same-key retry, a guard's refusal before running
+  (restore recovery, assistant off) with the API's message and "Nothing was changed",
+  IDEMPOTENCY_OUTCOME_UNAVAILABLE as "This may already have been done", a legacy-authority refusal
+  as "Make this change in the system of record" (`ui/CommandOutcome.tsx`), CAPABILITY_DISABLED as
+  "turned off".
 - Request bodies send defaulted fields explicitly (for example `recordDeparture: true`): the
   generated client types mark fields with an OpenAPI default as required.
 - Tests: `testing.ts` has `nameEntry` / `personNames` for `GET /person-names`; await the read a

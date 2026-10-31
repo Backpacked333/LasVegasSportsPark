@@ -17,7 +17,7 @@
  * - API gaps: a part of a screen the API cannot serve yet is "Not available yet", named, and kept
  *   apart from permission restrictions and from empty states.
  */
-import { presentationForError, type ApiError } from '@sportspark/api-client';
+import { presentationForError, refusedBeforeRunning, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { QueryBoundary, type QueryBoundaryProps } from '../../ui/QueryBoundary';
 import { Button } from '../../ui/Button';
@@ -92,8 +92,9 @@ export function CommandError({ error, onRetry, onReload, deniedDescription }: Co
   if (presentation === 'unavailable') {
     return <PermissionRestriction error={error} description={deniedDescription} />;
   }
+  // A guard's refusal before running (recovery mode, assistant off) is not a provider outage.
   const providerOwner =
-    error.code === 'INTEGRATION_UNAVAILABLE' ? (
+    error.code === 'INTEGRATION_UNAVAILABLE' && !refusedBeforeRunning(error) ? (
       <p className="caption">
         A provider this depends on is unavailable. Owner: {DECISIONS.providers.owner} (
         {DECISIONS.providers.ids.join(', ')}).

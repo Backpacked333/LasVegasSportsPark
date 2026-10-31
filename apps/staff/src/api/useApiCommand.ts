@@ -9,7 +9,10 @@
  * After an answer that says the command may have taken effect or did (`mayHaveTakenEffect`,
  * `mustNotCreateAgain`), the `invalidate` queries are read again as after a success, so a list
  * shows the record the command may have made. `reread()` reads them again on demand (a "Start a
- * new request" that must look at the current state first) and rejects when the read fails.
+ * new request" that must look at the current state first). It resolves only once every query of
+ * those keys shown on screen was fetched again and succeeded; it rejects when none is shown, when
+ * one failed, and when one could not start (TanStack pauses a fetch while the dashboard is
+ * offline and resolves its refetch at once, without reading anything).
  * Pass `expectedRevision` in the body wherever the API takes it; a STALE_REVISION answer is shown
  * with "Reload" and the user's input is kept (SPK-UX-008).
  */
@@ -22,7 +25,7 @@ import {
   type RequestOptions,
   type ResponseBody,
 } from '@sportspark/api-client';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type Query, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../providers/AppProviders';
 
@@ -30,6 +33,34 @@ export type CommandRequest<M extends CommandMethod, P extends PathsWithMethod<M>
   RequestOptions<P, M>,
   'intent' | 'signal'
 >;
+
+/**
+ * Reads the shown queries of `keys` again and resolves only when each was read afresh: every
+ * active, enabled query matched (at least one) ended a new fetch successfully. A refetch TanStack
+ * paused (offline) or one that failed rejects, so a form that waits for it stays locked.
+ */
+export async function rereadQueries(
+  queryClient: QueryClient,
+  keys: readonly (readonly unknown[])[],
+): Promise<void> {
+  const cache = queryClient.getQueryCache();
+  const shown = new Map<Query, number>();
+  for (const queryKey of keys) {
+    for (const query of cache.findAll({ queryKey, type: 'active' })) {
+      if (!query.isDisabled()) shown.set(query, query.state.dataUpdateCount);
+    }
+  }
+  if (shown.size === 0) throw new Error('Nothing on screen to read again.');
+  await Promise.all(
+    keys.map((queryKey) => queryClient.invalidateQueries({ queryKey }, { throwOnError: true })),
+  );
+  for (const [query, updatesBefore] of shown) {
+    const { status, fetchStatus, dataUpdateCount } = query.state;
+    if (fetchStatus !== 'idle' || status !== 'success' || dataUpdateCount <= updatesBefore) {
+      throw new Error('The record could not be read again.');
+    }
+  }
+}
 
 export interface UseApiCommandOptions {
   /** Query keys (or prefixes) to refetch after success, e.g. `['api', '/me/inbox']`. */
@@ -46,12 +77,7 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
   const tracker = useRef(api.intentTracker());
   const invalidateKeys = options.invalidate;
   const reread = useCallback(
-    () =>
-      Promise.all(
-        (invalidateKeys ?? []).map((queryKey) =>
-          queryClient.invalidateQueries({ queryKey }, { throwOnError: true }),
-        ),
-      ).then(() => undefined),
+    () => rereadQueries(queryClient, invalidateKeys ?? []),
     [invalidateKeys, queryClient],
   );
 

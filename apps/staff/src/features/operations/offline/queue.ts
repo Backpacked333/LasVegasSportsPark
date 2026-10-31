@@ -17,7 +17,12 @@
  *   the API refuses outright (a definitive 4xx: nothing in it was recorded) moves all its items to
  *   review as `refused` with the API's code and message, where they can be queued again under a
  *   new batch or discarded; the run goes on with the other batches. Only an unknown outcome (no
- *   answer, a 5xx, the same key still running) stops the run and keeps the batch and its key.
+ *   answer, a 5xx, the same key still running) stops the run and keeps the batch and its key. A
+ *   batch that committed but whose answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) is sent once
+ *   more under a new key with the same client batch id, which the API answers with the stored
+ *   batch (`batchSender`).
+ * - A requeued item keeps every time it was queued with (snapshot and observed times): they are
+ *   facts of the observation, never rewritten on the device.
  * - The server's batch id and counts of the latest synchronisations are kept (ids and numbers
  *   only), so the stored per-item outcome can be read again with `GET /v1/offline-sync/{id}`
  *   (ENT-01) after the response was shown.
@@ -26,7 +31,13 @@
  *   over observations another tab queued, and a `storage` event from another tab refreshes this
  *   tab's view. Where the browser has Web Locks, one tab at a time synchronises.
  */
-import { ApiError, keepsIntentAfterFailure, type Schema } from '@sportspark/api-client';
+import {
+  ApiError,
+  keepsIntentAfterFailure,
+  tookEffectOutcomeLost,
+  type CommandIntent,
+  type Schema,
+} from '@sportspark/api-client';
 
 export type OfflineItem = Schema<'OfflineItem'>;
 export type OfflineSyncBatch = Schema<'OfflineSyncBatch'>;
@@ -348,8 +359,10 @@ export class OfflineQueueStore {
 
   /**
    * Puts a refused item back in the queue under a new batch (a new client batch id and key), for
-   * example once the device clock is right or the role is back. Items the API recorded (a
-   * conflict, a rejection) are not queued again.
+   * example once the role is back. Its snapshot and observed times are sent unchanged, so an item
+   * refused as `snapshot_in_future` is accepted only once the service's clock has passed the stored
+   * times (less the API's tolerance); correcting the device clock does not change them. Items the
+   * API recorded (a conflict, a rejection) are not queued again.
    */
   requeue(clientObservationId: string): void {
     this.mutate((current) => {
@@ -419,6 +432,52 @@ export function isBatchRefusal(error: unknown): error is ApiError {
 
 /** Sends one batch; resolves with the API's batch outcome or rejects with an ApiError. */
 export type SendBatch = (batch: PendingBatch, deviceId: string) => Promise<OfflineSyncBatch>;
+
+/** Posts one batch under an idempotency intent (`POST /v1/offline-sync` in the dashboard). */
+export type PostBatch = (
+  batch: PendingBatch,
+  deviceId: string,
+  intent: CommandIntent,
+) => Promise<OfflineSyncBatch>;
+
+/**
+ * The idempotency key of each batch (§4.9): kept while the batch's outcome is unknown, so a retry
+ * in this tab is answered with the stored outcome; ended after a definitive answer.
+ *
+ * IDEMPOTENCY_OUTCOME_UNAVAILABLE (the batch committed under its key, but the answer was never
+ * recorded) is answered the same way for that key for ever, so keeping it would stop every later
+ * run at this batch. For this command the client batch id is the batch's own idempotency: the API
+ * looks the batch up by device and client batch id before it runs anything and answers its stored
+ * per-item outcome (apps/api entry offline-sync.service `sync`). So the same batch, with the same
+ * client batch id and items, is sent once more at once under a new key, and its stored outcome is
+ * applied like any answer; nothing is recorded twice.
+ */
+export function batchSender(
+  post: PostBatch,
+  newIntent: () => CommandIntent,
+  intents: Map<string, CommandIntent> = new Map(),
+): SendBatch {
+  const attempt = async (batch: PendingBatch, deviceId: string, intent: CommandIntent) => {
+    intents.set(batch.batchId, intent);
+    try {
+      const result = await post(batch, deviceId, intent);
+      intents.delete(batch.batchId);
+      return result;
+    } catch (error) {
+      // A definitive answer is stored under the key and would be replayed: the intent ends.
+      if (!keepsIntentAfterFailure(error)) intents.delete(batch.batchId);
+      throw error;
+    }
+  };
+  return async (batch, deviceId) => {
+    try {
+      return await attempt(batch, deviceId, intents.get(batch.batchId) ?? newIntent());
+    } catch (error) {
+      if (!(error instanceof ApiError && tookEffectOutcomeLost(error))) throw error;
+      return attempt(batch, deviceId, newIntent());
+    }
+  };
+}
 
 export interface SyncRuntime {
   syncing: boolean;
