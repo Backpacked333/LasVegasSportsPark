@@ -293,7 +293,12 @@ identifiers only.
   whose official result had none: winner recorded, empty fed slots filled), recompute the league
   standings (playoff games never count), audit and outbox. A bracket node links only a fixture
   without a published result: a published league result counts in the standings, so linking it is
-  refused (`fixture_result_published`); create the playoff fixture for the node.
+  refused (`fixture_result_published`); create the playoff fixture for the node. A canceled
+  fixture takes no result, and a `completed`, `forfeit` or `abandoned` result is accepted (submit,
+  resubmit and again at publication, under the fixture lock) only when the fixture machine can
+  move the fixture to that outcome or the fixture already holds one (a correction): an
+  unscheduled or postponed fixture never takes a played or abandoned result
+  (`INVALID_TRANSITION`, `machine: Fixture`; R2-LIFECYCLES-04).
 - **Corrections** (SPK-RESULT-004, SPK-AT-014): a correction is a new revision; the superseded row
   keeps its scores, actor, reason and publication instant. When it would touch published history —
   a playoff game whose node or downstream nodes are published, or a league game whose corrected
@@ -545,3 +550,10 @@ built, waiting on a decision or another module.
   this, the event took a 403-character title and generation failed with `INTERNAL_ERROR`.
   Bounding the notice titles communications composes from the event title (a prefix plus the
   title) is that module's change and is not made here.
+- A result is checked against its fixture's state at submission, resubmission and publication
+  (R2-LIFECYCLES-04, §4.6, SPK-RESULT-001, SPK-DISC-002): before this, a `completed` result was
+  accepted for an unscheduled or postponed fixture (no start, so no kickoff check) and a result
+  submitted before the fixture was canceled could still be published, counting in the standings
+  and serving suspensions for a game that never took place (`__tests__/results.spec.ts`
+  "R2-LIFECYCLES-04"). A draft or submitted revision of a fixture canceled afterwards stays as it
+  is (the result machine has no withdrawal state); publishing or resubmitting it is refused.

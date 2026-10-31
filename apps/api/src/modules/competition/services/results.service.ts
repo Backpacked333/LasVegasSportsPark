@@ -86,6 +86,29 @@ const PRE_KICKOFF_CLASSIFICATIONS: readonly ResultClassification[] = [
   'postponed',
 ];
 
+/** The fixture outcome a classification records (canceled, postponed and disputed record none). */
+interface ClassificationOutcome {
+  outcome: 'played' | 'forfeit' | 'abandoned';
+  event: 'record_played' | 'forfeit' | 'abandon';
+}
+function outcomeOfClassification(
+  classification: ResultClassification,
+): ClassificationOutcome | null {
+  switch (classification) {
+    case 'completed':
+      return { outcome: 'played', event: 'record_played' };
+    case 'forfeit':
+      return { outcome: 'forfeit', event: 'forfeit' };
+    case 'abandoned':
+      return { outcome: 'abandoned', event: 'abandon' };
+    default:
+      return null;
+  }
+}
+
+/** Fixture states that already hold a recorded outcome (a correction keeps the fixture there). */
+const OUTCOME_STATES: readonly FixtureRow['status'][] = ['played', 'forfeit', 'abandoned'];
+
 /** Winner and loser of a decided game (forfeit: the forfeiting side loses); null when undecided. */
 function sidesOf(
   revision: RevisionRow,
@@ -169,9 +192,7 @@ export class ResultsService {
       const context = await this.loadContext(trx, organizationId, fixtureId, { forUpdate: true });
       await this.authorizeSubmit(trx, principal, context);
       this.validateInput(context.fixture, input);
-      if (context.fixture.status === 'canceled') {
-        throw errors.invalidTransition('Fixture', context.fixture.status, 'submit_result');
-      }
+      this.assertFixtureTakesResult(context.fixture, input.classification, 'submit_result');
       this.assertKickoffPassed(context.fixture, input.classification);
       await this.assertShootoutAllowed(trx, context, input);
       const open = await trx
@@ -294,6 +315,7 @@ export class ResultsService {
       assertExpectedRevision(input.expectedRevision, revision.revision);
       const next = ResultMachine.next(revision.status, 'submit');
       this.validateInput(context.fixture, input);
+      this.assertFixtureTakesResult(context.fixture, input.classification, 'submit_result');
       this.assertKickoffPassed(context.fixture, input.classification);
       await this.assertShootoutAllowed(trx, context, input);
       const previous = revision.details as Partial<ResultDetails>;
@@ -459,6 +481,10 @@ export class ResultsService {
       );
       assertExpectedRevision(input.expectedRevision, revision.revision);
       const next = ResultMachine.next(revision.status, 'publish');
+      // R2-LIFECYCLES-04: the fixture is re-checked under its lock; it may have been canceled,
+      // postponed or moved since the revision was submitted.
+      this.assertFixtureTakesResult(context.fixture, revision.classification, 'publish_result');
+      this.assertKickoffPassed(context.fixture, revision.classification);
       const official = await this.officialOf(trx, organizationId, revision.fixture_id, {
         forUpdate: true,
       });
@@ -1018,6 +1044,29 @@ export class ResultsService {
    * CMP-12 (SPK-RESULT-001): a played result waits for kickoff; before the scheduled start only a
    * forfeit, cancellation or postponement is recorded (INVALID_TRANSITION FIXTURE_NOT_STARTED).
    */
+  /**
+   * R2-LIFECYCLES-04 (§4.6, SPK-RESULT-001, SPK-DISC-002): a canceled fixture takes no result, and a
+   * classification that records a game outcome (completed, forfeit, abandoned) is accepted only for
+   * a fixture the fixture machine can move to that outcome, or one whose outcome is already
+   * recorded (a correction: the outcome states are terminal or replayable, and the result revision
+   * is authoritative). So an unscheduled or postponed fixture never takes a played or abandoned
+   * result, and standings and served suspensions never count a game that did not take place.
+   */
+  private assertFixtureTakesResult(
+    fixture: FixtureRow,
+    classification: ResultClassification,
+    action: 'submit_result' | 'publish_result',
+  ): void {
+    if (fixture.status === 'canceled') {
+      throw errors.invalidTransition('Fixture', fixture.status, action);
+    }
+    const outcome = outcomeOfClassification(classification);
+    if (!outcome) return;
+    if (FixtureMachine.can(fixture.status, outcome.event)) return;
+    if (OUTCOME_STATES.includes(fixture.status)) return;
+    throw errors.invalidTransition('Fixture', fixture.status, outcome.event);
+  }
+
   private assertKickoffPassed(fixture: FixtureRow, classification: ResultClassification): void {
     if (!fixture.scheduled_start || PRE_KICKOFF_CLASSIFICATIONS.includes(classification)) return;
     if (this.clock.now().getTime() >= new Date(fixture.scheduled_start).getTime()) return;
@@ -1249,20 +1298,8 @@ export class ResultsService {
       .execute();
   }
 
-  private fixtureOutcomeOf(revision: RevisionRow): {
-    outcome: 'played' | 'forfeit' | 'abandoned';
-    event: 'record_played' | 'forfeit' | 'abandon';
-  } | null {
-    switch (revision.classification) {
-      case 'completed':
-        return { outcome: 'played', event: 'record_played' };
-      case 'forfeit':
-        return { outcome: 'forfeit', event: 'forfeit' };
-      case 'abandoned':
-        return { outcome: 'abandoned', event: 'abandon' };
-      default:
-        return null;
-    }
+  private fixtureOutcomeOf(revision: RevisionRow): ClassificationOutcome | null {
+    return outcomeOfClassification(revision.classification);
   }
 
   private async rosterPersons(

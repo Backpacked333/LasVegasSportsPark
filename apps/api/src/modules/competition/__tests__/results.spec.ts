@@ -574,4 +574,125 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
       .send({ expectedRevision: 1 });
     expect(foreignPublish.status).toBe(404);
   });
+
+  it('R2-LIFECYCLES-04 / SPK-RESULT-001 / SPK-DISC-002: a result that records a game outcome is refused for a fixture the fixture machine cannot move to it (unscheduled, postponed, canceled after submission), so standings never count a game that did not take place', async () => {
+    const patch = (path: string, actor: Actor, body: object) =>
+      t.http.patch(`/v1${path}`).set(actor.header).set('Idempotency-Key', key()).send(body);
+    const fixtureRevision = async (id: string) =>
+      (
+        await t.db
+          .selectFrom('fixtures')
+          .select('revision')
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow()
+      ).revision;
+    const table = async () =>
+      (await get(`/seasons/${season.seasonId}/standings?divisionId=${divisionId}`, leagueManager))
+        .body as { rows: unknown[]; sourceResultIds: string[] };
+    const before = await table();
+    const played = { classification: 'completed', homeScore: 3, awayScore: 1 };
+
+    // (a) an unscheduled fixture (no event, so no kickoff to wait for)
+    const created = await post('/fixtures', leagueManager, {
+      seasonId: season.seasonId,
+      divisionId,
+      homeEntryId: c.teamEntryId,
+      awayEntryId: d.teamEntryId,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.fixture.status).toBe('unscheduled');
+    const unscheduled = created.body.fixture.id as string;
+    const abandoned = {
+      classification: 'abandoned',
+      homeScore: 1,
+      awayScore: 0,
+      abandonment: { minutePlayed: 70, reason: 'Floodlight failure' },
+    };
+    for (const body of [played, abandoned]) {
+      const refused = await post(`/fixtures/${unscheduled}/results`, leagueManager, body);
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('INVALID_TRANSITION');
+      expect(refused.body.details).toMatchObject({ machine: 'Fixture', from: 'unscheduled' });
+    }
+
+    // (b) a postponed fixture: its event is canceled and it has no start any more
+    const toPostpone = await scheduleFixture(c, d, '2027-03-06', '18:00', '19:00');
+    await atKickoff(t, toPostpone);
+    const postponed = await patch(`/fixtures/${toPostpone}`, leagueManager, {
+      action: 'postpone',
+      expectedRevision: await fixtureRevision(toPostpone),
+      reason: 'frozen pitch',
+    });
+    expect(postponed.status).toBe(200);
+    expect(postponed.body.fixture).toMatchObject({ status: 'postponed', scheduledStart: null });
+    const onPostponed = await post(`/fixtures/${toPostpone}/results`, leagueManager, played);
+    expect(onPostponed.status).toBe(409);
+    expect(onPostponed.body.details).toMatchObject({
+      machine: 'Fixture',
+      from: 'postponed',
+      event: 'record_played',
+    });
+
+    // (c) a fixture canceled after its result was submitted: publication re-checks the fixture
+    const toCancel = await scheduleFixture(c, d, '2027-03-13', '18:00', '19:00');
+    await atKickoff(t, toCancel);
+    const submitted = await post(`/fixtures/${toCancel}/results`, leagueManager, played);
+    expect(submitted.status).toBe(201);
+    const canceled = await patch(`/fixtures/${toCancel}`, leagueManager, {
+      action: 'cancel',
+      expectedRevision: await fixtureRevision(toCancel),
+      reason: 'pitch flooded',
+    });
+    expect(canceled.status).toBe(200);
+    expect(canceled.body.fixture.status).toBe('canceled');
+    const publish = await post(`/results/${submitted.body.id}/publish`, leagueManager, {
+      expectedRevision: submitted.body.revision,
+    });
+    expect(publish.status).toBe(409);
+    expect(publish.body.code).toBe('INVALID_TRANSITION');
+    expect(publish.body.details).toMatchObject({ machine: 'Fixture', from: 'canceled' });
+    const revision = await t.db
+      .selectFrom('result_revisions')
+      .select('status')
+      .where('id', '=', submitted.body.id)
+      .executeTakeFirstOrThrow();
+    expect(revision.status).toBe('submitted');
+    // returned for correction, it cannot be resubmitted against the canceled fixture either
+    const returned = await post(`/results/${submitted.body.id}/return`, leagueManager, {
+      expectedRevision: submitted.body.revision,
+      reason: 'The game was canceled.',
+    });
+    expect(returned.status).toBe(200);
+    const resubmitted = await post(`/results/${submitted.body.id}/submit`, leagueManager, {
+      expectedRevision: returned.body.revision,
+      ...played,
+    });
+    expect(resubmitted.status).toBe(409);
+    expect(resubmitted.body.code).toBe('INVALID_TRANSITION');
+
+    // nothing was counted: the table is the one before
+    const after = await table();
+    expect(after.sourceResultIds).toEqual(before.sourceResultIds);
+    expect(after.rows).toEqual(before.rows);
+    const fixtures = await t.db
+      .selectFrom('fixtures')
+      .select(['id', 'status'])
+      .where('id', 'in', [unscheduled, toPostpone, toCancel])
+      .orderBy('id')
+      .execute();
+    expect(Object.fromEntries(fixtures.map((f) => [f.id, f.status]))).toEqual({
+      [unscheduled]: 'unscheduled',
+      [toPostpone]: 'postponed',
+      [toCancel]: 'canceled',
+    });
+
+    // the fixture machine does allow a forfeit of a game that was never scheduled
+    const forfeit = await post(`/fixtures/${unscheduled}/results`, leagueManager, {
+      classification: 'forfeit',
+      homeScore: 3,
+      awayScore: 0,
+      forfeitingEntryId: d.teamEntryId,
+    });
+    expect(forfeit.status).toBe(201);
+  });
 });
