@@ -139,23 +139,32 @@ export class ImportExceptionsService {
       .where('batch_id', '=', batch.id)
       .where('status', '=', 'open')
       .execute();
+    const status = ImportExceptionMachine.next('open', 'withdraw');
     let withdrawn = 0;
     for (const exception of open) {
       if (keep.has(exception.id)) continue;
-      ImportExceptionMachine.next('open', 'withdraw');
-      await trx
+      // An exception decided meanwhile keeps its decision (`status = 'open'` re-checked).
+      const updated = await trx
         .updateTable('import_exceptions')
-        .set({
-          status: 'withdrawn',
-          withdrawn_at: this.clock.now(),
-          revision: exception.revision + 1,
-        })
+        .set({ status, withdrawn_at: this.clock.now(), revision: exception.revision + 1 })
+        .where('organization_id', '=', batch.organization_id)
         .where('id', '=', exception.id)
+        .where('status', '=', 'open')
         .where('revision', '=', exception.revision)
-        .execute();
-      withdrawn += 1;
+        .executeTakeFirst();
+      withdrawn += Number(updated.numUpdatedRows);
     }
     return withdrawn;
+  }
+
+  /**
+   * Withdraws every open exception of a batch that is being aborted (R2-LIFECYCLES-07, §4.6):
+   * an aborted batch is terminal, so nothing could decide them any more and they would stay in
+   * each review owner's queue for good. Runs in the abort's transaction, which holds the batch
+   * lock; an exception a reviewer decided first keeps its decision.
+   */
+  async withdrawAllOpen(trx: Trx, batch: BatchRow): Promise<number> {
+    return this.withdrawOthers(trx, batch, new Set());
   }
 
   async counts(

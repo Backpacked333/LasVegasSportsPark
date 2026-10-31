@@ -657,6 +657,9 @@ export class ImportBatchesService {
         throw errors.invalidTransition('ImportBatch', 'apply_started', 'abort');
       }
       const status = ImportBatchMachine.next(batch.status, 'abort');
+      // R2-LIFECYCLES-07 (§4.6): an aborted batch is terminal, so its open exceptions could never
+      // be decided; they are withdrawn with it instead of staying in the review queues.
+      const withdrawnExceptions = await this.exceptions.withdrawAllOpen(trx, batch);
       await trx
         .updateTable('import_batches')
         .set({
@@ -679,6 +682,7 @@ export class ImportBatchesService {
         afterRevision: batch.revision + 1,
         reason: input.reason,
         correlationId,
+        details: { withdrawnExceptions },
       });
       await this.outbox.enqueue(trx, MigrationEvents.batchAborted, {
         organizationId: batch.organization_id,

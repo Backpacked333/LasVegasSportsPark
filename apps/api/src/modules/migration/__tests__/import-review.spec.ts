@@ -497,6 +497,123 @@ describe('import validation and review queues (§5.4)', () => {
     expect(aborted.body.status).toBe('aborted');
   });
 
+  it('§4.6 R2-LIFECYCLES-07: aborting a batch withdraws its open exceptions, so no review queue keeps an item nothing can settle; a decision taken first stands', async () => {
+    const validated = await stageAndValidate(t, operator, [
+      stagedPerson('AB-A', { dateOfBirth: '1980-01-01' }),
+      stagedPerson('AB-C', { dateOfBirth: '2015-01-01' }),
+      stagedRelationship('AB-R1', {
+        actorExternalId: 'AB-A',
+        subjectExternalId: 'AB-C',
+        basis: 'inferred',
+      }),
+      stagedRelationship('AB-R2', { actorExternalId: 'AB-A', subjectExternalId: 'AB-missing' }),
+      stagedObligation('AB-OB', { debtorExternalId: 'AB-A', amountMinor: -500 }),
+    ]);
+    const raised = await exceptionsOf(t, operator, validated.id);
+    expect(raised.map((e) => [e.externalId, e.reviewOwnerRole, e.status]).sort()).toEqual([
+      ['AB-OB', 'finance_operator', 'open'],
+      ['AB-R1', 'support_operator', 'open'],
+      ['AB-R2', 'system_administrator', 'open'],
+    ]);
+    const byExternal = new Map(raised.map((e) => [e.externalId, e]));
+    // Finance settles its item before the batch is abandoned: that decision is kept.
+    const rejected = await decide(finance, byExternal.get('AB-OB')!, { decision: 'reject' });
+    expect(rejected.status, JSON.stringify(rejected.body)).toBe(200);
+    const current = await get(t, `/v1/import-batches/${validated.id}`, operator);
+
+    const aborted = await post(t, `/v1/import-batches/${validated.id}/abort`, operator, {
+      reason: 'the export was taken from the wrong season',
+      expectedRevision: current.body.revision,
+    });
+    expect(aborted.status, JSON.stringify(aborted.body)).toBe(200);
+    expect(aborted.body).toMatchObject({
+      status: 'aborted',
+      exceptions: { open: 0, decided: 1, withdrawn: 2 },
+    });
+
+    // The review owners' queues no longer list them (SCR-S-48 reads status=open).
+    for (const role of ['support_operator', 'system_administrator', 'finance_operator']) {
+      const queue = await get(
+        t,
+        `/v1/import-exceptions?batchId=${validated.id}&status=open&reviewOwnerRole=${role}`,
+        operator,
+      );
+      expect(queue.status).toBe(200);
+      expect(queue.body.items, role).toEqual([]);
+    }
+    const after = await exceptionsOf(t, operator, validated.id);
+    expect(after.map((e) => [e.externalId, e.status]).sort()).toEqual([
+      ['AB-OB', 'decided'],
+      ['AB-R1', 'withdrawn'],
+      ['AB-R2', 'withdrawn'],
+    ]);
+    const withdrawn = await t.db
+      .selectFrom('import_exceptions')
+      .select(['status', 'withdrawn_at', 'revision'])
+      .where('organization_id', '=', t.organizationId)
+      .where('batch_id', '=', validated.id)
+      .where('status', '=', 'withdrawn')
+      .execute();
+    expect(withdrawn).toHaveLength(2);
+    for (const row of withdrawn) {
+      expect(row.withdrawn_at?.toISOString()).toBe(t.clock.now().toISOString());
+      expect(row.revision).toBe(2);
+    }
+    // A withdrawn exception is final: deciding it is an invalid transition, not a stuck item.
+    const late = await decide(
+      support,
+      after.find((e) => e.externalId === 'AB-R1')!,
+      {
+        decision: 'reject',
+      },
+    );
+    expect(late.status).toBe(409);
+    expect(late.body.code).toBe('INVALID_TRANSITION');
+    // The abort's audit record carries its reason and how many exceptions it withdrew.
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['reason', 'details'])
+      .where('organization_id', '=', t.organizationId)
+      .where('action', '=', 'migration.abort_batch')
+      .where('target_id', '=', validated.id)
+      .executeTakeFirstOrThrow();
+    expect(audit).toMatchObject({
+      reason: 'the export was taken from the wrong season',
+      details: { withdrawnExceptions: 2 },
+    });
+  });
+
+  it('§4.6 / §4.9 R2-LIFECYCLES-07: an abort racing a decision never leaves the exception open — it is either decided (and kept) or withdrawn (and the decision refused)', async () => {
+    const validated = await stageAndValidate(t, operator, [
+      stagedPerson('RA-A', { dateOfBirth: '1980-01-01' }),
+      stagedPerson('RA-C', { dateOfBirth: '2015-01-01' }),
+      stagedRelationship('RA-R', {
+        actorExternalId: 'RA-A',
+        subjectExternalId: 'RA-C',
+        basis: 'inferred',
+      }),
+    ]);
+    const [exception] = await exceptionsOf(t, operator, validated.id);
+    const [decided, aborted] = await Promise.all([
+      decide(support, exception!, { decision: 'reject' }),
+      post(t, `/v1/import-batches/${validated.id}/abort`, operator, {
+        reason: 'superseded by a later export',
+        expectedRevision: validated.revision,
+      }),
+    ]);
+    expect(aborted.status, JSON.stringify(aborted.body)).toBe(200);
+    const [after] = await exceptionsOf(t, operator, validated.id);
+    if (decided.status === 200) {
+      expect(after!.status).toBe('decided');
+      expect(aborted.body.exceptions).toMatchObject({ open: 0, decided: 1, withdrawn: 0 });
+    } else {
+      expect(decided.status, JSON.stringify(decided.body)).toBe(409);
+      expect(decided.body.code).toBe('INVALID_TRANSITION');
+      expect(after!.status).toBe('withdrawn');
+      expect(aborted.body.exceptions).toMatchObject({ open: 0, decided: 0, withdrawn: 1 });
+    }
+  });
+
   it('§4.10 / §4.14: batches are protected records — cross-organization, customers and staff without migration authority get NOT_FOUND; the role matrix holds', async () => {
     const validated = await stageAndValidate(t, operator, [stagedPerson('Z-1')]);
     const parent = await customer(t);

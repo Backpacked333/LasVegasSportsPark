@@ -137,7 +137,9 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
   manager may decide any. Accept may narrow staged permissions or state the amount finance
   approved, never widen; validation errors and conflicts can only be rejected or deferred. The
   review completes when no exception is open. An exception about a balance states the staged
-  amount and its currency.
+  amount and its currency. Aborting a batch withdraws its open exceptions in the same
+  transaction (the abort's audit record counts them), so no queue keeps an item nothing can
+  settle; an exception decided before the abort keeps its decision (R2-LIFECYCLES-07, §4.6).
 - **Apply (§5.4, SPK-AT-024):** idempotent per external id — a mapped, unchanged record is
   `matched`. Rows are applied in dependency order (persons; programs; households and
   relationships; balances; seasons; teams before their entries; rosters; events; preferences).
@@ -179,7 +181,8 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
     the batch row while it runs, so a takeover waits for it), and resumes after an interruption.
 - **Authority matrix (§5.6):** assignments per category and scope; a transfer names the
   assignment in effect and its revision, ends it and starts the next one at the same instant;
-  never retroactive. Without an assignment SportsPark is authoritative; importing a category
+  never retroactive. Without an assignment SportsPark is authoritative (a `default` matrix entry,
+  `scope: null`, published as `anyOf [$ref AuthorityScope, null]`); importing a category
   needs legacy authority in effect at the row's scope (a mapped program's program; a season's,
   team entry's or roster's competition; a future event's facility; otherwise the organization),
   else the row is a `sportspark_authoritative` conflict.
