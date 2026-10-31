@@ -1115,6 +1115,94 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
     expect(both.body.status).toBe('returned');
   });
 
+  it('§4.7 invariant 6 (R2-SCHEMA-04): another spelling of a sale line id cannot return more units than were sold, in one return or across returns', async () => {
+    const plain = await product(1_000);
+    const { sessionId } = await openSession();
+    const s = await sale(sessionId);
+    await line(s.id, plain, 1);
+    const paid = await post(t, `/v1/pos-sales/${s.id}/lines`, desk.header, {
+      productId: plain,
+      quantity: 1,
+    });
+    const [a] = paid.body.lines as Array<{ id: string }>;
+    const tendered = await post(t, `/v1/pos-sales/${s.id}/tenders`, desk.header, {
+      kind: 'cash',
+      amountMinor: 2_000,
+    });
+    expect(tendered.body.status).toBe('paid');
+    const lineA = a?.id as string;
+    const share = { quantity: 1, amountMinor: 1_000, baseMinor: 1_000, charges: [] };
+    const returnRow = (saleLineIds: string[]) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      sale_id: s.id,
+      currency: 'USD',
+      lines: json(saleLineIds.map((saleLineId) => ({ saleLineId, ...share }))),
+      amount_minor: 1_000 * saleLineIds.length,
+      tender_kind: 'cash',
+      refund_attempt_id: null,
+      register_session_id: sessionId,
+      evidence: null,
+      reason: 'direct',
+      approved_by: json({}),
+      approved_by_person_id: finance.personId,
+      returned_at: new Date(),
+    });
+    // Within one return: the same 1-unit line named in two spellings.
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('pos_returns')
+          .values(returnRow([lineA, lineA.toUpperCase()]))
+          .execute(),
+      ),
+    ).toBe('23514:pos_returns_line_id_canonical');
+    for (const spelling of [`{${lineA}}`, lineA.replaceAll('-', ''), 'not-a-uuid']) {
+      expect(
+        await refusedBy(
+          t.db
+            .insertInto('pos_returns')
+            .values(returnRow([spelling]))
+            .execute(),
+        ),
+      ).toBe('23514:pos_returns_line_id_canonical');
+    }
+    // Across returns: once the unit was returned, no spelling returns it again (rolled back).
+    const across = (second: string) =>
+      refusedBy(
+        t.db.transaction().execute(async (trx) => {
+          await trx
+            .insertInto('pos_returns')
+            .values(returnRow([lineA]))
+            .execute();
+          await trx
+            .insertInto('pos_returns')
+            .values(returnRow([second]))
+            .execute();
+        }),
+      );
+    expect(await across(lineA.toUpperCase())).toBe('23514:pos_returns_line_id_canonical');
+    expect(await across(lineA)).toBe('23514:pos_returns_within_quantity');
+    expect(
+      await t.db.selectFrom('pos_returns').select('id').where('sale_id', '=', s.id).execute(),
+    ).toHaveLength(0);
+    // The canonical id the service writes is accepted (the line returned once).
+    const once = await post(t, `/v1/pos-sales/${s.id}/returns`, finance.header, {
+      lines: [{ saleLineId: lineA, quantity: 1 }],
+      tenderKind: 'cash',
+      reason: 'Back once',
+    });
+    expect(once.status, JSON.stringify(once.body)).toBe(201);
+    expect(
+      await refusedBy(
+        t.db
+          .insertInto('pos_returns')
+          .values(returnRow([lineA.toUpperCase()]))
+          .execute(),
+      ),
+    ).toBe('23514:pos_returns_line_id_canonical');
+  });
+
   it('§4.7 invariant 6: two concurrent returns of the whole sale — exactly one is recorded', async () => {
     const plain = await product(1_500);
     const { sessionId } = await openSession();

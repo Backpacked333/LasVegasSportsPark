@@ -16,7 +16,7 @@ PaymentAttempt / Refund / Checkout machines, §4.7 invariants 5, 6, 7, §4.8
 §4.11 (all ten steps), §4.12, SPK-AT-006, SPK-AT-007, SPK-AT-022, SPK-AT-023 (financial parts)
 
 **Migration range:** `packages/db/migrations/0600_finance_*.sql` … `0699` (this module uses
-`0600`–`0614` and `0680`)
+`0600`–`0615` and `0680`)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT`; relationship authority through the kernel),
 catalog (`PRICING_PORT` for price rules, discount evaluation and redemption; `POLICY_PORT`;
@@ -421,7 +421,9 @@ sale whatever the switch, and hides only adding a line while it is off (`SalePag
   sale; a card tender names its payment attempt, an external one its evidence (SPK-PAY-012); a
   return never exceeds a line's sold quantity or the paid amount (constraint trigger, two
   concurrent returns cannot both pass, also under PostgreSQL; since `0610` the units one return
-  names for the same line are summed first, MONEY-10); a cash return names an open drawer
+  names for the same line are summed first, MONEY-10; since `0615` every `saleLineId` is the
+  canonical lower-case uuid text, refused otherwise with `pos_returns_line_id_canonical`, and lines
+  are grouped and matched with earlier returns by uuid value, R2-SCHEMA-04); a cash return names an open drawer
   session; machine guards refuse every transition the `PosSale`, `PosTender`, `PosRegisterSession`
   machines (`finance.state-machines.ts`) do not allow.
 - Taxes and fees come only from approved catalog `tax_fee` policy versions (CAT-02, DEC-057):
