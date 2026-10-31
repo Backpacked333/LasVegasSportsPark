@@ -1,6 +1,6 @@
 import { newId } from '@sportspark/contracts';
-import { json, seedOrganization } from '@sportspark/db';
-import { sql } from 'kysely';
+import { json, seedOrganization, type Database } from '@sportspark/db';
+import { sql, type SelectType } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createAccountFixture, createPersonFixture } from '../../identity';
@@ -18,6 +18,32 @@ const FOREIGN_KEY = '23503';
 const UNIQUE = '23505';
 const CHECK = '23514';
 const EXCLUSION = '23P01';
+
+type ReportingViewName = Extract<keyof Database, `reporting_${string}_v`>;
+/** The string literals a reporting view column is typed with in the Kysely schema. */
+type ViewLiterals<V extends ReportingViewName, C extends keyof Database[V]> = Extract<
+  SelectType<Database[V][C]>,
+  string
+>;
+interface PassThroughState {
+  view: string;
+  column: string;
+  table: string;
+  baseColumn: string;
+  typed: string[];
+}
+/**
+ * A view column that passes a base table's check-constrained column through unfiltered. `typed`
+ * must name every literal of the column's Kysely union and nothing more: the compiler rejects a
+ * missing or an extra key, and the test compares the list with the base table's check constraint.
+ */
+const passThrough = <V extends ReportingViewName, C extends keyof Database[V] & string>(
+  view: V,
+  column: C,
+  table: string,
+  baseColumn: string,
+  typed: Record<ViewLiterals<V, C>, true>,
+): PassThroughState => ({ view, column, table, baseColumn, typed: Object.keys(typed).sort() });
 
 /**
  * Integrity invariants enforced by the database (migration 1300), proven by writing violating rows
@@ -471,5 +497,234 @@ describe('reporting schema invariants (migration 1300)', () => {
     );
     expect(views.rows[0]!.n).toBe(total.rows[0]!.n);
     expect(total.rows[0]!.n).toBeGreaterThanOrEqual(40);
+  });
+
+  it('§4.6 / SPK-FAC-003: every state a reporting view passes through is typed exactly as its base check lists it (a withdrawn restriction included)', async () => {
+    // Every literal-typed column of a `reporting_*_v` view (none of them filters its rows), so a
+    // report that switches exhaustively on a typed state never meets an untyped one at runtime.
+    const columns: PassThroughState[] = [
+      passThrough('reporting_persons_v', 'person_kind', 'persons', 'kind', {
+        adult: true,
+        child: true,
+      }),
+      passThrough('reporting_events_v', 'status', 'events', 'status', {
+        draft: true,
+        published: true,
+        canceled: true,
+      }),
+      passThrough('reporting_closures_v', 'status', 'closures', 'status', {
+        pending: true,
+        active: true,
+        lifted: true,
+        withdrawn: true,
+      }),
+      passThrough('reporting_reserved_units_v', 'reservation_status', 'reservations', 'status', {
+        active: true,
+        released: true,
+      }),
+      passThrough('reporting_sessions_v', 'status', 'offering_sessions', 'status', {
+        scheduled: true,
+        canceled: true,
+        completed: true,
+      }),
+      passThrough('reporting_acknowledgments_v', 'status', 'acknowledgments', 'status', {
+        active: true,
+        withdrawn: true,
+      }),
+      passThrough('reporting_enrollments_v', 'person_kind', 'persons', 'kind', {
+        adult: true,
+        child: true,
+      }),
+      passThrough('reporting_enrollments_v', 'status', 'enrollments', 'status', {
+        pending: true,
+        confirmed: true,
+        canceled: true,
+        transferred: true,
+        completed: true,
+      }),
+      passThrough('reporting_session_bookings_v', 'person_kind', 'persons', 'kind', {
+        adult: true,
+        child: true,
+      }),
+      passThrough('reporting_session_bookings_v', 'status', 'session_bookings', 'status', {
+        pending: true,
+        confirmed: true,
+        canceled: true,
+        expired: true,
+      }),
+      passThrough('reporting_capacity_pools_v', 'status', 'capacity_pools', 'status', {
+        active: true,
+        closed: true,
+      }),
+      passThrough('reporting_holds_v', 'status', 'holds', 'status', {
+        active: true,
+        committed: true,
+        released: true,
+        expired: true,
+      }),
+      passThrough('reporting_waitlist_offers_v', 'status', 'waitlist_offers', 'status', {
+        offered: true,
+        accepted: true,
+        expired: true,
+        declined: true,
+      }),
+      passThrough('reporting_team_entries_v', 'status', 'team_entries', 'status', {
+        applied: true,
+        approved: true,
+        withdrawn: true,
+        rejected: true,
+      }),
+      passThrough('reporting_roster_memberships_v', 'person_kind', 'persons', 'kind', {
+        adult: true,
+        child: true,
+      }),
+      passThrough(
+        'reporting_assignment_requirements_v',
+        'target_type',
+        'assignment_requirements',
+        'target_type',
+        {
+          fixture: true,
+          event: true,
+          session: true,
+        },
+      ),
+      passThrough(
+        'reporting_attendance_v',
+        'activity_type',
+        'attendance_observations',
+        'activity_type',
+        {
+          session: true,
+          event: true,
+        },
+      ),
+      passThrough(
+        'reporting_attendance_v',
+        'observed_state',
+        'attendance_observations',
+        'observed_state',
+        {
+          present: true,
+          absent: true,
+          late: true,
+          left_early: true,
+        },
+      ),
+      passThrough('reporting_attendance_v', 'source', 'attendance_observations', 'source', {
+        online: true,
+        offline_sync: true,
+      }),
+      passThrough(
+        'reporting_session_checkins_v',
+        'activity_type',
+        'session_checkins',
+        'activity_type',
+        {
+          session: true,
+          event: true,
+        },
+      ),
+      passThrough('reporting_session_checkins_v', 'status', 'session_checkins', 'status', {
+        held: true,
+        admitted: true,
+        withdrawn: true,
+      }),
+      passThrough('reporting_visits_v', 'status', 'visits', 'status', {
+        on_site: true,
+        departed: true,
+        voided: true,
+      }),
+      passThrough('reporting_obligations_v', 'status', 'obligations', 'status', {
+        open: true,
+        settled: true,
+        written_off: true,
+        canceled: true,
+      }),
+      passThrough('reporting_installments_v', 'status', 'installments', 'status', {
+        scheduled: true,
+        paid: true,
+        failed: true,
+        canceled: true,
+      }),
+      passThrough('reporting_settlements_v', 'status', 'settlement_reconciliations', 'status', {
+        balanced: true,
+        discrepancy: true,
+      }),
+      passThrough('reporting_restrictions_v', 'kind', 'restrictions', 'kind', {
+        closed: true,
+        limited: true,
+      }),
+      passThrough('reporting_restrictions_v', 'status', 'restrictions', 'status', {
+        proposed: true,
+        approved: true,
+        active: true,
+        released: true,
+        withdrawn: true,
+      }),
+      passThrough('reporting_maintenance_tasks_v', 'severity', 'maintenance_tasks', 'severity', {
+        low: true,
+        medium: true,
+        high: true,
+        critical: true,
+      }),
+      passThrough('reporting_maintenance_tasks_v', 'status', 'maintenance_tasks', 'status', {
+        open: true,
+        assigned: true,
+        in_progress: true,
+        resolved: true,
+        closed: true,
+      }),
+      passThrough('reporting_notifications_v', 'category', 'notifications', 'category', {
+        operational: true,
+        promotional: true,
+      }),
+      passThrough('reporting_delivery_attempts_v', 'category', 'notifications', 'category', {
+        operational: true,
+        promotional: true,
+      }),
+      passThrough(
+        'reporting_notification_recipients_v',
+        'status',
+        'notification_recipients',
+        'status',
+        {
+          pending: true,
+          authorized: true,
+          revoked: true,
+        },
+      ),
+    ];
+    const allowed = async (table: string, column: string): Promise<string[]> => {
+      const { rows } = await sql<{ def: string }>`
+        select pg_get_constraintdef(con.oid) as def from pg_constraint con
+        join pg_class c on c.oid = con.conrelid
+        join pg_namespace n on n.oid = c.relnamespace
+        where con.contype = 'c' and c.relname = ${table} and n.nspname = current_schema()`.execute(
+        t.db,
+      );
+      const lists = rows.flatMap(({ def }) => {
+        const match =
+          /^CHECK \(\(\(?(\w+)\)?(?:::text)? = ANY \(\(?ARRAY\[(.+)\]\)?(?:::text\[\])?\)\)\)$/.exec(
+            def,
+          );
+        return match && match[1] === column
+          ? [[...match[2]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!).sort()]
+          : [];
+      });
+      expect(lists, `${table}.${column} has exactly one state check constraint`).toHaveLength(1);
+      return lists[0]!;
+    };
+    for (const c of columns) {
+      const { rows } = await sql<{ n: number }>`
+        select count(*)::int as n from information_schema.view_column_usage
+        where view_schema = current_schema() and view_name = ${c.view}
+          and table_name = ${c.table} and column_name = ${c.baseColumn}`.execute(t.db);
+      expect(rows[0]!.n, `${c.view} reads ${c.table}.${c.baseColumn}`).toBe(1);
+      expect(
+        c.typed,
+        `${c.view}.${c.column} is typed as ${c.table}.${c.baseColumn} allows`,
+      ).toEqual(await allowed(c.table, c.baseColumn));
+    }
   });
 });
