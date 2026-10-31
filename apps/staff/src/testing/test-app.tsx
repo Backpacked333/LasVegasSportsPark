@@ -6,7 +6,8 @@
  *   render(app.at('/today'));
  *
  * Defaults: `GET /me` (a general manager in two facilities), `GET /me/permissions` (every area
- * visible, every capability off) and `GET /today` (no issues).
+ * visible, every capability off), `GET /facilities` (both facilities in the viewer's scope, Los
+ * Angeles) and `GET /today` (no issues).
  */
 import { MemorySessionStore, type Session } from '@sportspark/api-client';
 import {
@@ -74,6 +75,30 @@ export function todayFeed(items: unknown[] = [], facilities = [FACILITY_A, FACIL
 }
 
 /**
+ * `GET /v1/facilities` (K-04): the facility directory with names, Los Angeles zones and
+ * `inStaffScope` true for every listed facility unless `outOfScope` names it.
+ */
+export function facilityDirectoryOf(
+  facilities: string[] = [FACILITY_A, FACILITY_B],
+  options: { outOfScope?: string[]; timezone?: string } = {},
+) {
+  return {
+    status: 200,
+    body: {
+      items: facilities.map((id, i) => ({
+        id,
+        slug: `north-park-${i + 1}`,
+        name: `North Park ${i + 1}`,
+        timezone: options.timezone ?? 'America/Los_Angeles',
+        status: 'active',
+        address: null,
+        inStaffScope: !(options.outOfScope ?? []).includes(id),
+      })),
+    },
+  };
+}
+
+/**
  * `GET /v1/me/permissions` (K-05, K-12): by default every navigation area is visible and every
  * capability switch is off, as the API starts (DEC-016). Override per test, e.g.
  * `routes: { 'GET /me/permissions': mePermissions({ enabled: ['rentals'] }) }`.
@@ -94,6 +119,7 @@ export function createTestApp(options: TestAppOptions = {}) {
   const fake = createFakeFetch({
     'GET /me': staffMe(),
     'GET /me/permissions': mePermissions(),
+    'GET /facilities': facilityDirectoryOf(),
     'GET /today': todayFeed(),
     ...options.routes,
   });

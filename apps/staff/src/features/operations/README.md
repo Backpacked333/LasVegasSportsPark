@@ -148,9 +148,12 @@ the actual devices of §6.3.
 
 ## Conventions
 
-- `context.ts`: `useOperatingFacility` (the selected facility, or the only one in scope; zone from
-  the Today feed or `GET /facilities/{id}`), `useFacilityZone` (the zone of the facility a record
-  names, same reads; null means the device zone, labelled) and `usePersonNames` / `nameOf`
+- `context.ts`: `useOperatingFacility` (the selected facility, or the only one in scope; name,
+  zone and scope from the facility directory `GET /facilities` with `inStaffScope`, or
+  `GET /facilities/{id}` for a facility the listing leaves out; the facility-local date and day
+  window derived from that zone and the injected clock; never the Today feed, which only the Today
+  screen reads, §4.5), `useFacilityZone` (the zone of the facility a record names, same reads and
+  cache; null means the device zone, labelled) and `usePersonNames` / `nameOf`
   (`GET /person-names`, names and kind only, one read per set of up to 100 ids; a person left out
   is "<noun>, name not available" with a short reference).
 - `StaffPicker.tsx`: the staff directory picker (`GET /staff-directory`, role and facility filters,

@@ -414,7 +414,11 @@ describe('SCR-S-29 SessionAttendanceScreen', () => {
     );
     const events = app.fake.requests.find((r) => r.route === '/events');
     expect(events?.query.facilityId).toBe(FACILITY_A);
-    expect(events?.query.start).toBe('2026-10-24T12:00:00.000Z');
+    // SPK-SCHED-008: the facility-local day in the directory's zone (Los Angeles, PDT), local
+    // midnight to local midnight, derived on the client; the Today feed is never read for it.
+    expect(events?.query.start).toBe('2026-10-24T07:00:00.000Z');
+    expect(events?.query.end).toBe('2026-10-25T07:00:00.000Z');
+    expect(app.fake.requests.some((r) => r.route === '/today')).toBe(false);
   });
 
   it('CAT-01 / SPK-SCHED-008: lists today’s program sessions in the facility time zone to open', async () => {
