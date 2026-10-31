@@ -1139,7 +1139,7 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
       currency: 'USD',
       lines: json(saleLineIds.map((saleLineId) => ({ saleLineId, ...share }))),
       amount_minor: 1_000 * saleLineIds.length,
-      tender_kind: 'cash',
+      tender_kind: 'cash' as const,
       refund_attempt_id: null,
       register_session_id: sessionId,
       evidence: null,
