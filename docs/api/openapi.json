@@ -26165,7 +26165,8 @@
           "originKind",
           "expiresAt",
           "reason"
-        ]
+        ],
+        "description": "SPK-YOUTH-004: `session_canceled` and `absence` require `originatingSessionId` (a session of the originating enrollment's offering when `originatingEnrollmentId` is given); `policy_event` requires `originReference`; `manual` may name neither."
       },
       "RedeemMakeupRequest": {
         "type": "object",

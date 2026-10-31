@@ -430,6 +430,65 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         ...overrides,
       });
 
+    it('SPK-YOUTH-004 / R3-TRACE-B-02: a makeup references its originating session or policy event', async () => {
+      // A participant of its own, so the shared one's entitlements stay as the tests below expect.
+      const mine = await child(t, [parent]);
+      const issueFor = (overrides: Record<string, unknown>) =>
+        issue({ participantPersonId: mine, ...overrides });
+      const refused = async (overrides: Record<string, unknown>, field: string) => {
+        const res = await issueFor(overrides);
+        expect(res.status, JSON.stringify(res.body)).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_FAILED');
+        expect(JSON.stringify(res.body)).toContain(field);
+      };
+      // A canceled session or an absence names the session; a policy event names its reference.
+      await refused({ originatingSessionId: undefined }, 'originatingSessionId');
+      await refused(
+        { originKind: 'absence', originatingSessionId: undefined },
+        'originatingSessionId',
+      );
+      await refused(
+        { originKind: 'policy_event', originatingSessionId: undefined },
+        'originReference',
+      );
+      // A session that does not exist in this organization is a validation error, not a 500.
+      await refused({ originatingSessionId: newId() }, 'originatingSessionId');
+      // With an originating enrollment, the session is one of that enrollment's offering.
+      const enrollmentId = await createEnrollmentFixture(t, {
+        offeringId: term.offeringId,
+        participantPersonId: mine,
+        status: 'confirmed',
+      });
+      const elsewhere = await offering(t);
+      const unrelated = await session(elsewhere, '2026-11-21T23:00:00Z');
+      await refused(
+        { originatingEnrollmentId: enrollmentId, originatingSessionId: unrelated },
+        'originatingSessionId',
+      );
+      const before = await t.db
+        .selectFrom('makeup_entitlements')
+        .select('id')
+        .where('participant_person_id', '=', mine)
+        .execute();
+      expect(before).toEqual([]);
+
+      const fromSession = await issueFor({ originatingEnrollmentId: enrollmentId });
+      expect(fromSession.status, JSON.stringify(fromSession.body)).toBe(201);
+      expect(fromSession.body).toMatchObject({
+        originKind: 'session_canceled',
+        originatingSessionId: sessions[0],
+      });
+      const fromPolicy = await issueFor({
+        originKind: 'policy_event',
+        originatingSessionId: undefined,
+        originReference: 'Closure CL-2026-11 (frost)',
+      });
+      expect(fromPolicy.status, JSON.stringify(fromPolicy.body)).toBe(201);
+      expect(fromPolicy.body.originReference).toBe('Closure CL-2026-11 (frost)');
+      const manual = await issueFor({ originKind: 'manual', originatingSessionId: undefined });
+      expect(manual.status, JSON.stringify(manual.body)).toBe(201);
+    });
+
     it('two concurrent redemptions of a single-use makeup yield exactly one booking', async () => {
       expect(
         (await post(t, '/v1/makeup-entitlements', parent.header, { participantPersonId: kid }))

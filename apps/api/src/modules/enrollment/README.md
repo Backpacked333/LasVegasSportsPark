@@ -80,6 +80,15 @@ including references into identity, catalog and competition tables; editable rec
   refuses an inactive/expired/foreign redemption and a reversal that does not correct a redemption
   of the same entitlement and booking, and moves the counter; `check (redeemed_count <=
 redemption_limit)` is the final guarantee.
+- **SPK-YOUTH-004 / R3-TRACE-B-02:** `makeup_entitlements_origin_referenced` (0520) refuses a
+  `session_canceled` or `absence` makeup without its originating session and a `policy_event` one
+  without a non-blank reference (`manual` may name neither); the issue command answers 400 for the
+  same cases (contract and service), for an unknown session, and for a session that is not one of
+  the originating enrollment's offering (read through catalog's sessions service). Rows written
+  before 0520 were not given an invented origin: a reference-less policy event is marked "not
+  recorded", a session-less canceled-session or absence makeup became `manual` with what it claimed
+  kept in its reference. **Verified**, `__tests__/enrollment-schema.spec.ts`,
+  `__tests__/youth.spec.ts` "SPK-YOUTH-004 / R3-TRACE-B-02 …".
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/enrollment.ts`)
 
@@ -703,7 +712,8 @@ bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
   published it, so its reminder still reaches the session's participants (enrolled, and booked
   ones canceled with it); aligning that event is catalog's and scheduling's (proposed, not built
   here).
-- Makeups are issued by staff (with the originating session); automatic issue on
+- Makeups are issued by staff, naming the originating session (`session_canceled`, `absence`) or
+  policy event (`policy_event`), or as `manual` goodwill; automatic issue on
   `catalog.session_canceled` awaits the makeup rules (DEC-003). The session's own bookings and
   waiters do follow the cancellation (`enrollment.follow_session_canceled`, above); enrolled
   participants of a canceled term session keep their enrollment. Package-credit redemption

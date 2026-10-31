@@ -458,6 +458,68 @@ describe('enrollment schema invariants (§4.7 invariants 2, 3, 7; §4.6 machines
     ).toBe(CHECK);
   });
 
+  it('SPK-YOUTH-004 / R3-TRACE-B-02: the database refuses a makeup that names no originating session or policy event', async () => {
+    const sessionId = await createOfferingSessionFixture(t, {
+      offeringId: setup.offeringId,
+      scheduledStart: new Date('2026-12-01T01:00:00Z'),
+      scheduledEnd: new Date('2026-12-01T02:00:00Z'),
+    });
+    const insert = (origin: {
+      origin_kind: 'session_canceled' | 'absence' | 'policy_event' | 'manual';
+      originating_session_id?: string | null;
+      origin_reference?: string | null;
+    }) =>
+      t.db
+        .insertInto('makeup_entitlements')
+        .values({
+          id: newId(),
+          organization_id: t.organizationId,
+          participant_person_id: person,
+          originating_enrollment_id: null,
+          originating_session_id: origin.originating_session_id ?? null,
+          origin_kind: origin.origin_kind,
+          origin_reference: origin.origin_reference ?? null,
+          eligible_offering_ids: json([setup.offeringId]),
+          eligible_program_ids: json([]),
+          issued_by: ACTOR,
+          issued_by_person_id: null,
+          reason: 'schema test',
+          expires_at: new Date(t.clock.now().getTime() + 30 * 86_400_000),
+          redemption_limit: 1,
+          revoked_at: null,
+          revoked_reason: null,
+        })
+        .execute();
+    const constraintOf = async (work: Promise<unknown>) => {
+      try {
+        await work;
+        return 'inserted';
+      } catch (error) {
+        return pgConstraintName(error);
+      }
+    };
+    for (const kind of ['session_canceled', 'absence'] as const) {
+      expect(await constraintOf(insert({ origin_kind: kind }))).toBe(
+        'makeup_entitlements_origin_referenced',
+      );
+      expect(
+        await constraintOf(insert({ origin_kind: kind, originating_session_id: sessionId })),
+      ).toBe('inserted');
+    }
+    for (const reference of [null, '   ']) {
+      expect(
+        await constraintOf(insert({ origin_kind: 'policy_event', origin_reference: reference })),
+      ).toBe('makeup_entitlements_origin_referenced');
+    }
+    expect(await rejectsWith(insert({ origin_kind: 'policy_event', origin_reference: null }))).toBe(
+      CHECK,
+    );
+    expect(
+      await constraintOf(insert({ origin_kind: 'policy_event', origin_reference: 'POL-041' })),
+    ).toBe('inserted');
+    expect(await constraintOf(insert({ origin_kind: 'manual' }))).toBe('inserted');
+  });
+
   it('§4.3: composite keys keep every reference inside its organization', async () => {
     const other = await seedOrganization(t.db);
     const foreignPerson = await createPersonFixture(t, {
