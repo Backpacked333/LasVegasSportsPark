@@ -16,7 +16,8 @@ Enrollment / Placement / Hold / SessionBooking machines, §4.7 invariants 2, 3, 
 SPK-YOUTH-005, SPK-YOUTH-006, SPK-UX-001, SPK-UX-004, SPK-SCHED-008, SPK-COMMS-002, SPK-IAM-007
 
 **Migration range:** `packages/db/migrations/0500_enrollment_*.sql` … `0599` (this module uses
-`0500` to `0515`; `0503` came from the review stage, `0510` to `0515` from the stage-5 review)
+`0500` to `0516`; `0503` came from the review stage, `0510` to `0515` from the stage-5 review,
+`0516` from the stage-6 review)
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` for participants, `RelationshipAuthority` for the
 family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT`, `PRICING_PORT`,
@@ -154,13 +155,34 @@ expiresAt`): expires an active hold once due, gives the place back, emits
   next waiter), and offer generation runs again for a free place (SPK-REG-008). Offer generation
   itself also retires such an entry and passes over one whose own registration is still pending.
 - `enrollment.expire_makeup` on `enrollment.makeup_expiry_due`.
+- `enrollment.follow_session_canceled` on `catalog.session_canceled` (R2-JOURNEYS-01; a session
+  canceled in the catalog, or by a closure's `cancel_affected` through scheduling and
+  `catalog.follow_scheduling_event`): the session's capacity pools close (`status = 'closed'`, so
+  no hold, booking or offer takes a seat again; a later booking answers 409 `CAPACITY_UNAVAILABLE`
+  `SESSION_CANCELED`), its live waitlist entries are `removed` with reason `session_canceled` (an
+  open offer is declined; the family gets a `registration_outcome` notice), and its pending and
+  confirmed session bookings are canceled with the facility as the cause: the customer notice
+  window does not apply, a makeup redemption is reversed whatever the start time, a package credit
+  returns only where the approved cancellation policy returns it at that instant, a membership
+  session before the start, and anything kept (`retained_pending_policy`, or a makeup or package
+  that has ended) raises one `enrollment.canceled_session_entitlement_pending` exception per
+  booking for `program_manager` (it names the package redemption to reverse; POL-007, POL-041
+  pending). Linked trials are canceled with their booking. Whether a makeup is issued for the lost
+  session stays DEC-003. **Verified**, `__tests__/session-canceled.spec.ts` (PGlite and
+  `TEST_DATABASE_URL`).
 - `enrollment.notify_waitlist_retired` on `enrollment.waitlist_left`: for an entry offer generation
-  removed with one of the three reasons above, composes a `registration_outcome` notice saying why
-  the family no longer waits and what to do instead; withdrawals, staff removals and
-  `equivalent_entitlement` send nothing.
+  removed with one of the three reasons above, or one removed because its session was canceled
+  (`session_canceled`), composes a `registration_outcome` notice saying why the family no longer
+  waits and what to do instead; withdrawals, staff removals and `equivalent_entitlement` send
+  nothing.
 - `enrollment.sync_capacity` on `catalog.offering_updated`: commercial pools follow catalog limits;
   staffing pools keep their staff count (SPK-YOUTH-002); a limit below commitments raises an
-  operational exception.
+  operational exception. The event only says the limits changed: the offering's pools are locked
+  in id order and then sized from the catalog's current units read in the same transaction, never
+  from the payload, so an earlier change delivered late (a retry) or two deliveries running at
+  once end at the latest limit, and a pool update that misses its row fails the delivery instead of
+  being recorded as done (R2-RACES-01; **Verified**, `capacity.spec.ts` "R2-RACES-01: …", PGlite
+  and `TEST_DATABASE_URL`).
 - `enrollment.resume_after_capability_enabled` on `core.capability_changed` (enabled only;
   CAPABILITIES-03, CAPABILITIES-06): the free places of the queues offer generation held while the
   switch was off are offered again (`enrollment.capacity_released`, cause `capability_enabled`),
@@ -423,7 +445,15 @@ mirrored by a database transition guard.
   two concurrent redemptions of the last credit leave one booking (PGlite and PostgreSQL). A
   canceled package booking returns its credit only as the package's approved cancellation policy
   says (`packageCreditReturn.untilMinutesBeforeStart`: `returned`), else `retained_by_policy`, or
-  `retained_pending_policy` when no policy states it (POL-007, POL-039). Staff reverse a redemption
+  `retained_pending_policy` when no policy states it (POL-007, POL-039). When the facility canceled
+  the session the notice window is not the family's: a credit the policy does not return at that
+  instant is `retained_pending_policy` with an owned exception, never `retained_by_policy`
+  (R2-JOURNEYS-01, above). A package that has ended (`revoked` or `expired`, final) gets nothing
+  back: the canceled booking records `retained_by_policy` (the package's own lifecycle keeps the
+  credit), its count does not move, and a staff reversal answers 409 `PACKAGE_ENDED`; the
+  `package_redemptions_apply` trigger refuses such a reversal too (migration 0516,
+  R2-LIFECYCLES-06; the same holds for a makeup that has expired or was revoked, and for a session
+  of a membership that has ended). Staff reverse a redemption
   (`POST /v1/package-redemptions/{id}/reverse`, ungated; an `expectedRevision` other than the
   entitlement's answers STALE_REVISION, COMMANDS-04). A canceled purchase revokes the package;
   future bookings stay and raise `enrollment.revoked_package_has_bookings`. Job
@@ -436,7 +466,14 @@ mirrored by a database transition guard.
   term and outside active suspensions, counted per `week:<first local date>`, `month:<YYYY-MM>` or
   `term` (`membership_benefit_uses`, `used_count <= limit_count`), `unlimited` books without a
   count. A membership never admits at check-in by itself: entry admits through the session
-  booking (verified with the entry module). Member-only eligibility (`membershipRequired` in the
+  booking (verified with the entry module). So bookings a membership made keep admitting after it
+  ends: a cancellation or completion (staff or the term end) that leaves live bookings after it
+  raises one `enrollment.ended_membership_has_bookings` exception, and a suspension created over
+  booked sessions raises `enrollment.suspended_membership_has_bookings` (both `program_manager`,
+  deadline at the first booking, booking ids in the details; handlers
+  `enrollment.membership_canceled` and `enrollment.membership_completed`). Nothing is canceled
+  automatically: what a membership's end does to its bookings is DEC-072 (R2-LIFECYCLES-03,
+  **Verified**, `memberships.spec.ts` "R2-LIFECYCLES-03 / SPK-COND-001: …"). Member-only eligibility (`membershipRequired` in the
   eligibility policy) is the known reason `MEMBERSHIP_REQUIRED`. Suspensions
   (`POST /v1/enrollments/{id}/membership-suspensions`, `/membership-suspensions/{id}/end`; active
   periods never overlap: exclusion constraint; staff who may suspend the membership list its
@@ -579,10 +616,16 @@ bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
   who takes part in the catalog sessions behind scheduling events (live enrollments of the offering,
   live bookings of the session). It is communications' `SESSION_AUDIENCE_IMPL` (change notices reach
   those participants' guardians) and a closure impact contributor (customers, and the orders they
-  paid through).
+  paid through). After the cancellation, the session's bookings and waiters follow it
+  (`enrollment.follow_session_canceled`, R2-JOURNEYS-01), and the family calendar leaves out a
+  booking whose session is no longer scheduled even before that follow-up has run.
 - Makeups are issued by staff (with the originating session); automatic issue on
-  `catalog.session_canceled` awaits the makeup rules (DEC-003). Package-credit redemption
-  (invariant 7 for packages) is enrollment's (ENR-11, above).
+  `catalog.session_canceled` awaits the makeup rules (DEC-003). The session's own bookings and
+  waiters do follow the cancellation (`enrollment.follow_session_canceled`, above); enrolled
+  participants of a canceled term session keep their enrollment. Package-credit redemption
+  (invariant 7 for packages) is enrollment's (ENR-11, above). Proposed, not built here: a
+  closure-path case in the SPK-AT-009 journey (`apps/api/src/__tests__/journeys/spk-at-009.spec.ts`)
+  with a package-paid pickup booking; the catalog path is verified in this module.
 - Pickup organizer assignment (workforce) and attendance (entry) are other modules' records.
 - The money side of a non-`none` transfer or cancellation consequence is finance's. Both are
   recorded here as facts (`cancellation_consequence`, `transfer_consequence`), and each also opens

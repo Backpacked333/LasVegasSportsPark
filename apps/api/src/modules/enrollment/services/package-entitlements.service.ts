@@ -62,6 +62,12 @@ type RedemptionRow = Selectable<PackageRedemptionsTable>;
 export type CreditDisposition = 'returned' | 'retained_by_policy' | 'retained_pending_policy';
 
 /**
+ * Who ended a session booking: the family (or staff acting for them), or the facility, whose
+ * catalog session was canceled (directly, or by a closure through scheduling; R2-JOURNEYS-01).
+ */
+export type BookingCancellationCause = 'customer' | 'session_canceled';
+
+/**
  * Session packages (ENR-11; §3.16 Session packages row, SPK-COND-002, SPK-AT-020, §4.7
  * invariant 7). A confirmed package purchase issues one entitlement with the credits its
  * definition states; each booking made with it records a redemption in the same unit of work, and
@@ -473,6 +479,16 @@ export class PackageEntitlementsService {
    * cancellation policy says so for this notice (`packageCreditReturn.untilMinutesBeforeStart`);
    * a later cancellation keeps it under that policy; without a policy stating it nothing returns
    * automatically (retained pending policy; staff may reverse the redemption).
+   *
+   * R2-JOURNEYS-01: when the facility canceled the session (`cause` `session_canceled`), the
+   * customer notice window is not the family's to meet: a credit the policy would return at this
+   * instant is returned, and any other is `retained_pending_policy` (never `retained_by_policy`),
+   * which the caller turns into an owned decision (POL-007 staff-initiated cancellation, POL-041).
+   *
+   * R2-LIFECYCLES-06 (§4.6 terminal states are final): a revoked or expired package can never be
+   * redeemed again, so nothing is returned to it (no reversal, its count unchanged) and the
+   * booking records `retained_by_policy`: the package's own lifecycle (its purchase canceled
+   * under the cancellation policy, or its definition's expiry, POL-039) keeps the credit.
    */
   async onBookingCanceled(
     trx: Trx,
@@ -481,17 +497,21 @@ export class PackageEntitlementsService {
     actor: Principal,
     reason: string,
     correlationId: string | null,
+    cause: BookingCancellationCause = 'customer',
   ): Promise<CreditDisposition> {
     if (!booking.package_entitlement_id) return 'retained_pending_policy';
     const row = await this.load(trx, organizationId, booking.package_entitlement_id, true);
     if (!row) return 'retained_pending_policy';
+    if (PackageEntitlementMachine.isTerminal(row.status)) return 'retained_by_policy';
     const now = this.clock.now();
     const snapshot = await this.offerings.getOffering(organizationId, row.offering_id, now, trx);
     const rule = packageCreditReturn(snapshot?.cancellationPolicy ?? null);
     if (!rule) return 'retained_pending_policy';
     const deadline =
       new Date(booking.scheduled_start).getTime() - rule.untilMinutesBeforeStart * 60_000;
-    if (now.getTime() > deadline) return 'retained_by_policy';
+    if (now.getTime() > deadline) {
+      return cause === 'session_canceled' ? 'retained_pending_policy' : 'retained_by_policy';
+    }
     const reversed = await this.reverseIn(
       trx,
       organizationId,
@@ -556,6 +576,15 @@ export class PackageEntitlementsService {
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (redemption.kind !== 'redeem') {
         throw errors.invalidTransition('PackageRedemption', 'reversal', 'reverse');
+      }
+      // R2-LIFECYCLES-06 (§4.6 terminal states are final): a revoked or expired package can never
+      // be redeemed again, so no credit is returned to it; the reversal trigger refuses it too
+      // (migration 0516).
+      if (PackageEntitlementMachine.isTerminal(row.status)) {
+        throw errors.resourceConflict('This package has ended; no credit can be returned to it.', {
+          code: 'PACKAGE_ENDED',
+          status: row.status,
+        });
       }
       const reversed = await this.reverseIn(
         trx,

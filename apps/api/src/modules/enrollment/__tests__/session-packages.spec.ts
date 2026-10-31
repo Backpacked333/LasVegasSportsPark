@@ -455,6 +455,83 @@ describe('session packages (ENR-11, SPK-COND-002)', () => {
     expect(refused.body.details.code).toBe('PACKAGE_NOT_REDEEMABLE');
   });
 
+  it('R2-LIFECYCLES-06 / SPK-COND-002 / §4.6: canceling a booking of a revoked package returns nothing to it, a staff reversal is refused, and the database rejects the reversal', async () => {
+    const policyId = await cancellationPolicy(t, {
+      text: 'Credits return until a day before the session.',
+      packageCreditReturn: { untilMinutesBeforeStart: 24 * 60 },
+    });
+    const buyer = await adult(t);
+    const { enrollmentId, entitlementId } = await buy(buyer, 3, {
+      cancellationPolicyVersionId: policyId,
+    });
+    const booked = await book(buyer, sessions[4]!, entitlementId);
+    expect(booked.status, JSON.stringify(booked.body)).toBe(201);
+    const enrollment = await t.http.get(`/v1/enrollments/${enrollmentId}`).set(frontDesk.header);
+    expect(
+      (
+        await post(t, `/v1/enrollments/${enrollmentId}/cancel`, frontDesk.header, {
+          reason: 'refunded at the desk',
+          expectedRevision: enrollment.body.revision,
+        })
+      ).status,
+    ).toBe(200);
+    await drain(t);
+    const counted = () =>
+      t.db
+        .selectFrom('package_entitlements')
+        .select(['status', 'redeemed_count', 'revision'])
+        .where('id', '=', entitlementId)
+        .executeTakeFirstOrThrow();
+    const revoked = await counted();
+    expect(revoked).toMatchObject({ status: 'revoked', redeemed_count: 1 });
+    // Well before the policy's deadline, yet the package has ended: nothing comes back to it.
+    const canceled = await post(
+      t,
+      `/v1/session-bookings/${booked.body.id as string}/cancel`,
+      buyer.header,
+      { reason: 'the package was refunded', expectedRevision: booked.body.revision },
+    );
+    expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+    expect(canceled.body.creditDisposition).toBe('retained_by_policy');
+    expect(await counted()).toEqual(revoked);
+    const redemptions = await t.db
+      .selectFrom('package_redemptions')
+      .select(['id', 'kind'])
+      .where('package_entitlement_id', '=', entitlementId)
+      .execute();
+    expect(redemptions.map((r) => r.kind)).toEqual(['redeem']);
+    // Staff cannot return a credit to it either.
+    const reversed = await post(
+      t,
+      `/v1/package-redemptions/${redemptions[0]!.id}/reverse`,
+      frontDesk.header,
+      { reason: 'goodwill' },
+    );
+    expect(reversed.status).toBe(409);
+    expect(reversed.body.details).toMatchObject({ code: 'PACKAGE_ENDED', status: 'revoked' });
+    // The database refuses a reversal onto an ended package from any writer (migration 0516).
+    expect(
+      await rejectsWith(
+        t.db
+          .insertInto('package_redemptions')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            package_entitlement_id: entitlementId,
+            session_booking_id: booked.body.id,
+            participant_person_id: buyer.personId,
+            kind: 'reversal',
+            reverses_redemption_id: redemptions[0]!.id,
+            reason: 'direct write',
+            actor: json({ kind: 'system' }),
+            redeemed_at: t.clock.now(),
+          })
+          .execute(),
+      ),
+    ).toBe('23514');
+    expect(await counted()).toEqual(revoked);
+  });
+
   it('POL-039: a package expires exactly as its definition chose, through the expiry job', async () => {
     const buyer = await adult(t);
     const { entitlementId } = await buy(buyer, 2, {

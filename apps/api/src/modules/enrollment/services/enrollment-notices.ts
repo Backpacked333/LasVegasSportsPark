@@ -158,7 +158,8 @@ export class EnrollmentNotices {
 
   /**
    * enrollment.waitlist_left → `registration_outcome` when offer generation retired an entry no
-   * offer could ever be accepted for (CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01): the family
+   * offer could ever be accepted for (CAPABILITIES-04, SPK-YOUTH-004, GAPS-TRIAGE-01), or the
+   * facility canceled the session it waited for (R2-JOURNEYS-01): the family
    * learns that they no longer wait, why, and what to do instead. Other departures send nothing
    * here: the family withdrew or declined, staff removed the entry with their own reason, or the
    * participant already holds the place (`equivalent_entitlement`).
@@ -206,6 +207,11 @@ const RETIREMENT_NOTICES = new Map<string, (offeringName: string) => string>([
     'booking_required',
     (name) =>
       `${name} is requested as a booking with its space, equipment and staff, not from a waitlist, so you are no longer on its waitlist. Request the booking instead.`,
+  ],
+  [
+    'session_canceled',
+    (name) =>
+      `The session of ${name} you were waiting for was canceled by the facility, so you are no longer on its waitlist.`,
   ],
   [
     'makeup_redemption_required',

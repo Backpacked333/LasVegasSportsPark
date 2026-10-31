@@ -344,7 +344,9 @@ export class CapacityService implements CapacityPort {
       .where('scope_id', '=', session.id)
       .orderBy('id')
       .execute();
-    if (!unit) return rows;
+    // R2-JOURNEYS-01: a canceled session's pools were closed (`closeSessionPools`); its capacity
+    // is never opened again, not even for a constraint kind it did not have.
+    if (!unit || rows.some((p) => p.status === 'closed')) return rows;
     const specs = this.offeringPoolSpecs([{ ...unit, unit: 'session_seats' }]);
     let missing = false;
     for (const spec of specs) {
@@ -368,6 +370,76 @@ export class CapacityService implements CapacityPort {
           .orderBy('id')
           .execute()
       : rows;
+  }
+
+  /**
+   * R2-JOURNEYS-01 (SPK-AT-009, SPK-REG-008, §4.7 invariant 3): the facility canceled the session
+   * (catalog.session_canceled), so its seats are closed: no hold, booking or waitlist offer can
+   * take one again (`reserve` and offer generation act on active pools only; a canceled session
+   * is final). Every pool of the offering is locked in id order first, the order holds and offer
+   * generation take them in. Counters stay as they are, so the bookings canceled afterwards still
+   * give their seats back. Idempotent: only active pools close. Answers the pools it closed.
+   */
+  async closeSessionPools(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+    sessionId: string,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<string[]> {
+    await trx
+      .selectFrom('capacity_pools')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const closed = await trx
+      .updateTable('capacity_pools')
+      .set((eb) => ({ status: 'closed', revision: eb('revision', '+', 1) }))
+      .where('organization_id', '=', organizationId)
+      .where('scope_type', '=', 'session')
+      .where('scope_id', '=', sessionId)
+      .where('status', '=', 'active')
+      .returningAll()
+      .execute();
+    const actor = enrollmentSystem(organizationId, 'enrollment.follow_session_canceled');
+    for (const pool of closed) {
+      await this.audit.record(trx, {
+        organizationId,
+        actor,
+        action: 'enrollment.close_session_pool',
+        targetType: 'capacity_pool',
+        targetId: pool.id,
+        beforeRevision: pool.revision - 1,
+        afterRevision: pool.revision,
+        reason,
+        correlationId,
+        details: {
+          sessionId,
+          offeringId,
+          constraintKind: pool.constraint_kind,
+          committed: pool.committed,
+          held: pool.held,
+        },
+      });
+    }
+    return closed.map((p) => p.id);
+  }
+
+  /** Whether the session's capacity was closed because the session was canceled. */
+  async sessionClosed(db: Reader, organizationId: string, sessionId: string): Promise<boolean> {
+    const row = await db
+      .selectFrom('capacity_pools')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('scope_type', '=', 'session')
+      .where('scope_id', '=', sessionId)
+      .where('status', '=', 'closed')
+      .executeTakeFirst();
+    return !!row;
   }
 
   /**
@@ -662,13 +734,7 @@ export class CapacityService implements CapacityPort {
       );
       if (!snapshot) throw errors.notFound('offering', offeringId);
       await this.ensurePoolsForOffering(trx, organizationId, snapshot, principal);
-      await this.syncFromCatalog(
-        trx,
-        organizationId,
-        offeringId,
-        snapshot.capacityUnits,
-        correlationId,
-      );
+      await this.syncFromCatalog(trx, organizationId, offeringId, correlationId);
       return (await this.poolRowsForOffering(trx, organizationId, offeringId)).map(toCapacityPool);
     });
   }
@@ -678,16 +744,44 @@ export class CapacityService implements CapacityPort {
    * staffing pools keep their staff count, so a raised commercial limit never silently bypasses
    * the staffing requirement (SPK-YOUTH-002). A limit below the places already committed or held
    * is kept at the used quantity and raised as an operational exception. Idempotent under replay.
+   *
+   * R2-RACES-01 (§4.7 invariant 3, §4.12, docs/architecture/overview.md "a consumer projecting
+   * another module's facts reads the owner's current state"): deliveries are not ordered per
+   * aggregate (concurrent workers, retries), so the limits are never taken from the event payload.
+   * The offering's pools are locked in id order (the order holds take them in) and only then are
+   * the catalog's current capacity units read in this transaction: whichever delivery runs last
+   * sizes the pools from the latest committed limit, and an earlier event delivered late changes
+   * nothing. Every pool update must hit its row (the lock makes a miss impossible; a miss throws,
+   * so the delivery is retried rather than recorded as done).
    */
   async syncFromCatalog(
     trx: Trx,
     organizationId: string,
     offeringId: string,
-    units: readonly CapacityUnit[],
     correlationId: string | null,
   ): Promise<void> {
-    const pools = await this.poolRowsForOffering(trx, organizationId, offeringId);
+    const pools = await trx
+      .selectFrom('capacity_pools')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .orderBy('id')
+      .forUpdate()
+      .execute();
     if (pools.length === 0) return; // pools are created lazily on the first hold
+    const snapshot = await this.offerings.getOffering(
+      organizationId,
+      offeringId,
+      this.clock.now(),
+      trx,
+    );
+    if (!snapshot) return;
+    const units: readonly CapacityUnit[] = snapshot.capacityUnits;
+    const updatedOrThrow = (result: { numUpdatedRows: bigint }, poolId: string) => {
+      if (Number(result.numUpdatedRows) !== 1) {
+        throw errors.internal(`capacity pool ${poolId} changed during the catalog sync`);
+      }
+    };
     for (const unit of units) {
       if (unit.unit === 'session_seats') continue;
       const commercial = pools.find(
@@ -709,13 +803,16 @@ export class CapacityService implements CapacityPort {
       } else if (commercial.capacity !== unit.limit) {
         const used = commercial.committed + commercial.held;
         const capacity = Math.max(unit.limit, used);
-        await trx
-          .updateTable('capacity_pools')
-          .set({ capacity, revision: commercial.revision + 1 })
-          .where('organization_id', '=', organizationId)
-          .where('id', '=', commercial.id)
-          .where('revision', '=', commercial.revision)
-          .execute();
+        updatedOrThrow(
+          await trx
+            .updateTable('capacity_pools')
+            .set({ capacity, revision: commercial.revision + 1 })
+            .where('organization_id', '=', organizationId)
+            .where('id', '=', commercial.id)
+            .where('revision', '=', commercial.revision)
+            .executeTakeFirst(),
+          commercial.id,
+        );
         if (capacity > commercial.capacity) {
           await this.outbox.enqueue(trx, EnrollmentEvents.capacityReleased, {
             organizationId,
@@ -775,13 +872,16 @@ export class CapacityService implements CapacityPort {
             (staffing.staff_count ?? 0) * ratio,
             staffing.committed + staffing.held,
           );
-          await trx
-            .updateTable('capacity_pools')
-            .set({ participants_per_staff: ratio, capacity, revision: staffing.revision + 1 })
-            .where('organization_id', '=', organizationId)
-            .where('id', '=', staffing.id)
-            .where('revision', '=', staffing.revision)
-            .execute();
+          updatedOrThrow(
+            await trx
+              .updateTable('capacity_pools')
+              .set({ participants_per_staff: ratio, capacity, revision: staffing.revision + 1 })
+              .where('organization_id', '=', organizationId)
+              .where('id', '=', staffing.id)
+              .where('revision', '=', staffing.revision)
+              .executeTakeFirst(),
+            staffing.id,
+          );
         }
       }
     }

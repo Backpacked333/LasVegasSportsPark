@@ -245,7 +245,11 @@ export class MembershipsService {
     );
   }
 
-  /** enrollment.enrollment_canceled of a membership: its change event (bookings stay). */
+  /**
+   * enrollment.enrollment_canceled of a membership: its change event. Bookings stay (no policy
+   * cancels them yet), but a live one after the cancellation raises an owned exception
+   * (R2-LIFECYCLES-03, below).
+   */
   async onCanceled(
     trx: Trx,
     organizationId: string,
@@ -254,14 +258,82 @@ export class MembershipsService {
   ): Promise<void> {
     const row = await this.enrollments.load(trx, organizationId, enrollmentId);
     if (!row || row.intent !== 'membership') return;
-    await this.changed(
-      trx,
+    const endedAt = row.canceled_at ? new Date(row.canceled_at) : this.clock.now();
+    await this.changed(trx, organizationId, row, 'canceled', endedAt, correlationId);
+    await this.raiseEndedWithBookings(trx, organizationId, row, 'canceled', endedAt);
+  }
+
+  /**
+   * enrollment.enrollment_completed of a membership (staff completion, or the lifecycle job at the
+   * term end): a live booking after the completion raises the owned exception (R2-LIFECYCLES-03).
+   * A term that ended on schedule has none (bookings stay inside the term).
+   */
+  async onCompleted(trx: Trx, organizationId: string, enrollmentId: string): Promise<void> {
+    const row = await this.enrollments.load(trx, organizationId, enrollmentId);
+    if (!row || row.intent !== 'membership') return;
+    const endedAt = row.completed_at ? new Date(row.completed_at) : this.clock.now();
+    await this.raiseEndedWithBookings(trx, organizationId, row, 'completed', endedAt);
+  }
+
+  /**
+   * R2-LIFECYCLES-03 (SPK-COND-001 cancellation and suspension entitlement effects, §4.7
+   * invariant 12, §4.12): the live session bookings a membership made for sessions starting at or
+   * after `from` (and before `until`, when given). Entry admits through the booking, never the
+   * membership, so these keep admitting the participant unless a person decides.
+   */
+  private async liveBookingsOf(
+    trx: Trx,
+    organizationId: string,
+    membershipEnrollmentId: string,
+    from: Date,
+    until: Date | null,
+  ): Promise<Array<{ id: string; scheduled_start: Date }>> {
+    let q = trx
+      .selectFrom('session_bookings')
+      .select(['id', 'scheduled_start'])
+      .where('organization_id', '=', organizationId)
+      .where('membership_enrollment_id', '=', membershipEnrollmentId)
+      .where('status', 'in', ['pending', 'confirmed'])
+      .where('scheduled_start', '>=', from);
+    if (until) q = q.where('scheduled_start', '<', until);
+    return q.orderBy('scheduled_start').orderBy('id').execute();
+  }
+
+  /**
+   * R2-LIFECYCLES-03: a canceled or completed membership that still has live bookings after it
+   * ended raises one owned exception for the program manager (as a revoked package does,
+   * `enrollment.revoked_package_has_bookings`). Nothing is canceled automatically: no approved
+   * policy says what a membership's cancellation does to its bookings (DEC-072, POL-007).
+   */
+  private async raiseEndedWithBookings(
+    trx: Trx,
+    organizationId: string,
+    membership: EnrollmentRow,
+    ended: 'canceled' | 'completed',
+    endedAt: Date,
+  ): Promise<void> {
+    const bookings = await this.liveBookingsOf(trx, organizationId, membership.id, endedAt, null);
+    if (bookings.length === 0) return;
+    await this.exceptions.raise(trx, {
       organizationId,
-      row,
-      'canceled',
-      row.canceled_at ? new Date(row.canceled_at) : this.clock.now(),
-      correlationId,
-    );
+      facilityId: await this.scope.facilityOf(organizationId, membership.offering_id, trx),
+      category: 'enrollment.ended_membership_has_bookings',
+      severity: 'warning',
+      title: `A ${ended} membership still has booked sessions`,
+      affectedType: 'enrollment',
+      affectedId: membership.id,
+      ownerQueue: 'program_manager',
+      deadlineAt: new Date(bookings[0]!.scheduled_start),
+      dedupeKey: `ended_membership_bookings:${membership.id}`,
+      details: {
+        enrollmentId: membership.id,
+        participantPersonId: membership.participant_person_id,
+        ended,
+        endedAt: endedAt.toISOString(),
+        sessionBookingIds: bookings.map((b) => b.id),
+        pendingDecisions: ['DEC-072', 'POL-007'],
+      },
+    });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -395,7 +467,9 @@ export class MembershipsService {
   /**
    * A canceled membership booking: before the session starts its counted use is given back
    * (`returned`); later it stays used (`retained_pending_policy`: no policy returns it). An
-   * unlimited membership counts nothing.
+   * unlimited membership counts nothing. A membership that has ended (canceled, completed or
+   * transferred: final, §4.6) can never book again, so nothing is given back to it and the
+   * booking records `retained_by_policy` (R2-LIFECYCLES-06, the membership variant).
    */
   async onBookingCanceled(
     trx: Trx,
@@ -403,6 +477,12 @@ export class MembershipsService {
     booking: SessionBookingRow,
   ): Promise<CreditDisposition | null> {
     if (!booking.membership_enrollment_id || !booking.membership_period_key) return null;
+    const membership = await this.enrollments.load(
+      trx,
+      organizationId,
+      booking.membership_enrollment_id,
+    );
+    if (!membership || membership.status !== 'confirmed') return 'retained_by_policy';
     if (new Date(booking.scheduled_start).getTime() <= this.clock.now().getTime()) {
       return 'retained_pending_policy';
     }
@@ -509,6 +589,33 @@ export class MembershipsService {
         },
       });
       await this.changed(trx, organizationId, membership, 'suspended', from, correlationId);
+      // R2-LIFECYCLES-03 (SPK-COND-001 suspension effects): sessions booked before the suspension
+      // that fall inside it still admit through their bookings; a person decides (nothing is
+      // canceled automatically, DEC-072).
+      const inside = await this.liveBookingsOf(trx, organizationId, enrollmentId, from, until);
+      if (inside.length > 0) {
+        await this.exceptions.raise(trx, {
+          organizationId,
+          facilityId: await this.scope.facilityOf(organizationId, membership.offering_id, trx),
+          category: 'enrollment.suspended_membership_has_bookings',
+          severity: 'warning',
+          title: 'A suspended membership still has booked sessions in the suspension',
+          affectedType: 'membership_suspension',
+          affectedId: id,
+          ownerQueue: 'program_manager',
+          deadlineAt: new Date(inside[0]!.scheduled_start),
+          dedupeKey: `suspended_membership_bookings:${id}`,
+          details: {
+            enrollmentId,
+            suspensionId: id,
+            participantPersonId: membership.participant_person_id,
+            from: from.toISOString(),
+            until: until?.toISOString() ?? null,
+            sessionBookingIds: inside.map((b) => b.id),
+            pendingDecisions: ['DEC-072'],
+          },
+        });
+      }
       const row = await trx
         .selectFrom('membership_suspensions')
         .selectAll()
