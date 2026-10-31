@@ -195,6 +195,12 @@ export interface EvaluatePlayerOptions {
    * counts (SPK-CAP-002, SPK-DISC-004). Codes, limits and reference dates stay.
    */
   restricted?: boolean;
+  /**
+   * R3-TIME-MONEY-03 (SPK-SCHED-008): the IANA zone of the facility whose local calendar date an
+   * instant-based reference date (`match_date`, `calendar_year_start`) is read in. When absent,
+   * the fixture's venue facility (with `fixtureId`) or else the division's facility is used.
+   */
+  timezone?: string | null;
 }
 
 /** SPK-CAP-004, SPK-COMP-005: explainable eligibility with reason, source, responsible role and action. */

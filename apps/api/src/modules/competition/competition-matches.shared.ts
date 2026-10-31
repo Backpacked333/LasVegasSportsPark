@@ -83,6 +83,34 @@ export function detailsOf(row: { details: Record<string, unknown> }): ResultDeta
   };
 }
 
+/**
+ * R3-TRACE-B-03 (SPK-DISC-001/004, SPK-CAP-002, §4.10): a result revision as a customer (a roster
+ * player or a guardian with view) reads it. Scores, classification, cards, abandonment and the
+ * correction reason stay; the ids of the restricted incidents and of the dispute a correction
+ * answers, the official's free-text notes, the review's return reason and the staff actors'
+ * identifiers do not. A customer learns about incidents and disputes only through records they may
+ * read themselves (their own discipline records, their entry's dispute).
+ */
+export function customerResultView(revision: ResultRevision): ResultRevision {
+  return {
+    ...revision,
+    details: { ...revision.details, incidentIds: [], notes: null, disputeId: null },
+    returnReason: null,
+    submittedBy: customerActorOf(revision.submittedBy),
+    publishedBy: revision.publishedBy ? customerActorOf(revision.publishedBy) : null,
+  };
+}
+
+/** A recorded actor as a customer sees it: the kind and a generic label, no account or person id. */
+function customerActorOf(actor: Incident['reportedBy']): Incident['reportedBy'] {
+  return {
+    kind: actor.kind,
+    accountId: null,
+    personId: null,
+    actorLabel: actor.kind === 'staff' || actor.kind === 'system' ? actor.kind : actor.actorLabel,
+  };
+}
+
 export function toResultRevision(row: Selectable<ResultRevisionsTable>): ResultRevision {
   return {
     id: row.id,

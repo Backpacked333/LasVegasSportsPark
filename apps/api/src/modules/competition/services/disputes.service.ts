@@ -33,7 +33,12 @@ import { DISPUTE_CAPTAIN_ROLE } from '../competition-matches.policy';
 import { toDispute } from '../competition-matches.shared';
 import { DisputeMachine } from '../competition-matches.state-machines';
 import { loadRuleSetRow, loadSeasonRow, type Reader } from '../competition.queries';
-import { hoursFromNow, isStaffLike, organizationOf, ruleSetContentOf } from '../competition.shared';
+import {
+  hoursFromNow,
+  organizationOf,
+  ruleSetContentOf,
+  staffAuthority,
+} from '../competition.shared';
 import { DisciplineService, nextCursorOf } from './discipline.service';
 
 const DisputeCursor = z.object({ at: KeysetInstant, id: z.uuid() });
@@ -85,7 +90,13 @@ export class DisputesService {
       // Eligible submitting role
       let submittingRole: string;
       const teamEntryId: string | null = input.teamEntryId ?? null;
-      if (isStaffLike(principal)) {
+      // R3-TRACE-A-01: league administration by a staff role that submits disputes; a captain who
+      // also holds another staff role submits as the captain of the entry they name.
+      if (
+        await staffAuthority(this.authorization, principal, MatchActions.submitDispute, {
+          organizationId,
+        })
+      ) {
         await this.authorization.require(principal, MatchActions.submitDispute, {
           type: 'fixture',
           id: fixtureId,
@@ -95,6 +106,15 @@ export class DisputesService {
           principal.kind === 'system' ? 'system' : (principal.staffRoles[0] ?? 'staff');
       } else {
         if (!teamEntryId) {
+          // A staff member whose roles do not submit disputes, naming no entry, has no authority
+          // to act on at all: refused as staff would be (ACCESS_DENIED), never granted by kind.
+          if (principal.kind === 'staff') {
+            await this.authorization.require(principal, MatchActions.submitDispute, {
+              type: 'fixture',
+              id: fixtureId,
+              organizationId,
+            });
+          }
           throw errors.validation('A captain names the entry the dispute is submitted for.');
         }
         if (teamEntryId !== fixture.home_entry_id && teamEntryId !== fixture.away_entry_id) {
@@ -421,7 +441,12 @@ export class DisputesService {
         out.push(toDispute(row, await this.appealStatus(this.db, organizationId, row.id)));
       }
     }
-    if (out.length === 0 && !isStaffLike(principal)) {
+    if (
+      out.length === 0 &&
+      !(await staffAuthority(this.authorization, principal, MatchActions.readDispute, {
+        organizationId,
+      }))
+    ) {
       // Customers without authority over any dispute of the fixture learn nothing (§4.10).
       const fixture = await this.db
         .selectFrom('fixtures')

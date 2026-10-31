@@ -39,10 +39,10 @@ import { CompetitionActions } from '../competition.actions';
 import { loadRuleSetRow, loadSeasonRow } from '../competition.queries';
 import {
   RESTRICTED_SOURCE_TYPES,
-  isStaffLike,
   iso,
   organizationOf,
   ruleSetContentOf,
+  staffAuthority,
 } from '../competition.shared';
 import {
   READINESS_CHECK_REGISTRY,
@@ -106,7 +106,13 @@ export class ReadinessService {
   async evaluate(principal: Principal, fixtureId: string): Promise<FixtureReadiness> {
     // Authorization: whoever may read the fixture may read its readiness (protected NOT_FOUND, §4.10).
     const detail = await this.fixtures.get(principal, fixtureId);
-    return this.assess(organizationOf(principal), detail, { restricted: !isStaffLike(principal) });
+    const organizationId = organizationOf(principal);
+    // R3-TRACE-A-01: restricted record ids reach a reader with a staff role that reads readiness,
+    // never a captain, player or guardian because they also hold some other staff role.
+    const staff = await staffAuthority(this.authorization, principal, MatchActions.readReadiness, {
+      organizationId,
+    });
+    return this.assess(organizationId, detail, { restricted: !staff });
   }
 
   /**
@@ -391,7 +397,13 @@ export class ReadinessService {
           side.entryId,
           member.personId,
           at,
-          { existingMembership: true, fixtureId, membershipStatus: member.status },
+          {
+            existingMembership: true,
+            fixtureId,
+            membershipStatus: member.status,
+            // R3-TIME-MONEY-03 (SPK-SCHED-008): a match-date age is the local date at the venue
+            timezone: event?.timezone ?? detail.venue?.timezone ?? null,
+          },
         );
         if (evaluation.eligible) eligible += 1;
         else if (evaluation.reasons.every((r) => r.severity !== 'blocking')) unknown += 1;

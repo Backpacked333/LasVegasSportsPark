@@ -6,7 +6,12 @@ import {
 } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
 import { proposedRuleSetContent } from './competition.policy';
-import { ageOn, isEffectiveAt, referenceDateFor } from './competition.shared';
+import {
+  ageOn,
+  isEffectiveAt,
+  referenceDateFor,
+  referenceDateZoneNote,
+} from './competition.shared';
 
 const FORMATS: SportFormat[] = ['outdoor', 'indoor_boarded', 'futsal', 'small_sided_other'];
 
@@ -105,12 +110,41 @@ describe('eligibility reference dates and ages (§4.5: never a stored age)', () 
   const at = new Date('2027-03-15T20:00:00Z');
 
   it('resolves the reference date from the rule', () => {
-    expect(referenceDateFor({ rule: 'season_start' }, season, at)).toBe('2027-01-10');
-    expect(referenceDateFor({ rule: 'calendar_year_start' }, season, at)).toBe('2027-01-01');
-    expect(referenceDateFor({ rule: 'match_date' }, season, at)).toBe('2027-03-15');
-    expect(referenceDateFor({ rule: 'fixed_date', date: '2026-08-01' }, season, at)).toBe(
-      '2026-08-01',
+    for (const zone of [null, 'America/Los_Angeles']) {
+      expect(referenceDateFor({ rule: 'season_start' }, season, at, zone)).toBe('2027-01-10');
+      expect(referenceDateFor({ rule: 'calendar_year_start' }, season, at, zone)).toBe(
+        '2027-01-01',
+      );
+      expect(referenceDateFor({ rule: 'match_date' }, season, at, zone)).toBe('2027-03-15');
+      expect(referenceDateFor({ rule: 'fixed_date', date: '2026-08-01' }, season, at, zone)).toBe(
+        '2026-08-01',
+      );
+    }
+  });
+
+  it('R3-TIME-MONEY-03 / SPK-SCHED-008: instant-based reference dates are the facility-local date, never the next UTC day', () => {
+    const zone = 'America/Los_Angeles';
+    // 17:30 PST on 4 November is 01:30 UTC on 5 November
+    const eveningKickoff = new Date('2026-11-05T01:30:00Z');
+    expect(referenceDateFor({ rule: 'match_date' }, season, eveningKickoff, zone)).toBe(
+      '2026-11-04',
     );
+    // a player born on 5 November 2014 is still 11 at that kickoff (U11 maximum 11)
+    expect(
+      ageOn('2014-11-05', referenceDateFor({ rule: 'match_date' }, season, eveningKickoff, zone)),
+    ).toBe(11);
+    // 18:00 PST on 31 December is 02:00 UTC on 1 January: the local year has not turned
+    const newYearsEve = new Date('2027-01-01T02:00:00Z');
+    expect(referenceDateFor({ rule: 'calendar_year_start' }, season, newYearsEve, zone)).toBe(
+      '2026-01-01',
+    );
+    // without a known facility the UTC date is used, and the reason says so
+    expect(referenceDateFor({ rule: 'match_date' }, season, eveningKickoff, null)).toBe(
+      '2026-11-05',
+    );
+    expect(referenceDateZoneNote({ rule: 'match_date' }, null)).toContain('UTC');
+    expect(referenceDateZoneNote({ rule: 'match_date' }, zone)).toBe('');
+    expect(referenceDateZoneNote({ rule: 'season_start' }, null)).toBe('');
   });
 
   it('computes whole years at the reference date, birthday inclusive', () => {

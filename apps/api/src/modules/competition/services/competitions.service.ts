@@ -27,11 +27,16 @@ import {
 } from '../../../kernel';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
-import { isStaffLike, organizationOf, toCompetition, toRuleSet } from '../competition.shared';
+import { organizationOf, toCompetition, toRuleSet } from '../competition.shared';
 import { CompetitionMachine, eventTo } from '../competition.state-machines';
 import { loadRuleSetRow } from '../competition.queries';
 
-/** Target for reads that any member of the organization may perform (customers read as themselves). */
+/**
+ * Target for reads that any member of the organization may perform (customers read as themselves).
+ * R3-TRACE-A-01: the reader's own person is always the subject, whatever their kind; the kernel
+ * still allows a staff role that holds the action first, so a staff member whose roles do not
+ * cover the read reads as themselves (§3.1, SPK-IAM-001/003).
+ */
 export function readTarget(
   principal: Principal,
   type: string,
@@ -42,7 +47,7 @@ export function readTarget(
     type,
     id,
     organizationId,
-    subjectPersonIds: isStaffLike(principal) || !principal.personId ? [] : [principal.personId],
+    subjectPersonIds: principal.personId ? [principal.personId] : [],
   };
 }
 

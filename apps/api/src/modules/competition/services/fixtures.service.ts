@@ -69,8 +69,8 @@ import {
   criteriaOf,
   emptySummary,
   fixtureTitle,
-  isStaffLike,
   organizationOf,
+  staffAuthority,
   toAvailabilityResponse,
   toFixture,
   toFixtureSummary,
@@ -78,6 +78,7 @@ import {
 import { FixtureMachine, type FixtureEvent } from '../competition.state-machines';
 import type { FixtureOutcome, FixturePort, FixtureSummary } from '../ports';
 import { readTarget } from './competitions.service';
+import { FixtureObligationsService } from './fixture-obligations.service';
 
 type FixtureRow = Selectable<FixturesTable>;
 type EventChangedPayload = z.infer<typeof EventChanged.payload>;
@@ -117,6 +118,7 @@ export class FixturesService implements FixturePort {
     @Inject(EVENT_SCHEDULING_PORT) private readonly scheduling: EventSchedulingPort,
     private readonly people: PeopleService,
     private readonly facilities: FacilityDirectory,
+    private readonly obligations: FixtureObligationsService,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -879,7 +881,7 @@ export class FixturesService implements FixturePort {
         .where('revision', '=', fixture.revision)
         .returningAll()
         .executeTakeFirst();
-      if (updated)
+      if (updated) {
         await this.recordChange(
           ctx.trx,
           system,
@@ -890,6 +892,18 @@ export class FixturesService implements FixturePort {
           event.correlationId,
           event.operationId,
         );
+        // R3-TRACE-A-04 (SPK-FIX-002): a fixture whose game scheduling canceled (a closure, a
+        // direct cancellation, a published draft) is a remaining obligation with an owner and a
+        // deadline, never a silent postponement.
+        await this.obligations.seasonScheduleChanged(ctx.trx, {
+          organizationId,
+          facilityId: current.facilityId,
+          seasonId: updated.season_id,
+          fixtureId: updated.id,
+          eventId: current.id,
+          lost: true,
+        });
+      }
       return;
     }
     if (current.status !== 'published') return;
@@ -923,7 +937,7 @@ export class FixturesService implements FixturePort {
       .where('revision', '=', fixture.revision)
       .returningAll()
       .executeTakeFirst();
-    if (updated)
+    if (updated) {
       await this.recordChange(
         ctx.trx,
         system,
@@ -934,6 +948,19 @@ export class FixturesService implements FixturePort {
         event.correlationId,
         event.operationId,
       );
+      // R3-TRACE-A-04: the season's open incomplete-season exception resolves once nothing is
+      // left unscheduled, however the last game was placed.
+      if (fixture.status !== 'scheduled') {
+        await this.obligations.seasonScheduleChanged(ctx.trx, {
+          organizationId,
+          facilityId: current.facilityId,
+          seasonId: updated.season_id,
+          fixtureId: updated.id,
+          eventId: current.id,
+          lost: false,
+        });
+      }
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1163,8 +1190,13 @@ export class FixturesService implements FixturePort {
   private async authorizeRead(principal: Principal, fixture: FixtureRow, at: Date): Promise<void> {
     const organizationId = fixture.organization_id;
     const base = { type: 'fixture', id: fixture.id, organizationId, protected: true };
-    if (isStaffLike(principal)) {
-      await this.authorization.require(principal, CompetitionActions.readFixture, base);
+    // R3-TRACE-A-01 (§3.1): a staff role that reads fixtures reads every fixture; anyone else, a
+    // staff member whose roles do not cover the read included, reads as a player or guardian.
+    if (
+      await staffAuthority(this.authorization, principal, CompetitionActions.readFixture, {
+        organizationId,
+      })
+    ) {
       return;
     }
     if (!principal.personId) throw errors.protectedNotFound('fixture');

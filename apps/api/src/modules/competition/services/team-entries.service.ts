@@ -70,8 +70,8 @@ import {
 } from '../competition.queries';
 import {
   emptySummary,
-  isStaffLike,
   organizationOf,
+  staffAuthority,
   toFixture,
   toJoinRequest,
   toRosterMember,
@@ -184,11 +184,32 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     correlationId: string | null,
   ): Promise<TeamEntryCreated> {
     const organizationId = organizationOf(principal);
-    const staff = isStaffLike(principal);
+    // R3-TRACE-A-01 (§2.1, SPK-CAP-004/005): staff powers follow a staff role that holds this
+    // action, never the principal's kind. A captain who is also an official or a coach renews or
+    // creates as a captain: inside the registration window, as their own captain, unplaced.
+    const staff = await staffAuthority(
+      this.authorization,
+      principal,
+      input.renewFromEntryId
+        ? CompetitionActions.renewTeamEntry
+        : CompetitionActions.createTeamEntry,
+      { organizationId },
+    );
     if (!staff && (input.teamId || input.captainPersonId || input.divisionId)) {
       throw errors.accessDenied(
         'Only staff may enter an existing team by id, name another captain or place an entry.',
       );
+    }
+    if (
+      input.divisionId &&
+      !(await staffAuthority(this.authorization, principal, CompetitionActions.approveTeamEntry, {
+        organizationId,
+      }))
+    ) {
+      // Placing an entry in a division is the approval action's power (SPK-COMP-004).
+      throw errors.accessDenied('Only league management places an entry in a division.', {
+        action: CompetitionActions.approveTeamEntry.id,
+      });
     }
     const now = this.clock.now();
     const entryId = newId();
@@ -952,7 +973,10 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       : undefined;
     return {
       readsObligation: decision.allowed,
-      staff: isStaffLike(principal),
+      // R3-TRACE-A-01: staff who read the workspace through a staff role, not every staff kind.
+      staff: await staffAuthority(this.authorization, principal, CompetitionActions.readTeamEntry, {
+        organizationId,
+      }),
       timezone: facility?.timezone ?? null,
     };
   }
@@ -995,15 +1019,20 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       base,
     );
     if (direct.allowed) {
-      const canManage = isStaffLike(principal)
-        ? true
-        : principal.personId !== null &&
+      // R3-TRACE-A-01 (SPK-CAP-002): a viewer manages the entry through a staff role that reads
+      // it, or as its captain or co-captain; an official or scheduler who is only a roster member
+      // is an ordinary member here.
+      const canManage =
+        (await staffAuthority(this.authorization, principal, CompetitionActions.readTeamEntry, {
+          organizationId,
+        })) ||
+        (principal.personId !== null &&
           (await this.teamAuthority.hasTeamRole(
             organizationId,
             principal.personId,
             id,
             'co_captain',
-          ));
+          )));
       return { canManage };
     }
     if (!principal.personId) throw errors.protectedNotFound('team_entry');

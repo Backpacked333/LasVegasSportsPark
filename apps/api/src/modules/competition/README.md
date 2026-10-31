@@ -47,7 +47,10 @@ PostgreSQL (`TEST_DATABASE_URL`). Statements below are verified unless marked pr
   closed and not already scheduled elsewhere (blocking); a game without a fixture is a remaining
   obligation for the scheduler; for every season the draft touches, the fixtures still
   unscheduled are reported with owner `league_manager` and a deadline (proposed 7 days, capped at
-  the season end). In the same transaction an incomplete season opens one
+  the season end). A change that targets a fixture's published game is about that fixture whatever
+  its payload names: a `cancel` leaves the fixture unscheduled and is counted in its season's
+  remaining fixtures, and a change that gives the game another source is blocking
+  (`fixture_game_repurposed`, R3-TRACE-A-04). In the same transaction an incomplete season opens one
   `competition.incomplete_season` operational exception (league manager queue, that deadline); a
   later publication that leaves nothing unscheduled resolves it (SPK-AT-010 step 5).
 - `SUSPENSION_CHECK_PORT` (part 1's eligibility consults it, SPK-AT-013): answered by this module's
@@ -55,8 +58,11 @@ PostgreSQL (`TEST_DATABASE_URL`). Statements below are verified unless marked pr
   `SUSPENSION_CHECK_IMPL` elsewhere takes precedence.
 - Outbox handler `competition.sync_fixture_schedule` on `scheduling.event_changed`: keeps a
   fixture's copied instants in step when scheduling moves the event, and marks it `postponed` when
-  scheduling cancels the event directly. Idempotent under replay (revision-guarded, no-op when
-  nothing changed). The same handler copies the venue read model (CMP-04, below).
+  scheduling cancels the event directly. A postponement opens (or keeps) the season's
+  `competition.incomplete_season` exception with owner and deadline, and a sync that leaves the
+  season with nothing unscheduled resolves it (R3-TRACE-A-04). Idempotent under replay
+  (revision-guarded, no-op when nothing changed; the exception is deduplicated per season). The
+  same handler copies the venue read model (CMP-04, below).
 - Periodic job `competition.expire_team_invitations` (CMP-07, IF-24; interval 60 s, failure owner
   `league_manager`) registered with the kernel `PeriodicJobRegistry`.
 - Outbox handler `competition.follow_person_merge` on `identity.persons_merged` (CMP-08, failure
@@ -126,7 +132,7 @@ become superseded. Publication authority itself is enforced by the publish actio
 | GET            | `/seasons/{id}/fixtures`                                         | staff and customers (`competition.read_competitions`); paginated, filters division/entry/status/window                                                                                                                                      |
 | POST/GET/PATCH | `/divisions[/{id}]`                                              | manage; capacity cannot drop below placed entries                                                                                                                                                                                           |
 | GET/PATCH      | `/teams/{id}`                                                    | staff, role holders and roster players read; captain of a live entry or league administration edit (`competition.manage_team`)                                                                                                              |
-| POST           | `/team-entries`                                                  | captain (adult customer, season `open` and inside the registration window) creates a new team's entry or renews with `renewFromEntryId` (captain role on the prior entry); staff may enter a `teamId`, name the captain and place the entry |
+| POST           | `/team-entries`                                                  | captain (season `open`, inside the registration window) creates a new team's entry or renews with `renewFromEntryId` (prior entry's captain); staff holding the action enter a `teamId` and name the captain; only approvers place an entry |
 | GET            | `/team-entries?seasonId`                                         | staff (`competition.list_team_entries`): what is missing and who resolves it (SPK-COMP-004)                                                                                                                                                 |
 | GET            | `/team-entries/{id}`                                             | captain workspace (SPK-CAP-001): staff in scope, role holders, roster players, guardians with `view`; others NOT_FOUND                                                                                                                      |
 | POST           | `/team-entries/{id}/approve`, `/reject`                          | league administration (`competition.approve_team_entry`); approve may place in a division                                                                                                                                                   |
@@ -144,7 +150,7 @@ Part 2 (contracts in `packages/contracts/src/api/competition-matches.ts`):
 | Method   | Path                                                              | Who (action)                                                                                                                                                                                                                                                                                                                                                |
 | -------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST     | `/fixtures/{id}/results`                                          | an official holding an accepted assignment (`ASSIGNMENT_CHECK_PORT`) whose role the rule set lists in `submitRoles`, or league administration (`competition.submit_result`, SPK-STAFF-005): draft → submitted with scores, classification, cards, incidents, abandonment details; a fixture with an official result receives a correction (reason required) |
-| GET      | `/fixtures/{id}/results`, `/results/{id}`                         | staff see every revision; roster players and guardians with `view` see official and superseded ones only; others NOT_FOUND                                                                                                                                                                                                                                  |
+| GET      | `/fixtures/{id}/results`, `/results/{id}`                         | staff see every revision; roster players and guardians with `view` see official and superseded ones only, in the customer view (no incident or dispute ids, notes, return reason or staff identifiers); others NOT_FOUND                                                                                                                                    |
 | POST     | `/results/{id}/return`, `/results/{id}/submit`                    | return: league administration (`competition.review_result`, submitted → draft with reason); resubmit: the submitter roles (draft → submitted)                                                                                                                                                                                                               |
 | POST     | `/results/{id}/publish`                                           | `competition.publish_result`: `league_manager` plus the rule set's `resultApproval.approveRoles` (§4.7 invariant 8, DEC-065); recalculates standings, moves the fixture, serves and proposes suspensions, progresses the bracket; see corrections below                                                                                                     |
 | GET      | `/seasons/{id}/standings?divisionId`                              | staff and customers: the latest projection (official league-phase results only), or a live computation when none is stored                                                                                                                                                                                                                                  |
@@ -604,3 +610,45 @@ built, waiting on a decision or another module.
   SPK-CAP-002"). The staff dashboard's entry review
   (SCR-S-16) shows the workspace's financial issue (open balance, not confirmed, or settled), never
   the bare reference (`apps/staff/src/screens/teams/__tests__/TeamEntryReviewScreen.test.tsx`).
+
+## Stage-7 review fixes — verified 2026-10-31
+
+- **Staff powers follow the action's staff roles, never the principal kind** (R3-TRACE-A-01, §2.1,
+  SPK-IAM-001/003, §3.1 "a coach who is also a parent receives each permission only in its proper
+  scope"). Identity marks anyone holding any staff role as kind `staff`; competition used to treat
+  every such principal as league staff. Every staff decision now goes through `staffAuthority`
+  (`competition.shared.ts`): a system principal of the organization, or a staff principal holding
+  one of the action's staff roles in its facility scope (a kernel decision with no subject and no
+  team entry). So a captain who is also a referee or a coach renews and creates entries only inside
+  the registration window, as their own captain and unplaced; adds guests and substitutes only with
+  league approval where the rule set requires it, as a `captain` addition, and never backdates a
+  roster; reads explain-eligibility and invitation previews redacted (no ages, no suspension ids);
+  may not hand the captaincy over as a co-captain, archive a team or appeal a dispute outcome they
+  neither submitted nor competed in. A rostered scheduler or official is an ordinary member (no
+  history, no explanations). The other direction holds too: a coach who captains a team edits it as
+  its captain, and a coach who is a parent lists their child's suspensions as the parent. Placing
+  an entry in a division when it is created needs the approval action (`competition.approve_team_entry`,
+  league administration), not front desk's create action (`__tests__/staff-role-scope.spec.ts`).
+  An official still reads every fixture's readiness as staff: `competition.read_readiness` lists
+  the official role (COMPETITION_READERS, proposed role matrix).
+- **Canceled fixture games are remaining obligations** (R3-TRACE-A-04, SPK-FIX-002, SPK-AT-010
+  step 5): see `FIXTURE_OBLIGATION_IMPL` and `competition.sync_fixture_schedule` above. Before this,
+  a draft that canceled a fixture's game reported nothing (a cancel carries no proposed fields) and,
+  with a create for another fixture of the season in the same draft, resolved the season's open
+  exception with "Every fixture of the season is scheduled."; a direct cancellation or a closure
+  left the postponed fixture with no owner and no deadline (`__tests__/fixture-obligations.spec.ts`).
+- **Result views for customers** (R3-TRACE-B-03, SPK-DISC-001/004, SPK-CAP-002, §4.10): roster
+  players and guardians read official and superseded revisions through `customerResultView`
+  (`competition-matches.shared.ts`): scores, classification, cards, abandonment and the correction
+  reason stay; `details.incidentIds` is empty, `details.notes`, `details.disputeId` and
+  `returnReason` are null, and `submittedBy`/`publishedBy` carry the kind and a generic label with
+  no account or person id. Staff holding `competition.read_results` keep the full revision
+  (`__tests__/results.spec.ts` "R3-TRACE-B-03"). The official's notes are staff-only; a
+  family-visible note field is not built (none is specified).
+- **Age reference dates are facility-local** (R3-TIME-MONEY-03, SPK-COMP-002, §4.5, SPK-SCHED-008):
+  `match_date` and `calendar_year_start` read the local calendar date (and its year) of the instant
+  in the zone of the fixture's venue (readiness passes the scheduling event's zone) or else the
+  division's facility, so a 17:30 kickoff in Las Vegas is not evaluated on the next UTC day and an
+  evening roster change on 31 December does not age every player a year. Without any known
+  facility the UTC date is used and the age reason says so ("UTC date: no facility time zone is
+  known") (`competition.rules.spec.ts`, `__tests__/readiness.spec.ts` "R3-TIME-MONEY-03").

@@ -29,7 +29,7 @@ import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { toBracketNode } from '../competition-matches.shared';
 import { loadSeasonRow, teamNamesOf, type Reader } from '../competition.queries';
-import { organizationOf } from '../competition.shared';
+import { organizationOf, staffAuthority } from '../competition.shared';
 import { readTarget } from './competitions.service';
 import { StandingsService } from './standings.service';
 
@@ -388,11 +388,12 @@ export class BracketsService {
       .orderBy('slot');
     if (query.divisionId) q = q.where('division_id', '=', query.divisionId);
     const rows = await q.execute();
-    // Customers see published nodes only; staff see the whole bracket.
-    const visible =
-      principal.kind === 'staff' || principal.kind === 'system'
-        ? rows
-        : rows.filter((r) => r.published);
+    // Customers see published nodes only; staff holding the read action see the whole bracket
+    // (R3-TRACE-A-01: by the action's staff roles, never the principal's kind).
+    const staff = await staffAuthority(this.authorization, principal, MatchActions.readBrackets, {
+      organizationId,
+    });
+    const visible = staff ? rows : rows.filter((r) => r.published);
     return this.views(this.db, organizationId, visible);
   }
 
