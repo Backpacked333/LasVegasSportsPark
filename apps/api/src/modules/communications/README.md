@@ -191,7 +191,11 @@ dispatch creates the attempts or suppresses the notice.
 - **Calendar feeds** (SPK-COMMS-008): 32 random bytes, hash stored; the ICS uses the scheduling
   event id as UID and `SEQUENCE` per change; every fetch re-checks `view` over each person in scope
   and includes the team entries each person is on; revocation stops future access (404) and cannot
-  recall what an external calendar already fetched.
+  recall what an external calendar already fetched. Every TEXT value (summary, location,
+  description, calendar name) escapes each line break, a bare CR included, to a literal `\n` and
+  drops the other control characters RFC 5545 §3.3.11 excludes, so a stored string such as a
+  captain's team name in a fixture title cannot add content lines to another family's feed
+  (R2-TENANCY-INPUT-04; `calendar/ics.spec.ts`, `__tests__/calendar-feeds.spec.ts`).
 
 ## Ports (`ports.ts`)
 
@@ -418,3 +422,9 @@ module's route classification counts once MIG-00 lands.
   the survivor's inbox (team membership is checked for the survivor's own id); unprotected ones are.
 - The ICS feed is a projection of `scheduling.event_changed`; it carries the facility zone in the
   description and UTC instants, not VTIMEZONE blocks.
+- Input with a NUL character (`\u0000`) in a communications free-text field (title, body, reason,
+  feed label) passes the zod schemas and is refused by PostgreSQL, so the request answers 500
+  `INTERNAL_ERROR` instead of `VALIDATION_FAILED`. Rejecting control characters for every module
+  belongs to the kernel's `ZodValidationPipe` and the shared string schemas (R2-TENANCY-INPUT-04,
+  **Proposed**, not made here). Whatever is stored, the ICS rendering above never emits a control
+  character.
