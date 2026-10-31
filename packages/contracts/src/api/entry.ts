@@ -137,9 +137,18 @@ export const MyPassSchema = z
   .openapi('MyPass');
 export type MyPass = z.infer<typeof MyPassSchema>;
 
-/** The opaque reference is returned once, at issue; only its hash is stored. */
+/**
+ * The opaque reference is returned once, at issue; only its hash is stored (§4.14). It is not kept
+ * with the idempotency key either: a same-key replay answers IDEMPOTENCY_SECRET_WITHHELD naming
+ * the pass (`details.resourceId` is `id`), and the holder revokes it and issues a new one.
+ */
 export const IssuedPassSchema = z
-  .object({ pass: PassSchema, reference: z.string() })
+  .object({
+    /** The issued pass's id (the same as `pass.id`); a withheld replay names it. */
+    id: z.uuid(),
+    pass: PassSchema,
+    reference: z.string(),
+  })
   .openapi('IssuedPass');
 export type IssuedPass = z.infer<typeof IssuedPassSchema>;
 
@@ -830,7 +839,7 @@ function query(
 
 command(
   '/passes',
-  'Issue an opaque pass to a person or household (SPK-ENTRY-002)',
+  'Issue an opaque pass to a person or household (SPK-ENTRY-002); the reference is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD',
   IssuePassBody,
   IssuedPassSchema,
 );

@@ -30235,7 +30235,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Issue an opaque pass to a person or household (SPK-ENTRY-002) */
+        /** Issue an opaque pass to a person or household (SPK-ENTRY-002); the reference is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD */
         post: {
             parameters: {
                 query?: never;
@@ -54283,6 +54283,8 @@ export type components = {
             sourceKind: "goodwill" | "adjustment";
         };
         IssuedPass: {
+            /** Format: uuid */
+            id: string;
             pass: components["schemas"]["Pass"];
             reference: string;
         };

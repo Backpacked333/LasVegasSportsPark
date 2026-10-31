@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { AccessControlEventBody, systemPrincipal } from '@sportspark/contracts';
+import { AccessControlEventBody, systemPrincipal, z } from '@sportspark/contracts';
 import {
   OperationalExceptions,
   runWithTransaction,
@@ -9,9 +9,14 @@ import {
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { HARDWARE_QUEUE, UNREGISTERED_ACCESS_DEVICE } from '../access-hardware.shared';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
-import { hashPassReference } from '../entry.shared';
+import { hashPassReference, PASS_REFERENCE_HASH } from '../entry.shared';
 import { ActivityResolver } from './activity-resolver';
 import { VisitsService } from './visits.service';
+
+/** The hash the webhook stores in place of a pass reference (withPassReferenceHashed, §4.14). */
+const StoredReferenceHash = z.object({
+  data: z.object({ passReferenceHash: z.string().regex(PASS_REFERENCE_HASH) }),
+});
 
 /**
  * Hardware access events (SPK-COND-004, §3.16 "Access hardware"; vendor not selected, DEC-023).
@@ -85,12 +90,20 @@ export class AccessEventsService {
 
     let personId: string | null = null;
     let passId: string | null = null;
-    if (body.data.passReference) {
+    // The webhook records the reference's hash only (§4.14); an event recorded before that change
+    // still carries the reference, which is hashed here.
+    const stored = StoredReferenceHash.safeParse(event.payload);
+    const referenceHash = stored.success
+      ? stored.data.data.passReferenceHash
+      : body.data.passReference
+        ? hashPassReference(body.data.passReference)
+        : null;
+    if (referenceHash) {
       const pass = await trx
         .selectFrom('passes')
         .select(['id', 'status', 'holder_person_id'])
         .where('organization_id', '=', organizationId)
-        .where('reference_hash', '=', hashPassReference(body.data.passReference))
+        .where('reference_hash', '=', referenceHash)
         .executeTakeFirst();
       if (!pass || pass.status !== 'active') return;
       passId = pass.id;

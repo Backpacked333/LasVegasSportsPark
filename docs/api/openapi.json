@@ -29117,6 +29117,10 @@
       "IssuedPass": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
           "pass": {
             "$ref": "#/components/schemas/Pass"
           },
@@ -29125,6 +29129,7 @@
           }
         },
         "required": [
+          "id",
           "pass",
           "reference"
         ]
@@ -80670,7 +80675,7 @@
     },
     "/passes": {
       "post": {
-        "summary": "Issue an opaque pass to a person or household (SPK-ENTRY-002)",
+        "summary": "Issue an opaque pass to a person or household (SPK-ENTRY-002); the reference is returned once and a replay answers IDEMPOTENCY_SECRET_WITHHELD",
         "tags": [
           "Entry"
         ],

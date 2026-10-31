@@ -237,6 +237,71 @@ describe('hardware access events (SPK-COND-004)', () => {
     expect(still).toHaveLength(1);
   });
 
+  it('§4.14 / SPK-ENTRY-002: the inbox keeps a pass reference a device read only as its hash', async () => {
+    const holder = await adultCustomer(t);
+    const pass = await post(t, '/v1/passes', desk, {
+      holder: { kind: 'person', personId: holder.personId },
+    });
+    const reference = pass.body.reference as string;
+    const event = device.granted({
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      occurredAt: t.clock.now().toISOString(),
+      passReference: reference,
+    });
+    const received = await deliver(event);
+    expect(received.status, JSON.stringify(received.body)).toBe(202);
+    const stored = await t.db
+      .selectFrom('inbox_events')
+      .select('payload')
+      .where('id', '=', received.body.inboxEventId as string)
+      .executeTakeFirstOrThrow();
+    expect(JSON.stringify(stored.payload)).not.toContain(reference);
+    const { reference_hash } = await t.db
+      .selectFrom('passes')
+      .select('reference_hash')
+      .where('id', '=', pass.body.pass.id)
+      .executeTakeFirstOrThrow();
+    expect(stored.payload).toMatchObject({ data: { passReferenceHash: reference_hash } });
+    // The handler matches the pass on the stored hash: the holder arrives once.
+    await drainInbox(t);
+    const visits = await t.db
+      .selectFrom('visits')
+      .select(['person_id', 'pass_id'])
+      .where('person_id', '=', holder.personId)
+      .execute();
+    expect(visits).toEqual([{ person_id: holder.personId, pass_id: pass.body.pass.id }]);
+  });
+
+  it('§4.14: an access event recorded before the hashing change (plain reference) is still matched', async () => {
+    const holder = await adultCustomer(t);
+    const pass = await post(t, '/v1/passes', desk, {
+      holder: { kind: 'person', personId: holder.personId },
+    });
+    const event = device.granted({
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      occurredAt: t.clock.now().toISOString(),
+      passReference: pass.body.reference as string,
+    });
+    const body = event.body as { id: string; type: string };
+    await t.app.get(Inbox).record({
+      provider: FAKE_ACCESS_CONTROL_PROVIDER,
+      providerEventId: body.id,
+      eventType: body.type,
+      payload: event.body,
+      organizationId: t.organizationId,
+      signatureVerified: true,
+    });
+    await drainInbox(t);
+    const visits = await t.db
+      .selectFrom('visits')
+      .select('pass_id')
+      .where('person_id', '=', holder.personId)
+      .execute();
+    expect(visits).toEqual([{ pass_id: pass.body.pass.id }]);
+  });
+
   it('denied entries record nothing; unknown outcomes raise a device exception; forged or foreign events are refused', async () => {
     const before = (await t.db.selectFrom('visits').select('id').execute()).length;
     await deliver(
