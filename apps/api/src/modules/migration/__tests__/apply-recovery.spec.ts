@@ -6,7 +6,12 @@ import { createProgramFixture } from '../../catalog';
 import { PeopleService } from '../../identity';
 import { applyCorrelationId, importPrincipal } from '../migration.shared';
 import { ImportTargets } from '../services/import-targets';
-import { stagedCredit, stagedHousehold, stagedPerson } from '../testing/migration-fixtures';
+import {
+  stagedCredit,
+  stagedHousehold,
+  stagedObligation,
+  stagedPerson,
+} from '../testing/migration-fixtures';
 import {
   countRows,
   exceptionsOf,
@@ -145,6 +150,110 @@ describe('apply recovery and the per-source apply lock (§4.7 invariants 5 and 1
     const [row] = await rowsOf(t, operator, batch.id);
     expect(row).toMatchObject({ outcome: 'created', internalId: created.id });
     expect(row?.reasons.map((r) => r.code)).toEqual(['recovered_after_interruption']);
+  });
+
+  it('SPK-AT-024 / §5.10 (R3-PERFORMANCE-05): a first apply of households, opening obligations and credits makes no creation-audit lookup per row', async () => {
+    const batch = await reviewed(
+      [
+        stagedPerson('FR-P'),
+        stagedHousehold('FR-H', 'Fresh Cutover Household', ['FR-P']),
+        stagedObligation('FR-OB', { debtorExternalId: 'FR-P', amountMinor: 4_200 }),
+        stagedCredit('FR-CR', { ownerExternalId: 'FR-P', amountMinor: 1_500 }),
+      ],
+      'fresh-cutover',
+    );
+    const targets = t.app.get(ImportTargets);
+    const recover = vi.spyOn(targets, 'recover');
+    try {
+      const applied = await post(t, `/v1/import-batches/${batch.id}/apply`, operator, {});
+      expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+      expect(applied.body.outcomeCounts).toEqual({
+        created: 4,
+        matched: 0,
+        updated: 0,
+        skipped: 0,
+        exception: 0,
+      });
+      // Every mapping was reserved by this apply, so none can have a creation behind it yet: the
+      // apply never scans the organization's creation audit records for them.
+      expect(recover).not.toHaveBeenCalled();
+    } finally {
+      recover.mockRestore();
+    }
+    const rows = await rowsOf(t, operator, batch.id);
+    expect(rows.map((r) => r.reasons.map((x) => x.code))).toEqual([[], [], [], []]);
+  });
+
+  it('SPK-AT-024 / SPK-AT-023 (support-migration-05): an apply interrupted after identity created a household resumes and links it, without creating it again', async () => {
+    const batch = await reviewed(
+      [stagedPerson('RH-P'), stagedHousehold('RH-H', 'Resumed Household', ['RH-P'])],
+      'resumed-household',
+    );
+    // The crash: the mapping was reserved and committed, identity created the household (audited
+    // with the mapping's correlation id), then the process died before the mapping was linked.
+    const mappingId = newId();
+    await t.db
+      .insertInto('external_mappings')
+      .values({
+        id: mappingId,
+        organization_id: t.organizationId,
+        source_system: 'resumed-household',
+        entity_type: 'household',
+        external_id: 'RH-H',
+        person_id: null,
+        household_id: null,
+        relationship_id: null,
+        program_id: null,
+        obligation_id: null,
+        credit_id: null,
+        applied_payload_hash: null,
+        first_seen_batch_id: batch.id,
+        last_seen_batch_id: batch.id,
+        provenance: json({ batchId: batch.id }),
+        linked_at: null,
+      })
+      .execute();
+    const targets = t.app.get(ImportTargets);
+    const householdId = await targets.createHousehold(
+      {
+        organizationId: t.organizationId,
+        principal: importPrincipal(t.organizationId, batch.id),
+        correlationId: applyCorrelationId(mappingId),
+        reason: 'interrupted apply',
+      },
+      'Resumed Household',
+    );
+    await t.db
+      .updateTable('import_batches')
+      .set({
+        apply_started_at: t.clock.now(),
+        apply_lock_operation_id: await runningOperation(),
+        apply_lock_until: new Date(t.clock.now().getTime() + 60_000),
+      })
+      .where('id', '=', batch.id)
+      .execute();
+    const households = await countRows(t, 'households');
+    t.clock.advance(16 * 60_000);
+    const recover = vi.spyOn(targets, 'recover');
+    try {
+      const resumed = await post(t, `/v1/import-batches/${batch.id}/apply`, operator, {});
+      expect(resumed.status, JSON.stringify(resumed.body)).toBe(200);
+      expect(resumed.body.outcomeCounts).toMatchObject({ created: 2, exception: 0 });
+      // The mapping an earlier attempt reserved is the one looked up, and only that one.
+      expect(recover.mock.calls).toEqual([
+        [t.organizationId, 'household', applyCorrelationId(mappingId)],
+      ]);
+    } finally {
+      recover.mockRestore();
+    }
+    expect(await countRows(t, 'households')).toBe(households);
+    const row = (await rowsOf(t, operator, batch.id)).find((r) => r.externalId === 'RH-H');
+    expect(row).toMatchObject({ outcome: 'created', internalId: householdId });
+    expect(row?.reasons.map((r) => r.code)).toEqual(['recovered_after_interruption']);
+    // The resumed apply also brought the recovered household to its staged members.
+    const person = (await rowsOf(t, operator, batch.id)).find((r) => r.externalId === 'RH-P');
+    const household = await targets.household(t.organizationId, householdId);
+    expect(household.members.map((m) => m.personId)).toEqual([person?.internalId]);
   });
 
   it('§4.7 invariant 11: two batches of one source system never apply at the same time', async () => {

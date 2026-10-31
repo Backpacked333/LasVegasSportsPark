@@ -601,18 +601,24 @@ export class ImportApplyService {
 
     // The reservation is fenced: an apply that lost its lock to another apply stops here, before
     // it creates anything new (support-migration-05).
-    const mapping = await this.uow.run(({ trx }) =>
-      this.reserveMapping(trx, batch, operationId, row),
+    const { mapping, inserted } = await this.uow.run(({ trx }) =>
+      this.reserve(trx, batch, operationId, row),
     );
     const tctx = this.targetContext(batch, mapping, row);
+    // The correlation id is the mapping's id, so a mapping this call has just inserted cannot
+    // have a creation behind it yet: only a mapping an earlier attempt reserved is looked up in
+    // the owning module's creation audit (support-migration-05, §5 cutover: a fresh batch makes
+    // no audit lookup per row, R3-PERFORMANCE-05).
     let internalId: string | null =
       mapping.status === 'linked'
         ? mapping.internal_id
-        : await this.targets.recover(
-            batch.organization_id,
-            entityType as AuditedCreation,
-            tctx.correlationId,
-          );
+        : inserted
+          ? null
+          : await this.targets.recover(
+              batch.organization_id,
+              entityType as AuditedCreation,
+              tctx.correlationId,
+            );
     const recovered = internalId !== null;
     if (!internalId) internalId = await this.createRecord(tctx, mapping, values, ctx);
     // Bring the record to every staged fact the creation itself cannot carry (household members),
@@ -815,6 +821,20 @@ export class ImportApplyService {
     row: RowRow,
     reserveRecordId = false,
   ): Promise<MappingRow> {
+    return (await this.reserve(trx, batch, operationId, row, reserveRecordId)).mapping;
+  }
+
+  /**
+   * `reserveMapping` that also says whether this call inserted the mapping (`inserted`), or found
+   * one an earlier attempt or another apply reserved.
+   */
+  private async reserve(
+    trx: Trx,
+    batch: BatchRow,
+    operationId: string,
+    row: RowRow,
+    reserveRecordId = false,
+  ): Promise<{ mapping: MappingRow; inserted: boolean }> {
     await this.renewLease(trx, batch, operationId);
     const entityType = row.entity_type as MappedEntityType;
     const find = () =>
@@ -828,11 +848,12 @@ export class ImportApplyService {
         .forUpdate()
         .executeTakeFirst();
     const existing = await find();
-    if (existing) return existing;
+    if (existing) return { mapping: existing, inserted: false };
+    const id = newId();
     await trx
       .insertInto('external_mappings')
       .values({
-        id: newId(),
+        id,
         organization_id: batch.organization_id,
         source_system: batch.source_system,
         entity_type: entityType,
@@ -856,7 +877,9 @@ export class ImportApplyService {
         oc.columns(['organization_id', 'source_system', 'entity_type', 'external_id']).doNothing(),
       )
       .execute();
-    return (await find()) as MappingRow;
+    // A concurrent reservation of the same external record wins the key: that one is not ours.
+    const mapping = (await find()) as MappingRow;
+    return { mapping, inserted: mapping.id === id };
   }
 
   private async linkMapping(
