@@ -23,7 +23,7 @@ import { MemoryRouter } from 'react-router';
 import { AppRoutes } from '../App';
 import type { StaffConfig } from '../config/config';
 import { createManualConnectivity } from '../connectivity/sources';
-import { AppProviders } from '../providers/AppProviders';
+import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
 import type { StaffServices } from '../providers/services';
 
 export const TEST_NOW = new Date('2026-10-24T12:00:00.000Z');
@@ -144,7 +144,8 @@ export function createTestApp(options: TestAppOptions = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: Infinity },
-      mutations: { retry: false, gcTime: Infinity },
+      // The dashboard's command defaults (never paused offline and replayed, never retried).
+      mutations: { ...MUTATION_DEFAULTS, gcTime: Infinity },
     },
   });
   function wrapper({ children }: { children: ReactNode }) {

@@ -3,11 +3,13 @@
  * cover), SPK-STAFF-003 (overlap and turnaround refusals shown with the API's code), SPK-AT-012
  * (replacement after a decline; the uncovered slot is escalated), §4.9 expected revision and
  * STALE_REVISION reload, protected NOT_FOUND as not available; the person is chosen from the
- * staff directory (ID-05) and transitions are the API's `availableActions` (WRK-01).
+ * staff directory (ID-05) and transitions are the API's `availableActions` (WRK-01); offline the
+ * screens are read-only and nothing is queued (§4.15).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { act } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   ASSIGNMENT_1,
@@ -421,7 +423,7 @@ describe('SCR-S-33 AssignmentsScreen', () => {
     const app = createTestApp({ routes: routes() });
     render(app.at('/staff'));
     const list = await screen.findByRole('list', { name: 'Assignments' });
-    // assignmentRecord starts 18:00Z at FACILITY_A (America/Los_Angeles in the Today feed).
+    // assignmentRecord starts 18:00Z at FACILITY_A (America/Los_Angeles in the facility directory).
     expect(await within(list).findByText(/11:00 (PDT|GMT-7) to 12:00/)).toBeInTheDocument();
   });
 
@@ -556,6 +558,93 @@ describe('SCR-S-33 AssignmentsScreen', () => {
       reason: 'Original declined on the day',
       expectedRevision: 4,
     });
+  });
+
+  it('SCR-S-33 offline (read-only): every command control is disabled and nothing is sent after reconnecting (§4.15)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /assignments/{id}': { status: 200, body: assignmentRecord() },
+        'GET /assignments': staffList([assignmentRecord()], ['offer', 'complete', 'withdraw']),
+        'GET /assignments/{id}/replacements': {
+          status: 200,
+          body: {
+            assignmentId: ASSIGNMENT_1,
+            targetType: 'fixture',
+            targetId: FIXTURE_1,
+            role: 'referee',
+            slot: 1,
+            scheduledStart: '2026-10-24T18:00:00.000Z',
+            scheduledEnd: '2026-10-24T19:00:00.000Z',
+            requiredQualifications: [],
+            evaluatedAt: '2026-10-24T12:00:00.000Z',
+            candidates: [
+              { personId: CANDIDATE, displayName: 'Casey Lee', eligible: true, reasons: [] },
+            ],
+          },
+        },
+        'POST /assignments/{id}/offer': { status: 200, body: {} },
+        'POST /assignments/{id}/complete': { status: 200, body: {} },
+        'POST /assignments/{id}/withdraw': { status: 200, body: {} },
+        'POST /assignments/{id}/replacements': { status: 201, body: {} },
+      }),
+    });
+    render(app.at(`/staff/assignments/${ASSIGNMENT_1}`));
+    await screen.findByRole('button', { name: 'Offer to the person' });
+    await user.click(screen.getByRole('radio', { name: /Casey Lee/ }));
+    await user.type(screen.getByLabelText('Reason for the replacement'), 'Absent');
+    await user.click(screen.getByRole('button', { name: 'Withdraw' }));
+    await user.type(screen.getByLabelText('Reason for withdrawing'), 'Fixture moved');
+    act(() => app.connectivity.set(false));
+    const commands = [
+      'Offer to the person',
+      'Mark completed',
+      'Confirm withdrawal',
+      'Offer the slot',
+    ];
+    for (const name of commands) {
+      const button = screen.getByRole('button', { name });
+      await waitFor(() => expect(button).toBeDisabled());
+      expect(button).toHaveAccessibleDescription('Needs a connection.');
+      await user.click(button);
+    }
+    // Enter in a reason field does not submit either.
+    await user.type(screen.getByLabelText('Reason for withdrawing'), '{Enter}');
+    act(() => app.connectivity.set(true));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Offer to the person' })).toBeEnabled(),
+    );
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+    expect(app.queryClient.getMutationCache().getAll()).toHaveLength(0);
+  });
+
+  it('SCR-S-33 offline: "Propose" is disabled and no assignment is created after reconnecting (§4.15)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'POST /assignments': { status: 201, body: {} } }),
+    });
+    render(app.at('/staff'));
+    await user.click(
+      await screen.findByRole('button', { name: 'Propose someone for U12 Red v Blue, Referee' }),
+    );
+    const picker = screen.getByLabelText('Person');
+    await waitFor(() =>
+      expect(
+        within(picker).getByRole('option', { name: 'Jordan Lee (official)' }),
+      ).toBeInTheDocument(),
+    );
+    await user.selectOptions(picker, OFFICIAL);
+    const propose = screen.getByRole('button', { name: 'Propose and offer' });
+    act(() => app.connectivity.set(false));
+    await waitFor(() => expect(propose).toBeDisabled());
+    expect(propose).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(propose);
+    await user.type(screen.getByLabelText('Role'), '{Enter}');
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(propose).toBeEnabled());
+    expect(app.fake.requests.some((r) => r.route === '/assignments' && r.method === 'POST')).toBe(
+      false,
+    );
   });
 
   it('shows an assignment the viewer may not see as not available', async () => {

@@ -44,6 +44,7 @@ import {
   SUPPRESSION_REASON,
 } from '../../features/operations/labels';
 import { Button } from '../../ui/Button';
+import { CommandButton } from '../../ui/CommandButton';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -225,9 +226,9 @@ function PreviewAndSend({ notification: n }: { notification: Notification }) {
               ))}
             </ul>
             <div className="ops-actions">
-              <Button busy={send.isProcessing} onClick={confirm}>
+              <CommandButton busy={send.isProcessing} onClick={confirm}>
                 Confirm and send to {data.count}
-              </Button>
+              </CommandButton>
               <Button variant="secondary" onClick={rePreview}>
                 Preview again
               </Button>
@@ -472,9 +473,9 @@ function RetryDelivery({
             hint="For example: the address was corrected. The recipient's authority is checked again."
             error={missing ? 'A reason is required.' : fieldErrorsOf(outcome.error).reason}
           />
-          <Button type="submit" busy={outcome.status === 'pending'}>
+          <CommandButton type="submit" busy={outcome.status === 'pending'}>
             Confirm retry
-          </Button>
+          </CommandButton>
         </form>
       ) : null}
       {outcome.status === 'error' && outcome.error ? (

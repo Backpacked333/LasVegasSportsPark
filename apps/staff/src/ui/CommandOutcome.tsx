@@ -5,9 +5,11 @@
  * deciding with the shared predicates of `@sportspark/api-client` (`outcome.ts`) only:
  *
  * - `OutcomeUnknown` (`mayHaveTakenEffect`): no definite answer. A lost connection is one of them:
- *   commands are not sent while the dashboard is offline, so a network failure happened after the
- *   request left, and the client cannot tell whether the API committed it. So is a success status
- *   whose answer could not be read (RESPONSE_UNREADABLE). Never "nothing changed" and never
+ *   command controls are disabled while the dashboard is offline and a command is never paused
+ *   for later (`MUTATION_DEFAULTS`), so a command that fails this way was sent while the device
+ *   looked connected; the connection may have dropped after the request left, and the client
+ *   cannot tell whether the API committed it. So is a success status whose answer could not be
+ *   read (RESPONSE_UNREADABLE). Never "nothing changed" and never
  *   "something went wrong": "Try again" resends the same request with the same idempotency key,
  *   which the API answers with the stored outcome or runs once. The API's own message is shown
  *   when it sent one.

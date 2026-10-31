@@ -39,6 +39,7 @@ import {
 import { AVAILABILITY_KIND, QUALIFICATION_STATUS } from '../../features/operations/labels';
 import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { CommandButton } from '../../ui/CommandButton';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -347,13 +348,13 @@ function QualificationRow({
       {actions.length > 0 ? (
         <div className="ops-actions">
           {actions.includes('verify') ? (
-            <Button
+            <CommandButton
               busy={outcomeOf('verify').status === 'pending'}
               aria-label={`Verify ${label} for ${name}`}
               onClick={() => run('verify')}
             >
               Verify
-            </Button>
+            </CommandButton>
           ) : null}
           {actions.includes('reject') ? (
             <Button
@@ -391,9 +392,9 @@ function QualificationRow({
             required
             error={missing ? 'A reason is required.' : undefined}
           />
-          <Button type="submit" busy={outcomeOf(reasonFor).status === 'pending'}>
+          <CommandButton type="submit" busy={outcomeOf(reasonFor).status === 'pending'}>
             Confirm {reasonFor}
-          </Button>
+          </CommandButton>
         </form>
       ) : null}
       {error ? (
@@ -514,9 +515,9 @@ function RecordQualification() {
         hint="Only staff who manage qualifications may record verified evidence; others' evidence awaits verification."
       />
       <div className="ops-actions">
-        <Button type="submit" busy={command.isProcessing}>
+        <CommandButton type="submit" busy={command.isProcessing}>
           Record evidence
-        </Button>
+        </CommandButton>
         <Button variant="secondary" onClick={() => setOpen(false)}>
           Close
         </Button>
@@ -669,9 +670,9 @@ function WindowRow({ window: w, timezone }: { window: Availability; timezone: st
             required
             error={missing ? 'A reason is required.' : undefined}
           />
-          <Button type="submit" busy={withdraw.isProcessing}>
+          <CommandButton type="submit" busy={withdraw.isProcessing}>
             Confirm withdrawal
-          </Button>
+          </CommandButton>
         </form>
       ) : null}
       {withdraw.error ? (
@@ -751,9 +752,9 @@ function AddWindow({ personId }: { personId: string | null }) {
         error={missing.kind}
       />
       <TextField label="Note (optional)" value={note} onChange={setNote} />
-      <Button type="submit" busy={command.isProcessing}>
+      <CommandButton type="submit" busy={command.isProcessing}>
         Add window
-      </Button>
+      </CommandButton>
       {command.error && Object.keys(apiErrors).length === 0 ? (
         <CommandError error={command.error} onRetry={submit} />
       ) : null}

@@ -1,11 +1,13 @@
 /**
  * SCR-W-01/SCR-W-02 coach and referee workspace (SPK-UX-007): only the viewer's assignments, offers
  * first; "Accept" only where the API allows it; the command carries an idempotency key per intent
- * and the expected revision (§4.9); a stale revision is reported with "Reload".
+ * and the expected revision (§4.9); a stale revision is reported with "Reload"; offline the list is
+ * read-only and nothing is queued (§4.15).
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FACILITY_A, createTestApp } from '../../../testing/test-app';
 
@@ -142,6 +144,59 @@ describe('SCR-W-01 WorkspaceScreen', () => {
     await waitFor(() =>
       expect(app.fake.requests.filter((r) => r.route === '/me/assignments')).toHaveLength(2),
     );
+  });
+
+  it('SCR-W-01 offline (cached list with age): Accept is disabled, nothing is queued or sent after reconnecting (§4.15)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /me/assignments': LIST,
+        'POST /assignments/{id}/accept': { status: 200, body: { ok: true } },
+      },
+    });
+    render(app.at('/workspace'));
+    await screen.findByRole('list', { name: 'Assignments' });
+    act(() => app.connectivity.set(false));
+    const accept = screen.getByRole('button', { name: 'Accept assignment: U12 match a2' });
+    await waitFor(() => expect(accept).toBeDisabled());
+    expect(accept).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(accept);
+    expect(accept).not.toHaveAttribute('aria-busy');
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(accept).toBeEnabled());
+    // Nothing was paused for later: reconnecting sends nothing the user did not ask for again.
+    expect(app.fake.requests.some((r) => r.route === '/assignments/{id}/accept')).toBe(false);
+    expect(app.queryClient.getMutationCache().getAll()).toHaveLength(0);
+  });
+
+  it('§4.9: an accept whose answer was lost reads as an unknown outcome, retried with the same key', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me/assignments': LIST,
+        'POST /assignments/{id}/accept': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(503, apiErrorBody('INTERNAL_ERROR'))
+            : fakeResponse(200, { ok: true });
+        },
+      },
+    });
+    render(app.at('/workspace'));
+    await user.click(
+      await screen.findByRole('button', { name: 'Accept assignment: U12 match a2' }),
+    );
+    const unknown = await screen.findByTestId('state-outcome-unknown');
+    expect(unknown).toHaveTextContent('Outcome not known yet');
+    expect(unknown).toHaveTextContent('this may already have taken effect');
+    expect(screen.queryByText('Something went wrong')).toBeNull();
+    await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(calls).toBe(2));
+    const keys = app.fake.requests
+      .filter((r) => r.route === '/assignments/{id}/accept')
+      .map((r) => r.headers['idempotency-key']);
+    expect(new Set(keys).size).toBe(1);
   });
 
   it('says so when there are no assignments, without showing other activities', async () => {

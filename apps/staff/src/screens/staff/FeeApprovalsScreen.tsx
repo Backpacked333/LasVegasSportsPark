@@ -35,6 +35,7 @@ import {
 } from '../../features/operations/format';
 import { FEE_STATUS } from '../../features/operations/labels';
 import { Button } from '../../ui/Button';
+import { CommandButton } from '../../ui/CommandButton';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -251,13 +252,13 @@ function FeeRow({ fee, name }: { fee: FeeSubmission; name: string }) {
       {actions.length > 0 ? (
         <div className="ops-actions">
           {actions.includes('approve') ? (
-            <Button
+            <CommandButton
               busy={outcome('approve').status === 'pending'}
               aria-label={`Approve ${name}: ${title}`}
               onClick={approve}
             >
               Approve
-            </Button>
+            </CommandButton>
           ) : null}
           {actions.includes('adjust') ? (
             <Button
@@ -308,9 +309,9 @@ function FeeRow({ fee, name }: { fee: FeeSubmission; name: string }) {
             error={problems.reason}
           />
           <div className="ops-actions">
-            <Button type="submit" busy={outcome(mode).status === 'pending'}>
+            <CommandButton type="submit" busy={outcome(mode).status === 'pending'}>
               {mode === 'adjust' ? 'Approve adjusted amount' : 'Confirm rejection'}
-            </Button>
+            </CommandButton>
             <Button variant="secondary" onClick={() => setMode(null)}>
               Cancel
             </Button>
@@ -362,9 +363,9 @@ function ExportBatch({ currencies }: { currencies: string[] }) {
           hint="ISO code, for example USD."
         />
         <TextField label="Note (optional)" value={note} onChange={setNote} />
-        <Button type="submit" busy={command.isProcessing} disabled={!chosen}>
+        <CommandButton type="submit" busy={command.isProcessing} disabled={!chosen}>
           Export
-        </Button>
+        </CommandButton>
       </form>
       {command.error ? (
         <CommandError error={command.error} onRetry={submit} subject="This export" />

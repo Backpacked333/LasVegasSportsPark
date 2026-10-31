@@ -16,6 +16,8 @@
  * - Times are in the facility's zone (SPK-SCHED-008): the report's scope zone, and for each
  *   assignment the zone of its facility (`GET /v1/facilities/{id}`).
  * - The client never decides who may manage assignments: ACCESS_DENIED renders as not available.
+ * - Offline the screen is read-only (inventory SCR-S-33, §4.15): "Propose" is disabled with "Needs
+ *   a connection" and nothing is queued or sent later.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
@@ -44,8 +46,9 @@ import {
   localDate,
 } from '../../features/operations/format';
 import { ASSIGNMENT_STATUS } from '../../features/operations/labels';
-import { useNow } from '../../providers/AppProviders';
+import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { CommandButton } from '../../ui/CommandButton';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -291,6 +294,7 @@ const isTargetType = (v: string | undefined): v is TargetType =>
 
 function ProposeForm({ seed }: { seed: ProposalSeed }) {
   const { facilityId, timezone } = useOperatingFacility();
+  const { online } = useApp();
   const seededTarget: ChosenTarget | null =
     isTargetType(seed.targetType) && seed.targetId
       ? {
@@ -323,7 +327,9 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
   const command = useApiCommand('post', '/assignments', { invalidate: [['api', '/assignments']] });
   const apiErrors = fieldErrorsOf(command.error);
 
+  // Offline nothing is proposed or queued (§4.15): the control is disabled and nothing is sent.
   const submit = () => {
+    if (!online) return;
     const next: Record<string, string> = {};
     if (!personId) next.personId = 'Choose the person from the staff directory.';
     if (!kind) next.kind = 'Choose the kind of assignment.';
@@ -449,9 +455,9 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
         />
         <CheckboxField label="Offer it to the person now" checked={offer} onChange={setOffer} />
         <div className="ops-actions">
-          <Button type="submit" busy={command.isProcessing}>
+          <CommandButton type="submit" busy={command.isProcessing}>
             {offer ? 'Propose and offer' : 'Propose'}
-          </Button>
+          </CommandButton>
         </div>
       </form>
       {command.error && Object.keys(apiErrors).length === 0 ? (

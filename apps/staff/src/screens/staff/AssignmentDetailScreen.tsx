@@ -14,6 +14,8 @@
  *   non-conflicting candidates with the API's reasons; offering the slot to one, optionally
  *   withdrawing the original (absent official). A slot left uncovered close to kickoff is
  *   escalated by the API and shown.
+ * - Offline the screen is read-only (inventory SCR-S-33 "offline (read-only)", §4.15): every
+ *   command control is disabled with "Needs a connection" and nothing is queued or sent later.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -32,7 +34,9 @@ import {
 } from '../../features/operations/fields';
 import { formatInstant, formatRange, humanize } from '../../features/operations/format';
 import { ASSIGNMENT_STATUS } from '../../features/operations/labels';
+import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { CommandButton } from '../../ui/CommandButton';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
@@ -159,6 +163,7 @@ function useAvailableActions(a: Assignment) {
 function Transitions({ assignment: a }: { assignment: Assignment }) {
   const zone = useFacilityZone(a.facilityId);
   const queryClient = useQueryClient();
+  const { online } = useApp();
   const available = useAvailableActions(a);
   const invalidate = [
     ['api', '/assignments/{id}'],
@@ -200,6 +205,7 @@ function Transitions({ assignment: a }: { assignment: Assignment }) {
   const body = { expectedRevision: a.revision };
   const error = offer.error ?? complete.error ?? withdraw.error;
   const submitWithdraw = () => {
+    if (!online) return;
     if (!reason.trim()) {
       setMissingReason(true);
       return;
@@ -212,21 +218,21 @@ function Transitions({ assignment: a }: { assignment: Assignment }) {
       <h3 id="transitions-title">Change this assignment</h3>
       <div className="ops-actions">
         {allowed.includes('offer') ? (
-          <Button
+          <CommandButton
             busy={offer.isProcessing}
             onClick={() => void offer.submit({ path, body }).catch(() => undefined)}
           >
             Offer to the person
-          </Button>
+          </CommandButton>
         ) : null}
         {allowed.includes('complete') ? (
-          <Button
+          <CommandButton
             variant="secondary"
             busy={complete.isProcessing}
             onClick={() => void complete.submit({ path, body }).catch(() => undefined)}
           >
             Mark completed
-          </Button>
+          </CommandButton>
         ) : null}
         {allowed.includes('withdraw') ? (
           <Button
@@ -254,9 +260,9 @@ function Transitions({ assignment: a }: { assignment: Assignment }) {
             required
             error={missingReason ? 'A reason is required.' : fieldErrorsOf(withdraw.error).reason}
           />
-          <Button type="submit" busy={withdraw.isProcessing}>
+          <CommandButton type="submit" busy={withdraw.isProcessing}>
             Confirm withdrawal
-          </Button>
+          </CommandButton>
         </form>
       ) : null}
       {error ? <CommandError error={error} onReload={reload} subject="This assignment" /> : null}
@@ -278,6 +284,7 @@ const REASON_TONE: Record<Schema<'ReplacementCandidateReason'>['severity'], Stat
 
 function Replacement({ assignment: a }: { assignment: Assignment }) {
   const zone = useFacilityZone(a.facilityId);
+  const { online } = useApp();
   const candidates = useApiQuery({
     path: '/assignments/{id}/replacements',
     request: { path: { id: a.id } },
@@ -300,6 +307,7 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
   const canWithdraw = a.status === 'accepted' || a.status === 'offered';
 
   const submit = () => {
+    if (!online) return;
     const next: Record<string, string> = {};
     if (!personId) next.personId = 'Choose an eligible replacement.';
     if (!reason.trim()) next.reason = 'A reason is required.';
@@ -412,9 +420,9 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
               required
               error={problems.reason ?? fieldErrorsOf(command.error).reason}
             />
-            <Button type="submit" busy={command.isProcessing}>
+            <CommandButton type="submit" busy={command.isProcessing}>
               Offer the slot
-            </Button>
+            </CommandButton>
           </form>
         )}
       </QueryBoundary>
