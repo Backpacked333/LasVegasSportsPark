@@ -301,8 +301,11 @@ channel approval and the essential/promotional split (DEC-012, DEC-062), the rem
 
 - **COM-01 push devices — verified** (`__tests__/push-devices.spec.ts`): register, refresh on
   re-registration (one row), move a token from another account (older row revoked
-  `reregistered`, one transaction, a racing duplicate insert retries once; concurrent registrations
-  leave one active row on PGlite and PostgreSQL), list and revoke; the token is never returned,
+  `reregistered`, one transaction; a registration whose insert loses a race retries once and then
+  revokes the winner's row as `reregistered`, so both answer 201 and one row stays active. The
+  test forces that race: on PostgreSQL the first registration is held uncommitted after its insert
+  until the second blocks on the unique index; on PGlite the second's first insert fails with a
+  23505 once), list and revoke; the token is never returned,
   logged, audited or put in an event (`tokenHint`); push fans out to every active device and never
   to a revoked one; no device → `NO_ADDRESS` without a front-desk exception, the in-app notice is
   delivered; `identity.account_relinked` revokes the account's devices last registered or
