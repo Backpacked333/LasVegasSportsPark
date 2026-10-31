@@ -43,7 +43,7 @@ import { organizationOf } from './organization';
 
 type ClosureRow = Selectable<ClosuresTable> & { start: string; end: string };
 
-/** A preview stored before customers, obligations and messages were identified (SPK-SCHED-009). */
+/** A preview stored before customers, obligations, messages and staff were identified (SPK-SCHED-009). */
 function withImpactDefaults(impact: ClosureImpact | null): ClosureImpact | null {
   if (!impact) return null;
   return {
@@ -51,11 +51,13 @@ function withImpactDefaults(impact: ClosureImpact | null): ClosureImpact | null 
     customers: impact.customers ?? [],
     obligations: impact.obligations ?? [],
     messages: impact.messages ?? [],
+    staff: impact.staff ?? [],
     summary: {
       ...impact.summary,
       customers: impact.summary.customers ?? 0,
       obligations: impact.summary.obligations ?? 0,
       messages: impact.summary.messages ?? 0,
+      staff: impact.summary.staff ?? 0,
     },
   };
 }
@@ -809,8 +811,8 @@ export class ClosuresService implements ClosurePort {
     summary.teams = teams.size;
     summary.people = people.size;
     summary.equipment = equipment.size;
-    // SPK-SCHED-009, SPK-AT-009: customers, financial obligations and messages come from the
-    // modules that own them; committed persons are customers of the event too.
+    // SPK-SCHED-009, SPK-AT-009: customers, staff assignments, financial obligations and messages
+    // come from the modules that own them; committed persons are customers of the event too.
     const contributed = await this.impactContributors.collect(
       db,
       organizationId,
@@ -859,11 +861,13 @@ export class ClosuresService implements ClosurePort {
       customers: customerList,
       obligations: contributed.obligations,
       messages: contributed.messages,
+      staff: contributed.staff,
       summary: {
         ...summary,
         customers: customerList.length,
         obligations: contributed.obligations.length,
         messages: contributed.messages.length,
+        staff: new Set(contributed.staff.map((a) => a.personId)).size,
       },
     };
   }

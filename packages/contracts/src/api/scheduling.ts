@@ -294,36 +294,62 @@ export const ReservationSchema = z
   .openapi('Reservation');
 export type Reservation = z.infer<typeof ReservationSchema>;
 
-export const ListReservationsQuery = z.object({
-  facilityId: z.uuid().optional(),
-  resourceId: z.uuid().optional(),
-  start: Instant,
-  end: Instant,
-});
+/**
+ * R3-PERFORMANCE-04 (§4.5 bounded queries): the longest window `GET /v1/reservations` and
+ * `GET /v1/resources/{id}/availability` cover, the bound the customer booking search already uses
+ * (`BookingAvailabilityQuery`). A longer or reversed window is refused as VALIDATION_FAILED, so
+ * one request walks and returns a bounded number of candidates (at most 31 days of 5-minute steps,
+ * 8,928 slots) instead of blocking the process on a multi-year search.
+ */
+export const SCHEDULE_QUERY_MAX_SPAN_DAYS = 31;
+export const SCHEDULE_QUERY_MAX_SPAN_MS = SCHEDULE_QUERY_MAX_SPAN_DAYS * 86_400_000;
+const startBeforeEnd = (v: { start: string; end: string }) =>
+  Date.parse(v.start) < Date.parse(v.end);
+const withinQuerySpan = (v: { start: string; end: string }) =>
+  Date.parse(v.end) - Date.parse(v.start) <= SCHEDULE_QUERY_MAX_SPAN_MS;
 
-export const AvailabilityQuery = z.object({
-  start: Instant,
-  end: Instant,
-  durationMinutes: z.coerce
-    .number()
-    .int()
-    .min(5)
-    .max(24 * 60),
-  setupMinutes: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(24 * 60)
-    .optional(),
-  cleanupMinutes: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(24 * 60)
-    .optional(),
-  /** Candidate start times step (default 15). */
-  stepMinutes: z.coerce.number().int().min(5).max(240).optional(),
-});
+export const ListReservationsQuery = z
+  .object({
+    facilityId: z.uuid().optional(),
+    resourceId: z.uuid().optional(),
+    start: Instant,
+    end: Instant,
+  })
+  .refine(startBeforeEnd, { message: 'start must be before end', path: ['end'] })
+  .refine(withinQuerySpan, {
+    message: `the window is at most ${SCHEDULE_QUERY_MAX_SPAN_DAYS} days`,
+    path: ['end'],
+  });
+
+export const AvailabilityQuery = z
+  .object({
+    start: Instant,
+    end: Instant,
+    durationMinutes: z.coerce
+      .number()
+      .int()
+      .min(5)
+      .max(24 * 60),
+    setupMinutes: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 60)
+      .optional(),
+    cleanupMinutes: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 60)
+      .optional(),
+    /** Candidate start times step (default 15). */
+    stepMinutes: z.coerce.number().int().min(5).max(240).optional(),
+  })
+  .refine(startBeforeEnd, { message: 'start must be before end', path: ['end'] })
+  .refine(withinQuerySpan, {
+    message: `the window is at most ${SCHEDULE_QUERY_MAX_SPAN_DAYS} days`,
+    path: ['end'],
+  });
 export type AvailabilityQuery = z.infer<typeof AvailabilityQuery>;
 
 export const AvailabilityResponse = z
@@ -450,6 +476,17 @@ export const SeriesEditChanges = z
     setupMinutes: Minutes.optional(),
     cleanupMinutes: Minutes.optional(),
     resourceIds: z.array(z.uuid()).min(1).max(20).optional(),
+    /**
+     * SPK-SCHED-008 (R3-TRACE-A-08): required when the new `localStartTime` does not exist on some
+     * in-scope date (spring-forward gap), as on creation; without it the edit, its preview
+     * included, is refused with details.code dst_resolution_required naming those dates. The
+     * series' own local start time reuses the policy chosen for it. `skip` cancels the occurrence
+     * on such a date; it never keeps its old start. An `entire_series` edit stores the chosen
+     * policy on the series.
+     */
+    nonexistentPolicy: NonexistentTimePolicy.optional(),
+    /** SPK-SCHED-008: required when the new `localStartTime` occurs twice on some in-scope date (fall-back overlap). */
+    ambiguousPolicy: AmbiguousTimePolicy.optional(),
     /** Cancel the selected occurrences instead of changing them. */
     cancel: z.boolean().optional(),
   })
@@ -548,6 +585,25 @@ export const ClosureImpactSchema = z
         status: z.string(),
       }),
     ),
+    /**
+     * SPK-SCHED-009 staff (R3-TRACE-A-06): live staff assignments (officials, coaches, supervisors,
+     * organizers; proposed, offered or accepted) on the affected events, from the module that owns
+     * them, so the scheduler resolving the closure knows whom to stand down or reassign. Ids, kind,
+     * role and status only. Every response carries it; the default covers an impact recorded
+     * before staff was identified.
+     */
+    staff: z
+      .array(
+        z.object({
+          assignmentId: z.uuid(),
+          personId: z.uuid(),
+          eventId: z.uuid(),
+          kind: z.string(),
+          role: z.string(),
+          status: z.string(),
+        }),
+      )
+      .default([]),
     summary: z.object({
       games: z.number().int(),
       programs: z.number().int(),
@@ -559,6 +615,8 @@ export const ClosureImpactSchema = z
       customers: z.number().int(),
       obligations: z.number().int(),
       messages: z.number().int(),
+      /** Distinct staff members with a live assignment on an affected event (`staff`). */
+      staff: z.number().int().default(0),
     }),
   })
   .openapi('ClosureImpact');

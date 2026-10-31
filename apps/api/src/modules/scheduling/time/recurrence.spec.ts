@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { localTimeOf, minutesSinceMidnight, resolveLocal, toLocal } from './local-time';
-import { candidateDates, materializeOccurrences } from './recurrence';
+import { candidateDates, describesMoreThan, materializeOccurrences } from './recurrence';
 
 const LA = 'America/Los_Angeles';
 // 2026: spring forward Sunday 2026-03-08 02:00 PST → 03:00 PDT; fall back Sunday 2026-11-01 02:00 PDT → 01:00 PST.
@@ -119,5 +119,39 @@ describe('SPK-SCHED-007 recurrence materialization', () => {
       '2026-01-09',
     ]);
     expect(candidateDates({ ...rule, count: undefined, until: '2030-01-01' }, 3)).toHaveLength(3);
+  });
+
+  it('R3-TIME-MONEY-04 / SPK-SCHED-007: a rule whose until date describes more dates than the cap is detected, not truncated silently', () => {
+    // daily from 2026-11-01 through 2027-12-31: 426 dates; the cap of 366 would end on 2027-11-01
+    const long = {
+      frequency: 'daily' as const,
+      interval: 1,
+      startDate: '2026-11-01',
+      until: '2027-12-31',
+    };
+    expect(candidateDates(long, 366).at(-1)?.localDate).toBe('2027-11-01');
+    expect(describesMoreThan(long, 366)).toBe(true);
+    // exactly at the cap is allowed: 2026-11-01 through 2027-11-01 is 366 dates
+    expect(describesMoreThan({ ...long, until: '2027-11-01' }, 366)).toBe(false);
+    expect(describesMoreThan({ ...long, until: '2027-11-02' }, 366)).toBe(true);
+    // count is bounded by the rule itself
+    const counted = {
+      frequency: 'daily' as const,
+      interval: 1,
+      startDate: '2026-11-01',
+      count: 366,
+    };
+    expect(describesMoreThan(counted, 366)).toBe(false);
+    // weekly rules count every listed weekday; until far in the future enumerates only cap + 1
+    const weekly = {
+      frequency: 'weekly' as const,
+      interval: 1,
+      byWeekday: [1, 3, 5],
+      startDate: '2026-11-02',
+      until: '9999-12-31',
+    };
+    expect(describesMoreThan(weekly, 52)).toBe(true);
+    expect(describesMoreThan({ ...weekly, until: '2027-04-23' }, 75)).toBe(false);
+    expect(candidateDates({ ...weekly, until: '2027-04-23' }, 1000)).toHaveLength(75);
   });
 });

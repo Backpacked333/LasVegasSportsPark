@@ -1508,6 +1508,20 @@
             "minItems": 1,
             "maxItems": 20
           },
+          "nonexistentPolicy": {
+            "type": "string",
+            "enum": [
+              "shift_forward",
+              "skip"
+            ]
+          },
+          "ambiguousPolicy": {
+            "type": "string",
+            "enum": [
+              "first",
+              "second"
+            ]
+          },
           "cancel": {
             "type": "boolean"
           }
@@ -1865,6 +1879,44 @@
               ]
             }
           },
+          "staff": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "assignmentId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "personId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "eventId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "assignmentId",
+                "personId",
+                "eventId",
+                "kind",
+                "role",
+                "status"
+              ]
+            },
+            "default": []
+          },
           "summary": {
             "type": "object",
             "properties": {
@@ -1897,6 +1949,10 @@
               },
               "messages": {
                 "type": "integer"
+              },
+              "staff": {
+                "type": "integer",
+                "default": 0
               }
             },
             "required": [

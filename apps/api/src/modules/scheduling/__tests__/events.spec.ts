@@ -694,6 +694,52 @@ describe('EventSchedulingPort: direct scheduling for owning records (SPK-SCHED-0
     ]);
   });
 
+  it('R3-PERFORMANCE-04 / §4.5: availability and reservation queries refuse a reversed window or one longer than 31 days', async () => {
+    const court = await seedResource(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      name: 'Court bounded',
+      kind: 'room',
+    });
+    const header = await t.authHeader(scheduler);
+    const fiveYears = { start: '2026-01-01T00:00:00Z', end: '2031-01-01T00:00:00Z' };
+    const reversed = { start: at('2026-11-03', '00:00'), end: at('2026-11-02', '00:00') };
+    const thirtyOneDays = { start: '2026-11-01T08:00:00Z', end: '2026-12-02T08:00:00Z' };
+    const availability = (window: { start: string; end: string }) =>
+      t.http
+        .get(`/v1/resources/${court.resourceId}/availability`)
+        .query({ ...window, durationMinutes: 5, stepMinutes: 5 })
+        .set(header);
+    const reservations = (window: { start: string; end: string }) =>
+      t.http
+        .get('/v1/reservations')
+        .query({ ...window, facilityId: facility })
+        .set(header);
+    for (const window of [fiveYears, reversed]) {
+      for (const res of [await availability(window), await reservations(window)]) {
+        expect(res.status, JSON.stringify(res.body)).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_FAILED');
+      }
+    }
+    // the bound is inclusive and the same one the customer booking search uses
+    const bounded = await availability(thirtyOneDays);
+    expect(bounded.status, JSON.stringify(bounded.body)).toBe(200);
+    expect(bounded.body.slots).toHaveLength(31 * 24 * 12);
+    expect((await reservations(thirtyOneDays)).status).toBe(200);
+    // in-process port callers are held to the same window
+    await expect(
+      events.findAvailableSlots(scheduler, {
+        resourceId: court.resourceId,
+        interval: fiveYears,
+        durationMinutes: 5,
+        stepMinutes: 5,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', details: { maxSpanDays: 31 } });
+    await expect(
+      events.listReservations(scheduler, { facilityId: facility, interval: reversed }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+  });
+
   it('lists events by facility window with resource and source filters and cursor pagination', async () => {
     const sourceId = newId();
     for (let i = 0; i < 3; i += 1) {

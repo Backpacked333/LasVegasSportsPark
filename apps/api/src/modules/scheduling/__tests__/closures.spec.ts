@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperationalExceptions, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { CLOSURE_PORT, type ClosurePort } from '../ports';
+import { ClosureImpactContributors } from '../services/closure-impact-contributors';
 import { ClosuresService } from '../services/closures.service';
 import { EventsService } from '../services/events.service';
 import { SchedulingModule } from '../scheduling.module';
@@ -442,6 +443,96 @@ describe('closures: impact preview, apply, lift (SPK-SCHED-009, SPK-FAC-003/004,
       .query({ facilityId: facility, status: 'active' })
       .set(auth);
     expect(list.body.map((c: { id: string }) => c.id)).toContain(closure.id);
+  });
+
+  it('SPK-SCHED-009 / R3-TRACE-A-06: the preview and the applied closure name the staff assigned to the affected events', async () => {
+    const referee = newId();
+    const coach = newId();
+    const game = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.pitchId],
+      start: at('2026-11-21', '10:00'),
+      end: at('2026-11-21', '11:00'),
+      title: 'Staffed league game',
+      sourceType: 'fixture',
+      sourceId: newId(),
+    });
+    const practice = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.northHalfId],
+      start: at('2026-11-21', '12:00'),
+      end: at('2026-11-21', '13:00'),
+      kind: 'practice',
+      title: 'Staffed practice',
+    });
+    const later = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.pitchId],
+      start: at('2026-11-21', '18:00'),
+      end: at('2026-11-21', '19:00'),
+      title: 'Evening game outside the closure',
+    });
+    const assignment = (eventId: string, personId: string, kind: string, role: string) => ({
+      assignmentId: newId(),
+      personId,
+      eventId,
+      kind,
+      role,
+      status: 'accepted',
+    });
+    const onGame = [
+      assignment(game.id, referee, 'official', 'referee'),
+      assignment(game.id, coach, 'coach', 'head_coach'),
+    ];
+    const onPractice = [assignment(practice.id, coach, 'coach', 'head_coach')];
+    const outside = assignment(later.id, newId(), 'official', 'referee');
+    // the module owning staff assignments answers for the events it is given (workforce in the app)
+    const seen: string[][] = [];
+    t.app.get(ClosureImpactContributors).register('test.staff_assignments', async (_db, o, evs) => {
+      expect(o).toBe(org);
+      seen.push(evs.map((e) => e.eventId).sort());
+      const ids = new Set(evs.map((e) => e.eventId));
+      // a slip naming an event outside the closure is never reported
+      return {
+        staff: [...onGame, ...onPractice, outside].filter(
+          (a) => ids.has(a.eventId) || a === outside,
+        ),
+      };
+    });
+    const interval = { start: at('2026-11-21', '09:00'), end: at('2026-11-21', '14:00') };
+    const res = await t.http
+      .get('/v1/closure-impact')
+      .query({ facilityId: facility, ...interval })
+      .set(auth);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const expected = [...onGame, ...onPractice].sort(
+      (a, b) => a.eventId.localeCompare(b.eventId) || a.assignmentId.localeCompare(b.assignmentId),
+    );
+    expect(res.body.staff).toEqual(expected);
+    expect(res.body.summary).toMatchObject({ games: 1, programs: 1, staff: 2 });
+    expect(seen.at(-1)).toEqual([game.id, practice.id].sort());
+
+    const closure = await closures.createClosure(facilitiesOperator, {
+      facilityId: facility,
+      interval,
+      reason: 'Lightning',
+      source: 'manual',
+    });
+    expect(closure.impact?.staff).toEqual(expected);
+    const applied = await closures.applyClosure(facilitiesOperator, closure.id, {
+      mode: 'leave_for_resolution',
+      expectedRevision: 1,
+    });
+    expect(applied.impact?.staff).toEqual(expected);
+    expect(applied.impact?.summary.staff).toBe(2);
+    const read = await t.http.get(`/v1/closures/${closure.id}`).set(auth);
+    expect(read.body.impact.staff).toEqual(expected);
+    expect(read.body.impact.staff.map((a: { eventId: string }) => a.eventId)).not.toContain(
+      later.id,
+    );
   });
 
   it('authorization and idempotency: front desk cannot close, other organizations see nothing, replays return the same closure', async () => {

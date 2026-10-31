@@ -37,7 +37,7 @@ import type { CancelEventSeriesInput, CreateEventSeriesInput, EventSeriesCreated
 import { SchedulingActions } from '../scheduling.actions';
 import type { EventChangeKind } from '../scheduling.events';
 import { localDateOf, localTimeOf, resolveLocal } from '../time/local-time';
-import { candidateDates, materializeOccurrences } from '../time/recurrence';
+import { describesMoreThan, materializeOccurrences } from '../time/recurrence';
 import { EventWriter, sameResourceSet, type EventRow, type FacilityRow } from './event-writer';
 import { organizationOf } from './organization';
 
@@ -360,12 +360,14 @@ export class EventSeriesService {
     );
     // SPK-SCHED-003: the reserved resources' turnover requirement is the minimum buffer
     const buffers = this.writer.effectiveBuffers(resources, spec);
-    if (
-      options.conflicts === 'per_occurrence' &&
-      candidateDates(spec.recurrence, options.maxOccurrences + 1).length > options.maxOccurrences
-    ) {
+    // R3-TIME-MONEY-04 (SPK-SCHED-007): a rule describing more occurrences than the series may
+    // hold is refused on every path (HTTP and port), never truncated to its first dates while the
+    // stored rule still names the later ones. `count` is bounded by the schema; `until` is not.
+    if (describesMoreThan(spec.recurrence, options.maxOccurrences)) {
       throw errors.validation(
-        `A series through the scheduling port holds at most ${options.maxOccurrences} occurrences.`,
+        options.conflicts === 'per_occurrence'
+          ? `A series through the scheduling port holds at most ${options.maxOccurrences} occurrences.`
+          : `A series holds at most ${options.maxOccurrences} occurrences; split a longer schedule into several series.`,
         { code: 'SERIES_TOO_LONG', maxOccurrences: options.maxOccurrences },
       );
     }
@@ -621,10 +623,22 @@ export class EventSeriesService {
               facility.id,
               body.changes.resourceIds,
             );
-      const policy = {
-        nonexistent: series.nonexistent_policy,
-        ambiguous: series.ambiguous_policy,
+      // SPK-SCHED-008 (R3-TRACE-A-08): a policy named by the edit wins; the stored one is only a
+      // fallback and never resolves a newly requested gap or overlap on its own (it may be the
+      // default creation stored without anyone choosing it).
+      const requested = {
+        nonexistent: body.changes.nonexistentPolicy,
+        ambiguous: body.changes.ambiguousPolicy,
       };
+      const policy = {
+        nonexistent: requested.nonexistent ?? series.nonexistent_policy,
+        ambiguous: requested.ambiguous ?? series.ambiguous_policy,
+      };
+      // Creation (and an entire-series edit) required an explicit choice for every gap or overlap
+      // the series' own local time meets, so the stored policy is a real choice for that time.
+      const seriesLocalTime = series.local_start_time.slice(0, 5);
+      const unresolvedGap: string[] = [];
+      const unresolvedOverlap: string[] = [];
       // SPK-SCHED-003: buffers follow the resources actually reserved; current buffers carry over
       // only while an occurrence stays on the same resources, never below their requirement.
       const resourcesById = new Map<string, Awaited<ReturnType<EventWriter['loadResources']>>>();
@@ -660,6 +674,8 @@ export class EventSeriesService {
         proposal: ProposedEvent | null;
         changeKind: EventChangeKind;
         dstResolution: EventRow['dst_resolution'];
+        /** The new local start time does not exist on this date and the edit chose `skip`. */
+        skipped: boolean;
       }> = [];
       for (const event of targets) {
         const before = await this.writer.details(trx, event);
@@ -671,22 +687,59 @@ export class EventSeriesService {
             proposal: null,
             changeKind: 'canceled',
             dstResolution: event.dst_resolution,
+            skipped: false,
           });
           continue;
         }
-        const localDate = localDateOf(facility.timezone, new Date(event.scheduled_start));
-        const localTime =
-          body.changes.localStartTime ??
-          localTimeOf(facility.timezone, new Date(event.scheduled_start));
+        const currentStart = new Date(event.scheduled_start);
+        const localDate = localDateOf(facility.timezone, currentStart);
+        const currentTime = localTimeOf(facility.timezone, currentStart);
+        const requestedTime = body.changes.localStartTime;
+        const timeRequested = requestedTime !== undefined && requestedTime !== currentTime;
         const currentDuration = Math.round(
-          (new Date(event.scheduled_end).getTime() - new Date(event.scheduled_start).getTime()) /
-            60_000,
+          (new Date(event.scheduled_end).getTime() - currentStart.getTime()) / 60_000,
         );
         const duration = body.changes.durationMinutes ?? currentDuration;
-        const resolved = resolveLocal(localDate, localTime, facility.timezone, policy) ?? {
-          instant: new Date(event.scheduled_start),
+        // SPK-SCHED-008: an occurrence whose wall-clock start the edit does not change keeps its
+        // instant and recorded resolution, unless the edit names a policy to apply to it.
+        let resolved: { instant: Date; resolution: EventRow['dst_resolution'] } | null = {
+          instant: currentStart,
           resolution: event.dst_resolution,
         };
+        if (timeRequested || requested.nonexistent || requested.ambiguous) {
+          const reresolved = resolveLocal(
+            localDate,
+            timeRequested ? requestedTime : currentTime,
+            facility.timezone,
+            policy,
+          );
+          resolved =
+            reresolved && reresolved.instant.getTime() === currentStart.getTime()
+              ? { instant: currentStart, resolution: event.dst_resolution }
+              : reresolved;
+          if (timeRequested && requestedTime !== seriesLocalTime) {
+            // "ambiguous or nonexistent times require resolution": the edit names the policy
+            const gap = reresolved === null || reresolved.resolution === 'shifted_forward';
+            const overlap =
+              reresolved?.resolution === 'first' || reresolved?.resolution === 'second';
+            if (gap && requested.nonexistent === undefined) unresolvedGap.push(localDate);
+            if (overlap && requested.ambiguous === undefined) unresolvedOverlap.push(localDate);
+          }
+        }
+        if (resolved === null) {
+          // `skip` chosen for a date where the new local time does not exist: the occurrence is
+          // canceled, never left at its old start while the rest of the series moves
+          plans.push({
+            event,
+            before,
+            after: null,
+            proposal: null,
+            changeKind: 'canceled',
+            dstResolution: event.dst_resolution,
+            skipped: true,
+          });
+          continue;
+        }
         const scheduledStart = resolved.instant;
         const scheduledEnd = new Date(scheduledStart.getTime() + duration * 60_000);
         const resourceIds = resources ? resources.map((r) => r.id) : event.resource_ids;
@@ -724,7 +777,22 @@ export class EventSeriesService {
           proposal,
           changeKind,
           dstResolution: resolved.resolution,
+          skipped: false,
         });
+      }
+      if (unresolvedGap.length > 0 || unresolvedOverlap.length > 0) {
+        throw errors.validation(
+          'The new local start time does not exist or occurs twice on some dates; choose how to resolve them.',
+          {
+            code: 'dst_resolution_required',
+            nonexistentLocalDates: unresolvedGap,
+            ambiguousLocalDates: unresolvedOverlap,
+            options: {
+              nonexistentPolicy: unresolvedGap.length > 0 ? ['shift_forward', 'skip'] : [],
+              ambiguousPolicy: unresolvedOverlap.length > 0 ? ['first', 'second'] : [],
+            },
+          },
+        );
       }
 
       const preview: SeriesEditPreview = {
@@ -758,7 +826,10 @@ export class EventSeriesService {
           const canceled = await this.writer.cancel(
             trx,
             event,
-            body.reason ?? 'Canceled by series edit',
+            body.reason ??
+              (plan.skipped
+                ? 'Skipped: the new local start time does not exist on this date'
+                : 'Canceled by series edit'),
           );
           await this.writer.notifyChanged(trx, {
             organizationId,
@@ -810,6 +881,8 @@ export class EventSeriesService {
         setup_minutes: number;
         cleanup_minutes: number;
         resource_ids: string[];
+        nonexistent_policy: NonexistentTimePolicy;
+        ambiguous_policy: AmbiguousTimePolicy;
         status: 'active' | 'ended';
       }> = {};
       if (body.scope === 'entire_series') {
@@ -828,6 +901,9 @@ export class EventSeriesService {
           seriesUpdate.cleanup_minutes = buffers.cleanupMinutes;
         }
         if (resources) seriesUpdate.resource_ids = resources.map((r) => r.id);
+        // the policy the scheduler chose becomes the series' own (SPK-SCHED-008)
+        if (requested.nonexistent) seriesUpdate.nonexistent_policy = requested.nonexistent;
+        if (requested.ambiguous) seriesUpdate.ambiguous_policy = requested.ambiguous;
         if (body.changes.cancel) seriesUpdate.status = 'ended';
       }
       await trx
@@ -851,6 +927,9 @@ export class EventSeriesService {
           scope: body.scope,
           occurrenceIndex: body.occurrenceIndex ?? null,
           affected: plans.length,
+          skippedEventIds: plans.filter((p) => p.skipped).map((p) => p.event.id),
+          nonexistentPolicy: requested.nonexistent ?? null,
+          ambiguousPolicy: requested.ambiguous ?? null,
         },
       });
       return { ...preview, committed: true };

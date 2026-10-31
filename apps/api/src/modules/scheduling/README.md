@@ -43,7 +43,7 @@ Every table carries `organization_id`; references use composite `(organization_i
 | Method          | Path                                          | Action                                                                                     |
 | --------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | POST/GET/PATCH  | `/resources`, `/resources/{id}`               | `scheduling.manage_inventory` / `read_inventory`                                           |
-| GET             | `/resources/{id}/availability`                | `scheduling.read_schedule`                                                                 |
+| GET             | `/resources/{id}/availability`                | `scheduling.read_schedule`; `start < end`, at most 31 days (R3-PERFORMANCE-04)             |
 | POST/GET/PATCH  | `/resource-configurations[/{id}]`             | manage / read inventory                                                                    |
 | POST/GET        | `/conflict-units`                             | manage / read inventory                                                                    |
 | POST/GET/DELETE | `/operating-hours[/{id}]`                     | manage / read inventory                                                                    |
@@ -171,6 +171,28 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   on some date and the matching `nonexistentPolicy` / `ambiguousPolicy` was not sent, the series is
   refused (`VALIDATION_FAILED`, `details.code = dst_resolution_required` with the local dates); the
   defaults are never applied silently (`event-series.spec.ts`).
+- Series edits follow the same rule (R3-TRACE-A-08, verified: `event-series.spec.ts`
+  "R3-TRACE-A-08 / SPK-SCHED-008"). When a new `localStartTime` falls in a gap or an overlap on an
+  in-scope date, `changes.nonexistentPolicy` / `changes.ambiguousPolicy` must name the resolution,
+  or the edit and its preview are refused with `dst_resolution_required`. For a new time, the
+  policy stored on the series does not count as a choice, because creation stores the defaults
+  when it needed none. It does count for the series' own local start time, since creation (or the
+  entire-series edit that set that time) required a choice wherever one was needed. Under `skip`,
+  an occurrence whose new time does not exist on its date is canceled, never left at its old
+  start. An occurrence whose start instant the edit does not change keeps its recorded
+  `dst_resolution`. An `entire_series` edit stores the chosen policy on the series.
+- A recurrence rule describes at most `maxSeriesOccurrences` (366) dates over HTTP and 52 through
+  the port. `count` is bounded by the schema and `until` is not, so a longer rule is refused with
+  `VALIDATION_FAILED` `details.code = SERIES_TOO_LONG` on both paths and is never cut short to its
+  first dates while the stored rule names the later ones (R3-TIME-MONEY-04, verified:
+  `event-series.spec.ts` and `time/recurrence.spec.ts` "R3-TIME-MONEY-04").
+  `describesMoreThan(rule, max)` is exported for other modules that materialize recurrences.
+- `GET /v1/reservations` and `GET /v1/resources/{id}/availability` cover an ordered window of at
+  most 31 days (`SCHEDULE_QUERY_MAX_SPAN_DAYS`), the bound the customer booking search uses. A
+  longer or reversed window is `VALIDATION_FAILED`, over HTTP and for in-process callers of
+  `AvailabilityPort` / `ReservationQueryPort` alike, so one search walks and returns a bounded
+  number of candidates: at most 8,928 slots at the 5-minute step (R3-PERFORMANCE-04, verified:
+  `events.spec.ts` "R3-PERFORMANCE-04").
 - Operating hours (SPK-SCHED-001/008) compare the local wall-clock start and end
   (`localMinuteSpan`), never the start plus elapsed minutes: a fall-back event 00:30 PDT to
   01:30 PST fits a 00:00-02:00 window, a spring-forward event 01:30 PST to 03:30 PDT does not fit
@@ -272,22 +294,31 @@ publication against the one published first).
 
 ### Closure impact contributors (SPK-SCHED-009, SPK-AT-009) — verified
 
-`ClosureImpactContributors` (exported) lets the modules that own participation, money and messages
-complete a closure preview: `impact.customers` (enrollment: participants of the catalog sessions
-linked to the affected events; competition: rostered players of committed teams; committed persons),
-`impact.obligations` (orders those enrollments were paid through) and `impact.messages` (unsent
-notices about the events), with counts in `impact.summary`. Contributors read through the preview's
-executor. **Verified**: `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`. Any financial
-adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009).
+`ClosureImpactContributors` (exported) lets the modules that own participation, staff, money and
+messages complete a closure preview: `impact.customers` (enrollment: participants of the catalog
+sessions linked to the affected events; competition: rostered players of committed teams;
+committed persons), `impact.staff` (live staff assignments on the affected events: assignment,
+person, event, kind, role and status), `impact.obligations` (orders those enrollments were paid
+through) and `impact.messages` (unsent notices about the events), with counts in `impact.summary`
+(`summary.staff` counts distinct staff members). Contributors read through the preview's executor.
+A contribution naming an event outside the closure is dropped. An impact stored before `staff`
+existed reads with `staff: []` and `summary.staff: 0`. **Verified**:
+`apps/api/src/__tests__/journeys/spk-at-009.spec.ts`; the staff section through a registered
+contributor in `__tests__/closures.spec.ts` "SPK-SCHED-009 / R3-TRACE-A-06". **Integration (not
+this module, R3-TRACE-A-06)**: workforce registers the staff contributor; until it does, live
+previews list no staff. Any financial adjustment of an affected obligation stays a staff
+resolution (DEC-003, DEC-009).
 
 ### Event title bound on every path (R2-TENANCY-INPUT-02, §4.10) — verified
 
-- An event title is 1 to 200 characters on every path that creates an event, not only
-  `POST /v1/events`: `EventSchedulingPort.createEvent` (competition fixtures, catalog sessions,
-  enrollment bookings), `importEvent`, series and schedule drafts all write through
-  `EventWriter.insertEvent`, which refuses with `VALIDATION_FAILED` naming `title`; `createEvent`
-  and `importEvent` check before opening their transaction (`__tests__/event-import.spec.ts`
-  "R2-TENANCY-INPUT-02").
+- An event title is 1 to 200 characters on every path that creates an event:
+  `EventSchedulingPort.createEvent` (competition fixtures, catalog sessions, enrollment bookings),
+  `importEvent`, series (`POST /v1/event-series`, the port's `createEventSeries`) and schedule
+  drafts all write through `EventWriter.insertEvent`, which refuses with `VALIDATION_FAILED` naming
+  `title`; `createEvent` and `importEvent` check before opening their transaction
+  (`__tests__/event-import.spec.ts` "R2-TENANCY-INPUT-02"). There is no direct event-creation
+  route: the events controller serves only `GET /v1/events`, `GET /v1/events/{id}`,
+  `GET /v1/reservations` and `GET /v1/resources/{id}/availability`.
 
 ## Known gaps / pending decisions
 
@@ -296,7 +327,11 @@ adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009)
   administrator) are placeholders until the physical-inventory and approval decision.
 - Proposed: a series through the scheduling port holds at most 52 occurrences
   (`PORT_SERIES_MAX_OCCURRENCES`); longer bookings are split by the owning module. The HTTP series
-  keeps `maxSeriesOccurrences` (366).
+  keeps `maxSeriesOccurrences` (366). Both refuse a longer rule (`SERIES_TOO_LONG`) rather than
+  truncating it.
+- Proposed: the 31-day window of `GET /v1/reservations` and `GET /v1/resources/{id}/availability`
+  (`SCHEDULE_QUERY_MAX_SPAN_DAYS`) follows the booking search's bound; the list is not paged within
+  the window.
 - Proposed: an imported event keeps only its batch as `source_id`; linking it back to the owning
   module's imported record (fixture, session) is that module's mapping (external mappings, MIG).
 - Integration (not this module): the committed `docs/api/openapi.json` and the generated
@@ -311,7 +346,8 @@ adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009)
   resource is descriptive until the facilities module owns equipment assets.
 - Staffing constraints are stored but not validated here; workforce assignments are checked by
   the workforce module and are not written back as scheduling commitments (workforce README,
-  "Known gaps").
+  "Known gaps"). A closure impact names them through the workforce staff contributor
+  (`impact.staff`), not through `summary.people`, which counts committed persons only.
 - SPK-SCHED-009 financial obligations and messages are resolved by finance and communications from
   the `source_records` in the closure impact; this module names the affected events and parties only.
 - Operating-hours overlap between windows is not constrained (only duplicate start times are).
