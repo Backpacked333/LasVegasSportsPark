@@ -24,6 +24,12 @@
  *   stopped by its holder. The reference itself can never be shown again (only its hash is kept).
  * - The scannable symbol depends on the desk scanners, which are DEC-023 (Technical lead/account
  *   owners): until then the reference is shown as text, and that is labelled as pending.
+ * - A failed issue or withdrawal is shown by the shared account `CommandError` (§4.9, SPK-UX-008):
+ *   no definite answer (`mayHaveTakenEffect`) reads "No answer yet" with "Check again", which
+ *   resends the same request under the same key (an issue then returns the pass it made, with its
+ *   reference); IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with
+ *   "Reload", after which a pass it made is listed under "Other active passes". Never "Something
+ *   went wrong" for a request that may have gone through.
  */
 import {
   formatAge,
@@ -45,6 +51,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
+import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
 import { usePassStore, type StoredPass } from './pass-store';
 
 type MyPass = Schema<'MyPass'>;
@@ -55,6 +62,18 @@ export const REPLACE_REASON = 'Replaced by the holder in the app';
 export const WITHDRAW_REASON = 'Withdrawn by the holder in the app: reference not on this device';
 
 const MY_PASSES_KEY = ['api', '/me/passes'] as const;
+
+/** A refused issue (ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED, NOT_FOUND), without the code. */
+const ISSUE_NOT_AVAILABLE: NotAvailableCopy = {
+  title: 'Pass not available',
+  description: 'A pass cannot be issued to this account. The front desk can help.',
+};
+/** A refused withdrawal of a pass whose reference is not on this device. */
+const WITHDRAW_NOT_AVAILABLE: NotAvailableCopy = {
+  title: 'Pass not available',
+  description:
+    'This pass is no longer available to withdraw from the app. The front desk can help.',
+};
 
 /**
  * What the API says about the pass stored on this device (ENT-01): `active`, `revoked` (with when),
@@ -352,15 +371,13 @@ function PassContent() {
       ) : null}
 
       {issue.error ? (
-        issue.error.isNotFound || issue.error.isPermissionRestriction ? (
-          <StateView
-            variant="unavailable"
-            title="Pass not available"
-            description="A pass cannot be issued to this account. The front desk can help."
-          />
-        ) : (
-          <StateView variant="error" error={issue.error} onRetry={() => void getPass()} />
-        )
+        // "Check again" after no answer resends the same issue (same key), so one pass is issued.
+        <CommandError
+          error={issue.error}
+          onRetry={() => void getPass()}
+          notFound={ISSUE_NOT_AVAILABLE}
+          denied={ISSUE_NOT_AVAILABLE}
+        />
       ) : null}
       {saveProblem ? (
         <View style={styles.pad} testID="pass-save-problem">
@@ -520,17 +537,13 @@ function OtherPass({
         />
       )}
       {error ? (
-        error.isNotFound || error.isPermissionRestriction ? (
-          <StateView
-            variant="unavailable"
-            title="Pass not available"
-            description="This pass is no longer available to withdraw from the app. The front desk can help."
-          />
-        ) : error.isStale ? (
-          <StateView variant="error" error={error} onAction={onReload} />
-        ) : (
-          <StateView variant="error" error={error} onRetry={submit} />
-        )
+        <CommandError
+          error={error}
+          onRetry={submit}
+          onReload={onReload}
+          notFound={WITHDRAW_NOT_AVAILABLE}
+          denied={WITHDRAW_NOT_AVAILABLE}
+        />
       ) : null}
     </View>
   );

@@ -12,8 +12,14 @@
  *   and can be left out with "Do not link it". The API decides: a person or
  *   record of another household is NOT_FOUND and is shown as "not available" with no hint that it
  *   exists (§4.10); a team the person does not captain is ACCESS_DENIED. One idempotency key per
- *   request intent: "Try again" after no answer resends the same request (§4.9); the draft is kept
- *   on every failure and offline (sending needs a connection, nothing is queued, §4.15).
+ *   request intent (§4.9). A send with no definite answer (`mayHaveTakenEffect`) reads "No answer
+ *   yet: this may already have been recorded", never "Something went wrong", and "Check again"
+ *   resends the request exactly as it was sent, under the same key, even when the draft was edited
+ *   meanwhile (an edited draft is a new request, sent with "Send request"; it is kept if the check
+ *   finds the first one went through). IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already
+ *   have been done" with "Reload", which reads "Your requests" again (the shared account
+ *   `CommandError`). The draft is kept on every failure and offline (sending needs a connection,
+ *   nothing is queued, §4.15).
  * - "Your requests": `GET /v1/me/cases` (cursor pages, newest first) lists the person's own
  *   requests with their status in words; each opens `/support/<id>` (`GET /v1/me/cases/{id}`).
  *   The API never shows a customer notes, owner, queue or internal history (§4.14), and neither
@@ -32,9 +38,8 @@
  * on return to the app and shows its age); offline (draft kept, sending disabled); processing;
  * success (request sent, with its status); signed out (sign in).
  */
-import type { ApiError } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
@@ -71,6 +76,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
+import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
 import {
   CATEGORIES,
   CATEGORY_LABELS,
@@ -124,27 +130,23 @@ function ContactDetails({ contact }: { contact: SupportContact }) {
   );
 }
 
-/** How a refused request is shown: the record or person as "not available", else the code. */
-function RequestError({ error, onRetry }: { error: ApiError; onRetry: () => void }) {
-  if (error.isNotFound) {
-    return (
-      <StateView
-        variant="unavailable"
-        title="Not available"
-        description="Something this request names is not available to you. Check who and what it is about, then send it again."
-      />
-    );
-  }
-  if (error.isPermissionRestriction) {
-    return (
-      <StateView
-        variant="unavailable"
-        title="Not available"
-        description="You cannot open a request about this person or team. Choose another, or contact the facility."
-      />
-    );
-  }
-  return <StateView variant="error" error={error} onRetry={onRetry} />;
+/** A person or record of another household (protected NOT_FOUND): no hint that it exists. */
+const REQUEST_NOT_FOUND: NotAvailableCopy = {
+  title: 'Not available',
+  description:
+    'Something this request names is not available to you. Check who and what it is about, then send it again.',
+};
+/** ACCESS_DENIED or PARTICIPANT_AUTHORITY_REQUIRED: a person or team the account may not ask about. */
+const REQUEST_DENIED: NotAvailableCopy = {
+  title: 'Not available',
+  description:
+    'You cannot open a request about this person or team. Choose another, or contact the facility.',
+};
+
+/** A request as sent: the draft it came from and the body, for "Check again" (same key, §4.9). */
+interface SentRequest {
+  draft: SupportDraft;
+  body: ReturnType<typeof requestBody>;
 }
 
 function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: string } | null }) {
@@ -212,18 +214,30 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
     (registrations.data?.items ?? []).some((e) => e.id === r.id);
   const listedRelated = draft.related.filter((r) => !shownInPicker(r));
 
+  // The request last sent: "Check again" resends exactly it, so its idempotency key is reused even
+  // if the draft was edited after a send without an answer (an edited body would get a new key and
+  // could open a second case).
+  const lastSent = useRef<SentRequest | null>(null);
+  const sendRequest = (request: SentRequest) => {
+    lastSent.current = request;
+    void send
+      .submit({ body: request.body })
+      .then((created) => {
+        setSent(created);
+        // The draft is cleared only if it is still the one that was sent.
+        setDraft((d) => (d === request.draft ? { ...EMPTY_DRAFT } : d));
+        setErrors({});
+      })
+      .catch(() => undefined); // shown from send.error; the draft stays
+  };
   const submit = () => {
     const found = draftErrors(draft);
     setErrors(found);
     if (Object.keys(found).length > 0) return;
-    void send
-      .submit({ body: requestBody(draft, selfId) })
-      .then((created) => {
-        setSent(created);
-        setDraft({ ...EMPTY_DRAFT });
-        setErrors({});
-      })
-      .catch(() => undefined); // shown from send.error; the draft stays
+    sendRequest({ draft, body: requestBody(draft, selfId) });
+  };
+  const sendAgain = () => {
+    if (lastSent.current) sendRequest(lastSent.current);
   };
 
   return (
@@ -379,7 +393,14 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
       {offline ? (
         <Caption>Sending needs a connection. Your draft stays on this screen.</Caption>
       ) : null}
-      {send.error ? <RequestError error={send.error} onRetry={submit} /> : null}
+      {send.error ? (
+        <CommandError
+          error={send.error}
+          onRetry={sendAgain}
+          notFound={REQUEST_NOT_FOUND}
+          denied={REQUEST_DENIED}
+        />
+      ) : null}
       <Caption>
         The facility team answers requests; how quickly is not set yet (DEC-015). Notes and internal
         details stay with the team.

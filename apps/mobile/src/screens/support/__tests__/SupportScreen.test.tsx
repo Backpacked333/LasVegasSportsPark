@@ -24,7 +24,7 @@ import {
   SELF_CAPTAIN,
   teamWorkspace,
 } from '../../../features/today/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, dropAnswers } from '../../../testing/test-app';
 import { SupportCaseScreen } from '../SupportCaseScreen';
 import { SupportScreen } from '../SupportScreen';
 import { draftErrors, EMPTY_DRAFT, relatedFromParams, requestBody } from '../support-model';
@@ -68,9 +68,15 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
 
 function renderSupport(
   overrides: Record<string, FakeHandler> = {},
-  options: { linked?: { type: 'payment_attempt'; id: string }; reachable?: boolean } = {},
+  options: {
+    linked?: { type: 'payment_attempt'; id: string };
+    reachable?: boolean;
+    /** Lose the answer of the first request sent (`dropAnswers`). */
+    dropSend?: boolean;
+  } = {},
 ) {
   const app = createTestApp({ routes: routes(overrides), reachable: options.reachable });
+  if (options.dropSend) dropAnswers(app, 'POST', /\/me\/support-requests$/);
   render(<SupportScreen linked={options.linked ?? null} />, { wrapper: app.wrapper });
   return app;
 }
@@ -153,7 +159,7 @@ describe('SCR-C-38 SupportScreen: opening a request (POST /v1/me/support-request
     expect(sent(app)).toHaveLength(0);
   });
 
-  it('§4.9: a retry after INTEGRATION_UNAVAILABLE resends the same request with the same key; the draft stays', async () => {
+  it('§4.9: a 503 INTEGRATION_UNAVAILABLE is "No answer yet"; "Check again" resends the same request with the same key; the draft stays', async () => {
     let calls = 0;
     const app = renderSupport({
       'POST /me/support-requests': () => {
@@ -175,10 +181,52 @@ describe('SCR-C-38 SupportScreen: opening a request (POST /v1/me/support-request
       await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-sup/),
     ).toBeOnTheScreen();
     expect(within(form).getByLabelText('Title')).toHaveProp('value', 'Practice time for Sam');
-    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    // A 5xx may follow a committed request (mayHaveTakenEffect): never "Something went wrong".
+    expect(
+      screen.getByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     expect(await screen.findByLabelText('Request sent')).toBeOnTheScreen();
     expect(sent(app)).toHaveLength(2);
     expect(sent(app)[0]?.headers['idempotency-key']).toBe(sent(app)[1]?.headers['idempotency-key']);
+  });
+
+  it('SPK-UX-008 / §4.9: a request whose answer was lost reads "No answer yet"; "Check again" resends it as sent, under the same key, even after the draft was edited', async () => {
+    const app = renderSupport({}, { dropSend: true });
+    const form = await fillDraft();
+    fireEvent.press(within(form).getByRole('button', { name: 'Send request' }));
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    // Rewording the draft does not change what "Check again" sends: a new body would get a new
+    // key and could open a second case.
+    fireEvent.changeText(within(form).getByLabelText('Title'), 'Practice time for Sam, again');
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByLabelText('Request sent')).toBeOnTheScreen();
+    expect(sent(app)).toHaveLength(2);
+    expect(sent(app)[1]?.body).toEqual(sent(app)[0]?.body);
+    expect(sent(app).map((r) => r.headers['idempotency-key'])).toEqual([
+      'key-00000001',
+      'key-00000001',
+    ]);
+    // The edited draft was not sent, so it stays on screen.
+    expect(within(form).getByLabelText('Title')).toHaveProp(
+      'value',
+      'Practice time for Sam, again',
+    );
+  });
+
+  it('SPK-UX-008: a request answered IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done", never "Something went wrong"', async () => {
+    renderSupport({
+      'POST /me/support-requests': fail(409, 'IDEMPOTENCY_OUTCOME_UNAVAILABLE'),
+    });
+    const form = await fillDraft();
+    fireEvent.press(within(form).getByRole('button', { name: 'Send request' }));
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(within(form).getByLabelText('Title')).toHaveProp('value', 'Practice time for Sam');
   });
 
   it('§4.10: a person or record the API does not let this account name is "not available", without the code; the draft stays', async () => {

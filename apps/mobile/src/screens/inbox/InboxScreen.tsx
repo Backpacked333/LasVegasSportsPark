@@ -10,7 +10,10 @@
  *   (`POST /v1/me/inbox/{id}/acknowledge`). Both are idempotent commands with one key per intent
  *   and send the delivery attempt's `revision` as `expectedRevision` (§4.9): the newest the screen
  *   knows (the list's, or the one the read returned). STALE_REVISION (read or acknowledged
- *   elsewhere meanwhile) reloads the list; acknowledging shows the code with "Reload".
+ *   elsewhere meanwhile) reloads the list; acknowledging shows the code with "Reload". An
+ *   acknowledgement with no definite answer (`mayHaveTakenEffect`) reads "No answer yet" with
+ *   "Check again" under the same key, never "Something went wrong" (the shared account
+ *   `CommandError`).
  *   If the API answers NOT_FOUND the notice was withdrawn: the screen says it is no longer
  *   available and refreshes the list, without implying anything about it.
  * - Each notice names the participants it concerns (`subjectPersonIds`, SPK-UX-003): "For: You,
@@ -51,6 +54,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { CommandError } from '../account/components/CommandError';
 
 type InboxItem = Schema<'InboxItem'>;
 type InboxPage = Schema<'InboxPage'>;
@@ -189,12 +193,7 @@ function NoticeDetail({
         <Text style={styles.caption}>Acknowledging needs a connection.</Text>
       ) : null}
       {acknowledge.error && !withdrawn ? (
-        <StateView
-          variant="error"
-          error={acknowledge.error}
-          onRetry={acknowledgeNow}
-          onAction={acknowledge.error.isStale ? reload : undefined}
-        />
+        <CommandError error={acknowledge.error} onRetry={acknowledgeNow} onReload={reload} />
       ) : null}
       {acknowledge.status === 'success' ? (
         <View accessibilityLiveRegion="polite">

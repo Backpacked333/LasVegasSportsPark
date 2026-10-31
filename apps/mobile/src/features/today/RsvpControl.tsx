@@ -10,6 +10,11 @@
  * - The API decides who may answer: a person not on an effective roster gets VALIDATION_FAILED,
  *   a missing authority ACCESS_DENIED or PARTICIPANT_AUTHORITY_REQUIRED, a fixture that no longer
  *   takes answers INVALID_TRANSITION. Each is shown with its code; nothing is retried blindly.
+ * - An answer with no definite outcome (`mayHaveTakenEffect`: no response after sending, a 5xx) is
+ *   never "Something went wrong" (§4.9, SPK-UX-008): the shared teams `CommandFailure` reads "No
+ *   answer yet: this may already have been recorded", and "Check again" resends exactly the request
+ *   that got no answer (same state, same `expectedRevision`), so it reuses its key.
+ *   IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with "Reload".
  * - Answers are for the signed-in person only. Which permission lets a guardian answer for a
  *   child is DEC-090 (pending), so the control does not offer it.
  * - CMP-04 (§4.9): an existing answer is changed only from the revision the person saw (the
@@ -22,14 +27,17 @@
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useApiCommand } from '../../api/useApiCommand';
+import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { CommandFailure } from '../teams/ui';
 import { fixtureAcceptsRsvp, rsvpStatus, type RsvpState } from './status';
 
 type FixtureStatus = Schema<'FixtureStatus'>;
+
+type RsvpRequest = CommandRequest<'post', '/fixtures/{id}/availability'>;
 
 /** The answers this build offers; "tentative" waits on DEC-064. */
 export const OFFERED_RSVP_STATES: readonly RsvpState[] = ['available', 'unavailable'];
@@ -80,7 +88,9 @@ function rsvpErrorView(error: ApiError, onRetry: () => void, onReload?: () => vo
   if (error.code === 'INVALID_TRANSITION' || error.code === 'STALE_REVISION') {
     return <StateView variant="error" error={error} onAction={onReload} />;
   }
-  return <StateView variant="error" error={error} onRetry={onRetry} />;
+  // No definite answer ("No answer yet", "Check again" under the same key), a lost outcome ("This
+  // may already have been done") or a definite refusal, decided by the shared predicates.
+  return <CommandFailure error={error} onRetry={onRetry} testID="rsvp-failure" />;
 }
 
 export function RsvpControl({
@@ -100,24 +110,25 @@ export function RsvpControl({
       ['api', '/me/fixtures'],
     ],
   });
-  const [lastChoice, setLastChoice] = useState<RsvpState | null>(null);
+  // The request last sent: "Check again" resends exactly it (same body, so the same key, §4.9).
+  const [lastRequest, setLastRequest] = useState<RsvpRequest | null>(null);
   const recorded = (rsvp.data?.state as RsvpState | undefined) ?? myResponse ?? null;
   const open = fixtureAcceptsRsvp(fixtureStatus) && onRoster !== false;
   const current = rsvpStatus(recorded);
   // The revision this person last saw: the answer just recorded, else the fixture read's.
   const expectedRevision = rsvp.data?.revision ?? responseRevision ?? undefined;
 
-  const choose = (state: RsvpState) => {
+  const send = (request: RsvpRequest) => {
     if (rsvp.isProcessing) return;
-    setLastChoice(state);
-    // The same answer retried reuses its idempotency key; a different answer is a new intent.
-    void rsvp
-      .submit({
-        path: { id: fixtureId },
-        body: expectedRevision === undefined ? { state } : { state, expectedRevision },
-      })
-      .catch(() => undefined);
+    setLastRequest(request);
+    // The same request retried reuses its idempotency key; a different answer is a new intent.
+    void rsvp.submit(request).catch(() => undefined);
   };
+  const choose = (state: RsvpState) =>
+    send({
+      path: { id: fixtureId },
+      body: expectedRevision === undefined ? { state } : { state, expectedRevision },
+    });
 
   return (
     <View style={styles.box} testID="rsvp">
@@ -186,7 +197,7 @@ export function RsvpControl({
       {rsvp.error
         ? rsvpErrorView(
             rsvp.error,
-            () => lastChoice && choose(lastChoice),
+            () => lastRequest && send(lastRequest),
             () => {
               // Clear the stale answer before reloading, so the reloaded state stands alone.
               rsvp.reset();

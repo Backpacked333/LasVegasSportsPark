@@ -8,7 +8,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import * as SecureStore from 'expo-secure-store';
 import type { ReactNode } from 'react';
 import { me, ok, SELF } from '../../../features/today/__tests__/fixtures';
-import { createTestApp, TEST_SESSION } from '../../../testing/test-app';
+import { createTestApp, dropAnswers, TEST_SESSION } from '../../../testing/test-app';
 import {
   MemoryPassStore,
   PassStoreContext,
@@ -89,11 +89,18 @@ const STORED: StoredPass = {
 
 function setup(
   routes: Record<string, FakeHandler>,
-  options: { stored?: StoredPass; reachable?: boolean; now?: () => Date } = {},
+  options: {
+    stored?: StoredPass;
+    reachable?: boolean;
+    now?: () => Date;
+    /** Requests whose answer is lost after the fake API recorded them (`dropAnswers`). */
+    drop?: { method: string; url: RegExp };
+  } = {},
 ) {
   const store = new MemoryPassStore();
   if (options.stored) store.values.set(ACCOUNT, options.stored);
   const app = createTestApp({ routes, reachable: options.reachable, now: options.now });
+  if (options.drop) dropAnswers(app, options.drop.method, options.drop.url);
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <app.wrapper>
       <PassStoreContext.Provider value={store}>{children}</PassStoreContext.Provider>
@@ -261,7 +268,7 @@ describe('SCR-C-05 PassScreen', () => {
     expect(label).toContain(groupReference(REF_ONE).split('').join(' '));
   });
 
-  it('§4.9: a retry after INTEGRATION_UNAVAILABLE reuses the idempotency key, so one pass is issued', async () => {
+  it('§4.9: a 503 INTEGRATION_UNAVAILABLE is "No answer yet"; "Check again" reuses the idempotency key, so one pass is issued', async () => {
     let calls = 0;
     const { app } = setup({
       'GET /me': ok(me()),
@@ -282,11 +289,66 @@ describe('SCR-C-05 PassScreen', () => {
     expect(
       await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-pass/),
     ).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    // A 5xx may follow a committed issue (mayHaveTakenEffect): never "Something went wrong".
+    expect(
+      screen.getByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     expect(await screen.findByText(groupReference(REF_ONE))).toBeOnTheScreen();
     const posts = app.fake.requests.filter((r) => r.route === '/passes');
     expect(posts).toHaveLength(2);
     expect(posts[0]?.headers['idempotency-key']).toBe(posts[1]?.headers['idempotency-key']);
+  });
+
+  it('SPK-UX-008 / §4.9: an issue whose answer was lost reads "No answer yet", never "Something went wrong"; "Check again" gets the same pass under the same key', async () => {
+    const { app, store } = setup(
+      {
+        'GET /me': ok(me()),
+        'GET /me/passes': myPasses(),
+        'POST /passes': { status: 201, body: issued(PASS_ONE, REF_ONE) },
+      },
+      { drop: { method: 'POST', url: /\/passes$/ } },
+    );
+    fireEvent.press(await screen.findByRole('button', { name: 'Get my pass' }));
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    // Nothing was saved from a request without an answer.
+    expect(store.values.get(ACCOUNT)).toBeUndefined();
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByText(groupReference(REF_ONE))).toBeOnTheScreen();
+    expect(store.values.get(ACCOUNT)?.passId).toBe(PASS_ONE);
+    const keys = app.fake.requests
+      .filter((r) => r.route === '/passes')
+      .map((r) => r.headers['idempotency-key']);
+    expect(keys).toEqual(['key-00000001', 'key-00000001']);
+  });
+
+  it('SPK-UX-008 / §4.9: an issue answered IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with "Reload", which reads the passes again', async () => {
+    const { app } = setup({
+      'GET /me': ok(me()),
+      'GET /me/passes': myPasses(),
+      'POST /passes': () =>
+        fakeResponse(
+          409,
+          apiErrorBody('IDEMPOTENCY_OUTCOME_UNAVAILABLE', {
+            nextAction: 'reload_current_state',
+            correlationId: 'corr-lost',
+          }),
+        ),
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'Get my pass' }));
+    expect(await screen.findByLabelText('This may already have been done')).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    const reads = app.fake.requests.filter((r) => r.route === '/me/passes').length;
+    fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/passes').length).toBeGreaterThan(
+        reads,
+      ),
+    );
   });
 
   it('shows a denied issue as "Pass not available", without the code, and an unlinked account as not available', async () => {
@@ -440,6 +502,36 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
     expect(await within(row).findByLabelText('Withdrawn')).toBeOnTheScreen();
     await waitFor(() => expect(calls).toBeGreaterThan(1));
     expect(within(row).queryByLabelText('Active')).toBeNull();
+  });
+
+  it('SPK-UX-008 / §4.9: a withdrawal whose answer was lost reads "No answer yet"; "Check again" resends it under the same key', async () => {
+    let passes: unknown[] = [listed(PASS_ONE, { revision: 4 })];
+    const { app } = setup(
+      {
+        'GET /me': ok(me()),
+        'GET /me/passes': () => fakeResponse(200, passes),
+        'POST /passes/{id}/revoke': () => {
+          passes = [listed(PASS_ONE, { status: 'revoked', revision: 5 })];
+          return fakeResponse(200, { ...issued(PASS_ONE, REF_ONE).pass, status: 'revoked' });
+        },
+      },
+      { drop: { method: 'POST', url: /\/revoke$/ } },
+    );
+    const row = await screen.findByTestId(`pass-other-${PASS_ONE}`);
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw this pass' }));
+    fireEvent.press(within(row).getByRole('button', { name: 'Withdraw' }));
+    expect(
+      await within(row).findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(within(row).queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(within(row).getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(screen.queryByTestId('pass-others')).toBeNull());
+    const revokes = app.fake.requests.filter((r) => r.route === '/passes/{id}/revoke');
+    expect(revokes.map((r) => r.headers['idempotency-key'])).toEqual([
+      'key-00000001',
+      'key-00000001',
+    ]);
+    expect(revokes[1]?.body).toEqual({ reason: WITHDRAW_REASON, expectedRevision: 4 });
   });
 
   it('a withdrawal answered STALE_REVISION shows the code with "Reload", which reads the list again', async () => {

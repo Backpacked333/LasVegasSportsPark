@@ -15,7 +15,7 @@ import {
   scheduleChange,
   SELF,
 } from '../../../features/today/__tests__/fixtures';
-import { createTestApp } from '../../../testing/test-app';
+import { createTestApp, dropAnswers } from '../../../testing/test-app';
 import { InboxScreen, inboxStatus } from '../InboxScreen';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
@@ -163,7 +163,7 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
     expect(reads[0]?.body).toEqual({ expectedRevision: 1 });
   });
 
-  it('acknowledges once; a retry after INTEGRATION_UNAVAILABLE reuses the same idempotency key (§4.9)', async () => {
+  it('acknowledges once; a 503 INTEGRATION_UNAVAILABLE is "No answer yet" and "Check again" reuses the same idempotency key (§4.9)', async () => {
     const item = unread({ readAt: '2026-10-24T11:30:00.000Z', title: 'Bring water' });
     let calls = 0;
     let acknowledgedAt: string | null = null;
@@ -193,13 +193,50 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
     expect(
       await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-ack/),
     ).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(
+      screen.getByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     expect(
       await screen.findByRole('button', { name: 'Bring water, Acknowledged' }),
     ).toBeOnTheScreen();
     const acks = app.fake.requests.filter((r) => r.route === '/me/inbox/{id}/acknowledge');
     expect(acks).toHaveLength(2);
     expect(acks[0]?.headers['idempotency-key']).toBe(acks[1]?.headers['idempotency-key']);
+  });
+
+  it('SPK-UX-008 / §4.9: an acknowledgement whose answer was lost reads "No answer yet", never "Something went wrong"; "Check again" resends it under the same key', async () => {
+    const item = unread({ readAt: '2026-10-24T11:30:00.000Z', title: 'Bring water' });
+    let acknowledgedAt: string | null = null;
+    const app = createTestApp({
+      routes: {
+        'GET /me/inbox': () =>
+          fakeResponse(200, { items: [{ ...item, acknowledgedAt }], nextCursor: null }),
+        'POST /me/inbox/{id}/acknowledge': () => {
+          acknowledgedAt = '2026-10-24T12:00:00.000Z';
+          return fakeResponse(200, { ...item, acknowledgedAt });
+        },
+      },
+    });
+    dropAnswers(app, 'POST', /\/acknowledge$/);
+    render(<InboxScreen />, { wrapper: app.wrapper });
+    fireEvent.press(await screen.findByRole('button', { name: 'Bring water, Read' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Acknowledge' }));
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    expect(
+      await screen.findByRole('button', { name: 'Bring water, Acknowledged' }),
+    ).toBeOnTheScreen();
+    const acks = app.fake.requests.filter((r) => r.route === '/me/inbox/{id}/acknowledge');
+    expect(acks.map((r) => r.headers['idempotency-key'])).toEqual([
+      acks[0]?.headers['idempotency-key'],
+      acks[0]?.headers['idempotency-key'],
+    ]);
+    expect(acks[1]?.body).toEqual(acks[0]?.body);
   });
 
   it('SPK-IAM-006 / SPK-AT-017: a protected notice withdrawn after access was removed shows as no longer available and leaves the list', async () => {
