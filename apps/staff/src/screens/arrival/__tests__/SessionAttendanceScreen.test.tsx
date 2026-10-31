@@ -8,6 +8,10 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  OFFLINE_QUEUE_STORAGE_KEY,
+  type OfflineQueueState,
+} from '../../../features/operations/offline/queue';
+import {
   CHILD_1,
   CHILD_2,
   OFFERING,
@@ -265,6 +269,28 @@ describe('SCR-S-29 SessionAttendanceScreen', () => {
     ).toBeInTheDocument();
     expect(app.fake.requests.some((r) => r.route === '/attendance-observations')).toBe(false);
     expect(screen.getAllByText('Showing information from just now.').length).toBeGreaterThan(0);
+  });
+
+  it('§4.15: the roster snapshot of a queued observation is dated by the service’s clock (Date header), not a device clock that runs ahead', async () => {
+    const user = userEvent.setup();
+    // The device clock reads 12:00; the service answered at 11:53 (the device runs 7 minutes fast).
+    const app = createTestApp({
+      routes: routes({
+        'GET /attendance': () =>
+          fakeResponse(200, attendance([ALEX_PRESENT]).body, {
+            Date: 'Sat, 24 Oct 2026 11:53:00 GMT',
+          }),
+      }),
+    });
+    render(app.at(SESSION_URL));
+    const blake = await screen.findByRole('listitem', { name: 'Blake Rivera' });
+    act(() => app.connectivity.set(false));
+    await user.click(within(blake).getByRole('button', { name: 'Late: Blake Rivera' }));
+    await within(blake).findByText('Queued on this device: Late (not yet recorded)');
+    const stored = JSON.parse(
+      window.localStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY) ?? '{}',
+    ) as OfflineQueueState;
+    expect(stored.pending[0]?.snapshot.takenAt).toBe('2026-10-24T11:53:00.000Z');
   });
 
   it('lists today’s events to choose from when no activity is given', async () => {

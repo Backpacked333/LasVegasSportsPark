@@ -82,8 +82,21 @@ the actual devices of §6.3.
   recording for a person found by search cannot.
 - Synchronisation (`POST /offline-sync`) runs once when the connection returns and on request.
   Items are assigned to a client batch id before upload and keep it across retries, so a lost
-  response never applies an item twice; the idempotency key is reused while the tab is open.
-  Conflicting and rejected items are kept for review with the API's reason.
+  response never applies an item twice; the idempotency key is reused while the tab is open and
+  the outcome is unknown. Every prepared batch is sent in the run, a full one (500 items, the
+  API's limit) included. Conflicting and rejected items are kept for review with the API's reason.
+- A batch the API refuses outright (a definitive 4xx such as VALIDATION_FAILED
+  `snapshot_in_future` or ACCESS_DENIED after a role ended: nothing in it was recorded) ends its
+  intent and its items move to "Kept for review" as "Not recorded" with the API's code and message;
+  "Queue again" sends them under a new client batch id (a new key) and "Discard (not recorded)"
+  removes them. The run goes on with the other batches. Only an unknown outcome (no answer, a 5xx,
+  the same key still running) stops the run and keeps the batch and its key; a signed-out session
+  or a turned-off capability keeps the items queued. **Verified** in jsdom
+  (`offline/__tests__/queue.test.ts`, `screens/arrival/__tests__/OfflineQueueScreen.test.tsx`).
+- Tabs of one browser profile share the queue: every change is applied to the queue as last
+  stored, never to a stale copy of the tab, the other tabs follow it through the `storage` event,
+  and where the browser has Web Locks one tab at a time synchronises. **Verified** for two stores
+  over one storage (`queue.test.ts`); the Web Locks path is not exercised in jsdom.
 - The API's id and counts of the last 20 synchronised batches are kept (ids and numbers only); the
   stored per-item outcome is read again with `GET /offline-sync/{id}` (ENT-01). Desk readers may
   open any batch by its full reference (validated before the request); a refused one reads "not
@@ -94,8 +107,12 @@ the actual devices of §6.3.
   hours) and the API flags stale snapshots for review.
 - Device approval and an encrypted, scoped roster download are not implemented by the API
   (DEC-023, DEC-032 **pending decision**): the snapshot reference is the device's own label of the
-  read it queued against, with the server's time of that read; the device id is generated per
-  browser.
+  read it queued against; the device id is generated per browser. The snapshot time of an
+  attendance roster is the service's time of the read (the response's `Date` header) when it is
+  readable, so a device clock that runs ahead does not date it in the future (the API refuses a
+  snapshot dated beyond its clock-skew tolerance); a cross-origin deployment exposes that header
+  only once the API lists it in Access-Control-Expose-Headers, and until then the device's receipt
+  time is used. A scan snapshot uses the scan's `scannedAt`, the API's time.
 
 ## API gaps rendered as not available — Proposed handling
 
@@ -124,9 +141,14 @@ the actual devices of §6.3.
   inside or outside a form); not available when the role may not search.
 - `sessions.ts`: today's sessions at a facility (`GET /sessions`, the facility-local day).
 - `commands.ts` `useKeyedCommands`: one intent (idempotency key) per record on a screen with
-  several commands; outcomes kept per record for partial completion.
+  several commands; outcomes kept per record for partial completion. The key is kept after an
+  unknown outcome, after IDEMPOTENCY_OUTCOME_UNAVAILABLE and after a failure that is not the
+  client's typed error.
 - `feedback.tsx` `CommandError`: ACCESS_DENIED as "Not available" with the API's message,
-  NOT_FOUND without implying existence, timeouts as "outcome not known" with a same-key retry,
+  NOT_FOUND without implying existence, any answer that may have taken effect (a timeout, a
+  connection lost after sending, IDEMPOTENCY_IN_PROGRESS, a 5xx) as "Outcome not known yet" with a
+  same-key retry, IDEMPOTENCY_OUTCOME_UNAVAILABLE as "This may already have been done", a
+  legacy-authority refusal as "Make this change in the system of record" (`ui/CommandOutcome.tsx`),
   CAPABILITY_DISABLED as "turned off".
 - Request bodies send defaulted fields explicitly (for example `recordDeparture: true`): the
   generated client types mark fields with an OpenAPI default as required.

@@ -82,7 +82,12 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
   it('shows each queued item with its fields and keeps another account’s items for that account', async () => {
     seed();
     const app = createTestApp({
-      routes: { 'GET /me': oneFacilityMe(), 'GET /person-names': people },
+      routes: {
+        'GET /me': oneFacilityMe(),
+        'GET /person-names': people,
+        // The synchronisation on opening stays in flight: the items stay queued while shown.
+        'POST /offline-sync': () => new Promise<never>(() => undefined),
+      },
     });
     render(app.at('/arrival/offline'));
     const table = await screen.findByRole('table');
@@ -168,7 +173,7 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 
-  it('shows the API’s refusal for an unapproved scope as not available', async () => {
+  it('§4.15: a batch refused for an unapproved scope is kept for review with the API’s reason, never replayed for ever', async () => {
     seed();
     const app = createTestApp({
       routes: {
@@ -184,9 +189,65 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
       },
     });
     render(app.at('/arrival/offline'));
-    expect(await screen.findByTestId('command-unavailable')).toHaveTextContent(
-      'entry.sync_offline',
+    const review = await screen.findByRole('list', { name: 'Observations kept for review' });
+    expect(
+      within(review).getByText(
+        'Not recorded: the service refused the batch: You need entry.sync_offline.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(review).getByText(/Error code: ACCESS_DENIED/)).toBeInTheDocument();
+    // It left the queue, so a later run does not replay the stored refusal.
+    expect(screen.getByRole('heading', { name: 'Nothing queued' })).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/offline-sync')).toHaveLength(1);
+  });
+
+  it('§4.15: a batch refused because the device clock is ahead can be queued again under a new batch, or discarded', async () => {
+    const user = userEvent.setup();
+    seed();
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me': oneFacilityMe(),
+        'GET /person-names': people,
+        'POST /offline-sync': (request) => {
+          calls += 1;
+          if (calls === 1) {
+            return fakeResponse(
+              400,
+              apiErrorBody('VALIDATION_FAILED', {
+                message: 'The roster snapshot is dated in the future.',
+                nextAction: 'correct_input',
+                details: { code: 'snapshot_in_future' },
+              }),
+            );
+          }
+          const body = request.body as { items: { clientObservationId: string; kind: string }[] };
+          return fakeResponse(
+            201,
+            syncBatch(body.items.map((i) => ({ ...i, outcome: 'accepted' }))),
+          );
+        },
+      },
+    });
+    render(app.at('/arrival/offline'));
+    const review = await screen.findByRole('list', { name: 'Observations kept for review' });
+    expect(
+      within(review).getByText(
+        /this device’s\s+clock may be ahead|this device's clock may be ahead/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(review).getByText(/VALIDATION_FAILED \(snapshot_in_future\)/),
+    ).toBeInTheDocument();
+    await user.click(within(review).getByRole('button', { name: /^Queue again:/ }));
+    await user.click(await screen.findByRole('button', { name: 'Synchronise 1 now' }));
+    await waitFor(() => expect(calls).toBe(2));
+    const [first, second] = app.fake.requests.filter((r) => r.route === '/offline-sync');
+    expect((second?.body as { clientBatchId: string }).clientBatchId).not.toBe(
+      (first?.body as { clientBatchId: string }).clientBatchId,
     );
+    expect(second?.headers['idempotency-key']).not.toBe(first?.headers['idempotency-key']);
+    expect(await screen.findByRole('heading', { name: 'Nothing to review' })).toBeInTheDocument();
   });
 
   it('is empty when nothing is queued', async () => {

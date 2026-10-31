@@ -115,10 +115,14 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
     [people, labelOf],
   );
 
-  // One snapshot per roster load: queued items name the roster they were observed against.
+  // One snapshot per roster load: queued items name the roster they were observed against. Its
+  // time is the service's time of the read when the response states it (the API refuses a
+  // snapshot dated after its own clock, so a device clock that runs ahead must not date it); the
+  // roster's age on this screen is measured on the device clock it was received by.
   const takenAt = attendance.updatedAt;
+  const servedAt = attendance.serverDate;
   const snapshot = useMemo(
-    () => (takenAt ? queue.newSnapshot(takenAt) : null),
+    () => (takenAt ? queue.newSnapshot(servedAt ?? takenAt) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a new reference only per load
     [takenAt?.getTime()],
   );
