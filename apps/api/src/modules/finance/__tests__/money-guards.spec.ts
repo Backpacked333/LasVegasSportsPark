@@ -5,6 +5,7 @@ import { OperationalExceptions, UnitOfWork, databaseConstraintOf } from '../../.
 import { staffPrincipal, type TestApp } from '../../../testing';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import { MoneyFacts } from '../services/money-facts.service';
+import { createAcknowledgmentFixture } from '../../catalog';
 import { createCreditFixture, createObligationFixture } from '../testing/finance-fixtures';
 import {
   MINUTE,
@@ -340,6 +341,34 @@ describe('money guards: one way to pay a debt at a time (§4.11, SPK-PAY-005/006
     expect(checkout.status).toBe('completed');
     await drain(t);
     const enrollmentId = (checkout['enrollmentIds'] as string[])[0] as string;
+    await cancelEnrollment(parent, enrollmentId);
+    const installments = await installmentsOf(checkout.orderId);
+    return { parent, checkout, planId: installments[0]?.plan_id as string, installments };
+  }
+
+  const installmentsOf = (orderId: string) =>
+    t.db
+      .selectFrom('installments')
+      .innerJoin('installment_plans', 'installment_plans.id', 'installments.plan_id')
+      .select([
+        'installments.id as id',
+        'installments.obligation_id as obligation_id',
+        'installments.status as status',
+        'installment_plans.id as plan_id',
+      ])
+      .where('installment_plans.order_id', '=', orderId)
+      .orderBy('installments.sequence')
+      .execute();
+
+  type Consequence = { kind: string; amountMinor: number | null; currency: string | null };
+  const accepted = (consequence: Consequence) => ({
+    kind: consequence.kind,
+    amountMinor: consequence.amountMinor ?? null,
+    currency: consequence.currency ?? null,
+  });
+
+  /** The payer cancels the enrollment, accepting the consequence the API recomputes. */
+  async function cancelEnrollment(parent: Actor, enrollmentId: string) {
     const current = await t.db
       .selectFrom('enrollments')
       .select('revision')
@@ -350,33 +379,42 @@ describe('money guards: one way to pay a debt at a time (§4.11, SPK-PAY-005/006
       expectedRevision: current.revision,
     });
     expect(asked.status).toBe(409);
-    const consequence = asked.body.details.consequence as {
-      kind: string;
-      amountMinor: number | null;
-      currency: string | null;
-    };
     const canceled = await post(t, `/v1/enrollments/${enrollmentId}/cancel`, parent.header, {
       reason: 'Moving away',
       expectedRevision: current.revision,
-      acceptedConsequence: {
-        kind: consequence.kind,
-        amountMinor: consequence.amountMinor ?? null,
-        currency: consequence.currency ?? null,
-      },
+      acceptedConsequence: accepted(asked.body.details.consequence as Consequence),
     });
-    expect(canceled.body.status).toBe('canceled');
-    const installments = await t.db
-      .selectFrom('installments')
-      .innerJoin('installment_plans', 'installment_plans.id', 'installments.plan_id')
-      .select([
-        'installments.id as id',
-        'installments.obligation_id as obligation_id',
-        'installment_plans.id as plan_id',
-      ])
-      .where('installment_plans.order_id', '=', checkout.orderId)
-      .orderBy('installments.sequence')
-      .execute();
-    return { parent, checkout, planId: installments[0]?.plan_id as string, installments };
+    expect(canceled.body.status, JSON.stringify(canceled.body)).toBe('canceled');
+  }
+
+  /** The payer transfers the enrollment to another offering at the same price (SPK-REG-010). */
+  async function transferEnrollment(parent: Actor, enrollmentId: string, price: number) {
+    const source = await t.db
+      .selectFrom('enrollments')
+      .select(['revision', 'participant_person_id'])
+      .where('id', '=', enrollmentId)
+      .executeTakeFirstOrThrow();
+    const target = await offering(t, { basePriceMinor: price });
+    await createAcknowledgmentFixture(t, {
+      subjectPersonId: source.participant_person_id,
+      policyVersionId: target.formPolicyVersionId,
+      signedByPersonId: parent.personId,
+    });
+    const preview = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, parent.header, {
+      targetOfferingId: target.offeringId,
+      expectedRevision: source.revision,
+    });
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    const consequence = preview.body.financialConsequence as Consequence;
+    const committed = await post(t, `/v1/enrollments/${enrollmentId}/transfer`, parent.header, {
+      targetOfferingId: target.offeringId,
+      expectedRevision: source.revision,
+      commit: true,
+      ...(consequence.kind === 'none' ? {} : { acceptedConsequence: accepted(consequence) }),
+    });
+    expect(committed.status, JSON.stringify(committed.body)).toBe(200);
+    expect(committed.body.previousEnrollment.status).toBe('transferred');
+    return committed.body.newEnrollment.id as string;
   }
 
   const attemptPurposes = async (orderId: string) =>
@@ -559,5 +597,81 @@ describe('money guards: one way to pay a debt at a time (§4.11, SPK-PAY-005/006
           .execute(),
       ),
     ).toBe('23514:payment_attempts_installment_plan_held');
+  });
+
+  it('SPK-PAY-006, §4.11 step 10 (R2-LIFECYCLES-01): a registration transferred and then canceled holds the plan; while the transferred registration stands, collection continues', async () => {
+    const { parent, checkout } = await checkoutWith(
+      FakePaymentTokens.succeed,
+      30_000,
+      { authorizeFutureInstallments: true },
+      { paymentPlan: { kind: 'installments', count: 3 } },
+    );
+    expect(checkout.status).toBe('completed');
+    await drain(t);
+    const original = (checkout['enrollmentIds'] as string[])[0] as string;
+    // The order line keeps naming the enrollment the family transferred away from.
+    const moved = await transferEnrollment(parent, original, 30_000);
+    const line = await t.db
+      .selectFrom('order_lines')
+      .select('enrollment_id')
+      .where('order_id', '=', checkout.orderId)
+      .executeTakeFirstOrThrow();
+    expect(line.enrollment_id).toBe(original);
+    const [, second, third] = await installmentsOf(checkout.orderId);
+    const planId = second?.plan_id as string;
+    // The transferred registration is still held by the family: its installment is collected.
+    t.clock.advance(31 * DAY);
+    await drain(t);
+    await worker(t).runOnce();
+    await drain(t);
+    expect(await attemptPurposes(checkout.orderId)).toEqual(['checkout', 'installment']);
+    expect(await noticesOf([second?.id as string])).toHaveLength(1);
+    expect(await holdExceptions(planId)).toEqual([]);
+    // Then the family cancels the registration it was transferred to.
+    await cancelEnrollment(parent, moved);
+    // The third installment's notice time: the plan is held, so no notice and no charge.
+    t.clock.advance(27 * DAY);
+    await drain(t);
+    expect(await noticesOf([third?.id as string])).toEqual([]);
+    t.clock.advance(4 * DAY);
+    await drain(t);
+    await worker(t).runOnce();
+    await worker(t).runOnce();
+    const manual = await post(
+      t,
+      `/v1/installments/${third?.id as string}/collect`,
+      finance.header,
+      {},
+    );
+    expect(manual.status).toBe(409);
+    expect(manual.body.details).toMatchObject({ code: 'INSTALLMENT_REGISTRATION_CANCELED' });
+    expect(await attemptPurposes(checkout.orderId)).toEqual(['checkout', 'installment']);
+    expect((await installmentsOf(checkout.orderId)).map((i) => i.status)).toEqual([
+      'paid',
+      'paid',
+      'scheduled',
+    ]);
+    expect(await noticesOf([third?.id as string])).toEqual([]);
+    // Exactly one owned exception, naming the order line's enrollment and the one it became.
+    const raised = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['owner_queue', 'details'])
+      .where('category', '=', 'finance.installment_registration_canceled')
+      .where('affected_id', '=', planId)
+      .execute();
+    expect(raised).toEqual([
+      expect.objectContaining({
+        owner_queue: 'finance_operator',
+        details: expect.objectContaining({
+          enrollmentIds: [original],
+          currentEnrollmentIds: [moved],
+        }),
+      }),
+    ]);
+    const plan = await t.http.get(`/v1/installment-plans/${planId}`).set(finance.header);
+    expect(plan.body).toMatchObject({
+      status: 'active',
+      hold: { reason: 'registrations_canceled' },
+    });
   });
 });

@@ -1517,6 +1517,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -1719,6 +1728,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -1816,6 +1834,15 @@ export type paths = {
                 };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2013,6 +2040,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -2117,6 +2153,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -2214,6 +2259,15 @@ export type paths = {
                 };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -33524,6 +33578,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -33632,6 +33695,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         trace?: never;
@@ -33725,6 +33797,15 @@ export type paths = {
                 };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -33934,6 +34015,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -34124,6 +34214,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -34221,6 +34320,15 @@ export type paths = {
                 };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -34332,6 +34440,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -34427,6 +34544,15 @@ export type paths = {
                 };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -34636,6 +34762,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -34838,6 +34973,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -34942,6 +35086,15 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -35039,6 +35192,15 @@ export type paths = {
                 };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };

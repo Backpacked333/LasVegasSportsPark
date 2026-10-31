@@ -28,7 +28,7 @@ import { EnrollmentModule, FINANCE_POLICY_IMPL } from '../enrollment';
 // IF-39: entry declares the port finance provides; its declaration file is imported directly
 // because entry's module imports finance (an import of entry's index would be a cycle).
 import { FINANCIAL_STANDING_IMPL } from '../entry/entry.ports';
-import { IdentityModule } from '../identity';
+import { IdentityEvents, IdentityModule } from '../identity';
 import { AccountingController } from './controllers/accounting.controller';
 import {
   CheckoutsController,
@@ -80,6 +80,7 @@ import { CheckoutFinalizer } from './services/checkout-finalizer.service';
 import { CheckoutService } from './services/checkout.service';
 import { CreditsService } from './services/credits.service';
 import { FinanceCustomerScope } from './services/customer-scope';
+import { PersonMergeMoneyFollowUp } from './services/person-merge-follow-up';
 import { FinanceNotices } from './services/finance-notices.service';
 import { FinancialStandingService } from './services/financial-standing.service';
 import { MoneyReadsService } from './services/money-reads.service';
@@ -197,6 +198,7 @@ const providers: Provider[] = [
   { provide: FINANCIAL_STANDING_IMPL, useExisting: FinancialStandingService },
   // FIN-01/02: customer and staff money lists.
   FinanceCustomerScope,
+  PersonMergeMoneyFollowUp,
   MoneyReadsService,
   // FIN-05: finance-owned customer notices (IF-22).
   FinanceNotices,
@@ -286,6 +288,7 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
     private readonly accounting: AccountingExportService,
     private readonly periodicJobs: PeriodicJobRegistry,
     @Inject(INTEGRATION_REGISTRY) private readonly integrations: IntegrationRegistryPort,
+    private readonly mergeFollowUp: PersonMergeMoneyFollowUp,
   ) {}
 
   onModuleInit(): void {
@@ -428,6 +431,14 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
         runWithTransaction(ctx.trx, () =>
           this.posSales.onRefundSettled(ctx.trx, event.organizationId, event.payload),
         ),
+      { failureOwner: 'finance_operator' },
+    );
+    // R2-LIFECYCLES-02 (SPK-IAM-007): a merge rewrites no financial row; money the merged record
+    // still holds is reported once to the finance operator.
+    this.registry.on<EventPayload<typeof IdentityEvents.personsMerged>>(
+      IdentityEvents.personsMerged.type,
+      'finance.follow_person_merge',
+      (event, ctx) => this.mergeFollowUp.onPersonsMerged(event, ctx),
       { failureOwner: 'finance_operator' },
     );
     // Provider evidence through the kernel inbox: duplicates consumed once, reordering tolerated.

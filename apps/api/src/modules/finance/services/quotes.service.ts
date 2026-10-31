@@ -40,6 +40,7 @@ import {
   type Reader,
 } from '../finance.shared';
 import { computeQuote, type PlanInput, type QuoteLineInput } from '../pricing/quote-calculator';
+import { FinanceCustomerScope } from './customer-scope';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
 
@@ -72,6 +73,7 @@ export class QuotesService {
     private readonly outbox: Outbox,
     private readonly policy: FinancePolicyResolver,
     private readonly facts: MoneyFacts,
+    private readonly scope: FinanceCustomerScope,
   ) {}
 
   async load(
@@ -315,9 +317,12 @@ export class QuotesService {
       throw errors.validation('A credit may be listed only once.', { field: 'creditIds' });
     }
     const credits = [];
+    // SPK-IAM-007 (R2-LIFECYCLES-02): a credit of a record merged into the payer is the payer's.
+    const creditOwners =
+      input.creditIds.length > 0 ? await this.scope.idsOf(organizationId, payerPersonId) : [];
     for (const creditId of input.creditIds) {
       const credit = await this.facts.loadCredit(this.db, organizationId, creditId);
-      if (!credit || credit.owner_person_id !== payerPersonId)
+      if (!credit || !creditOwners.includes(credit.owner_person_id))
         throw errors.protectedNotFound('credit');
       if (
         credit.status !== 'active' ||

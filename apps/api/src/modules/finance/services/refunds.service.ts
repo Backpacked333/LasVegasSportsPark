@@ -44,6 +44,7 @@ import {
   type RefundableRow,
 } from '../finance.shared';
 import { LedgerService } from '../ledger/ledger.service';
+import { FinanceCustomerScope } from './customer-scope';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 
 export interface ReserveRefundInput {
@@ -95,6 +96,7 @@ export class RefundsService {
     private readonly ledger: LedgerService,
     private readonly policy: FinancePolicyResolver,
     @Inject(RECORD_AUTHORITY_PORT) private readonly recordAuthority: RecordAuthorityPort,
+    private readonly scope: FinanceCustomerScope,
   ) {}
 
   async load(
@@ -145,7 +147,8 @@ export class RefundsService {
       type: 'refund',
       id,
       organizationId,
-      subjectPersonIds: [payment.payer_person_id],
+      // SPK-IAM-007 (R2-LIFECYCLES-02): a merged payer's refund is read under the survivor.
+      subjectPersonIds: [await this.scope.subjectOf(organizationId, payment.payer_person_id)],
       protected: true,
     });
     return this.view(this.db, row);

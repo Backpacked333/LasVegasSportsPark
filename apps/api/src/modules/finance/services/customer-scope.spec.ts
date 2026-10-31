@@ -2,7 +2,7 @@ import { errors } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
 import { declaredNotImplemented } from '../../../kernel';
 import type { PersonDirectoryPort } from '../../identity';
-import { personIdsOf } from './customer-scope';
+import { canonicalPersonIdOf, personIdsOf } from './customer-scope';
 
 // FIN-01, FIN-03 (IF-09, SPK-IAM-007): the person ids whose financial facts are a person's.
 
@@ -42,5 +42,34 @@ describe('personIdsOf', () => {
       throw errors.internal('connection lost');
     });
     await expect(personIdsOf(failing, 'org', 'x')).rejects.toThrow('connection lost');
+  });
+});
+
+describe('canonicalPersonIdOf', () => {
+  const resolving = (answer: () => Promise<string>) =>
+    ({ resolveCanonicalPersonId: answer }) as unknown as PersonDirectoryPort;
+
+  it('SPK-IAM-007 (R2-LIFECYCLES-02): answers the surviving record of a merged person', async () => {
+    expect(
+      await canonicalPersonIdOf(
+        resolving(async () => 'survivor'),
+        'org',
+        'merged',
+      ),
+    ).toBe('survivor');
+  });
+
+  it('answers the person itself while the directory member is declared but not implemented', async () => {
+    const pending = resolving(async () =>
+      declaredNotImplemented('PersonDirectoryPort.resolveCanonicalPersonId', 'ID-01'),
+    );
+    expect(await canonicalPersonIdOf(pending, 'org', 'x')).toBe('x');
+  });
+
+  it('propagates any other failure', async () => {
+    const failing = resolving(async () => {
+      throw errors.internal('connection lost');
+    });
+    await expect(canonicalPersonIdOf(failing, 'org', 'x')).rejects.toThrow('connection lost');
   });
 });

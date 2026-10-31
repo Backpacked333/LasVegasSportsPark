@@ -216,7 +216,15 @@ export class MoneyReadsService {
       .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
       .limit(query.limit + 1);
-    if (query.payerPersonId) q = q.where('payer_person_id', '=', query.payerPersonId);
+    // SPK-IAM-007 (R2-LIFECYCLES-02): a payer's orders include those of every record merged into
+    // it, as GET /credits and GET /obligations do; no order row is rewritten by a merge.
+    if (query.payerPersonId) {
+      q = q.where(
+        'payer_person_id',
+        'in',
+        await this.scope.idsOf(organizationId, query.payerPersonId),
+      );
+    }
     if (query.paymentStatus) q = q.where('payment_status', '=', query.paymentStatus);
     if (query.fulfillmentStatus) q = q.where('fulfillment_status', '=', query.fulfillmentStatus);
     if (query.from) q = q.where('created_at', '>=', new Date(query.from));
@@ -244,7 +252,14 @@ export class MoneyReadsService {
       .limit(query.limit + 1);
     if (query.status) q = q.where('status', '=', query.status);
     if (query.purpose) q = q.where('purpose', '=', query.purpose);
-    if (query.payerPersonId) q = q.where('payer_person_id', '=', query.payerPersonId);
+    // SPK-IAM-007 (R2-LIFECYCLES-02): as /orders, the payer and every record merged into it.
+    if (query.payerPersonId) {
+      q = q.where(
+        'payer_person_id',
+        'in',
+        await this.scope.idsOf(organizationId, query.payerPersonId),
+      );
+    }
     if (query.orderId) q = q.where('order_id', '=', query.orderId);
     if (query.obligationId) q = q.where('obligation_id', '=', query.obligationId);
     if (cursor) q = q.where(afterKeysetDesc('payment_attempts', cursor));

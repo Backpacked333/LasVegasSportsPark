@@ -1,5 +1,6 @@
 import { newId, systemPrincipal } from '@sportspark/contracts';
 import { json, pgErrorCode } from '@sportspark/db';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork, databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -90,14 +91,17 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     });
   }
 
-  /** A prepared batch row as only the service writes it (for direct database probes). */
-  function newBatchRow(lineCount: number) {
+  /**
+   * A prepared batch row as only the service writes it (for direct database probes); its period
+   * must contain the posting time of the entries its lines export (0614).
+   */
+  function newBatchRow(lineCount: number, period: { periodStart: string; periodEnd: string }) {
     const id = newId();
     return {
       id,
       organization_id: t.organizationId,
-      period_start: new Date('2026-01-01T00:00:00Z'),
-      period_end: new Date('2026-01-02T00:00:00Z'),
+      period_start: new Date(period.periodStart),
+      period_end: new Date(period.periodEnd),
       idempotency_key: `acct-${id}`,
       checksum: `sha256:${'0'.repeat(64)}`,
       line_count: lineCount,
@@ -417,7 +421,7 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     expect(
       await refusedBy(
         t.db.transaction().execute(async (trx) => {
-          const draft = newBatchRow(1);
+          const draft = newBatchRow(1, period);
           await trx.insertInto('accounting_export_batches').values(draft).execute();
           await trx
             .insertInto('accounting_export_lines')
@@ -471,7 +475,8 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
 
   it('SPK-PAY-010 (INTEGRITY-03): the database refuses a line added to a batch after it was prepared, in any status, and a line that misstates its entry', async () => {
     // Entries that no batch exports live (their batch was canceled).
-    const freed = await prepared((await dayWithEntries(1_300)).period);
+    const freedPeriod = (await dayWithEntries(1_300)).period;
+    const freed = await prepared(freedPeriod);
     const entry = await firstLine(freed.id);
     await post(t, `/v1/accounting-export-batches/${freed.id}/cancel`, fo1.header, {
       reason: 'Frees the entries for the probe',
@@ -531,7 +536,7 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     expect(
       await refusedBy(
         t.db.transaction().execute(async (trx) => {
-          const draft = newBatchRow(1);
+          const draft = newBatchRow(1, freedPeriod);
           await trx.insertInto('accounting_export_batches').values(draft).execute();
           await trx
             .insertInto('accounting_export_lines')
@@ -551,13 +556,79 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     expect(
       await refusedBy(
         t.db.transaction().execute(async (trx) => {
-          const draft = newBatchRow(2);
+          const draft = newBatchRow(2, freedPeriod);
           await trx.insertInto('accounting_export_batches').values(draft).execute();
           await trx.insertInto('accounting_export_lines').values(lineFor(draft.id, 1)).execute();
         }),
       ),
     ).toBe('23514:accounting_export_batches_complete');
     await post(t, `/v1/accounting-export-batches/${open.id}/cancel`, fo1.header, {
+      reason: 'tidy',
+    });
+  });
+
+  it('SPK-PAY-010/011, §4.7 invariant 5 (R2-SCHEMA-02): the database refuses an export line that is born not live, misdates its entry, or exports an entry posted outside the batch period', async () => {
+    // Entries that no batch exports live (their batch was canceled), and their period.
+    const freedPeriod = (await dayWithEntries(1_800)).period;
+    const freed = await prepared(freedPeriod);
+    const entry = await firstLine(freed.id);
+    await post(t, `/v1/accounting-export-batches/${freed.id}/cancel`, fo1.header, {
+      reason: 'Frees the entries for the probe',
+    });
+    const lineFor = (batchId: string, overrides: Json = {}) => ({
+      ...entry,
+      id: newId(),
+      batch_id: batchId,
+      line_number: 1,
+      live: true,
+      created_at: new Date(),
+      ...overrides,
+    });
+    /** One draft batch with one line, checked at once and then rolled back. */
+    const probe = (period: { periodStart: string; periodEnd: string }, overrides: Json = {}) =>
+      refusedBy(
+        t.db.transaction().execute(async (trx) => {
+          const draft = newBatchRow(1, period);
+          await trx.insertInto('accounting_export_batches').values(draft).execute();
+          await trx
+            .insertInto('accounting_export_lines')
+            .values(lineFor(draft.id, overrides))
+            .execute();
+          await sql`set constraints all immediate`.execute(trx);
+          throw new Error('accepted');
+        }),
+      );
+    // The line as the service writes it is accepted (and rolled back here).
+    expect(await probe(freedPeriod)).toBe('Error: accepted');
+    // A line born not live would escape the at-most-once index while its batch can be accepted.
+    expect(await probe(freedPeriod, { live: false })).toBe(
+      '23514:accounting_export_lines_live_at_insert',
+    );
+    // A line states the entry's posting time as booked.
+    expect(await probe(freedPeriod, { posted_at: new Date('1999-01-01T00:00:00Z') })).toBe(
+      '23514:accounting_export_lines_posted_as_booked',
+    );
+    // A batch exports only entries posted in its own period.
+    expect(
+      await probe({ periodStart: '2026-01-01T00:00:00Z', periodEnd: '2026-02-01T00:00:00Z' }),
+    ).toBe('23514:accounting_export_lines_within_period');
+    expect(
+      await probe({
+        periodStart: freedPeriod.periodStart,
+        periodEnd: entry.posted_at.toISOString(),
+      }),
+    ).toBe('23514:accounting_export_lines_within_period');
+
+    // The stage-5 reproduction: the entry is exported live by a service batch, and a second batch
+    // naming the same entry with live = false is refused, so it can never be accepted twice.
+    const live = await prepared(freedPeriod);
+    const exported = await firstLine(live.id);
+    expect(exported.journal_entry_id).toBe(entry.journal_entry_id);
+    expect(await probe(freedPeriod, { live: false })).toBe(
+      '23514:accounting_export_lines_live_at_insert',
+    );
+    expect(await probe(freedPeriod)).toBe('23505:accounting_export_lines_live_entry_idx');
+    await post(t, `/v1/accounting-export-batches/${live.id}/cancel`, fo1.header, {
       reason: 'tidy',
     });
   });
