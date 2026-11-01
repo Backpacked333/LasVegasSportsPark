@@ -92,7 +92,7 @@ describe('offline queue batches (SPK-AT-018)', () => {
     const note = 'n'.repeat(4000);
     const big = Array.from({ length: 450 }, () => {
       const q = queued('f1');
-      return { ...q, item: { ...q.item, note } as Schema<'OfflineItem'> };
+      return { ...q, item: { ...q.item, note } as unknown as Schema<'OfflineItem'> };
     });
     store.enqueue(big);
     const batches = store.prepareBatches(ACCOUNT);
