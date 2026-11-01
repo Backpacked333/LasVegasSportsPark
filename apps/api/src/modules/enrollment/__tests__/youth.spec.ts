@@ -6,7 +6,10 @@ import type { TestApp } from '../../../testing';
 import { createOfferingSessionFixture, createProgramFixture } from '../../catalog';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
 import { ENROLLMENT_PORT, type EnrollmentPort } from '../enrollment.ports';
-import { createEnrollmentFixture } from '../testing/enrollment-fixtures';
+import {
+  createEnrollmentFixture,
+  createSessionBookingFixture,
+} from '../testing/enrollment-fixtures';
 import { membershipOffering } from './package-g-support';
 import {
   acknowledge,
@@ -407,6 +410,8 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
     let term: OfferingSetup;
     let kid: string;
     let sessions: string[];
+    /** The session the kid was enrolled in and lost (another term's), which the makeup replaces. */
+    let missed: string;
 
     beforeAll(async () => {
       term = await offering(t);
@@ -416,19 +421,130 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         await session(term, '2026-11-20T23:00:00Z'),
         await session(term, '2026-11-27T23:00:00Z'),
       ];
+      const origin = await offering(t);
+      missed = await session(origin, '2026-11-13T23:00:00Z');
+      await createEnrollmentFixture(t, {
+        offeringId: origin.offeringId,
+        participantPersonId: kid,
+        status: 'confirmed',
+      });
     });
 
     const issue = (overrides: Record<string, unknown> = {}) =>
       post(t, '/v1/makeup-entitlements', frontDesk.header, {
         participantPersonId: kid,
         originKind: 'session_canceled',
-        originatingSessionId: sessions[0],
+        originatingSessionId: missed,
         eligibleOfferingIds: [term.offeringId],
         expiresAt: new Date(t.clock.now().getTime() + 30 * DAY).toISOString(),
         redemptionLimit: 1,
         reason: 'Pitch closed for frost',
         ...overrides,
       });
+
+    it('SPK-YOUTH-004 / R3-TRACE-B-02: a makeup references its originating session or policy event', async () => {
+      // A participant of its own, so the shared one's entitlements stay as the tests below expect.
+      const mine = await child(t, [parent]);
+      const issueFor = (overrides: Record<string, unknown>) =>
+        issue({ participantPersonId: mine, ...overrides });
+      const refused = async (overrides: Record<string, unknown>, field: string) => {
+        const res = await issueFor(overrides);
+        expect(res.status, JSON.stringify(res.body)).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_FAILED');
+        expect(JSON.stringify(res.body)).toContain(field);
+      };
+      // A canceled session or an absence names the session; a policy event names its reference.
+      await refused({ originatingSessionId: undefined }, 'originatingSessionId');
+      await refused(
+        { originKind: 'absence', originatingSessionId: undefined },
+        'originatingSessionId',
+      );
+      await refused(
+        { originKind: 'policy_event', originatingSessionId: undefined },
+        'originReference',
+      );
+      // A session that does not exist in this organization is a validation error, not a 500.
+      await refused({ originatingSessionId: newId() }, 'originatingSessionId');
+      // With an originating enrollment, the session is one of that enrollment's offering.
+      const enrollmentId = await createEnrollmentFixture(t, {
+        offeringId: term.offeringId,
+        participantPersonId: mine,
+        status: 'confirmed',
+      });
+      const elsewhere = await offering(t);
+      const unrelated = await session(elsewhere, '2026-11-21T23:00:00Z');
+      await refused(
+        { originatingEnrollmentId: enrollmentId, originatingSessionId: unrelated },
+        'originatingSessionId',
+      );
+      // Without one, it is a session the participant took part in: a session of an offering they
+      // were never enrolled in, booked or trialed for is refused (the kid's own missed session is
+      // another participant's here), as is an enrollment that was never confirmed.
+      await refused({ originatingSessionId: unrelated }, 'originatingSessionId');
+      await refused({ originatingSessionId: missed }, 'originatingSessionId');
+      await refused(
+        { originKind: 'absence', originatingSessionId: unrelated },
+        'originatingSessionId',
+      );
+      const neverConfirmed = await offering(t);
+      const pendingSession = await session(neverConfirmed, '2026-11-22T23:00:00Z');
+      await createEnrollmentFixture(t, {
+        offeringId: neverConfirmed.offeringId,
+        participantPersonId: mine,
+        status: 'canceled',
+      });
+      await refused({ originatingSessionId: pendingSession }, 'originatingSessionId');
+      const before = await t.db
+        .selectFrom('makeup_entitlements')
+        .select('id')
+        .where('participant_person_id', '=', mine)
+        .execute();
+      expect(before).toEqual([]);
+
+      const fromSession = await issueFor({
+        originatingEnrollmentId: enrollmentId,
+        originatingSessionId: sessions[0],
+      });
+      expect(fromSession.status, JSON.stringify(fromSession.body)).toBe(201);
+      expect(fromSession.body).toMatchObject({
+        originKind: 'session_canceled',
+        originatingSessionId: sessions[0],
+      });
+      // Without naming the enrollment: a session of the term they are enrolled in, or one they
+      // booked (a canceled booking counts: the canceled session canceled it).
+      const enrolledSession = await issueFor({
+        originKind: 'absence',
+        originatingSessionId: sessions[1],
+      });
+      expect(enrolledSession.status, JSON.stringify(enrolledSession.body)).toBe(201);
+      expect(enrolledSession.body).toMatchObject({
+        originKind: 'absence',
+        originatingEnrollmentId: null,
+        originatingSessionId: sessions[1],
+      });
+      const pickup = await offering(t, { kind: 'pickup' });
+      const bookedSession = await session(pickup, '2026-11-23T23:00:00Z');
+      await createSessionBookingFixture(t, {
+        offeringId: pickup.offeringId,
+        sessionId: bookedSession,
+        participantPersonId: mine,
+        scheduledStart: new Date('2026-11-23T23:00:00Z'),
+        scheduledEnd: new Date('2026-11-24T00:00:00Z'),
+        status: 'canceled',
+      });
+      const fromBooking = await issueFor({ originatingSessionId: bookedSession });
+      expect(fromBooking.status, JSON.stringify(fromBooking.body)).toBe(201);
+      expect(fromBooking.body.originatingSessionId).toBe(bookedSession);
+      const fromPolicy = await issueFor({
+        originKind: 'policy_event',
+        originatingSessionId: undefined,
+        originReference: 'Closure CL-2026-11 (frost)',
+      });
+      expect(fromPolicy.status, JSON.stringify(fromPolicy.body)).toBe(201);
+      expect(fromPolicy.body.originReference).toBe('Closure CL-2026-11 (frost)');
+      const manual = await issueFor({ originKind: 'manual', originatingSessionId: undefined });
+      expect(manual.status, JSON.stringify(manual.body)).toBe(201);
+    });
 
     it('two concurrent redemptions of a single-use makeup yield exactly one booking', async () => {
       expect(
@@ -449,7 +565,7 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         status: 'active',
         redemptionLimit: 1,
         redeemedCount: 0,
-        originatingSessionId: sessions[0],
+        originatingSessionId: missed,
       });
       // A makeup is not money (SPK-YOUTH-004): no amount or currency anywhere on it.
       expect(Object.keys(issued.body)).not.toEqual(expect.arrayContaining(['amountMinor']));
@@ -515,10 +631,18 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
         await acknowledge(t, small, participant, parent.personId);
       }
       const seat = await session(small, '2026-11-24T23:00:00Z');
+      // The session `first` lost, in a term they were enrolled in (SPK-YOUTH-004).
+      const lostTerm = await offering(t);
+      const lost = await session(lostTerm, '2026-11-17T23:00:00Z');
+      await createEnrollmentFixture(t, {
+        offeringId: lostTerm.offeringId,
+        participantPersonId: first,
+        status: 'confirmed',
+      });
       const makeup = await post(t, '/v1/makeup-entitlements', frontDesk.header, {
         participantPersonId: first,
         originKind: 'session_canceled',
-        originatingSessionId: seat,
+        originatingSessionId: lost,
         eligibleOfferingIds: [small.offeringId],
         expiresAt: new Date(t.clock.now().getTime() + 30 * DAY).toISOString(),
         redemptionLimit: 1,

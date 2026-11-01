@@ -46,21 +46,23 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentPackageGEvents } from '../enrollment.events';
 import {
   actorSnapshot,
+  assistedBy,
   beforeCursor,
   cursorAt,
   decodeCreatedCursor,
   enrollmentSystem,
   iso,
   isoOrNull,
-  isStaffLike,
   keysetPage,
   organizationOf,
+  registrantSnapshot,
   type Reader,
 } from '../enrollment.shared';
 import { MembershipSuspensionMachine } from '../enrollment.state-machines';
 import {
   addWholeDays,
   benefitPeriodKey,
+  lastIncludedInstant,
   localDayStart,
   localMidnightAfter,
   stableId,
@@ -724,14 +726,24 @@ export class MembershipsService {
       if (!membership || membership.intent !== 'membership') {
         throw errors.protectedNotFound('membership');
       }
+      const facilityId = await this.scope.facilityOf(organizationId, input.targetOfferingId, trx);
       await this.authorization.require(principal, EnrollmentActions.renewMembership, {
         type: 'enrollment',
         id: enrollmentId,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.targetOfferingId, trx),
+        facilityId,
         subjectPersonIds: [membership.participant_person_id],
         protected: true,
       });
+      // R3-TRACE-A-02 (SPK-REG-009, §4.7 (1)): only a staff role renewing at the offering's
+      // facility opens the basket in the family's name; a staff member renewing their own child's
+      // membership through `register` owns the basket, as any family adult does.
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.renewMembership,
+        organizationId,
+        facilityId,
+      );
       await this.capabilities.require(organizationId, 'memberships', trx);
       if (membership.status !== 'confirmed') {
         throw errors.invalidTransition('Membership', membership.status, 'renew');
@@ -763,7 +775,7 @@ export class MembershipsService {
           throw errors.invalidTransition('Basket', basket.status, 'add_line');
         }
       } else {
-        const ownerPersonId = isStaffLike(principal)
+        const ownerPersonId = staff
           ? (membership.payer_person_id ?? membership.participant_person_id)
           : (principal.personId as string);
         const owner = await this.evaluator.participant(trx, organizationId, ownerPersonId);
@@ -775,9 +787,9 @@ export class MembershipsService {
             organization_id: organizationId,
             owner_person_id: owner.id,
             payer_person_id: membership.payer_person_id ?? owner.id,
-            created_by: json(actorSnapshot(principal)),
+            created_by: json(registrantSnapshot(principal, staff)),
             created_by_person_id: principal.personId,
-            assisted_by_person_id: isStaffLike(principal) ? principal.personId : null,
+            assisted_by_person_id: assistedBy(principal, staff),
             fulfillment_mode: 'all_or_nothing',
             partial_accepted_at: null,
             status: 'open',
@@ -1025,9 +1037,13 @@ export class MembershipsService {
       audience: { subjectPersonIds: [row.participant_person_id] },
       protected: true,
       title: 'Membership renewal',
+      // R3-TIME-MONEY-05 (SPK-SCHED-008, SPK-COMMS-002): the term's end is exclusive, so the
+      // notice names its last included local day, never the day after it.
       body: `The membership ${snapshot.offering.name} ends on ${
         zone
-          ? new Intl.DateTimeFormat('en-US', { timeZone: zone, dateStyle: 'medium' }).format(endsAt)
+          ? new Intl.DateTimeFormat('en-US', { timeZone: zone, dateStyle: 'medium' }).format(
+              lastIncludedInstant(endsAt),
+            )
           : endsAt.toISOString()
       }. It can be renewed in the app.`,
       sourceEventId: stableId(`renewal:${row.id}`),

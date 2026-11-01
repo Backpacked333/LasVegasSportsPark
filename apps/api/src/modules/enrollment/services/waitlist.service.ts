@@ -49,17 +49,17 @@ import {
 } from '../enrollment.policy';
 import type { WaitlistPort } from '../enrollment.ports';
 import {
-  actorSnapshot,
   enrollmentSystem,
   hiddenFrom,
-  isStaffLike,
   minutesFrom,
   organizationOf,
   redactWaitlistEntry,
+  registrantSnapshot,
   resolveCustomerPayer,
   toSessionBooking,
   toWaitlistEntry,
   toWaitlistOffer,
+  viewerOf,
   withSavepoint,
   type Reader,
 } from '../enrollment.shared';
@@ -354,12 +354,6 @@ export class WaitlistService implements WaitlistPort {
         path: 'sessionId',
       });
     }
-    if (
-      !isStaffLike(principal) &&
-      (input.priorityBasis !== undefined || input.priorityRank !== undefined)
-    ) {
-      throw errors.accessDenied('Only staff set a waitlist priority.');
-    }
     const session = sessionScoped
       ? await this.sessions.get(organizationId, input.offeringId, input.sessionId as string)
       : undefined;
@@ -370,12 +364,35 @@ export class WaitlistService implements WaitlistPort {
         organizationId,
         input.participantPersonId,
       );
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.joinWaitlist, {
         type: 'waitlist_entry',
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [person.id],
       });
+      // R3-TRACE-A-02 (SPK-REG-008, §2.1): the queue follows the configured priority policy; only
+      // a role holding `enrollment.manage_waitlist` ("adjust priority") at the offering's facility
+      // sets a priority, never a staff member who joins for their own child through `register`.
+      if (
+        (input.priorityBasis !== undefined || input.priorityRank !== undefined) &&
+        !(await this.scope.actsAsStaff(
+          principal,
+          EnrollmentActions.manageWaitlist,
+          organizationId,
+          facilityId,
+        ))
+      ) {
+        throw errors.accessDenied(
+          'Only program administration sets a waitlist priority (enrollment.manage_waitlist).',
+        );
+      }
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.joinWaitlist,
+        organizationId,
+        facilityId,
+      );
       // CAPABILITIES-03 (DEC-016), GAPS-TRIAGE-01: joining is a new commitment of what the queue
       // waits for; a place that could not be taken now is not waited for either.
       await this.assertObtainable(trx, organizationId, {
@@ -447,12 +464,12 @@ export class WaitlistService implements WaitlistPort {
             joined_at: now,
             queued_at: now,
             preferences: json(input.preferences),
-            requested_by: json(actorSnapshot(principal)),
+            requested_by: json(registrantSnapshot(principal, staff)),
             requested_by_person_id: principal.personId,
             // §4.7 (1), SPK-REG-009: a customer waits as their own payer; staff may name one.
             payer_person_id:
-              resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
-              (isStaffLike(principal) ? null : principal.personId),
+              resolveCustomerPayer(staff, input.payerPersonId, [principal.personId]) ??
+              (staff ? null : principal.personId),
             status: 'waiting',
             accepted_enrollment_id: null,
             withdrawn_at: null,
@@ -481,7 +498,7 @@ export class WaitlistService implements WaitlistPort {
           sessionId: session?.id ?? null,
           poolId: primary.id,
           priorityBasis: input.priorityBasis ?? 'joined_at',
-          assistedByStaff: isStaffLike(principal),
+          assistedByStaff: staff,
         },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.waitlistJoined, {
@@ -511,16 +528,23 @@ export class WaitlistService implements WaitlistPort {
     const organizationId = organizationOf(principal);
     const row = await this.loadEntry(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('waitlist_entry');
+    const facilityId = await this.scope.facilityOf(organizationId, row.offering_id);
     await this.authorization.require(principal, EnrollmentActions.readWaitlist, {
       type: 'waitlist_entry',
       id,
       organizationId,
-      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
+      facilityId,
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return redactWaitlistEntry(
+    const staff = await this.scope.actsAsStaff(
       principal,
+      EnrollmentActions.readWaitlist,
+      organizationId,
+      facilityId,
+    );
+    return redactWaitlistEntry(
+      viewerOf(principal, staff),
       await this.view(this.db, organizationId, row),
       row.requested_by_person_id,
     );
@@ -605,26 +629,31 @@ export class WaitlistService implements WaitlistPort {
     return this.uow.run(async ({ trx }) => {
       const row = await this.loadEntry(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('waitlist_entry');
-      await this.authorization.require(
-        principal,
-        outcome === 'removed' ? EnrollmentActions.manageWaitlist : EnrollmentActions.joinWaitlist,
-        {
-          type: 'waitlist_entry',
-          id,
-          organizationId,
-          facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
-          subjectPersonIds: [row.participant_person_id],
-          protected:
-            outcome === 'removed'
-              ? await hiddenFrom(this.authorization, principal, EnrollmentActions.readWaitlist, {
+      const action =
+        outcome === 'removed' ? EnrollmentActions.manageWaitlist : EnrollmentActions.joinWaitlist;
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
+      await this.authorization.require(principal, action, {
+        type: 'waitlist_entry',
+        id,
+        organizationId,
+        facilityId,
+        subjectPersonIds: [row.participant_person_id],
+        protected:
+          outcome === 'removed'
+            ? await hiddenFrom(
+                this.authorization,
+                principal,
+                EnrollmentActions.readWaitlist,
+                {
                   type: 'waitlist_entry',
                   id,
                   organizationId,
                   subjectPersonIds: [row.participant_person_id],
-                })
-              : true,
-        },
-      );
+                },
+                facilityId,
+              )
+            : true,
+      });
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'waiting' && row.status !== 'offered') {
         throw errors.invalidTransition(
@@ -694,7 +723,10 @@ export class WaitlistService implements WaitlistPort {
       });
       const updated = await this.loadEntry(trx, organizationId, id);
       return redactWaitlistEntry(
-        principal,
+        viewerOf(
+          principal,
+          await this.scope.actsAsStaff(principal, action, organizationId, facilityId),
+        ),
         await this.view(trx, organizationId, updated!),
         row.requested_by_person_id,
       );
@@ -905,18 +937,25 @@ export class WaitlistService implements WaitlistPort {
     return this.uow.run(async ({ trx }) => {
       const before = await this.loadEntry(trx, organizationId, id);
       if (!before) throw errors.protectedNotFound('waitlist_entry');
+      const facilityId = await this.scope.facilityOf(organizationId, before.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.manageWaitlist, {
         type: 'waitlist_entry',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, before.offering_id, trx),
+        facilityId,
         subjectPersonIds: [before.participant_person_id],
-        protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readWaitlist, {
-          type: 'waitlist_entry',
-          id,
-          organizationId,
-          subjectPersonIds: [before.participant_person_id],
-        }),
+        protected: await hiddenFrom(
+          this.authorization,
+          principal,
+          EnrollmentActions.readWaitlist,
+          {
+            type: 'waitlist_entry',
+            id,
+            organizationId,
+            subjectPersonIds: [before.participant_person_id],
+          },
+          facilityId,
+        ),
       });
       // Pools first in id order (as holds and offer generation take them), then the entries.
       await trx
@@ -980,8 +1019,9 @@ export class WaitlistService implements WaitlistPort {
         reason: input.reason,
       });
       const updated = await this.loadEntry(trx, organizationId, id);
+      // `enrollment.manage_waitlist` is staff-only: whoever passed it acts on their role.
       return redactWaitlistEntry(
-        principal,
+        viewerOf(principal, true),
         await this.view(trx, organizationId, updated!),
         entry.requested_by_person_id,
       );
@@ -1266,11 +1306,12 @@ export class WaitlistService implements WaitlistPort {
         ? await this.loadEntry(trx, organizationId, offer.waitlist_entry_id, true)
         : undefined;
       if (!offer || !entry) throw errors.protectedNotFound('waitlist_offer');
+      const facilityId = await this.scope.facilityOf(organizationId, entry.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.joinWaitlist, {
         type: 'waitlist_offer',
         id: offerId,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, entry.offering_id, trx),
+        facilityId,
         subjectPersonIds: [entry.participant_person_id],
         protected: true,
       });
@@ -1339,7 +1380,15 @@ export class WaitlistService implements WaitlistPort {
       if (Number(consumed.numUpdatedRows) === 0)
         throw errors.invalidTransition('WaitlistOffer', offer.status, 'accept');
 
-      const staffLike = isStaffLike(principal);
+      // R3-TRACE-A-02 (SPK-REG-009): staff defaults (naming the payer or owner) apply only to a
+      // staff role acting at the offering's facility, never to a staff member accepting for their
+      // own child through `register`.
+      const staffLike = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.joinWaitlist,
+        organizationId,
+        facilityId,
+      );
       let basketId: string | null = null;
       let enrollmentId: string | null = null;
       let bookingId: string | null = null;
@@ -1349,7 +1398,7 @@ export class WaitlistService implements WaitlistPort {
         // the booking is confirmed at once.
         const payerPersonId = staffLike
           ? (input.payerPersonId ?? entry.payer_person_id ?? null)
-          : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+          : (resolveCustomerPayer(false, input.payerPersonId, [principal.personId]) ??
             principal.personId);
         const booking = await this.bookings.createInTrx(trx, organizationId, {
           kind: this.sessionKindOf(entry.intent),
@@ -1359,6 +1408,7 @@ export class WaitlistService implements WaitlistPort {
           evaluation,
           payerPersonId,
           actor: principal,
+          actingAsStaff: staffLike,
           existingHoldIds: holds.map((h) => h.id),
           correlationId,
         });
@@ -1393,7 +1443,7 @@ export class WaitlistService implements WaitlistPort {
         // customer names only themselves or the owner; staff may name another payer.
         const payerPersonId = staffLike
           ? (input.payerPersonId ?? entry.payer_person_id ?? owner.id)
-          : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId, owner.id]) ??
+          : (resolveCustomerPayer(false, input.payerPersonId, [principal.personId, owner.id]) ??
             owner.id);
         let application = await this.applications.findCurrent(
           trx,
@@ -1414,6 +1464,7 @@ export class WaitlistService implements WaitlistPort {
             sessionId: null,
             notes: null,
             actor: principal,
+            actingAsStaff: staffLike,
             correlationId,
           });
         }
@@ -1421,6 +1472,7 @@ export class WaitlistService implements WaitlistPort {
           owner,
           payerPersonId,
           actor: principal,
+          actingAsStaff: staffLike,
           participant: person,
           snapshot,
           intent: entry.intent,
@@ -1435,6 +1487,7 @@ export class WaitlistService implements WaitlistPort {
           opened.basket,
           opened.lineId,
           principal,
+          staffLike,
           holds.map((h) => h.id),
           minutesFrom(now, this.evaluator.configuration.holdMinutes),
           correlationId,
@@ -1497,7 +1550,7 @@ export class WaitlistService implements WaitlistPort {
       return {
         offer: toWaitlistOffer(updatedOffer!),
         entry: redactWaitlistEntry(
-          principal,
+          viewerOf(principal, staffLike),
           await this.view(trx, organizationId, updatedEntry!),
           entry.requested_by_person_id,
         ),

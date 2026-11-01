@@ -40,10 +40,10 @@ import {
   cursorAt,
   decodeCreatedCursor,
   hiddenFrom,
-  isStaffLike,
   keysetPage,
   organizationOf,
   redactApplication,
+  registrantSnapshot,
   resolveCustomerPayer,
   toApplication,
   type Reader,
@@ -65,6 +65,12 @@ export interface CreateApplicationInTrx {
   sessionId: string | null;
   notes: string | null;
   actor: Principal;
+  /**
+   * R3-TRACE-A-02 (SPK-REG-009): the actor acts on a staff role at the offering's facility
+   * (`EnrollmentFacilityScope.actsAsStaff`); a staff member applying for their own family is
+   * recorded as the customer they acted as.
+   */
+  actingAsStaff: boolean;
   correlationId: string | null;
 }
 
@@ -214,12 +220,19 @@ export class ApplicationsService {
         organizationId,
         input.participantPersonId,
       );
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.apply, {
         type: 'application',
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [person.id],
       });
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.apply,
+        organizationId,
+        facilityId,
+      );
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
       const evaluation = await this.evaluator.evaluate(trx, organizationId, {
         snapshot,
@@ -230,8 +243,8 @@ export class ApplicationsService {
       });
       // §4.7 (1), SPK-REG-009: a customer pays for their own application; staff may name a payer.
       const payerPersonId =
-        resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
-        (isStaffLike(principal) ? null : principal.personId);
+        resolveCustomerPayer(staff, input.payerPersonId, [principal.personId]) ??
+        (staff ? null : principal.personId);
       const existing = await this.findCurrent(
         trx,
         organizationId,
@@ -273,6 +286,7 @@ export class ApplicationsService {
         sessionId: session?.id ?? null,
         notes: input.notes ?? null,
         actor: principal,
+        actingAsStaff: staff,
         correlationId,
       });
       return toApplication(row);
@@ -307,7 +321,7 @@ export class ApplicationsService {
           offering_id: input.snapshot.offering.id,
           participant_person_id: input.person.id,
           intent: input.intent,
-          submitted_by: json(actorSnapshot(input.actor)),
+          submitted_by: json(registrantSnapshot(input.actor, input.actingAsStaff)),
           submitted_by_person_id: input.actor.personId,
           payer_person_id: input.payerPersonId,
           status,
@@ -356,7 +370,7 @@ export class ApplicationsService {
         eligible: input.evaluation.result.eligible,
         reasonCodes: input.evaluation.result.reasons.map((r) => r.code),
         requiresApproval: input.evaluation.requiresApproval,
-        assistedByStaff: isStaffLike(input.actor),
+        assistedByStaff: input.actingAsStaff,
       },
     });
     await this.outbox.enqueue(trx, EnrollmentEvents.applicationSubmitted, {
@@ -388,21 +402,46 @@ export class ApplicationsService {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('application');
+    const facilityId = await this.scope.facilityOf(organizationId, row.offering_id);
     await this.authorization.require(principal, EnrollmentActions.readApplication, {
       type: 'application',
       id,
       organizationId,
-      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
+      facilityId,
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return redactApplication(principal, toApplication(row));
+    return redactApplication(
+      await this.scope.viewer(
+        principal,
+        EnrollmentActions.readApplication,
+        organizationId,
+        facilityId,
+      ),
+      toApplication(row),
+    );
   }
 
   async list(principal: Principal, query: ListApplicationsQuery): Promise<Page<Application>> {
     const organizationId = organizationOf(principal);
     const facilityId = await this.scope.facilityOf(organizationId, query.offeringId);
-    if (isStaffLike(principal)) {
+    // R3-TRACE-A-02 (§4.14, SPK-IAM-001/003): the review queue is for a role holding
+    // `enrollment.list_applications` (a role held only at other facilities answers ACCESS_DENIED);
+    // anyone else, a staff member reading their own child included, lists one participant.
+    const holdsListRole = await this.scope.actsAsStaff(
+      principal,
+      EnrollmentActions.listApplications,
+      organizationId,
+    );
+    const ownListing =
+      !!query.participantPersonId &&
+      !(await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.listApplications,
+        organizationId,
+        facilityId,
+      ));
+    if (holdsListRole && !ownListing) {
       await this.authorization.require(principal, EnrollmentActions.listApplications, {
         type: 'application',
         organizationId,
@@ -418,10 +457,16 @@ export class ApplicationsService {
         protected: true,
       });
     }
-    // §4.3, §4.14: facility-scoped staff list only their facilities' applications.
+    // §4.3, §4.14: facility-scoped staff list only their facilities' applications. A listing of
+    // one participant narrows through the read action (SPK-IAM-001/003), so a staff member's own
+    // self or guardian authority over that participant lists every application GET would show them
+    // (a coach-guardian, or desk staff scoped to another facility); the review queue narrows
+    // through `enrollment.list_applications`, which carries no customer authority.
     const offerings = await this.scope.listOfferings(
       principal,
-      EnrollmentActions.listApplications,
+      query.participantPersonId
+        ? EnrollmentActions.readApplication
+        : EnrollmentActions.listApplications,
       organizationId,
       query.participantPersonId,
     );
@@ -443,8 +488,14 @@ export class ApplicationsService {
     if (query.status) q = q.where('status', '=', query.status);
     if (cursor) q = q.where(beforeCursor('applications', cursor));
     const page = keysetPage(await q.execute(), query.limit);
+    const viewerFor = await this.scope.viewersByOffering(
+      principal,
+      EnrollmentActions.readApplication,
+      organizationId,
+      page.rows.map((r) => r.offering_id),
+    );
     return {
-      items: page.rows.map((r) => redactApplication(principal, toApplication(r))),
+      items: page.rows.map((r) => redactApplication(viewerFor(r.offering_id), toApplication(r))),
       nextCursor: page.nextCursor,
     };
   }
@@ -465,11 +516,12 @@ export class ApplicationsService {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('application');
       // Staff-only; a customer of another household must not learn that the application exists.
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.overrideEligibility, {
         type: 'application',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: await hiddenFrom(
           this.authorization,
@@ -481,6 +533,7 @@ export class ApplicationsService {
             organizationId,
             subjectPersonIds: [row.participant_person_id],
           },
+          facilityId,
         ),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
@@ -601,11 +654,12 @@ export class ApplicationsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('application');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.reviewApplication, {
         type: 'application',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: await hiddenFrom(
           this.authorization,
@@ -617,6 +671,7 @@ export class ApplicationsService {
             organizationId,
             subjectPersonIds: [row.participant_person_id],
           },
+          facilityId,
         ),
       });
       assertExpectedRevision(expectedRevision, row.revision);
@@ -679,11 +734,12 @@ export class ApplicationsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('application');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.withdrawApplication, {
         type: 'application',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
@@ -723,7 +779,12 @@ export class ApplicationsService {
         payload: { organizationId, applicationId: id, offeringId: row.offering_id },
       });
       return redactApplication(
-        principal,
+        await this.scope.viewer(
+          principal,
+          EnrollmentActions.withdrawApplication,
+          organizationId,
+          facilityId,
+        ),
         toApplication((await this.load(trx, organizationId, id))!),
       );
     });

@@ -1092,7 +1092,25 @@ export const IssueMakeupBody = withCommandMeta({
     message: 'name at least one eligible replacement offering or program',
     path: ['eligibleOfferingIds'],
   })
-  .openapi('IssueMakeupRequest');
+  // R3-TRACE-B-02 (SPK-YOUTH-004): an entitlement references its originating session or policy
+  // event; only a `manual` makeup may name neither. The database checks the same rule (0520).
+  .refine(
+    (v) =>
+      (v.originKind !== 'session_canceled' && v.originKind !== 'absence') ||
+      !!v.originatingSessionId,
+    {
+      message: 'a session_canceled or absence makeup names its originating session',
+      path: ['originatingSessionId'],
+    },
+  )
+  .refine((v) => v.originKind !== 'policy_event' || !!v.originReference, {
+    message: 'a policy_event makeup names the policy event it comes from (originReference)',
+    path: ['originReference'],
+  })
+  .openapi('IssueMakeupRequest', {
+    description:
+      "SPK-YOUTH-004: `session_canceled` and `absence` require `originatingSessionId`: a session of the originating enrollment's offering when `originatingEnrollmentId` is given, otherwise a session the participant took part in (a confirmed enrollment in its offering, or a session booking or trial for it); `policy_event` requires `originReference`; `manual` may name neither.",
+  });
 export type IssueMakeupInput = z.infer<typeof IssueMakeupBody>;
 
 export const RedeemMakeupBody = withCommandMeta({

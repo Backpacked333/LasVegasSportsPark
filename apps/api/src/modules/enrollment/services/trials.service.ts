@@ -38,12 +38,13 @@ import {
   SESSION_INTENT_COMMANDS,
 } from '../enrollment.policy';
 import {
-  actorSnapshot,
-  isStaffLike,
+  assistedBy,
   organizationOf,
   redactTrialParticipation,
+  registrantSnapshot,
   resolveCustomerPayer,
   toTrialParticipation,
+  viewerOf,
   type Reader,
 } from '../enrollment.shared';
 import { ApplicationsService } from './applications.service';
@@ -132,12 +133,19 @@ export class TrialsService {
         organizationId,
         input.participantPersonId,
       );
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.recordTrial, {
         type: 'trial_participation',
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [person.id],
       });
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.recordTrial,
+        organizationId,
+        facilityId,
+      );
       const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
       const evaluation = await this.evaluator.evaluate(trx, organizationId, {
         snapshot,
@@ -153,8 +161,8 @@ export class TrialsService {
       const id = newId();
       // §4.7 (1), SPK-REG-009: a customer books the trial as its own payer; staff may name one.
       const payerPersonId =
-        resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
-        (isStaffLike(principal) ? null : principal.personId);
+        resolveCustomerPayer(staff, input.payerPersonId, [principal.personId]) ??
+        (staff ? null : principal.personId);
       try {
         await trx
           .insertInto('trial_participations')
@@ -177,9 +185,9 @@ export class TrialsService {
             converted_enrollment_id: null,
             converted_basket_id: null,
             converted_at: null,
-            registered_by: json(actorSnapshot(principal)),
+            registered_by: json(registrantSnapshot(principal, staff)),
             registered_by_person_id: principal.personId,
-            assisted_by_person_id: isStaffLike(principal) ? principal.personId : null,
+            assisted_by_person_id: assistedBy(principal, staff),
           })
           .execute();
       } catch (error) {
@@ -207,6 +215,7 @@ export class TrialsService {
           evaluation,
           payerPersonId,
           actor: principal,
+          actingAsStaff: staff,
           correlationId,
         });
         await trx
@@ -228,7 +237,7 @@ export class TrialsService {
           offeringId: snapshot.offering.id,
           sessionId: session?.id ?? null,
           followUpConsent: input.followUpConsent,
-          assistedByStaff: isStaffLike(principal),
+          assistedByStaff: staff,
         },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.trialRecorded, {
@@ -244,7 +253,7 @@ export class TrialsService {
         },
       });
       return redactTrialParticipation(
-        principal,
+        viewerOf(principal, staff),
         toTrialParticipation((await this.load(trx, organizationId, id))!),
       );
     });
@@ -254,15 +263,19 @@ export class TrialsService {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('trial_participation');
+    const facilityId = await this.scope.facilityOf(organizationId, row.offering_id);
     await this.authorization.require(principal, EnrollmentActions.readTrial, {
       type: 'trial_participation',
       id,
       organizationId,
-      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
+      facilityId,
       subjectPersonIds: [row.participant_person_id],
       protected: true,
     });
-    return redactTrialParticipation(principal, toTrialParticipation(row));
+    return redactTrialParticipation(
+      await this.scope.viewer(principal, EnrollmentActions.readTrial, organizationId, facilityId),
+      toTrialParticipation(row),
+    );
   }
 
   // -------------------------------------------------------------------------------------------
@@ -280,16 +293,25 @@ export class TrialsService {
       const now = this.clock.now();
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('trial_participation');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.recordTrial, {
         type: 'trial_participation',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
-      if (input.outcome !== 'canceled' && !isStaffLike(principal)) {
-        // Attendance is an operational observation, recorded by staff (entry owns arrival facts).
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.recordTrial,
+        organizationId,
+        facilityId,
+      );
+      if (input.outcome !== 'canceled' && !staff) {
+        // Attendance is an operational observation, recorded by staff on their role at the trial's
+        // facility (entry owns arrival facts); a staff member who is the participant's guardian
+        // never records their own child's attendance through `register` (R3-TRACE-A-02).
         throw errors.accessDenied('Only staff record trial attendance.');
       }
       assertExpectedRevision(input.expectedRevision, row.revision);
@@ -389,7 +411,7 @@ export class TrialsService {
         },
       });
       return redactTrialParticipation(
-        principal,
+        viewerOf(principal, staff),
         toTrialParticipation((await this.load(trx, organizationId, id))!),
       );
     });
@@ -410,6 +432,11 @@ export class TrialsService {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('trial_participation');
       // §4.3: a conversion acts at the trial's and the target offering's facility.
+      const facilityIds = await this.scope.facilitiesOf(
+        organizationId,
+        [row.offering_id, input.targetOfferingId],
+        trx,
+      );
       await this.scope.requireAt(
         principal,
         EnrollmentActions.recordTrial,
@@ -420,17 +447,22 @@ export class TrialsService {
           subjectPersonIds: [row.participant_person_id],
           protected: true,
         },
-        await this.scope.facilitiesOf(
-          organizationId,
-          [row.offering_id, input.targetOfferingId],
-          trx,
-        ),
+        facilityIds,
+      );
+      // R3-TRACE-A-02 (SPK-REG-009, SPK-YOUTH-003): staff rules (consent, naming the payer) apply
+      // to a staff role at both offerings; a staff member converting their own child's trial
+      // through `register` converts it as the family does.
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.recordTrial,
+        organizationId,
+        facilityIds,
       );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (!['scheduled', 'attended', 'no_show'].includes(row.status) || row.converted_basket_id) {
         throw errors.invalidTransition('TrialParticipation', row.status, 'convert');
       }
-      if (isStaffLike(principal) && !row.follow_up_consent) {
+      if (staff && !row.follow_up_consent) {
         // SPK-YOUTH-003: staff reuse trial information for a follow-up offer only when permitted.
         throw errors.resourceConflict(
           'The family has not permitted a follow-up offer from this trial.',
@@ -482,11 +514,11 @@ export class TrialsService {
         : null;
       const familyRegistrant = row.assisted_by_person_id ? null : row.registered_by_person_id;
       // §4.7 (1), SPK-REG-009: a customer converts as their own payer; staff may name one.
-      const payerPersonId = isStaffLike(principal)
+      const payerPersonId = staff
         ? (input.payerPersonId ?? trialPayer ?? familyRegistrant)
-        : (resolveCustomerPayer(principal, input.payerPersonId, [principal.personId]) ??
+        : (resolveCustomerPayer(false, input.payerPersonId, [principal.personId]) ??
           principal.personId);
-      const ownerPersonId = isStaffLike(principal) ? payerPersonId : principal.personId;
+      const ownerPersonId = staff ? payerPersonId : principal.personId;
       if (!ownerPersonId)
         throw errors.validation('payerPersonId is required when staff open a follow-up.', {
           path: 'payerPersonId',
@@ -525,6 +557,7 @@ export class TrialsService {
           sessionId: null,
           notes: null,
           actor: principal,
+          actingAsStaff: staff,
           correlationId,
         });
       }
@@ -532,6 +565,7 @@ export class TrialsService {
         owner,
         payerPersonId,
         actor: principal,
+        actingAsStaff: staff,
         participant: person,
         snapshot,
         intent: input.intent,
@@ -587,7 +621,7 @@ export class TrialsService {
       const basket = await this.baskets.getBasket(organizationId, opened.basket.id, trx);
       return {
         trial: redactTrialParticipation(
-          principal,
+          viewerOf(principal, staff),
           toTrialParticipation((await this.load(trx, organizationId, id))!),
         ),
         basket: basket!,

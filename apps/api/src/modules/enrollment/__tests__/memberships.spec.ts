@@ -534,6 +534,51 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
     }
   });
 
+  it('SPK-SCHED-008 / SPK-COMMS-002 / R3-TIME-MONEY-05: the renewal notice names the last day of the term, never the day after', async () => {
+    const jobs = t.app.get(EnrollmentJobs);
+    const lifecycle = () => jobs.membershipLifecycle({ now: t.clock.now(), batchSize: 500 });
+    const bodyOf = async (enrollmentId: string) =>
+      (
+        await t.db
+          .selectFrom('notifications')
+          .select(['body'])
+          .where('kind', '=', 'renewal_opportunity')
+          .where('subject_id', '=', enrollmentId)
+          .executeTakeFirstOrThrow()
+      ).body;
+    // An offering_dates term ends at the facility's local midnight after its last day
+    // (2027-01-01T08:00Z in Los Angeles): the notice says Dec 31, as the customer app shows it.
+    const season = await join(
+      await adult(t),
+      {
+        attendance: { mode: 'none' },
+        term: { kind: 'offering_dates' },
+        renewal: { noticeLeadDays: 90 },
+      },
+      { startsOn: '2026-10-01', endsOn: '2026-12-31' },
+    );
+    const term = await t.db
+      .selectFrom('enrollments')
+      .select('membership_ends_at')
+      .where('id', '=', season.enrollmentId)
+      .executeTakeFirstOrThrow();
+    expect(new Date(term.membership_ends_at as Date).toISOString()).toBe(
+      '2027-01-01T08:00:00.000Z',
+    );
+    // A from_confirmation term ends at an instant inside its last day (confirmed at the test
+    // clock, 2026-11-02T15:00Z, plus 30 days: 07:00 on Dec 2 in Los Angeles).
+    const rolling = await join(await adult(t), {
+      attendance: { mode: 'none' },
+      term: { kind: 'from_confirmation', lengthDays: 30 },
+      renewal: { noticeLeadDays: 60 },
+    });
+    await lifecycle();
+    const seasonBody = await bodyOf(season.enrollmentId);
+    expect(seasonBody).toContain('ends on Dec 31, 2026');
+    expect(seasonBody).not.toContain('Jan 1, 2027');
+    expect(await bodyOf(rolling.enrollmentId)).toContain('ends on Dec 2, 2026');
+  });
+
   it('CAPABILITIES-06 / DEC-072: no renewal notice is sent while memberships is off; the one notice owed is sent once it is back on', async () => {
     const member = await adult(t);
     const expiring = await join(
