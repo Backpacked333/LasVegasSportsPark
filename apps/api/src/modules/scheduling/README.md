@@ -320,9 +320,11 @@ assignment is on the events). Until one does, and for an impact stored before `s
 closure that affects no event reports `staff: []` and `0`. **Verified**:
 `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`; the staff section through a registered
 contributor and the not-identified case in `__tests__/closures.spec.ts` "SPK-SCHED-009 /
-R3-TRACE-A-06". **Integration (not this module, R3-TRACE-A-06)**: workforce registers the staff
-contributor; until it does, every live preview, and every closure created or applied in that time,
-reports staff as not identified (`null`), and a client must show it as such, never as 0. Any
+R3-TRACE-A-06". Workforce registers the staff contributor (`workforce.staff_assignments`, live
+assignments proposed, offered or accepted on the affected events; **Verified**,
+`modules/workforce/__tests__/closure-impact-staff.spec.ts`), so in the assembled application a
+preview names the staff and an unstaffed closure reports `[]` and `0`; the staff dashboard shows
+`null` as "Not identified", never as 0. Any
 financial adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009).
 
 ### Event title bound on every path (R2-TENANCY-INPUT-02, §4.10) — verified

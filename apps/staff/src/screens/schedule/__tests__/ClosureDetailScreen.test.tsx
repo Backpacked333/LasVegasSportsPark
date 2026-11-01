@@ -99,6 +99,47 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
 }
 
 describe('SCR-S-06 ClosureDetailScreen', () => {
+  it('SPK-SCHED-009 / R3-TRACE-A-06: lists the staff assigned to the affected events, and shows none as 0', async () => {
+    const staffed = {
+      ...IMPACT,
+      staff: [
+        {
+          assignmentId: 'as-1',
+          personId: 'p1',
+          eventId: 'e1',
+          kind: 'official',
+          role: 'referee',
+          status: 'accepted',
+        },
+      ],
+      summary: { ...IMPACT.summary, staff: 1 },
+    };
+    const app = createTestApp({
+      routes: routes({
+        'GET /closures/{id}': { status: 200, body: { ...PENDING, impact: staffed } },
+      }),
+    });
+    render(app.at('/schedule/closures/c1'));
+    const table = await screen.findByRole('table', { name: 'What this closure affects' });
+    expect(within(table).getByRole('row', { name: 'Staff assigned 1' })).toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Staff assigned to affected events' });
+    expect(list).toHaveTextContent('official · referee');
+    expect(list).toHaveTextContent('accepted · U12 Red v Blue');
+  });
+
+  it('SPK-SCHED-009 / R3-TRACE-A-06: an impact with no staff assigned reads 0, not "not identified"', async () => {
+    const none = { ...IMPACT, staff: [], summary: { ...IMPACT.summary, staff: 0 } };
+    const app = createTestApp({
+      routes: routes({ 'GET /closures/{id}': { status: 200, body: { ...PENDING, impact: none } } }),
+    });
+    render(app.at('/schedule/closures/c1'));
+    const table = await screen.findByRole('table', { name: 'What this closure affects' });
+    expect(within(table).getByRole('row', { name: 'Staff assigned 0' })).toBeInTheDocument();
+    expect(
+      screen.getByText('No staff member is assigned to the affected events.'),
+    ).toBeInTheDocument();
+  });
+
   it('SPK-SCHED-009: lists what is affected, including customers, obligations and unsent messages', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
@@ -138,6 +179,13 @@ describe('SCR-S-06 ClosureDetailScreen', () => {
       ),
     );
     expect(screen.getByText('pending: impact preview, not applied')).toBeInTheDocument();
+    // R3-TRACE-A-06: an impact without staff reads "not identified", never zero
+    expect(
+      within(table).getByRole('row', { name: 'Staff assigned Not identified' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Staff assignments on the affected events are not identified.'),
+    ).toBeInTheDocument();
   });
 
   it('apply needs an explicit choice, sends it with the expected revision, and reports a changed affected set', async () => {

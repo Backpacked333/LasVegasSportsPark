@@ -13,6 +13,7 @@ import {
 } from '../competition';
 import { IdentityEvents, IdentityModule } from '../identity';
 import {
+  ClosureImpactContributors,
   ConflictDetector,
   EventChanged,
   PartyCommitmentSources,
@@ -156,6 +157,7 @@ export class WorkforceModule implements OnModuleInit {
     private readonly partySources: PartyCommitmentSources,
     private readonly notices: AssignmentNotices,
     private readonly mergeFollowUp: PersonMergeFollowUp,
+    private readonly impactContributors: ClosureImpactContributors,
   ) {}
 
   onModuleInit(): void {
@@ -167,6 +169,38 @@ export class WorkforceModule implements OnModuleInit {
       held: (trx, organizationId, _partyType, personId, range, ignoreEventIds) =>
         this.checker.held(trx, organizationId, personId, range, ignoreEventIds),
     });
+    // SPK-SCHED-009 / R3-TRACE-A-06: a closure preview names the staff whose live assignments
+    // (proposed, offered or accepted) are on the affected events. Read through the preview's own
+    // executor, so an applied closure reads inside its transaction. Always answers `staff` ([] for
+    // none): returning it is what marks staff as identified.
+    this.impactContributors.register(
+      'workforce.staff_assignments',
+      async (db, organizationId, events) => {
+        if (events.length === 0) return { staff: [] };
+        const rows = await db
+          .selectFrom('assignments')
+          .select(['id', 'person_id', 'scheduling_event_id', 'kind', 'role', 'status'])
+          .where('organization_id', '=', organizationId)
+          .where(
+            'scheduling_event_id',
+            'in',
+            events.map((e) => e.eventId),
+          )
+          .where('status', 'in', ['proposed', 'offered', 'accepted'])
+          .orderBy('id')
+          .execute();
+        return {
+          staff: rows.map((r) => ({
+            assignmentId: r.id,
+            personId: r.person_id,
+            eventId: r.scheduling_event_id as string,
+            kind: r.kind,
+            role: r.role,
+            status: r.status,
+          })),
+        };
+      },
+    );
     // SPK-STAFF-002 / SPK-READY-001: required officials are satisfied only by accepted assignments.
     this.readiness.registerCheck(REQUIRED_OFFICIALS_CHECK, (context) =>
       this.coverage.readinessIssues(context),

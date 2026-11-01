@@ -62,6 +62,12 @@ PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** u
   (`schedule_conflict`), evaluated against the new start (window, deadline, notice), never
   double-books. A canceled, postponed or unscheduled fixture, a canceled event and a canceled
   session also close the target's open `workforce.uncovered_assignment` exceptions (SPK-UX-006).
+- Scheduling closure impact contributor `workforce.staff_assignments` (`ClosureImpactContributors`,
+  registered in `onModuleInit`; SPK-SCHED-009, SPK-AT-009, R3-TRACE-A-06): a closure preview, and
+  the impact stored on a created or applied closure, names the live assignments (proposed, offered
+  or accepted) on the affected events by id, person, event, kind, role and status, read through
+  the preview's own executor. It always answers, `[]` when none, which is what marks staff as
+  identified (`__tests__/closure-impact-staff.spec.ts`).
 - Scheduling party commitment source `workforce.assignments` (`PartyCommitmentSources`,
   registered in `onModuleInit`): scheduling's conflict detection and its post-lock re-check see
   accepted and completed assignments, so scheduling refuses to commit a person an assignment holds
