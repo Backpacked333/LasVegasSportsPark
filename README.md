@@ -66,18 +66,48 @@ Run the test suite against a PostgreSQL server (true concurrency) with `TEST_DAT
 
 ### Follow-ups need the worker
 
-The API process only serves requests. Every follow-up runs in the separate worker process
-(`apps/api/src/worker.ts`, started with `pnpm --filter @sportspark/api start:worker` after a
-build): the outbox dispatcher (for example `finance.finalize_checkout`, which completes a paid
-checkout, and every notice), the provider inbox, the periodic jobs (invitation, claim and package
-expiry and the others listed in [docs/architecture/overview.md](docs/architecture/overview.md)
-section 7.1), message delivery and the finance provider worker (`main.ts` starts none of them).
+The API process serves requests and finishes in the request what the request itself settles. A
+checkout whose payment succeeds at once (the fake provider's `pm_fake_visa`, "Succeeds at once" in
+the customer app's development payment picker) is finalized inline: the response is `completed`
+and the enrollments are confirmed (`apps/api/src/modules/finance/services/checkout.service.ts`;
+`modules/finance/__tests__/checkout.spec.ts`). A refund the provider settles at once is recorded in
+the request as well, and a pending invitation past its expiry reads as expired and is recorded as
+expired when someone accepts or declines it.
 
-The in-process PGlite database used above cannot be shared by two processes: it is in memory unless
-`PGLITE_DATA_DIR` is set, and a data directory can be open in one process at a time. A worker
-started next to a PGlite API therefore runs on its own, separate database. In the quick start and in
-the development-seed flow below no follow-up runs at all: a checkout paid through the fake provider
-stays unfinalized, nothing expires and no notice is delivered. To exercise follow-ups, run the API
+What follows a commit runs only in the separate worker process (`apps/api/src/worker.ts`, started
+with `pnpm --filter @sportspark/api start:worker` after a build; `main.ts` starts none of it):
+
+- the outbox dispatcher: every notice, the cross-module reactions to events (for example the
+  membership start and package issue that follow `enrollment.enrollment_confirmed`), hold and
+  checkout expiry, and `finance.finalize_checkout`, the durable backstop that finalizes a checkout
+  the request did not finish;
+- the provider inbox, which applies payment webhooks: the outcome of a payment that is processing
+  or needs a customer action arrives that way (or through `POST /v1/payments/{id}/reconcile`, a
+  provider lookup in the request), and the checkout it pays is then finalized by
+  `finance.finalize_checkout` in the outbox, so without the worker it stays unfinalized;
+- the finance provider worker: refunds left requested, abandoned payment challenges, the provider
+  lookup of payments and refunds whose outcome is unknown (a timeout), and installment collection;
+- the periodic jobs (the invitation and claim sweep, package expiry and the others listed in
+  [docs/architecture/overview.md](docs/architecture/overview.md) section 7.1);
+- message delivery (`communications.delivery_worker`).
+
+The fake payment provider keeps its charges in the memory of the process that made them
+(`FakePaymentProvider`), so a worker's provider lookup finds nothing the API process charged; with
+the fake provider, delayed payment outcomes are exercised by the tests, which run the API, the
+inbox and the provider worker in one process.
+
+The in-process PGlite database cannot be shared by two processes. Without `PGLITE_DATA_DIR` each
+process has its own in-memory database, so a worker started next to a PGlite API works on a
+different, empty database. With `PGLITE_DATA_DIR`, never start a second process (the worker, a
+`seed:dev` run, another API) on that directory while one is running: PGlite takes no lock, the
+second process opens the directory without an error, and writes it committed are lost when the
+processes close. **Verified 2026-11-01 (correction)** with `@electric-sql/pglite` 0.5.11: a second
+process opened a directory the first held open, read the first process's row, and its own
+committed row was gone after both closed; the 2026-10-31 text said a data directory could be open
+in one process at a time. A lock in `createPgliteDatabase` (`packages/db/src/client.ts`) that
+refuses a second process is **Proposed**. In the quick start and in the development-seed flow
+below nothing that needs the worker runs: no notice is delivered, holds, claims and packages do not
+expire, and a payment whose outcome arrives later stays pending. To exercise follow-ups, run the API
 and the worker against one PostgreSQL database:
 
 ```bash
@@ -110,8 +140,9 @@ UTC) and six local accounts: `dev-admin` (system administrator), `dev-desk` (fro
 (a guardian holding the six permissions over a child). No capability is enabled unless named with
 `--enable`, which records the change with DEC-016 and the reason `local development`. Keep the same
 `AUTH_LOCAL_SECRET` and `PGLITE_DATA_DIR` (or `DATABASE_URL`) for the seed and the API. With
-`PGLITE_DATA_DIR` no worker can run beside the API (previous section); use `DATABASE_URL` for the
-seed, the API and the worker when follow-ups matter.
+`PGLITE_DATA_DIR`, run the seed before the API starts, never while it runs, and never start a
+worker on the same directory (previous section); use `DATABASE_URL` for the seed, the API and the
+worker when follow-ups matter.
 
 ## Working in this repository
 

@@ -32,11 +32,14 @@ SPORTSPARK_API_BASE_URL=http://localhost:3000/v1 pnpm --filter @sportspark/mobil
   holding the six permissions over a child); the others are staff accounts for the staff
   dashboard. Keep the same `AUTH_LOCAL_SECRET` and `PGLITE_DATA_DIR` (or `DATABASE_URL`) for the
   seed and the API, so both use the same database.
-- Follow-ups (checkout finalization after a payment, notices, expiries) run only in the API's
-  worker process, which cannot share a PGlite database with the API. With the commands above a
-  checkout paid through the fake provider stays unfinalized; to exercise follow-ups, run the API
-  and `pnpm --filter @sportspark/api start:worker` against one PostgreSQL database
-  (`DATABASE_URL`; root README "Follow-ups need the worker").
+- A checkout whose payment succeeds at once ("Succeeds at once" in the development payment
+  picker) is finalized in the request and answers `completed`. Every other follow-up (notices,
+  expiries, the finalization of a payment whose outcome arrives later) runs only in the API's
+  worker process, so with the commands above none of them runs. Never start the worker, a second
+  seed run or another API on the same `PGLITE_DATA_DIR` while the API runs: PGlite takes no lock
+  and committed data is lost. To exercise follow-ups, run the API and
+  `pnpm --filter @sportspark/api start:worker` against one PostgreSQL database (`DATABASE_URL`;
+  root README "Follow-ups need the worker").
 - `SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES` sets the age after which shown data is called stale.
   The value is pending (DEC-032, DEC-033); unset, the app shows data age but never calls it stale.
 

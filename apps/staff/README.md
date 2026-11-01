@@ -30,11 +30,13 @@ pnpm --filter @sportspark/staff dev      # http://localhost:5173
   Use a staff `accountId` that `pnpm --filter @sportspark/api seed:dev` prints (`dev-admin`,
   `dev-desk`, `dev-league`, `dev-coach`, `dev-official`); keep the same `AUTH_LOCAL_SECRET` and
   `PGLITE_DATA_DIR` (or `DATABASE_URL`) for the seed and the API.
-- Follow-ups (checkout finalization, notices, expiries, exceptions raised by periodic jobs) run only
-  in the API's worker process, which cannot share a PGlite database with the API. With the commands
-  above none of them runs; to exercise them, run the API and
-  `pnpm --filter @sportspark/api start:worker` against one PostgreSQL database (`DATABASE_URL`;
-  root README "Follow-ups need the worker").
+- A checkout whose payment succeeds at once is finalized in the request. Every other follow-up
+  (notices, expiries, exceptions raised by periodic jobs, cross-module reactions, the finalization
+  of a payment whose outcome arrives later) runs only in the API's worker process, so with the
+  commands above none of them runs. Never start the worker, a second seed run or another API on the
+  same `PGLITE_DATA_DIR` while the API runs: PGlite takes no lock and committed data is lost. To
+  exercise follow-ups, run the API and `pnpm --filter @sportspark/api start:worker` against one
+  PostgreSQL database (`DATABASE_URL`; root README "Follow-ups need the worker").
 - `VITE_STALE_DATA_THRESHOLD_MINUTES` sets when shown data is called stale; pending DEC-032/DEC-033,
   unset by default.
 - `VITE_OFFLINE_ROSTER_MAX_AGE_MINUTES` sets the maximum roster age for queuing offline arrival and
