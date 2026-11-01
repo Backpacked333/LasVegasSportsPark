@@ -116,11 +116,27 @@ export function changesFromSeriesPreview(preview: SeriesEditPreview): DraftChang
   });
 }
 
+/**
+ * SPK-SCHED-008: how an occurrence's new start was resolved on a daylight-saving date, shown so the
+ * user sees which of the policies they chose applied where (nothing for an exact time).
+ */
+export const DST_RESOLUTION_NOTE: Record<
+  SeriesEditPreview['affected'][number]['dstResolution'],
+  string
+> = {
+  exact: '',
+  shifted_forward:
+    'the time does not exist that day, so it starts when the clocks have gone forward',
+  first: 'the time happens twice that day; the first one, before the clocks go back',
+  second: 'the time happens twice that day; the second one, after the clocks go back',
+};
+
 export function previewLine(item: SeriesEditPreview['affected'][number], timeZone: string): string {
   const before = `${formatRange(item.before.scheduledStart, item.before.scheduledEnd, timeZone)} on ${item.before.resources.map((r) => r.name).join(', ')}`;
   if (item.after === null) return `Occurrence ${item.occurrenceIndex + 1}: ${before}, canceled`;
   const after = `${formatRange(item.after.scheduledStart, item.after.scheduledEnd, timeZone)} on ${item.after.resources.map((r) => r.name).join(', ')}`;
-  return `Occurrence ${item.occurrenceIndex + 1}: was ${before}; becomes ${after}`;
+  const note = DST_RESOLUTION_NOTE[item.dstResolution];
+  return `Occurrence ${item.occurrenceIndex + 1}: was ${before}; becomes ${after}${note ? ` (${note})` : ''}`;
 }
 
 export function savedAtLabel(iso: string, timeZone: string): string {

@@ -13,6 +13,12 @@
  * out of the preview). Changes are added to the draft offline too (the editor keeps and saves them
  * on reconnecting); the preview is a request to the API, so offline "Preview affected events" is
  * disabled with "Needs a connection" (§4.15) instead of failing as an unknown outcome.
+ *
+ * SPK-SCHED-008 (R3-TRACE-A-08): when a series' new local start time does not exist (clocks go
+ * forward) or happens twice (clocks go back) on some of its dates, the API refuses the preview with
+ * `dst_resolution_required`. The form names those dates, offers the policies the API lists for
+ * each, and previews again with the choices; each listed event then says how its time was
+ * resolved. Nothing is chosen on the user's behalf.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState, type FormEvent } from 'react';
@@ -22,6 +28,12 @@ import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CommandButton } from '../../ui/CommandButton';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
+import {
+  dstResolutionRequired,
+  type AmbiguousPolicy,
+  type DstResolutionRequired,
+  type NonexistentPolicy,
+} from '../../features/schedule-facilities/error-details';
 import type { FacilityContext } from '../../features/schedule-facilities/facility-scope';
 import { namesOf, resourceNames } from '../../features/schedule-facilities/inventory';
 import { EVENT_KIND_LABEL } from '../../features/schedule-facilities/labels';
@@ -34,6 +46,7 @@ import {
 } from '../../features/schedule-facilities/LocalDateTimeField';
 import { ResourceChecklist } from '../../features/schedule-facilities/ResourceChecklist';
 import {
+  formatLocalDate,
   formatRange,
   localDateOf,
   localDaysWindow,
@@ -53,6 +66,95 @@ type ChangeAction = 'move' | 'resize' | 'resource_change' | 'cancel';
 type Scope = 'one' | 'this_and_future' | 'entire_series';
 
 const EVENT_KINDS = Object.keys(EVENT_KIND_LABEL) as EventKind[];
+
+/** The daylight-saving policies chosen for a series preview (SPK-SCHED-008). */
+interface DstChoice {
+  nonexistentPolicy?: NonexistentPolicy;
+  ambiguousPolicy?: AmbiguousPolicy;
+}
+
+const NONEXISTENT_LABEL: Record<NonexistentPolicy, string> = {
+  shift_forward: 'Start when the clocks have gone forward',
+  skip: 'Cancel the occurrence on those dates',
+};
+
+const ambiguousLabel = (policy: AmbiguousPolicy, time: string) =>
+  policy === 'first'
+    ? `The first ${time}, before the clocks go back`
+    : `The second ${time}, after the clocks go back`;
+
+/**
+ * SPK-SCHED-008: the dates on which the new local start time does not exist or happens twice, with
+ * a choice per case from the policies the API offered, and a preview again with them.
+ */
+function DstChoiceSection({
+  required,
+  time,
+  value,
+  onChange,
+  onPreview,
+  disabled,
+  busy,
+}: {
+  required: DstResolutionRequired;
+  time: string;
+  value: DstChoice;
+  onChange: (next: DstChoice) => void;
+  onPreview: () => void;
+  disabled: boolean;
+  busy: boolean;
+}) {
+  const dates = (list: string[]) => list.map(formatLocalDate).join(', ');
+  const needsGap = required.nonexistentLocalDates.length > 0;
+  const needsOverlap = required.ambiguousLocalDates.length > 0;
+  const complete =
+    (!needsGap || value.nonexistentPolicy !== undefined) &&
+    (!needsOverlap || value.ambiguousPolicy !== undefined);
+  return (
+    <section aria-labelledby="series-dst-title" data-testid="series-dst-choice">
+      <h5 id="series-dst-title">Choose how to handle daylight-saving dates</h5>
+      {needsGap ? (
+        <fieldset>
+          <legend>
+            {time} does not exist on {dates(required.nonexistentLocalDates)} (the clocks go forward)
+          </legend>
+          {required.nonexistentOptions.map((policy) => (
+            <label key={policy}>
+              <input
+                type="radio"
+                name="series-dst-nonexistent"
+                checked={value.nonexistentPolicy === policy}
+                onChange={() => onChange({ ...value, nonexistentPolicy: policy })}
+              />{' '}
+              {NONEXISTENT_LABEL[policy]}
+            </label>
+          ))}
+        </fieldset>
+      ) : null}
+      {needsOverlap ? (
+        <fieldset>
+          <legend>
+            {time} happens twice on {dates(required.ambiguousLocalDates)} (the clocks go back)
+          </legend>
+          {required.ambiguousOptions.map((policy) => (
+            <label key={policy}>
+              <input
+                type="radio"
+                name="series-dst-ambiguous"
+                checked={value.ambiguousPolicy === policy}
+                onChange={() => onChange({ ...value, ambiguousPolicy: policy })}
+              />{' '}
+              {ambiguousLabel(policy, time)}
+            </label>
+          ))}
+        </fieldset>
+      ) : null}
+      <CommandButton type="button" disabled={disabled || !complete} busy={busy} onClick={onPreview}>
+        Preview with these choices
+      </CommandButton>
+    </section>
+  );
+}
 
 function optionalMinutes(text: string): number | undefined | 'invalid' {
   if (text.trim() === '') return undefined;
@@ -252,7 +354,9 @@ export function ExistingEventForm({
   const [reason, setReason] = useState('');
   const [attempted, setAttempted] = useState(false);
   const [preview, setPreview] = useState<SeriesEditPreview | null>(null);
+  const [dstChoice, setDstChoice] = useState<DstChoice>({});
   const previewCommand = useApiCommand('post', '/event-series/{id}/edits');
+  const dstRequired = dstResolutionRequired(previewCommand.error);
 
   const event = events.data?.items.find((e) => e.id === eventId);
   // §4.9: a series edit, previews included, carries the series revision it was based on.
@@ -268,6 +372,7 @@ export function ExistingEventForm({
     setEventId(id);
     setPreview(null);
     setScope('');
+    setDstChoice({});
     previewCommand.reset();
     const chosen = events.data?.items.find((e) => e.id === id);
     if (chosen) {
@@ -334,6 +439,7 @@ export function ExistingEventForm({
     setScope('');
     setReason('');
     setPreview(null);
+    setDstChoice({});
     setAttempted(false);
     previewCommand.reset();
   };
@@ -352,6 +458,8 @@ export function ExistingEventForm({
               ? {
                   localStartTime: start.time,
                   durationMinutes: minutesBetween(startAt.instant, endAt.instant),
+                  // SPK-SCHED-008: the policies chosen after a dst_resolution_required refusal
+                  ...dstChoice,
                 }
               : {};
     void previewCommand
@@ -549,7 +657,17 @@ export function ExistingEventForm({
           Add change to draft
         </Button>
       )}
-      {previewCommand.error ? (
+      {dstRequired ? (
+        <DstChoiceSection
+          required={dstRequired}
+          time={start.time}
+          value={dstChoice}
+          onChange={setDstChoice}
+          onPreview={requestPreview}
+          disabled={disabled || !online}
+          busy={previewCommand.isProcessing}
+        />
+      ) : previewCommand.error ? (
         <CommandError
           error={previewCommand.error}
           onRetry={requestPreview}

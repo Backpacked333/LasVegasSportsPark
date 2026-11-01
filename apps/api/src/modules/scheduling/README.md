@@ -190,9 +190,10 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   `dst_resolution`, whatever the series' policy for the other axis says. An `entire_series` edit
   stores the chosen policy on the series, so the series and its in-scope occurrences agree
   (verified: `event-series.spec.ts` "R3-TRACE-A-08 / SPK-SCHED-008: an edit re-resolves only the
-  axis it names"). Known gap outside this module (staff client): the schedule draft editor's
-  series-edit preview sends no policy, so an edit to a time in a gap or overlap is refused there
-  until it offers the choice from `details.options` (deferred to the staff app).
+  axis it names"). The staff schedule draft editor answers this refusal: it names the dates,
+  offers the policies in `details.options`, previews again with the choice and shows each
+  occurrence's `dstResolution` (verified: staff `ScheduleDraftEditorScreen.test.tsx`
+  "SPK-SCHED-008: a series move whose new time happens twice").
 - A recurrence rule describes at most `maxSeriesOccurrences` (366) dates over HTTP and 52 through
   the port. `count` is bounded by the schema and `until` is not, so a longer rule is refused with
   `VALIDATION_FAILED` `details.code = SERIES_TOO_LONG` on both paths and is never cut short to its
