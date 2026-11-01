@@ -37,8 +37,14 @@ operator approval. **Pending decision** = waits on an operator answer
   completing your registration." when the enrollment's last operation or one of the customer's
   checkouts in recovery (`GET /v1/me/registration-checkouts?status=recovery_required`, every page,
   so an older one is found however many newer checkouts there are) reports `recovery_required`.
-  The list row and the record decide with the same test (`pendingEnrollmentInRecovery`,
-  R3-SCREEN-STATES-04); "Confirmed. Next payment due <date>." for a future installment.
+  The list row and the record decide with the same test (`pendingEnrollmentRecovery` in
+  `recovery.tsx`, R3-SCREEN-STATES-04). While that is not known (the first page loading, a later
+  page still to come or failed, the operation read loading or failed) an enrollment waiting for
+  payment reads "Registration pending: payment status not known yet", never "payment not
+  finished", and the failed read is shown with its code and "Try again" (on the list in a "Payment
+  status" section, on the record under the status); "Try again" on a failed later page asks for
+  that page again and the rest follow. "Confirmed. Next payment due <date>." for a future
+  installment.
 - **Memberships** (ENR-12): term, included sessions, usage and suspensions from
   `GET /v1/me/memberships`. A confirmed membership can be renewed into a membership offering open
   for registration (`POST /v1/enrollments/{id}/renew`, added to the open basket the API lists, or

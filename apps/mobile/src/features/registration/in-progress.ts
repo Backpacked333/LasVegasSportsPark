@@ -7,7 +7,8 @@
  * - `GET /v1/me/registration-checkouts`: their checkouts, including one that needs recovery
  *   (FIN-01), so a payment whose outcome is unknown or a `recovery_required` checkout is found
  *   again without anything kept on the device; `useRecoveryCheckouts` reads every page of the
- *   `recovery_required` ones, so a label that depends on them never misses an older one;
+ *   `recovery_required` ones, so a label that depends on them never misses an older one (the
+ *   enrollment row and record), and `recoveryCheckoutsKnown` says when that list is complete;
  * - `GET /v1/me/waitlist-entries?status=offered`: entries with an open offer and its server
  *   expiry (ENR-01, SPK-REG-008).
  *
@@ -16,9 +17,9 @@
  * invalidate these keys. The device keeps only a checkout request whose answer never arrived
  * (`progress.tsx`).
  */
-import type { Schema } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useEffect } from 'react';
-import { useApiPages } from '../../api/useApiPages';
+import { useApiPages, type ApiPagesResult } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp } from '../../providers/AppProviders';
 import { checkoutInFlight } from './status';
@@ -82,10 +83,27 @@ export function useRecoveryCheckouts(enabled = true) {
   });
   const { hasNextPage, isFetchingNextPage, nextPageError, loadMore } = pages;
   useEffect(() => {
-    // A failed page stops here (shown by the caller); a refresh starts over from the first page.
+    // A failed page stops the paging: until it is read the list is not known
+    // (`recoveryCheckoutsKnown`), and the screens show that page's failure with "Try again"
+    // (`loadMore`), after which the remaining pages follow. A refresh starts over from page one.
     if (hasNextPage && !isFetchingNextPage && !nextPageError) loadMore();
   }, [hasNextPage, isFetchingNextPage, nextPageError, loadMore]);
   return pages;
+}
+
+/**
+ * Every checkout of the caller in recovery is known: all pages were read, or the API does not show
+ * this account the list (§4.10). While the first page loads, a later page is still to come, or a
+ * page failed, a checkout missing from what was read proves nothing (R3-SCREEN-STATES-04): a screen
+ * never concludes from it that a payment is not finished.
+ */
+export function recoveryCheckoutsKnown(
+  pages: Pick<ApiPagesResult<unknown>, 'data' | 'error' | 'hasNextPage'>,
+): boolean {
+  if (pages.data === undefined) {
+    return pages.error !== null && presentationForError(pages.error) === 'unavailable';
+  }
+  return !pages.hasNextPage;
 }
 
 export function useMyOffers(enabled = true) {

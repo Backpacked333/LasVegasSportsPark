@@ -10,7 +10,9 @@
  * `pendingReason`), the operation or checkout of a pending enrollment (a `recovery_required`
  * checkout, from the operation or every page of `GET /v1/me/registration-checkouts?status=
  * recovery_required`, the same test as the list row, reads "Payment received. We are completing
- * your registration."), and the linked enrollments of a transfer (the old and
+ * your registration."; while that is not known, a record waiting for payment never says the
+ * payment is not finished and shows the read loading or failed, with "Try again"), and the linked
+ * enrollments of a transfer (the old and
  * new records stay linked; attendance history is kept). A membership shows its term,
  * suspensions and the renewal the customer may start (MembershipSection).
  *
@@ -49,14 +51,10 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import {
-  INTENT_LABELS,
-  offeringLabel,
-  pendingEnrollmentInRecovery,
-  recoveryEnrollmentIds,
-} from './EnrollmentsScreen';
+import { INTENT_LABELS, offeringLabel, recoveryContext } from './EnrollmentsScreen';
 import { MembershipSection } from './MembershipSection';
 import { enrollmentOffering } from './participation';
+import { pendingEnrollmentRecovery, recoveryIndex, RecoveryReadState } from './recovery';
 
 type Order = Schema<'Order'>;
 
@@ -73,7 +71,7 @@ function useEnrollmentContext(enrollment: Enrollment) {
   });
   // Every checkout in recovery, as the list reads them (R3-SCREEN-STATES-04).
   const checkouts = useRecoveryCheckouts(enrollment.status === 'pending');
-  const recovery = recoveryEnrollmentIds(checkouts.data);
+  const recovery = recoveryIndex(checkouts);
   const placement = useApiQuery({
     path: '/placement-requests/{id}',
     request: { path: { id: enrollment.placementRequestId ?? '' } },
@@ -106,7 +104,17 @@ function useEnrollmentContext(enrollment: Enrollment) {
       .map((r) => r.data?.offeringId)
       .filter((id): id is string => typeof id === 'string'),
   );
-  return { offering, recovery, placement, order, plan, operation, linked, linkedOfferings };
+  return {
+    offering,
+    checkouts,
+    recovery,
+    placement,
+    order,
+    plan,
+    operation,
+    linked,
+    linkedOfferings,
+  };
 }
 
 function PaymentSummary({
@@ -173,11 +181,14 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
   const source = enrollment.transferredFromEnrollmentId
     ? ctx.linked[enrollment.transferredFromEnrollmentId]?.data
     : undefined;
-  const recoveryRequired = pendingEnrollmentInRecovery(
+  const recovery = pendingEnrollmentRecovery(
     enrollment,
     ctx.recovery,
-    ctx.operation.data,
+    enrollment.lastOperationId ? ctx.operation : undefined,
   );
+  const recoveryRequired = recovery === 'recovery_required';
+  // Not known yet: "payment not finished" could invite a second payment (§4.11).
+  const paymentUnknown = recovery === 'unknown' && enrollment.pendingReason === 'payment';
   const status = enrollmentStatus(enrollment, {
     offeringName,
     transferTargetName: target
@@ -186,7 +197,7 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
     placement: ctx.placement.data ?? null,
     placementUnknown: enrollment.placementRequestId !== null && ctx.placement.data === undefined,
     nextInstallmentDueAt: nextInstallment?.dueAt ?? null,
-    recoveryRequired,
+    ...recoveryContext(recovery),
   });
   const recorded = enrollment.cancellationConsequence
     ? consequenceSummary(enrollment.cancellationConsequence)
@@ -211,7 +222,19 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
         {enrollment.confirmedAt ? (
           <Field label="Confirmed" value={formatInstant(enrollment.confirmedAt, timeZone)} />
         ) : null}
-        {enrollment.status === 'pending' && !recoveryRequired ? (
+        {paymentUnknown ? (
+          <View testID="enrollment-recovery-unknown">
+            <Caption>
+              Whether the payment for this registration was received is not known yet. It shows here
+              once it can be checked.
+            </Caption>
+            <RecoveryReadState
+              checkouts={ctx.checkouts}
+              operations={enrollment.lastOperationId ? [ctx.operation] : []}
+            />
+          </View>
+        ) : null}
+        {enrollment.status === 'pending' && !recoveryRequired && !paymentUnknown ? (
           <Caption>
             {enrollment.pendingReason === 'forms'
               ? 'A required form is not signed yet. Forms are signed from the registration basket or from Home.'

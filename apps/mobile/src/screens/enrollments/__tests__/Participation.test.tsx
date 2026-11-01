@@ -196,6 +196,107 @@ describe('SCR-C-32 participation records (stage-3 reads)', () => {
     expect(new Set(reads.map((r) => r.query.cursor ?? null))).toEqual(new Set([null, '20']));
   });
 
+  it('R3-SCREEN-STATES-04 §4.11: when page 2 of the checkouts in recovery fails, the row never says the payment is not finished, and the failure has "Try again"', async () => {
+    const checkout = (n: number, basketId: string) => ({
+      id: `0192f1a0-0000-7000-8000-0000000b${String(n).padStart(4, '0')}`,
+      basketId,
+      status: 'recovery_required',
+      enrollmentIds: [],
+    });
+    const recovering = [
+      ...Array.from({ length: 20 }, (_, n) =>
+        checkout(100 + n, `0192f1a0-0000-7000-8000-0000000c${String(100 + n).padStart(4, '0')}`),
+      ),
+      // This enrollment's checkout, on the second page.
+      checkout(999, PIDS.basket),
+    ];
+    let secondPageFails = true;
+    const app = await renderForChild({
+      'GET /enrollments': page([
+        enrollment({ status: 'pending', pendingReason: 'payment', basketId: PIDS.basket }),
+      ]),
+      'GET /me/registration-checkouts': (req) => {
+        const start = req.query.cursor ? Number(req.query.cursor) : 0;
+        if (start > 0 && secondPageFails) {
+          return fakeResponse(
+            503,
+            apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+          );
+        }
+        const end = start + Number(req.query.limit ?? 50);
+        return fakeResponse(200, {
+          items: recovering.slice(start, end),
+          nextCursor: end < recovering.length ? String(end) : null,
+        });
+      },
+    });
+    const section = await screen.findByTestId('enrollments-recovery-unknown');
+    expect(
+      within(section).getByText(
+        'Whether the payment was received for a pending registration could not be checked.',
+      ),
+    ).toBeOnTheScreen();
+    expect(within(section).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText('Registration pending: payment status not known yet'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Registration pending: payment not finished')).toBeNull();
+
+    // "Try again" asks for that page again; the checkout in recovery is found on it.
+    const secondPage = () =>
+      app.fake.requests.filter(
+        (r) => r.route === '/me/registration-checkouts' && r.query.cursor === '20',
+      ).length;
+    const before = secondPage();
+    secondPageFails = false;
+    fireEvent.press(within(section).getByRole('button', { name: 'Try again' }));
+    expect(
+      await screen.findByLabelText('Payment received. We are completing your registration.'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('enrollments-recovery-unknown')).toBeNull();
+    expect(secondPage()).toBeGreaterThan(before);
+  });
+
+  it('R3-SCREEN-STATES-04 §4.11: a failed first page of checkouts in recovery, or a failed operation read, is shown instead of "payment not finished"', async () => {
+    const OPERATION = '0192f1a0-0000-7000-8000-00000000a802';
+    await renderForChild({
+      'GET /enrollments': page([
+        enrollment({
+          status: 'pending',
+          pendingReason: 'payment',
+          basketId: PIDS.basket,
+          lastOperationId: OPERATION,
+        }),
+      ]),
+      'GET /me/registration-checkouts': () =>
+        fakeResponse(
+          500,
+          apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+        ),
+      'GET /operations/{id}': () =>
+        fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
+    });
+    const section = await screen.findByTestId('enrollments-recovery-unknown');
+    expect(await within(section).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(within(section).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText('Registration pending: payment status not known yet'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Registration pending: payment not finished')).toBeNull();
+  });
+
+  it('R3-SCREEN-STATES-04: with every checkout in recovery read and none for it, a pending payment still reads "payment not finished"', async () => {
+    await renderForChild({
+      'GET /enrollments': page([
+        enrollment({ status: 'pending', pendingReason: 'payment', basketId: PIDS.basket }),
+      ]),
+    });
+    expect(
+      await screen.findByLabelText('Registration pending: payment not finished'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('enrollments-recovery-unknown')).toBeNull();
+  });
+
   it('R3-SCREEN-STATES-04 §4.11: a pending enrollment whose last operation is recovery_required is labelled so, as on the record', async () => {
     const OPERATION = '0192f1a0-0000-7000-8000-00000000a801';
     await renderForChild({
