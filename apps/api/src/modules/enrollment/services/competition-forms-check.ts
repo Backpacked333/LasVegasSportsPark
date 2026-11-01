@@ -54,13 +54,16 @@ export class CompetitionFormsCheck implements FormsCheckPort {
       ];
     }
     const findings: ConditionFinding[] = [];
+    const persons = [...new Set(context.personIds)];
     for (const form of snapshot.requiredForms) {
-      let missing = 0;
-      for (const personId of context.personIds) {
-        if (!(await this.policies.hasAcknowledgment(organizationId, personId, form.id, trx))) {
-          missing += 1;
-        }
-      }
+      // R3-PERFORMANCE-01: one query per form for the whole roster, not one per person.
+      const acknowledged = await this.policies.acknowledgedSubjects(
+        organizationId,
+        persons,
+        form.id,
+        trx,
+      );
+      const missing = persons.filter((personId) => !acknowledged.has(personId)).length;
       if (missing === 0) continue;
       findings.push({
         status: 'unsatisfied',

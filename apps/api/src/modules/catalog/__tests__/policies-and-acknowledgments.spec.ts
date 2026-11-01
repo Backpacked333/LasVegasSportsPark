@@ -368,6 +368,11 @@ describe('policy versions and acknowledgments (§4.4 Policies, SPK-REG-002, SPK-
       expect(await port.hasAcknowledgment(t.organizationId, people.child.personId, form)).toBe(
         true,
       );
+      // R3-PERFORMANCE-01: the batched form answers the same for a whole roster in one query
+      const stranger = newId();
+      expect(
+        await port.acknowledgedSubjects(t.organizationId, [people.child.personId, stranger], form),
+      ).toEqual(new Set([people.child.personId]));
 
       const duplicate = await t.http
         .post('/v1/acknowledgments')
