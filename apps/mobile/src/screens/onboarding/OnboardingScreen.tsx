@@ -23,10 +23,9 @@
  * not permitted (each step is one server fact); recovery required (resumes from server state).
  */
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
-import { readLinkSecret } from '../../links/link-secrets';
+import { useLinkSecret } from '../../links/useLinkSecret';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -44,9 +43,12 @@ import { contactState, ContactPointStep, type ContactState } from './ContactPoin
 const NOT_STARTED: StatusBadgeProps = { tone: 'neutral', label: 'Not started' };
 const PERMISSIONS_PENDING: StatusBadgeProps = { tone: 'pending', label: 'Waiting on a decision' };
 
-/** Route entry: a claim code from a link is read from memory, never from the route. */
+/**
+ * Route entry: a claim code from a link is read from memory, never from the route, and only for
+ * the account signed in now (R3-SECURITY-07).
+ */
 export function OnboardingRoute() {
-  const [claimToken] = useState(() => readLinkSecret('claim'));
+  const claimToken = useLinkSecret('claim');
   return <OnboardingScreen claimToken={claimToken} />;
 }
 
@@ -130,7 +132,9 @@ function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
         ]}
       />
       <SectionHeader title="Link your participant record" />
+      {/* A code from another account's link is never kept in the field (R3-SECURITY-07). */}
       <ClaimForm
+        key={claimToken ?? 'typed'}
         initialToken={claimToken}
         intro="Enter the claim code the front desk gave you. Your account is linked to the record they created, so no second participant is made."
       />
@@ -154,9 +158,10 @@ function LinkedOnboarding({ personId }: { personId: string }) {
   // Same query (and cache entry) as ContactPointStep: the step list and the step agree.
   const detail = useApiQuery({ path: '/people/{id}', request: { path: { id: personId } } });
   const state = detail.data ? contactState(detail.data.contactPoints) : null;
-  // A claim link opened by a linked account claims a child's record (guardian claim). Read once:
-  // a code just used to link this account is already forgotten, so it is not offered again.
-  const [guardianClaim] = useState(() => readLinkSecret('claim'));
+  // A claim link opened by a linked account claims a child's record (guardian claim). Read once
+  // per account: a code just used to link this account is already forgotten, so it is not offered
+  // again.
+  const guardianClaim = useLinkSecret('claim');
   return (
     <View>
       <StepList

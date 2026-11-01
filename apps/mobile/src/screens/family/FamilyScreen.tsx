@@ -36,7 +36,7 @@ import { StyleSheet, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { usePersonNames, type PersonNameEntry } from '../../api/person-names';
 import { useApiPages } from '../../api/useApiPages';
-import { readLinkSecret } from '../../links/link-secrets';
+import { useLinkSecret } from '../../links/useLinkSecret';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
@@ -144,7 +144,7 @@ function nameOf(entry: PersonNameEntry | undefined): string {
 }
 
 function FamilyBody({ me }: { me: MeData }) {
-  const [claimToken] = useState(() => readLinkSecret('claim'));
+  const claimToken = useLinkSecret('claim');
   const held = useApiPages({
     path: '/me/access-grants',
     request: HELD_GRANTS_REQUEST,
@@ -198,6 +198,7 @@ function FamilyBody({ me }: { me: MeData }) {
       <AccessOverMeSection />
       <SectionHeader title="Claim a record from the front desk" />
       <ClaimForm
+        key={claimToken ?? 'typed'}
         initialToken={claimToken}
         intro="If the front desk registered your child, enter the claim code they gave you. You become guardian with exactly the permissions on the claim, and no second record is made."
       />

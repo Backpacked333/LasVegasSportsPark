@@ -7,8 +7,12 @@
  * then checkouts that need attention ("Payment received. We are completing your registration.",
  * "Payment outcome being confirmed. Do not pay again.", "Payment processing"), baskets still open
  * or held, and waitlist offers with the server's deadline (in the facility zone of the entry's
- * offering, SPK-SCHED-008). Each read has its own error state
- * (code and "Try again"); a list the API does not show this account is simply absent.
+ * offering, SPK-SCHED-008). Checkouts in recovery come from every page of those
+ * (`useRecoveryCheckouts`) as well as the newest page of all checkouts, so one older than any
+ * number of newer checkouts still has its row and its basket is not listed as "Payment
+ * processing" (R3-SCREEN-STATES-04). Each read has its own error state (code and "Try again"; a
+ * failed later page of checkouts in recovery is asked for again); a list the API does not show
+ * this account is simply absent.
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
@@ -21,10 +25,12 @@ import { StateView } from '../../ui/StateView';
 import { spacing } from '../../ui/theme';
 import {
   basketInProgress,
-  checkoutNeedsAttention,
+  checkoutsNeedingAttention,
+  recoveryCheckoutsKnown,
   useMyBaskets,
   useMyCheckouts,
   useMyOffers,
+  useRecoveryCheckouts,
 } from './in-progress';
 import { useParticipantNames } from './participants';
 import { useRegistrationProgress } from './progress';
@@ -53,9 +59,10 @@ export function InProgressCard() {
   const { progress, update } = useRegistrationProgress();
   const baskets = useMyBaskets();
   const checkouts = useMyCheckouts();
+  const recovery = useRecoveryCheckouts();
   const offers = useMyOffers();
 
-  const attention = (checkouts.data?.items ?? []).filter(checkoutNeedsAttention);
+  const attention = checkoutsNeedingAttention(checkouts.data, recovery.data);
   const coveredBaskets = new Set(attention.map((c) => c.basketId));
   const active = (baskets.data?.items ?? []).filter(
     (b) => basketInProgress(b) && !coveredBaskets.has(b.id),
@@ -75,10 +82,12 @@ export function InProgressCard() {
   const loading =
     (baskets.data === undefined && baskets.fetchStatus === 'fetching') ||
     (checkouts.data === undefined && checkouts.fetchStatus === 'fetching') ||
+    (recovery.data === undefined && recovery.fetchStatus === 'fetching') ||
     (offers.data === undefined && offers.fetchStatus === 'fetching');
   const nothing =
     baskets.data !== undefined &&
     checkouts.data !== undefined &&
+    recoveryCheckoutsKnown(recovery) &&
     offers.data !== undefined &&
     attention.length + active.length + offered.length === 0 &&
     !(pendingQuote && !pendingListed);
@@ -94,6 +103,11 @@ export function InProgressCard() {
       ) : null}
       {loading ? <StateView variant="loading" label="registrations in progress" /> : null}
       <ReadError error={checkouts.error} onRetry={() => void checkouts.refetch()} />
+      <ReadError
+        error={recovery.data === undefined ? recovery.error : null}
+        onRetry={() => void recovery.refetch()}
+      />
+      <ReadError error={recovery.nextPageError} onRetry={recovery.loadMore} />
       <ReadError error={baskets.error} onRetry={() => void baskets.refetch()} />
       <ReadError error={offers.error} onRetry={() => void offers.refetch()} />
       <View accessibilityRole="list">

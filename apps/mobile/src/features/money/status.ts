@@ -70,7 +70,16 @@ export interface EnrollmentContext {
   nextInstallmentDueAt?: string | null;
   /** The checkout behind a pending enrollment is `recovery_required` (§4.11). */
   recoveryRequired?: boolean;
+  /**
+   * Whether that checkout is in recovery is not known yet (a read loading or failed,
+   * R3-SCREEN-STATES-04): a pending enrollment waiting for payment is never shown as "payment not
+   * finished", since the payment may have been received (§4.11 "do not pay again").
+   */
+  recoveryUnknown?: boolean;
 }
+
+/** A pending enrollment waiting for payment whose recovery is not known yet. */
+export const PAYMENT_STATUS_UNKNOWN = 'Registration pending: payment status not known yet';
 
 /**
  * SPK-REG-003: each record keeps its own state. A future installment never makes a confirmed
@@ -80,9 +89,13 @@ export function enrollmentStatus(enrollment: Enrollment, context: EnrollmentCont
   switch (enrollment.status) {
     case 'pending':
       // journeys.md: "Registration pending: <reason>", named from the API's `pendingReason`.
-      return context.recoveryRequired
-        ? { tone: 'warning', label: 'Payment received. We are completing your registration.' }
-        : { tone: 'pending', label: pendingLabel(enrollment.pendingReason) };
+      if (context.recoveryRequired) {
+        return { tone: 'warning', label: 'Payment received. We are completing your registration.' };
+      }
+      if (context.recoveryUnknown && enrollment.pendingReason === 'payment') {
+        return { tone: 'pending', label: PAYMENT_STATUS_UNKNOWN };
+      }
+      return { tone: 'pending', label: pendingLabel(enrollment.pendingReason) };
     case 'confirmed': {
       if (context.placementUnknown) {
         return { tone: 'info', label: 'Confirmed. Placement status not available yet.' };
