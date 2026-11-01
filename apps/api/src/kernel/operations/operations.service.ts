@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   errors,
   newId,
@@ -17,6 +17,7 @@ import { currentCommitFence } from '../database/commit-fence';
 import { ensureUpdated } from '../database/revision';
 import { executorFor } from '../database/transaction-context';
 import type { Trx } from '../database/unit-of-work';
+import { UNEXPECTED_ERROR_MESSAGE } from '../http/domain-exception.filter';
 import { CLOCK, DATABASE } from '../tokens';
 
 /**
@@ -74,9 +75,34 @@ export interface CreateOperationInput {
 
 const TERMINAL: OperationStatus[] = ['succeeded', 'failed', 'compensated'];
 
+export interface OperationError {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
+/**
+ * The error an operation shows its readers (R3-SECURITY-05 at the operation boundary, §4.10 "safe
+ * message"). A module that records a caught DomainError on a failed operation stores its code,
+ * message and details; for INTERNAL_ERROR (`errors.internal(...)`, or a raw driver or runtime text)
+ * those are written for the operator (ids, ledger sums, SQL), and GET /v1/operations/{id} answers
+ * the requester, who may be a customer. Such an error reads as the generic message without
+ * details, as the HTTP error filter answers it; every other code keeps its client-facing text.
+ */
+export function readableOperationError(error: unknown): OperationError | null {
+  if (error === null || error === undefined) return null;
+  if (typeof error === 'object' && !Array.isArray(error)) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code !== 'INTERNAL_ERROR') return error as OperationError;
+  }
+  return { code: 'INTERNAL_ERROR', message: UNEXPECTED_ERROR_MESSAGE };
+}
+
 /** Durable operations (§4.8 GET /v1/operations/{id}): the readable outcome of multi-step commands. */
 @Injectable()
 export class OperationsService {
+  private readonly logger = new Logger(OperationsService.name);
+
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
@@ -116,7 +142,7 @@ export class OperationsService {
     trx: Trx,
     id: string,
     to: OperationStatus,
-    data: { result?: unknown; error?: { code: string; message: string; details?: unknown } } = {},
+    data: { result?: unknown; error?: OperationError } = {},
   ): Promise<void> {
     // §4.9, §4.6: lock the row so a concurrent transition waits and then sees the committed state
     // (and fails the terminal check) instead of being silently lost.
@@ -131,13 +157,19 @@ export class OperationsService {
       throw errors.invalidTransition('Operation', current.status, to);
     }
     const now = this.clock.now();
+    // R3-SECURITY-05: an INTERNAL_ERROR's own text is for the operator: it is logged with the
+    // operation id and the operation stores (and shows) the generic message only.
+    const error = data.error === undefined ? undefined : readableOperationError(data.error);
+    if (data.error !== undefined && data.error.code === 'INTERNAL_ERROR') {
+      this.logger.error(`operation ${id} ${to}: INTERNAL_ERROR: ${data.error.message}`);
+    }
     const updated = await trx
       .updateTable('operations')
       .set({
         status: to,
         revision: current.revision + 1,
         result: data.result === undefined ? undefined : json(data.result as object),
-        error: data.error === undefined ? undefined : json(data.error),
+        error: error === undefined ? undefined : json(error),
         completed_at: TERMINAL.includes(to) ? now : null,
       })
       .where('id', '=', id)
@@ -210,7 +242,8 @@ export function toOperation(row: Selectable<OperationsTable>): Operation {
     status: row.status,
     correlationId: row.correlation_id,
     result: row.result ?? null,
-    error: row.error ?? null,
+    // Rows recorded before R3-SECURITY-05 reached the operation boundary still hold the raw text.
+    error: readableOperationError(row.error),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
