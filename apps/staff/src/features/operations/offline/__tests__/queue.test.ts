@@ -237,6 +237,44 @@ describe('a batch the API refuses (§4.15 "preserve conflicting observations for
     expect(store.getState().review).toHaveLength(1);
   });
 
+  it('R3-SECURITY-02: a batch refused as body_too_large is split and both halves are sent in the same run; a single item too large goes to review', async () => {
+    const store = new OfflineQueueStore(null, keys());
+    const items = Array.from({ length: 5 }, () => queued('f1'));
+    const oversized = items[4]!.item.clientObservationId;
+    store.enqueue(items);
+    const sent: PendingBatch[] = [];
+    const tooLarge = refusal('VALIDATION_FAILED', 400, {
+      code: 'body_too_large',
+      limitBytes: 2_097_152,
+    });
+    // The service takes at most two items per body, and never the oversized one.
+    const send = (batch: PendingBatch) => {
+      sent.push(batch);
+      const ids = batch.items.map((q) => q.item.clientObservationId);
+      if (ids.length > 2 || ids.includes(oversized)) return Promise.reject(tooLarge);
+      return Promise.resolve(accepted(batch));
+    };
+    const runner = new OfflineSyncRunner(store);
+    const summary = await runner.run(ACCOUNT, send, NOW);
+    // 5 -> 3 + 2; 3 -> 2 + 1; then the 2 holding the oversized item -> 1 + 1
+    expect(sent.map((b) => b.items.length)).toEqual([5, 3, 2, 1, 2, 1, 1]);
+    // every split is a new client batch id, so a new idempotency key (§4.9)
+    expect(new Set(sent.map((b) => b.batchId)).size).toBe(sent.length);
+    const state = store.getState();
+    expect(state.pending).toHaveLength(0);
+    expect(summary).toMatchObject({ synchronised: 4, refused: 1 });
+    expect(state.review).toEqual([
+      expect.objectContaining({
+        outcome: 'refused',
+        code: 'VALIDATION_FAILED (body_too_large)',
+        queued: expect.objectContaining({
+          item: expect.objectContaining({ clientObservationId: oversized }),
+        }),
+      }),
+    ]);
+    expect(runner.getRuntime().error).toBeNull();
+  });
+
   it('ACCESS_DENIED after a role ended is kept for review too; discarding it removes it from the device', async () => {
     const store = new OfflineQueueStore(null, keys());
     store.enqueue([queued('f1')]);

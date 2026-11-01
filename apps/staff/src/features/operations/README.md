@@ -99,6 +99,11 @@ the actual devices of §6.3.
   response never applies an item twice; the idempotency key is reused while the tab is open and
   the outcome is unknown. Every prepared batch is sent in the run, a full one (500 items, the
   API's limit) included. Conflicting and rejected items are kept for review with the API's reason.
+- A batch also stays under 1,500,000 bytes of serialized items (`MAX_BATCH_BYTES`, below the
+  service's 2 MiB `HTTP_BODY_LIMIT_BYTES` default). If the service still refuses one as too large
+  (VALIDATION_FAILED `body_too_large`, nothing recorded), it is split in two under new client
+  batch ids (new keys) and both halves are sent in the same run; only a single item too large on
+  its own goes to review (R3-SECURITY-02). **Verified** (`queue.test.ts` "R3-SECURITY-02").
 - A batch the API refuses outright (a definitive 4xx such as VALIDATION_FAILED
   `snapshot_in_future` or ACCESS_DENIED after a role ended: nothing in it was recorded) ends its
   intent and its items move to "Kept for review" as "Not recorded" with the API's code and message;
