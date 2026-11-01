@@ -346,8 +346,9 @@ taxes and fees rounded half up per line (DEC-007).
   `POST /registration-quotes`, and the quote's payer whose pay authority lapsed gets it from
   `POST /registration-checkouts`; an owner who named another payer gets `ACCESS_DENIED`; everyone else
   still gets `NOT_FOUND`. `apps/api/src/__tests__/journeys/spk-at-001.spec.ts`.
-- SPK-AT-028, §5.8: money commands are `@RefusedDuringRecovery()` (503 `INTEGRATION_UNAVAILABLE`
-  `recovery_mode` while the organization recovers from a restore); payment and refund reconcile and
+- SPK-AT-028, §5.8: money commands' HTTP routes are `@RefusedDuringRecovery()` (503
+  `INTEGRATION_UNAVAILABLE` `recovery_mode` while the organization recovers from a restore; in-process
+  callers in other modules are not refused, [Known gaps](#known-gaps)); payment and refund reconcile and
   settlement reconciliation stay allowed; installment collection starts no new charge; the
   `finance.provider_facts` recovery check blocks resuming until no payment or refund outcome is
   unresolved and a processor settlement since the restore balances.
@@ -656,6 +657,15 @@ outcome recording and reconciliation are never gated.
   automatically (no automatic refund, credit or charge from enrollment's commands); a plan whose
   registrations were all canceled is held (no collection, no notice) and waits for the finance
   operator, with no command yet to end the hold, write off or cancel its installments (DEC-009).
+- Recovery mode (SPK-AT-028, §5.8) is refused on finance's HTTP routes only: `RecoveryGuard` reads
+  the `@RefusedDuringRecovery()` mark of the handler being called, and `RefundsService.request`,
+  `CreditsService.issue` and `ObligationsService.create` do not check `RecoveryMode` (only the
+  installment collection does). Other modules that call them in process are therefore not refused
+  during recovery: automation's `POST /v1/recommendations/{id}/apply` (refund tool), migration's
+  `POST /v1/import-batches/{id}/apply` (`credit` and `open_obligation` rows) and support's
+  `POST /v1/cases/{id}/request-refund` (**Verified** by code reading 2026-11-01; no test covers them).
+  **Proposed**: the services check `RecoveryMode.isActive` and answer the same 503
+  `INTEGRATION_UNAVAILABLE` `recovery_mode` before recording anything (recovery runbook §5.2).
 - Point of sale and accounting export: see [Stage 3](#stage-3-fin-01fin-07) for their own gaps.
 
 ## Kernel limitations worked around here
