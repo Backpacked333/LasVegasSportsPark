@@ -179,8 +179,20 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   when it needed none. It does count for the series' own local start time, since creation (or the
   entire-series edit that set that time) required a choice wherever one was needed. Under `skip`,
   an occurrence whose new time does not exist on its date is canceled, never left at its old
-  start. An occurrence whose start instant the edit does not change keeps its recorded
-  `dst_resolution`. An `entire_series` edit stores the chosen policy on the series.
+  start. An occurrence's local start is the time it was asked for: one shifted out of a gap
+  (02:30 published at 03:30, `shifted_forward`) stands for 02:30 (`requestedLocalOf`). A new
+  local start records its own resolution even when the instant does not change (02:30 moved to
+  03:30 on the spring-forward date is `exact`; 03:30 moved to 02:30 under `shift_forward` is
+  `shifted_forward`). When the edit keeps the local start, only the axis it names is re-resolved,
+  and only on occurrences that axis concerns: `nonexistentPolicy` on occurrences recorded
+  `shifted_forward` (`skip` cancels them, `shift_forward` keeps them), `ambiguousPolicy` on
+  occurrences recorded `first` / `second`. Every other occurrence keeps its instant and recorded
+  `dst_resolution`, whatever the series' policy for the other axis says. An `entire_series` edit
+  stores the chosen policy on the series, so the series and its in-scope occurrences agree
+  (verified: `event-series.spec.ts` "R3-TRACE-A-08 / SPK-SCHED-008: an edit re-resolves only the
+  axis it names"). Known gap outside this module (staff client): the schedule draft editor's
+  series-edit preview sends no policy, so an edit to a time in a gap or overlap is refused there
+  until it offers the choice from `details.options` (deferred to the staff app).
 - A recurrence rule describes at most `maxSeriesOccurrences` (366) dates over HTTP and 52 through
   the port. `count` is bounded by the schema and `until` is not, so a longer rule is refused with
   `VALIDATION_FAILED` `details.code = SERIES_TOO_LONG` on both paths and is never cut short to its
@@ -301,13 +313,17 @@ committed persons), `impact.staff` (live staff assignments on the affected event
 person, event, kind, role and status), `impact.obligations` (orders those enrollments were paid
 through) and `impact.messages` (unsent notices about the events), with counts in `impact.summary`
 (`summary.staff` counts distinct staff members). Contributors read through the preview's executor.
-A contribution naming an event outside the closure is dropped. An impact stored before `staff`
-existed reads with `staff: []` and `summary.staff: 0`. **Verified**:
+A contribution naming an event outside the closure is dropped. Staff is identified only when the
+module owning staff assignments answers: its contributor always returns `staff` (`[]` when no live
+assignment is on the events). Until one does, and for an impact stored before `staff` existed,
+`impact.staff` and `summary.staff` are `null`, "not identified", which is never "no staff"; a
+closure that affects no event reports `staff: []` and `0`. **Verified**:
 `apps/api/src/__tests__/journeys/spk-at-009.spec.ts`; the staff section through a registered
-contributor in `__tests__/closures.spec.ts` "SPK-SCHED-009 / R3-TRACE-A-06". **Integration (not
-this module, R3-TRACE-A-06)**: workforce registers the staff contributor; until it does, live
-previews list no staff. Any financial adjustment of an affected obligation stays a staff
-resolution (DEC-003, DEC-009).
+contributor and the not-identified case in `__tests__/closures.spec.ts` "SPK-SCHED-009 /
+R3-TRACE-A-06". **Integration (not this module, R3-TRACE-A-06)**: workforce registers the staff
+contributor; until it does, every live preview, and every closure created or applied in that time,
+reports staff as not identified (`null`), and a client must show it as such, never as 0. Any
+financial adjustment of an affected obligation stays a staff resolution (DEC-003, DEC-009).
 
 ### Event title bound on every path (R2-TENANCY-INPUT-02, §4.10) — verified
 

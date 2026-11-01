@@ -481,11 +481,17 @@ export const SeriesEditChanges = z
      * in-scope date (spring-forward gap), as on creation; without it the edit, its preview
      * included, is refused with details.code dst_resolution_required naming those dates. The
      * series' own local start time reuses the policy chosen for it. `skip` cancels the occurrence
-     * on such a date; it never keeps its old start. An `entire_series` edit stores the chosen
-     * policy on the series.
+     * on such a date; it never keeps its old start. Sent without a new local start time, it
+     * applies only to occurrences shifted out of a gap (`dstResolution` shifted_forward: `skip`
+     * cancels them). An `entire_series` edit stores the chosen policy on the series.
      */
     nonexistentPolicy: NonexistentTimePolicy.optional(),
-    /** SPK-SCHED-008: required when the new `localStartTime` occurs twice on some in-scope date (fall-back overlap). */
+    /**
+     * SPK-SCHED-008: required when the new `localStartTime` occurs twice on some in-scope date
+     * (fall-back overlap). Sent without a new local start time, it applies only to occurrences
+     * resolved in an overlap (`dstResolution` first or second); every other occurrence keeps its
+     * instant and recorded resolution.
+     */
     ambiguousPolicy: AmbiguousTimePolicy.optional(),
     /** Cancel the selected occurrences instead of changing them. */
     cancel: z.boolean().optional(),
@@ -589,8 +595,11 @@ export const ClosureImpactSchema = z
      * SPK-SCHED-009 staff (R3-TRACE-A-06): live staff assignments (officials, coaches, supervisors,
      * organizers; proposed, offered or accepted) on the affected events, from the module that owns
      * them, so the scheduler resolving the closure knows whom to stand down or reassign. Ids, kind,
-     * role and status only. Every response carries it; the default covers an impact recorded
-     * before staff was identified.
+     * role and status only. `null` means staff was NOT IDENTIFIED: no module that owns staff
+     * assignments answered for these events (none is registered yet, or the impact was recorded
+     * before staff was identified). It never means "no staff"; that is `[]`, also returned when
+     * the closure affects no event. Every response carries it; a reader treats an absent value as
+     * `null` (the default).
      */
     staff: z
       .array(
@@ -603,7 +612,8 @@ export const ClosureImpactSchema = z
           status: z.string(),
         }),
       )
-      .default([]),
+      .nullable()
+      .default(null),
     summary: z.object({
       games: z.number().int(),
       programs: z.number().int(),
@@ -615,8 +625,11 @@ export const ClosureImpactSchema = z
       customers: z.number().int(),
       obligations: z.number().int(),
       messages: z.number().int(),
-      /** Distinct staff members with a live assignment on an affected event (`staff`). */
-      staff: z.number().int().default(0),
+      /**
+       * Distinct staff members with a live assignment on an affected event (`staff`); `null`
+       * (not identified) exactly when `staff` is null, never a count of 0 that nobody checked.
+       */
+      staff: z.number().int().nullable().default(null),
     }),
   })
   .openapi('ClosureImpact');

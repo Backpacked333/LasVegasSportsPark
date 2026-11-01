@@ -1880,7 +1880,10 @@
             }
           },
           "staff": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "object",
               "properties": {
@@ -1915,7 +1918,7 @@
                 "status"
               ]
             },
-            "default": []
+            "default": null
           },
           "summary": {
             "type": "object",
@@ -1951,8 +1954,11 @@
                 "type": "integer"
               },
               "staff": {
-                "type": "integer",
-                "default": 0
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "default": null
               }
             },
             "required": [

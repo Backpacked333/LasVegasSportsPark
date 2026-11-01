@@ -51137,7 +51137,7 @@ export type components = {
                 sourceId: string;
                 sourceType: string;
             }[];
-            /** @default [] */
+            /** @default null */
             staff?: {
                 /** Format: uuid */
                 assignmentId: string;
@@ -51148,7 +51148,7 @@ export type components = {
                 personId: string;
                 role: string;
                 status: string;
-            }[];
+            }[] | null;
             summary: {
                 customers: number;
                 equipment: number;
@@ -51159,8 +51159,8 @@ export type components = {
                 people: number;
                 programs: number;
                 rentals: number;
-                /** @default 0 */
-                staff?: number;
+                /** @default null */
+                staff?: number | null;
                 teams: number;
             };
         };

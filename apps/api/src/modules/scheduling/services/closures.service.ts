@@ -43,23 +43,33 @@ import { organizationOf } from './organization';
 
 type ClosureRow = Selectable<ClosuresTable> & { start: string; end: string };
 
-/** A preview stored before customers, obligations, messages and staff were identified (SPK-SCHED-009). */
+/**
+ * A preview stored before customers, obligations, messages and staff were identified
+ * (SPK-SCHED-009). Staff missing from a stored impact was never identified, so it reads as not
+ * identified (`null`), never as "no staff" (R3-TRACE-A-06).
+ */
 function withImpactDefaults(impact: ClosureImpact | null): ClosureImpact | null {
   if (!impact) return null;
+  const staff = impact.staff ?? null;
   return {
     ...impact,
     customers: impact.customers ?? [],
     obligations: impact.obligations ?? [],
     messages: impact.messages ?? [],
-    staff: impact.staff ?? [],
+    staff,
     summary: {
       ...impact.summary,
       customers: impact.summary.customers ?? 0,
       obligations: impact.summary.obligations ?? 0,
       messages: impact.summary.messages ?? 0,
-      staff: impact.summary.staff ?? 0,
+      staff: staff === null ? null : (impact.summary.staff ?? distinctStaff(staff)),
     },
   };
+}
+
+/** Distinct staff members across live assignments (`summary.staff`). */
+function distinctStaff(staff: NonNullable<ClosureImpact['staff']>): number {
+  return new Set(staff.map((a) => a.personId)).size;
 }
 
 /** The Today exception `applyClosure` opens for events it leaves for resolution (scheduler queue). */
@@ -867,7 +877,8 @@ export class ClosuresService implements ClosurePort {
         customers: customerList.length,
         obligations: contributed.obligations.length,
         messages: contributed.messages.length,
-        staff: new Set(contributed.staff.map((a) => a.personId)).size,
+        // not identified stays null: no module owning staff assignments answered (R3-TRACE-A-06)
+        staff: contributed.staff === null ? null : distinctStaff(contributed.staff),
       },
     };
   }

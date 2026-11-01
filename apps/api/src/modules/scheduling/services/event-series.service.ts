@@ -36,7 +36,7 @@ import type { ProposedEvent } from '../conflicts/conflict-detector';
 import type { CancelEventSeriesInput, CreateEventSeriesInput, EventSeriesCreated } from '../ports';
 import { SchedulingActions } from '../scheduling.actions';
 import type { EventChangeKind } from '../scheduling.events';
-import { localDateOf, localTimeOf, resolveLocal } from '../time/local-time';
+import { requestedLocalOf, resolveLocal } from '../time/local-time';
 import { describesMoreThan, materializeOccurrences } from '../time/recurrence';
 import { EventWriter, sameResourceSet, type EventRow, type FacilityRow } from './event-writer';
 import { organizationOf } from './organization';
@@ -692,39 +692,45 @@ export class EventSeriesService {
           continue;
         }
         const currentStart = new Date(event.scheduled_start);
-        const localDate = localDateOf(facility.timezone, currentStart);
-        const currentTime = localTimeOf(facility.timezone, currentStart);
+        // SPK-SCHED-008: the local start this occurrence stands for. A start shifted past a
+        // spring-forward gap stands for the time inside the gap (02:30, published at 03:30), so
+        // moving it to 03:30 is a change of local time and a policy about gaps still concerns it.
+        const { date: localDate, time: currentTime } = requestedLocalOf(
+          facility.timezone,
+          currentStart,
+          event.dst_resolution,
+        );
         const requestedTime = body.changes.localStartTime;
         const timeRequested = requestedTime !== undefined && requestedTime !== currentTime;
         const currentDuration = Math.round(
           (new Date(event.scheduled_end).getTime() - currentStart.getTime()) / 60_000,
         );
         const duration = body.changes.durationMinutes ?? currentDuration;
-        // SPK-SCHED-008: an occurrence whose wall-clock start the edit does not change keeps its
-        // instant and recorded resolution, unless the edit names a policy to apply to it.
-        let resolved: { instant: Date; resolution: EventRow['dst_resolution'] } | null = {
-          instant: currentStart,
-          resolution: event.dst_resolution,
-        };
-        if (timeRequested || requested.nonexistent || requested.ambiguous) {
-          const reresolved = resolveLocal(
-            localDate,
-            timeRequested ? requestedTime : currentTime,
-            facility.timezone,
-            policy,
-          );
-          resolved =
-            reresolved && reresolved.instant.getTime() === currentStart.getTime()
-              ? { instant: currentStart, resolution: event.dst_resolution }
-              : reresolved;
-          if (timeRequested && requestedTime !== seriesLocalTime) {
+        let resolved: { instant: Date; resolution: EventRow['dst_resolution'] } | null;
+        if (timeRequested) {
+          // a new local start: its own resolution is recorded, even where the instant happens to
+          // be the old one (03:30 asked on a spring-forward date is exact, not shifted_forward)
+          resolved = resolveLocal(localDate, requestedTime, facility.timezone, policy);
+          if (requestedTime !== seriesLocalTime) {
             // "ambiguous or nonexistent times require resolution": the edit names the policy
-            const gap = reresolved === null || reresolved.resolution === 'shifted_forward';
-            const overlap =
-              reresolved?.resolution === 'first' || reresolved?.resolution === 'second';
+            const gap = resolved === null || resolved.resolution === 'shifted_forward';
+            const overlap = resolved?.resolution === 'first' || resolved?.resolution === 'second';
             if (gap && requested.nonexistent === undefined) unresolvedGap.push(localDate);
             if (overlap && requested.ambiguous === undefined) unresolvedOverlap.push(localDate);
           }
+        } else {
+          // The local start stays. Only the axis the edit names is re-resolved, and only on a date
+          // where that axis applies to this occurrence (its recorded resolution says which); the
+          // other axis keeps the choice the occurrence records, whatever the series' policy says.
+          const shifted = event.dst_resolution === 'shifted_forward';
+          const overlapping = event.dst_resolution === 'first' || event.dst_resolution === 'second';
+          const named =
+            (shifted && requested.nonexistent !== undefined) ||
+            (overlapping && requested.ambiguous !== undefined);
+          // (`policy` carries the named axis; the other one cannot apply on this date)
+          resolved = named
+            ? resolveLocal(localDate, currentTime, facility.timezone, policy)
+            : { instant: currentStart, resolution: event.dst_resolution };
         }
         if (resolved === null) {
           // `skip` chosen for a date where the new local time does not exist: the occurrence is

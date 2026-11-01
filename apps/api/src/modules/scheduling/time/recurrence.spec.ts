@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { localTimeOf, minutesSinceMidnight, resolveLocal, toLocal } from './local-time';
+import {
+  localTimeOf,
+  minutesSinceMidnight,
+  requestedLocalOf,
+  resolveLocal,
+  toLocal,
+} from './local-time';
 import { candidateDates, describesMoreThan, materializeOccurrences } from './recurrence';
 
 const LA = 'America/Los_Angeles';
@@ -35,6 +41,25 @@ describe('SPK-SCHED-008 local time resolution across daylight-saving transitions
     expect(second).toEqual({ instant: new Date('2026-11-01T09:30:00.000Z'), resolution: 'second' });
     expect(localTimeOf(LA, first!.instant)).toBe('01:30');
     expect(localTimeOf(LA, second!.instant)).toBe('01:30');
+  });
+
+  it('R3-TRACE-A-08 / SPK-SCHED-008: a resolved start reads back as the local time it was asked for (a shifted 02:30 stands for 02:30, not 03:30)', () => {
+    for (const [date, time, policy] of [
+      ['2026-03-08', '02:30', { nonexistent: 'shift_forward', ambiguous: 'first' }],
+      ['2026-03-08', '02:00', { nonexistent: 'shift_forward', ambiguous: 'first' }],
+      ['2026-03-08', '03:30', { nonexistent: 'shift_forward', ambiguous: 'first' }],
+      ['2026-11-01', '01:30', { nonexistent: 'shift_forward', ambiguous: 'first' }],
+      ['2026-11-01', '01:30', { nonexistent: 'shift_forward', ambiguous: 'second' }],
+      ['2026-06-15', '18:30', { nonexistent: 'shift_forward', ambiguous: 'first' }],
+    ] as const) {
+      const r = resolveLocal(date, time, LA, policy)!;
+      expect(requestedLocalOf(LA, r.instant, r.resolution)).toEqual({ date, time });
+    }
+    // the same instant read as an exact start is its own wall-clock time
+    expect(requestedLocalOf(LA, new Date('2026-03-08T10:30:00.000Z'), 'exact')).toEqual({
+      date: '2026-03-08',
+      time: '03:30',
+    });
   });
 
   it('keeps the same wall-clock time on both sides of a transition', () => {
