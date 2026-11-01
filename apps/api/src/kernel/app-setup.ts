@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ConfigSchema, type AppConfig } from './config';
+import { bodyDepthMiddleware } from './http/body-depth.middleware';
 import { correlationMiddleware } from './http/correlation.middleware';
 import { responseHeadersMiddleware } from './http/response-headers.middleware';
 
@@ -24,6 +25,8 @@ export const CORS_METHODS = ['GET', 'POST', 'PATCH', 'DELETE'] as const;
 
 /** The body limit when no configuration is given (the `HTTP_BODY_LIMIT_BYTES` default). */
 const DEFAULT_BODY_LIMIT_BYTES = ConfigSchema.shape.HTTP_BODY_LIMIT_BYTES.parse(undefined);
+/** The nesting limit when no configuration is given (the `HTTP_BODY_MAX_DEPTH` default). */
+const DEFAULT_BODY_MAX_DEPTH = ConfigSchema.shape.HTTP_BODY_MAX_DEPTH.parse(undefined);
 
 /**
  * Shared HTTP setup for the server entrypoint and the test harness. Call it before `init()` /
@@ -34,7 +37,8 @@ const DEFAULT_BODY_LIMIT_BYTES = ConfigSchema.shape.HTTP_BODY_LIMIT_BYTES.parse(
  *   (`X-Powered-By` off) (R3-SECURITY-04, §4.14).
  * - Request bodies are read up to `HTTP_BODY_LIMIT_BYTES` (R3-SECURITY-02); a larger, badly encoded
  *   or interrupted body answers 400 VALIDATION_FAILED through the error filter (R3-SECURITY-03),
- *   never a 5xx a client would retry.
+ *   never a 5xx a client would retry; so does a body nested deeper than `HTTP_BODY_MAX_DEPTH`
+ *   (`body_too_deep`), checked right after the parsers, before any route.
  */
 export function configureApp(app: INestApplication, config?: AppConfig): INestApplication {
   const origins = config?.CORS_ALLOWED_ORIGINS;
@@ -56,6 +60,8 @@ export function configureApp(app: INestApplication, config?: AppConfig): INestAp
   const expressApp = app as NestExpressApplication;
   expressApp.useBodyParser('json', { limit });
   expressApp.useBodyParser('urlencoded', { limit, extended: true });
+  // Registered after the parsers, so it sees the parsed body; a refusal reaches the error filter.
+  app.use(bodyDepthMiddleware(config?.HTTP_BODY_MAX_DEPTH ?? DEFAULT_BODY_MAX_DEPTH));
   app.setGlobalPrefix(API_PREFIX);
   app.enableShutdownHooks();
   return app;

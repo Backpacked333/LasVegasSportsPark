@@ -1,7 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { nestingDepthExceeds } from '../kernel/http/body-depth.middleware';
 import { canonicalHash, canonicalize } from '../kernel/http/idempotency.interceptor';
+import { CatalogModule } from '../modules/catalog/catalog.module';
 import { EntryModule } from '../modules/entry/entry.module';
 import { IdentityModule } from '../modules/identity/identity.module';
 import {
@@ -56,7 +58,7 @@ describe('HTTP request bodies (R3-SECURITY-02, R3-SECURITY-03, R3-SECURITY-04, ย
 
   beforeAll(async () => {
     t = await createTestApp({
-      imports: [IdentityModule, EntryModule],
+      imports: [IdentityModule, CatalogModule, EntryModule],
       principalResolver: 'module',
       clockStart: '2026-10-23T12:00:00Z',
     });
@@ -133,25 +135,80 @@ describe('HTTP request bodies (R3-SECURITY-02, R3-SECURITY-03, R3-SECURITY-04, ย
     }
   });
 
-  it('R3-SECURITY-03 / ยง4.10: a deeply nested body on an @Idempotent command is hashed and validated like any other (the unknown field is dropped), never answered 500 from hashing', async () => {
+  it('R3-SECURITY-03 / ยง4.10: a body nested deeper than HTTP_BODY_MAX_DEPTH answers 400 VALIDATION_FAILED body_too_deep (correct_input), also before authentication, never 500', async () => {
     const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     try {
       // About 40 KB: written out as text, since serializing it would exhaust the test's own stack.
       const deep = `${'['.repeat(20_000)}1${']'.repeat(20_000)}`;
-      const res = await t.http
-        .post('/v1/people')
-        .set(header)
-        .set('Idempotency-Key', key())
-        .set('Content-Type', 'application/json')
-        .send(
-          `{"kind":"adult","givenName":"Pat","familyName":"Doe","dateOfBirth":"1990-01-01","extra":${deep}}`,
-        );
-      expect(res.status).toBe(201);
-      expect(res.body).not.toHaveProperty('extra');
+      const body = `{"kind":"adult","givenName":"Pat","familyName":"Doe","dateOfBirth":"1990-01-01","extra":${deep}}`;
+      for (const res of [
+        await t.http
+          .post('/v1/people')
+          .set(header)
+          .set('Idempotency-Key', key())
+          .set('Content-Type', 'application/json')
+          .send(body),
+        await t.http.post('/v1/people').set('Content-Type', 'application/json').send(body),
+      ]) {
+        expect(res.status).toBe(400);
+        expect(res.body).toMatchObject({
+          code: 'VALIDATION_FAILED',
+          nextAction: 'correct_input',
+          details: { code: 'body_too_deep', limitDepth: t.config.HTTP_BODY_MAX_DEPTH },
+        });
+        expect(res.body.correlationId).toEqual(res.headers['x-correlation-id']);
+      }
       expect(error).not.toHaveBeenCalled();
     } finally {
       error.mockRestore();
     }
+  });
+
+  it('R3-SECURITY-03 / ยง4.10: a deep value in an open record field (POST /v1/policy-versions content) answers 400 body_too_deep instead of overflowing JSON.stringify into a 500; a body within the limit is accepted', async () => {
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const manager = await createStaffMemberFixture(t, { roles: ['program_manager'] });
+      const pm = await authHeaderForPerson(t, manager.personId);
+      const policy = (depth: number) => {
+        const deep = `${'['.repeat(depth)}1${']'.repeat(depth)}`;
+        return `{"kind":"eligibility","key":"elig-${newId().slice(-8)}","title":"Deep","content":{"x":${deep}},"effectiveFrom":"2026-10-01T00:00:00Z"}`;
+      };
+      const send = (depth: number) =>
+        t.http
+          .post('/v1/policy-versions')
+          .set(pm)
+          .set('Idempotency-Key', key())
+          .set('Content-Type', 'application/json')
+          .send(policy(depth));
+      // The body object and `content` take two levels; the arrays the rest. At the limit exactly:
+      const within = await send(t.config.HTTP_BODY_MAX_DEPTH - 2);
+      expect(within.status).toBe(201);
+      for (const depth of [t.config.HTTP_BODY_MAX_DEPTH - 1, 20_000]) {
+        const refused = await send(depth);
+        expect(refused.status).toBe(400);
+        expect(refused.body).toMatchObject({
+          code: 'VALIDATION_FAILED',
+          nextAction: 'correct_input',
+          details: { code: 'body_too_deep' },
+        });
+      }
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('R3-SECURITY-03: the depth check counts nested objects and arrays and never recurses', () => {
+    expect(nestingDepthExceeds(null, 1)).toBe(false);
+    expect(nestingDepthExceeds('text', 1)).toBe(false);
+    expect(nestingDepthExceeds({}, 1)).toBe(false);
+    expect(nestingDepthExceeds({ a: [] }, 1)).toBe(true);
+    expect(nestingDepthExceeds({ a: [1, 2], b: { c: 'x' } }, 2)).toBe(false);
+    expect(nestingDepthExceeds({ a: [1, [2]] }, 2)).toBe(true);
+    let deep: unknown = 1;
+    for (let i = 0; i < 100_000; i += 1) deep = [deep];
+    expect(nestingDepthExceeds(deep, 64)).toBe(true);
+    expect(nestingDepthExceeds(deep, 100_000)).toBe(false);
   });
 
   it('R3-SECURITY-03: the iterative canonical form equals the earlier recursive one, so stored request hashes keep matching', () => {

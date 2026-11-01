@@ -124,6 +124,16 @@ export const ConfigSchema = z
       .max(64 * 1024 * 1024)
       .default(2 * 1024 * 1024),
     /**
+     * The deepest nesting of objects and arrays a JSON or form body may have (§4.10, §4.15;
+     * technical value). Every route shares it. Open fields (`z.record(z.string(), z.unknown())`:
+     * policy content, entitlement scope, details) pass validation as they are and are then
+     * serialized by recursive code (`JSON.stringify`, the drivers), which overflows the stack at a
+     * few thousand levels (about 10 KB of body); a deeper body answers 400 VALIDATION_FAILED with
+     * `details.code = 'body_too_deep'` and `details.limitDepth` before any route runs, never a 5xx
+     * a client would retry. No published contract nests near the default.
+     */
+    HTTP_BODY_MAX_DEPTH: z.coerce.number().int().min(16).max(1000).default(64),
+    /**
      * How long an outbox or inbox event waits before it is tried again when the build that
      * recorded it expected a handler this build does not register (R3-OPERATIONS-01, §4.7
      * invariant 12: a software rollback or a rolling deploy). The event stays pending, its attempts
