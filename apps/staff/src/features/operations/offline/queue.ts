@@ -82,6 +82,19 @@ export interface ReviewItem {
 /** The API's own limit on items per offline batch. */
 export const MAX_BATCH_ITEMS = 500;
 
+/**
+ * R3-SECURITY-02 (§4.8, §4.15): the serialized items of one batch stay under this many bytes, a
+ * margin below the server's default body limit (`HTTP_BODY_LIMIT_BYTES`, 2 MiB), so a batch of
+ * long notes is split by size before it is sent instead of being refused as `body_too_large`.
+ */
+export const MAX_BATCH_BYTES = 1_500_000;
+
+const encoder = new TextEncoder();
+/** The UTF-8 size of one item as it travels in the batch body. */
+function itemBytes(item: unknown): number {
+  return encoder.encode(JSON.stringify(item)).length + 1;
+}
+
 /** A batch the API answered, by its ids and counts only (no personal data). */
 export interface SyncedBatch {
   id: string;
@@ -242,7 +255,8 @@ export class OfflineQueueStore {
 
   /**
    * Groups this account's pending items into batches (one facility and snapshot each, at most
-   * MAX_BATCH_ITEMS, the API's limit), keeping the batch id of items already sent once. Every
+   * MAX_BATCH_ITEMS, the API's limit, and at most MAX_BATCH_BYTES of serialized items), keeping
+   * the batch id of items already sent once. Every
    * prepared batch is returned, a full one included (R2-CLIENTS-2-11).
    */
   prepareBatches(accountId: string): PendingBatch[] {
@@ -252,6 +266,8 @@ export class OfflineQueueStore {
       const sent = new Map<string, PendingBatch>();
       /** The batch new items of one facility and snapshot are still added to. */
       const open = new Map<string, PendingBatch>();
+      /** The serialized size of each open batch's items (R3-SECURITY-02). */
+      const openBytes = new Map<string, number>();
       const pending = current.pending.map((q) => {
         if (q.queuedBy !== accountId) return q;
         let batch: PendingBatch | undefined;
@@ -269,8 +285,13 @@ export class OfflineQueueStore {
           }
         } else {
           const key = `${q.facilityId}|${q.snapshot.reference}`;
+          const size = itemBytes(q.item);
           batch = open.get(key);
-          if (!batch || batch.items.length >= MAX_BATCH_ITEMS) {
+          if (
+            !batch ||
+            batch.items.length >= MAX_BATCH_ITEMS ||
+            (batch.items.length > 0 && (openBytes.get(key) ?? 0) + size > MAX_BATCH_BYTES)
+          ) {
             batch = {
               batchId: this.generateKey(),
               facilityId: q.facilityId,
@@ -278,8 +299,10 @@ export class OfflineQueueStore {
               items: [],
             };
             open.set(key, batch);
+            openBytes.set(key, 0);
             batches.push(batch);
           }
+          openBytes.set(key, (openBytes.get(key) ?? 0) + size);
         }
         const assigned = { ...q, batchId: batch.batchId };
         batch.items.push(assigned);

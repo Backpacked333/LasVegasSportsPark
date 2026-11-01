@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { syncBatch } from '../../testing';
 import { serviceClockOf } from '../clock';
 import {
+  MAX_BATCH_BYTES,
   MAX_BATCH_ITEMS,
   OFFLINE_QUEUE_STORAGE_KEY,
   OfflineQueueStore,
@@ -86,6 +87,24 @@ function refusal(code: string, status: number, details?: unknown): ApiError {
 }
 
 describe('offline queue batches (SPK-AT-018)', () => {
+  it('R3-SECURITY-02: a batch whose serialized items would pass the size bound is split by size', () => {
+    const store = new OfflineQueueStore(null, keys());
+    const note = 'n'.repeat(4000);
+    const big = Array.from({ length: 450 }, () => {
+      const q = queued('f1');
+      return { ...q, item: { ...q.item, note } as Schema<'OfflineItem'> };
+    });
+    store.enqueue(big);
+    const batches = store.prepareBatches(ACCOUNT);
+    expect(batches.length).toBeGreaterThan(1);
+    expect(batches.reduce((n, b) => n + b.items.length, 0)).toBe(450);
+    for (const b of batches) {
+      expect(
+        new TextEncoder().encode(JSON.stringify(b.items.map((q) => q.item))).length,
+      ).toBeLessThan(MAX_BATCH_BYTES + 2);
+    }
+  });
+
   it('SPK-AT-018: more than 500 items of one facility and snapshot are all returned and sent in one run', async () => {
     const store = new OfflineQueueStore(null, keys());
     store.enqueue(Array.from({ length: MAX_BATCH_ITEMS + 1 }, () => queued('f1')));
