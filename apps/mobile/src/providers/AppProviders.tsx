@@ -56,6 +56,15 @@ export interface ConnectivityState {
 const AppContext = createContext<AppContextValue | null>(null);
 const ConnectivityContext = createContext<ConnectivityState>({ reachable: null });
 
+/**
+ * R3-SCREEN-STATES-01 (§4.15, journeys.md section 3 "never pretend a queued action is committed"):
+ * a command is never retried by the data layer and never paused while the device is offline to be
+ * sent by itself on reconnection (TanStack's default `networkMode: 'online'` would do both). A
+ * command sent offline fails at once and its failure view says what is known; the failure views'
+ * retry controls are disabled while offline.
+ */
+export const MUTATION_DEFAULTS = { retry: false, networkMode: 'always' } as const;
+
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -67,7 +76,7 @@ export function createQueryClient(): QueryClient {
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
       },
-      mutations: { retry: false },
+      mutations: MUTATION_DEFAULTS,
     },
   });
 }

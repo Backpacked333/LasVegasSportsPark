@@ -20,6 +20,7 @@
 import { presentationForError, recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text, View } from 'react-native';
 import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { OutcomeLost } from '../../ui/OutcomeLost';
@@ -68,6 +69,8 @@ export function CommandError({
   onAlternatives,
   testID = 'command-error',
 }: CommandErrorProps) {
+  // R3-SCREEN-STATES-01: "Check again" needs a connection; offline it neither queues nor fails.
+  const offline = useConnectivity().reachable === false;
   if (!error) return null;
   const presentation = presentationForError(error);
   if (presentation === 'unavailable') {
@@ -109,7 +112,10 @@ export function CommandError({
             {`Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
           </Text>
           {recovery.retry && onRetry ? (
-            <Button label={nextAction} onPress={onRetry} />
+            <>
+              <Button label={nextAction} onPress={onRetry} disabled={offline} />
+              {offline ? <Text style={styles.caption}>Needs a connection.</Text> : null}
+            </>
           ) : (
             <Text style={styles.body}>{nextAction}</Text>
           )}

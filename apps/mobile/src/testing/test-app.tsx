@@ -19,7 +19,7 @@ import { waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import type { AppConfig } from '../config/app-config';
 import { createManualSources, type Reachability } from '../connectivity/sources';
-import { AppProviders } from '../providers/AppProviders';
+import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
 import type { AppServices } from '../providers/services';
 
 export const TEST_NOW = new Date('2026-10-24T12:00:00.000Z');
@@ -79,7 +79,7 @@ export function createTestApp(options: TestAppOptions = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: Infinity },
-      mutations: { retry: false, gcTime: Infinity },
+      mutations: { ...MUTATION_DEFAULTS, gcTime: Infinity },
     },
   });
   function wrapper({ children }: { children: ReactNode }) {

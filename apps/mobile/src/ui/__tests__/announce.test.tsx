@@ -297,6 +297,20 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
     ]);
   });
 
+  it('R3-SCREEN-STATES-01: offline, "Check again" is disabled with "Needs a connection" in the registration and money failure views', async () => {
+    const app = createTestApp({ reachable: false });
+    for (const view of [
+      <MoneyCommandFailure key="money" error={noAnswer()} what="the payment" onRetry={jest.fn()} />,
+      <RegistrationCommandError key="registration" error={noAnswer()} onRetry={jest.fn()} />,
+    ]) {
+      const { unmount } = render(view, { wrapper: app.wrapper });
+      await nextTask();
+      expect(screen.getByRole('button', { name: 'Check again' })).toBeDisabled();
+      expect(screen.getByText('Needs a connection.')).toBeOnTheScreen();
+      unmount();
+    }
+  });
+
   it('a stale answer is announced as "This changed since you opened it"', () => {
     render(<MoneyCommandFailure error={apiError('STALE_REVISION')} what="the cancellation" />);
     // No Reload is offered here, so none is announced.
