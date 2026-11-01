@@ -50,7 +50,11 @@ Invariants enforced by the database: composite `(organization_id, id)` foreign k
 §4.3): an asset, preventive schedule, task or restriction names only the space, asset, task,
 schedule and closure of its own facility; one closure backs at most one restriction; a task carries at
 most one unreleased restriction; a preventive schedule materializes each occurrence's task and
-restriction at most once; `active` needs a closure, `released` needs who/when/which closure.
+restriction at most once; `active` needs a closure, `released` needs who/when/which closure. A
+preventive recurrence describes at most `maxScheduleOccurrences` (366) occurrences: a longer one is
+refused at creation, and one stored before that rule is refused at generation, with
+`VALIDATION_FAILED` `details.code = SERIES_TOO_LONG`, never truncated (**Verified**, R3-TIME-MONEY-04,
+`__tests__/preventive-schedules.spec.ts`).
 Migration `0903` (FAC-01): `withdrawn` exactly when `withdrawn_at` is set, with `withdrawn_by` and a
 1..2000-character `withdrawal_reason`; a withdrawn restriction never took effect (no conflict units);
 `proposed` carries no approval facts and `approved / active / released` always do (the 0900 check

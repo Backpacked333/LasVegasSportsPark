@@ -11,6 +11,7 @@ import {
   type PreventiveGenerationResult,
   type PreventiveSchedule,
   type Principal,
+  type RecurrenceRule,
   type Resource,
   type UpdatePreventiveScheduleBody,
 } from '@sportspark/contracts';
@@ -26,7 +27,7 @@ import {
   type Trx,
 } from '../../../kernel';
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
-import { materializeOccurrences, ResourcesService } from '../../scheduling';
+import { describesMoreThan, materializeOccurrences, ResourcesService } from '../../scheduling';
 import { FacilitiesActions } from '../facilities.actions';
 import { PreventiveOccurrencesGenerated } from '../facilities.events';
 import { FACILITIES_POLICY, type FacilitiesPolicy } from '../facilities.policy';
@@ -72,12 +73,30 @@ export class PreventiveSchedulesService {
     private readonly restrictions: RestrictionsService,
   ) {}
 
+  /**
+   * R3-TIME-MONEY-04 (SPK-FAC-005, SPK-SCHED-007): a preventive recurrence describes at most
+   * `maxScheduleOccurrences` occurrences. One that describes more is refused (as scheduling refuses
+   * an over-long series) instead of being truncated: occurrences past the bound would otherwise
+   * never be generated.
+   */
+  private assertWithinOccurrenceBound(rule: RecurrenceRule): void {
+    const max = this.policy.maxScheduleOccurrences;
+    if (describesMoreThan(rule, max)) {
+      throw errors.validation(`A preventive schedule describes at most ${max} occurrences.`, {
+        path: 'recurrence',
+        code: 'SERIES_TOO_LONG',
+        maxOccurrences: max,
+      });
+    }
+  }
+
   async create(
     principal: Principal,
     body: CreatePreventiveScheduleBody,
     correlationId?: string,
   ): Promise<PreventiveSchedule> {
     const organizationId = organizationOf(principal);
+    this.assertWithinOccurrenceBound(RecurrenceRuleSchema.parse(body.recurrence));
     await this.reader.loadFacility(this.db, organizationId, body.facilityId);
     const resource = await this.resolveResource(principal, organizationId, body);
     return this.uow.run(async ({ trx }) => {
@@ -258,7 +277,11 @@ export class PreventiveSchedulesService {
       if (horizon.getTime() < now.getTime()) {
         throw errors.validation('through must not be in the past.', { path: 'through' });
       }
-      const occurrences = materializeOccurrences(RecurrenceRuleSchema.parse(schedule.recurrence), {
+      const rule = RecurrenceRuleSchema.parse(schedule.recurrence);
+      // A schedule stored before the creation bound may describe more occurrences than are
+      // materialized: refuse instead of silently generating nothing past the bound.
+      this.assertWithinOccurrenceBound(rule);
+      const occurrences = materializeOccurrences(rule, {
         localStartTime: schedule.local_start_time.slice(0, 5),
         durationMinutes: schedule.duration_minutes,
         timezone: schedule.timezone,
