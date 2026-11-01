@@ -27,11 +27,10 @@ interface ReadinessIssue {
  * R2-JOURNEYS-05), and finance's condition port does not know the viewer, so the finding carries
  * none of them for anyone.
  *
- * The finding names the team entry, which competition needs to scope it by viewer, and today
- * competition passes it through unchanged. The tests named "KNOWN GAP R3-TRACE-B-01b" record what
- * that still discloses (which entry has a balance) and what it still withholds from admitted
- * viewers (the deadline, SPK-READY-003). They are not the intended behaviour: they change when the
- * deferred competition change lands, and are then replaced by its target, written in each test.
+ * The finding names the team entry, and competition scopes it by viewer (R3-TRACE-B-01b): a
+ * viewer finance.read_obligation admits for that entry gets it with the amount and, as its
+ * deadline, the next due date (SPK-READY-003); every other viewer gets one fixture-level finding
+ * that names no entry and states no balance, the same whether or not any entry has one.
  */
 describe('fixture readiness never shows a team balance amount, count or due date (R3-TRACE-B-01, SPK-READY-001)', () => {
   let t: TestApp;
@@ -44,6 +43,7 @@ describe('fixture readiness never shows a team balance amount, count or due date
   let homeEntryId: string;
   let awayEntryId: string;
   let fixtureId: string;
+  let clearFixtureId: string;
 
   beforeAll(async () => {
     t = await financeTestApp();
@@ -99,6 +99,40 @@ describe('fixture readiness never shows a team balance amount, count or due date
       });
     expect(created.status, JSON.stringify(created.body)).toBe(201);
     fixtureId = created.body.fixture.id as string;
+    // A second fixture between two entries that owe nothing.
+    const clearHome = await createTeamEntryFixture(t, {
+      seasonId: season.seasonId,
+      captainPersonId: (await adult(t)).personId,
+      teamName: 'Clear home',
+      divisionId,
+    });
+    const clearAway = await createTeamEntryFixture(t, {
+      seasonId: season.seasonId,
+      captainPersonId: (await adult(t)).personId,
+      teamName: 'Clear away',
+      divisionId,
+    });
+    for (const personId of [homePlayer.personId, homeChild]) {
+      await addRosterMemberFixture(t, { teamEntryId: clearHome.teamEntryId, personId });
+    }
+    const clear = await t.http
+      .post('/v1/fixtures')
+      .set(leagueManager.header)
+      .set('Idempotency-Key', key())
+      .send({
+        seasonId: season.seasonId,
+        divisionId,
+        homeEntryId: clearHome.teamEntryId,
+        awayEntryId: clearAway.teamEntryId,
+        schedule: {
+          facilityId: t.facilityId,
+          resourceIds: [pitch.pitchId],
+          scheduledStart: at('2027-01-17', '18:00'),
+          scheduledEnd: at('2027-01-17', '19:00'),
+        },
+      });
+    expect(clear.status, JSON.stringify(clear.body)).toBe(201);
+    clearFixtureId = clear.body.fixture.id as string;
     await drain(t);
     // The away team owes 600.00 USD, due 2027-01-20.
     await createObligationFixture(t, {
@@ -111,12 +145,23 @@ describe('fixture readiness never shows a team balance amount, count or due date
     await t?.close();
   });
 
-  async function balanceIssue(actor: Actor): Promise<ReadinessIssue> {
-    const res = await t.http.get(`/v1/fixtures/${fixtureId}/readiness`).set(actor.header);
+  async function balanceIssues(actor: Actor, id: string = fixtureId): Promise<ReadinessIssue[]> {
+    const res = await t.http.get(`/v1/fixtures/${id}/readiness`).set(actor.header);
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    const issues = (res.body.issues as ReadinessIssue[]).filter(
+    return (res.body.issues as ReadinessIssue[]).filter(
       (i) => i.code === 'team_balance_policy_pending',
     );
+  }
+
+  async function balanceIssue(actor: Actor): Promise<ReadinessIssue> {
+    const issues = await balanceIssues(actor);
+    expect(issues).toHaveLength(1);
+    return issues[0] as ReadinessIssue;
+  }
+
+  /** The away entry's own finding, for a viewer finance lets read its obligation. */
+  async function awayEntryIssue(actor: Actor): Promise<ReadinessIssue> {
+    const issues = (await balanceIssues(actor)).filter((i) => i.source.type === 'team_entry');
     expect(issues).toHaveLength(1);
     return issues[0] as ReadinessIssue;
   }
@@ -138,17 +183,20 @@ describe('fixture readiness never shows a team balance amount, count or due date
     }
   });
 
-  it('KNOWN GAP R3-TRACE-B-01b (deferred competition change): opposing players and guardians still learn which entry has an open balance', async () => {
-    // Today: competition passes finance's entry-scoped finding to every readiness viewer, so the
-    // home team's player and guardian, who may not read the away entry's obligation
-    // (finance.read_obligation) nor open its workspace, see that the away entry has a balance.
-    // Target once competition scopes the finding by viewer: they get one fixture-level finding
-    // (source { type: 'fixture', id: fixtureId }) that names no entry and states no balance, the
-    // same whether or not any entry has one; replace these assertions with that.
+  it('§4.14 (R3-TRACE-B-01b): opposing players and guardians get one fixture-level finding naming no entry, the same as on a fixture without a balance', async () => {
     for (const viewer of [homePlayer, homeGuardian]) {
       const issue = await balanceIssue(viewer);
-      expect(issue.source).toEqual({ type: 'team_entry', id: awayEntryId });
-      expect(issue.message).toContain('open balance');
+      expect(issue.source).toEqual({ type: 'fixture', id: fixtureId });
+      expect(issue.message).not.toContain(awayEntryId);
+      expect(issue.message).not.toContain('open balance');
+      expect(issue.message).not.toContain('Away');
+      const withoutBalance = await balanceIssues(viewer, clearFixtureId);
+      expect(withoutBalance).toHaveLength(1);
+      const { source: clearSource, ...clearRest } = withoutBalance[0] as ReadinessIssue;
+      const { source, ...rest } = issue;
+      expect(clearSource).toEqual({ type: 'fixture', id: clearFixtureId });
+      expect(source).toEqual({ type: 'fixture', id: fixtureId });
+      expect(clearRest).toEqual(rest);
     }
   });
 
@@ -169,14 +217,18 @@ describe('fixture readiness never shows a team balance amount, count or due date
     expect(JSON.stringify(workspace.body)).toContain('$600.00');
   });
 
-  it('KNOWN GAP R3-TRACE-B-01b (deferred competition change): viewers finance.read_obligation admits get no amount and no deadline in readiness (SPK-READY-003)', async () => {
-    // Today: the league manager and the away captain may read the away obligation, but the
-    // readiness finding has no amount and a null deadline for them as for everyone.
-    // Target once competition adds the details for admitted viewers: the message carries the
-    // formatted amount ($600.00) and `deadline` is the next due date (2027-01-20T18:00:00.000Z);
-    // replace these assertions with that.
+  it('SPK-READY-003 (R3-TRACE-B-01b): viewers finance.read_obligation admits see the amount and the next due date as the deadline', async () => {
     for (const viewer of [leagueManager, awayCaptain]) {
-      expectNoBalanceFacts(await balanceIssue(viewer));
+      const issue = await awayEntryIssue(viewer);
+      expect(issue).toMatchObject({
+        severity: 'unknown',
+        source: { type: 'team_entry', id: awayEntryId },
+        deadline: '2027-01-20T18:00:00.000Z',
+      });
+      expect(issue.message).toContain('$600.00');
+      expect(issue.message).toContain('POL-017');
     }
+    // The league manager reads both entries' obligations, so no fixture-level finding is added.
+    expect(await balanceIssues(leagueManager)).toHaveLength(1);
   });
 });

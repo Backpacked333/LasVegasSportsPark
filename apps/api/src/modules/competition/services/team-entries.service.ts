@@ -1457,7 +1457,7 @@ export interface FinancialIssueAudience {
 type WorkspaceIssue = TeamEntryWorkspace['readiness']['issues'][number];
 
 /** An amount for people (SPK-PAY-001: minor units and currency, formatted by the Money helpers). */
-function moneyText(amountMinor: number, currency: string): string {
+export function moneyText(amountMinor: number, currency: string): string {
   try {
     return formatMoney(money(amountMinor, currency));
   } catch {
@@ -1466,7 +1466,7 @@ function moneyText(amountMinor: number, currency: string): string {
 }
 
 /** An instant as a facility-local date and time with the zone named (SPK-SCHED-008). */
-function localDateTime(iso: string, timezone: string | null): string {
+export function localDateTime(iso: string, timezone: string | null): string {
   const instant = new Date(iso);
   if (!timezone) return `${instant.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
   const text = new Intl.DateTimeFormat('en-US', {

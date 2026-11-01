@@ -193,7 +193,10 @@ export class MyCompetitionService {
     const opponentId = row.home_entry_id === teamEntryId ? row.away_entry_id : row.home_entry_id;
     const names = await teamNamesOf(db, organizationId, [opponentId]);
     const detail = await this.fixtures.detail(db, principal, row);
-    const readiness = await this.readiness.assess(organizationId, detail, { restricted: true });
+    const readiness = await this.readiness.assess(organizationId, detail, {
+      restricted: true,
+      viewer: principal,
+    });
     return {
       fixtureId: row.id,
       scheduledStart: row.scheduled_start ? new Date(row.scheduled_start).toISOString() : null,

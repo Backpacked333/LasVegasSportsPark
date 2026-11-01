@@ -540,7 +540,14 @@ built, waiting on a decision or another module.
   `postponed` classification records the fact; cancelling or postponing the game itself remains a
   fixture command.
 - An open team obligation keeps the finance check `unknown` (never a pass or a block) until the
-  participation policy for team balances is approved (POL-017, DEC-056). A fixture whose event was
+  participation policy for team balances is approved (POL-017, DEC-056). Finance reports it per
+  team entry, and readiness scopes it by viewer (**Verified**, R3-TRACE-B-01b, §4.14,
+  SPK-READY-003): a viewer `finance.read_obligation` admits for that entry (finance readers, the
+  entry's captain or responsible payer) gets it with the formatted amount and the next due date,
+  in the division facility's time zone, as its deadline; every other viewer gets one fixture-level
+  `team_balance_policy_pending` finding that names no entry and is the same whether or not an
+  entry has a balance (`__tests__/readiness-finance-viewer.spec.ts`, finance
+  `__tests__/fixture-conditions.spec.ts`). A fixture whose event was
   canceled (postponed, unlinked) reports the change notice as `unknown`.
 - A decided dispute's consequence is not executed automatically (a correction revision carries it
   out).

@@ -30,7 +30,7 @@ export type ParticipationStanding =
  *   satisfied; an open one is reported `unknown`, never a block and never a pass, because whether
  *   an open team balance affects play is pending POL-017 / DEC-056. The finding names the entry
  *   but never the balance's count, amounts or due date (R3-TRACE-B-01); which entry it names is
- *   itself protected and is for competition to scope by viewer (deferred R3-TRACE-B-01b).
+ *   itself protected, and competition scopes it by viewer (R3-TRACE-B-01b).
  * - Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004): none, clear or outstanding from
  *   the obligations that name the entry as debtor, shown on the team entry workspace.
  * - Arrival standing (SPK-ENTRY-004): delegated to FinancialStandingService, which finance
@@ -57,10 +57,9 @@ export class ParticipationStandingService implements FinancialConditionsPort {
    * The finding still names the team entry (one per competing entry with an open obligation, in
    * the fixture's order), because competition needs it to scope the finding by viewer: that an
    * entry has an open balance is itself protected from viewers `finance.read_obligation` does not
-   * admit for that entry. Competition's ReadinessService passes it through unchanged today, so the
-   * opposing team's players and guardians still learn which entry has a balance; scoping it per
-   * entry and viewer (and adding the formatted amount and the deadline for admitted viewers,
-   * SPK-READY-003) is the deferred competition change R3-TRACE-B-01b (README "Known gaps").
+   * admit for that entry. Competition's ReadinessService scopes it per entry and viewer
+   * (R3-TRACE-B-01b): an admitted viewer gets it with the formatted amount and the deadline
+   * (SPK-READY-003), every other viewer one fixture-level finding that names no entry.
    */
   async fixtureConditions(
     organizationId: string,
