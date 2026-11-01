@@ -582,22 +582,20 @@ outcome recording and reconciliation are never gated.
 
 ### Stage-3 gaps and dependencies
 
-- Tests use doubles (`__tests__/stage3-doubles.ts`) for port members other work items implement:
-  identity's `personIdsResolvingTo` (ID-01) and `subjectsWithPermission` (ID-09), and catalog's
-  `tax_fee` policy kind (CAT-02). Each double answers only while the real member is still
-  declared but not implemented, so the tests exercise the real implementation once those merge.
-  In production code, `personIdsOf` (`services/customer-scope.ts`) answers the person's own id
-  while `personIdsResolvingTo` is still declared but not implemented, so the `/me` lists and the
-  arrival standing read the person's own records (as before merges were resolvable) instead of
-  failing; once ID-01 is merged a survivor also sees the records of the people merged into it.
+- The stage-3 port members finance depends on are merged and implemented: identity's
+  `personIdsResolvingTo` (ID-01, `PeopleService`) and `subjectsWithPermission` (ID-09,
+  `RelationshipAuthorityService`), and catalog's `tax_fee` policy kind (CAT-02). The doubles in
+  `__tests__/stage3-doubles.ts` only stand in for module tests that do not load those modules;
+  each answers only while the real member is declared but not implemented, so a test that loads
+  the real module exercises it. `personIdsOf` (`services/customer-scope.ts`) keeps the same guard
+  for a build without ID-01 and otherwise lets a survivor see the records of the people merged
+  into it (**Verified**, prior DOCS-TRUTH-13).
 - A POS card tender needs a sale customer (`CARD_TENDER_NEEDS_CUSTOMER`): a payment attempt always
   has a payer; anonymous card sales depend on the processor (DEC-019 **Pending decision**). A
   zero-total sale cannot be paid. Refunding a cash or external POS tender is a drawer payout or an
   external fact, not a provider refund.
 - The accounting export sends journal entries as booked; revenue recognition, payroll and
   account-level summaries are not exported (DEC-022, DEC-052 **Pending decision**).
-- `docs/api/openapi.json` and the generated API client are regenerated at integration (outside
-  this module's files), so their parity tests stay stale until then.
 
 ## Known gaps
 
@@ -623,21 +621,15 @@ outcome recording and reconciliation are never gated.
 - `FINANCIAL_CONDITIONS_IMPL` (competition match readiness, `ParticipationStandingService`) reports
   an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
   DEC-056), so it is never a pass or a block until the policy is approved. **Verified:** the
-  finding carries no count, amount or due date (deadline `null`) and no obligation id, for any
-  viewer (R3-TRACE-B-01, `__tests__/fixture-conditions.spec.ts`); those stay on the team entry
-  workspace for the viewers `finance.read_obligation` admits. **Known gap, deferral
-  R3-TRACE-B-01b (competition):** the finding names the team entry (source `team_entry`, "This
-  team has an open balance"), which competition needs in order to scope it by viewer, but
-  competition's `ReadinessService` passes it through unchanged to every viewer of
-  `GET /v1/fixtures/{id}/readiness`. So the players and guardians of the opposing team, who may not
-  read that entry's obligation, still learn which entry has an open balance; and the viewers
-  `finance.read_obligation` admits (league manager, finance operator, the team's captain) see no
-  amount and no deadline, although SPK-READY-003 asks for the deadline when it applies. The
-  deferred change (proposed, not implemented): for each competing entry competition decides
-  `finance.read_obligation` for the viewer; an admitted viewer gets the entry-level finding with
-  the formatted amount and the next due date (facility time zone) as its deadline, and every other
-  viewer gets one fixture-level finding that names no entry and states no balance, shown whether
-  or not any entry has one. The tests "KNOWN GAP R3-TRACE-B-01b" record today's behaviour.
+  finding carries no count, amount or due date (deadline `null`) and no obligation id
+  (R3-TRACE-B-01, `__tests__/fixture-conditions.spec.ts`). It names the team entry, and
+  competition's `ReadinessService` scopes it by viewer (**Verified**, R3-TRACE-B-01b): for each
+  competing entry it decides `finance.read_obligation` for the viewer; an admitted viewer (finance
+  readers such as the league manager, the entry's captain or responsible payer) gets the
+  entry-level finding with the formatted amount and the next due date, in the division facility's
+  time zone, as its deadline (SPK-READY-003); every other viewer gets one fixture-level finding
+  that names no entry and states no balance, the same whether or not any entry has one
+  (`fixture-conditions.spec.ts`; competition `__tests__/readiness-finance-viewer.spec.ts`).
 - Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002) — **Verified**:
   `POST /v1/obligations` for a team entry records the obligation as the entry's
   `financialStatusRef` through competition's `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`, in

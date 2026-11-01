@@ -254,13 +254,13 @@ DEC-015 (support coverage, service objectives) and the §6.6 support/operations 
 
 ## Pending and known gaps
 
-- **Cross-branch (pending integration):** `personIdsResolvingTo` is identity's ID-01 and
-  `CashTendersService.listForPersons` is finance's FIN-02; the support tests run against them when
-  present and otherwise through `__tests__/stage3-doubles.ts`, which follows the declared contract
-  (verified against both branches merged). Without ID-01 the timeline, case search by person and
-  `/me/cases` answer INTERNAL_ERROR; without FIN-02 the cash-tender source reports `unavailable`.
+- **Cross-module dependencies (merged, verified):** identity's `personIdsResolvingTo` (ID-01) and
+  finance's `CashTendersService.listForPersons` (FIN-02) are merged, so the timeline, case search
+  by person, `/me/cases` and the cash-tender source use them; `__tests__/stage3-doubles.ts` only
+  stands in for module tests that do not load those modules and follows the declared contract.
   The `@NoRecordAuthority` classification of `POST /me/support-requests` is counted by MIG-00's
-  authority test; `docs/api/openapi.json` and the api-client are regenerated at integration.
+  authority test (`modules/migration/__tests__/authority.spec.ts`), and `docs/api/openapi.json`
+  and the api-client are regenerated.
 - **Customer requests:** a notification cannot be linked to a request (communications offers no
   customer read of a notification by id); the customer describes it instead. Whether a request
   about a team should also be visible to the entry's co-captains is pending DEC-088. Customers do

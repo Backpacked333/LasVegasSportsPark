@@ -270,11 +270,6 @@ modules).
   `503` like every automation endpoint; the `automation.apply_outcome_unknown` exception stays in its
   owner's Today queue (resolvable through the kernel's exception commands) and the claim stays held
   until the module is enabled again (**Proposed**).
-- **Integration steps outside this module:** `docs/api/openapi.json` and `packages/api-client` are
-  regenerated at integration (the new route and `RecommendationApplySettlement` make the committed
-  document stale on this branch: `openapi-parity.spec.ts` "fresh emission"); the migration module's
-  route classification counts `@NoRecordAuthority` on `settle-apply` once MIG-00 is merged (on
-  stage3-core alone `modules/migration/__tests__/authority.spec.ts` lists it as unclassified).
 - **Catalogue:** schedule repairs publish drafts (existing or opened from proposed changes) but the
   assistant does not compute repairs itself; renewal summaries, readiness across many fixtures and
   financial exceptions beyond a single payment need further tools. Roster, permission and discipline

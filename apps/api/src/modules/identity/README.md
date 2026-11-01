@@ -257,8 +257,7 @@ ids in history; they read through `personIdsResolvingTo`, IF-21).
   commands answer with ids and revisions only (`__tests__/people.spec.ts` "SPK-IAM-003: register
   without view changes a child record but never reads it back (no implied view)"). The alternative
   the owner may choose is to require `view` as well for these edits. DEC-094 is recorded in
-  `docs/package-a/decision-register.md` (Register F, after DEC-093) by the documentation change
-  that accompanies this module; until that row lands, this paragraph is the only record.
+  `docs/package-a/decision-register.md` (Register F, after DEC-093).
 - Staff reads (permission matrix C.2, Proposed): the role sets of `identity.lookup_person`,
   `identity.read_invitations`, `identity.read_authority`, `identity.read_staff_membership`,
   `identity.read_staff_directory`, `identity.read_workforce_directory` and
