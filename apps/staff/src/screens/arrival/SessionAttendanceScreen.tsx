@@ -3,7 +3,8 @@
  * §4.15, SPK-SCHED-008). The activity comes from the query string (opaque ids, from the scanner,
  * a session link or the workspace); without one, today's program sessions at the facility
  * (`GET /v1/sessions`, CAT-01, paged, in the facility's time zone) and today's scheduled events
- * (`GET /v1/events`) over the facility-local day from the Today feed are listed to choose from.
+ * (`GET /v1/events`) over the facility-local day (zone from the facility directory) are listed to
+ * choose from.
  */
 import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
@@ -55,7 +56,7 @@ export function SessionAttendanceScreen() {
           facilityId={facility.facilityId}
           timezone={facility.timezone}
           window={facility.window}
-          ready={facility.feedSettled}
+          ready={facility.zoneSettled}
         />
       )}
     </section>
@@ -119,7 +120,7 @@ function ActivityPicker({
   window: { start: string; end: string } | null;
   ready: boolean;
 }) {
-  // Without the Today feed's facility window, the 24 hours around now.
+  // Without the facility-local day (zone not known), the 24 hours around now.
   const range = useDayWindow(window);
   const sessions = useTodaySessions({ facilityId, window, enabled: ready });
   const events = useApiQuery({

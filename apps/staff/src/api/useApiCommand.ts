@@ -15,6 +15,13 @@
  * offline and resolves its refetch at once, without reading anything).
  * Pass `expectedRevision` in the body wherever the API takes it; a STALE_REVISION answer is shown
  * with "Reload" and the user's input is kept (SPK-UX-008).
+ *
+ * `resend()` is "Try again": it sends exactly the request that was last submitted, so the hook's
+ * fingerprint matches and the same idempotency key goes with it (§4.9). A request rebuilt at retry
+ * time from records read again since (the `invalidate` queries are re-read after an unknown
+ * outcome, and a committed command has bumped the record's revision) would be a new intent with a
+ * new key, which the API answers with STALE_REVISION or INVALID_TRANSITION instead of the stored
+ * outcome, or runs a second time.
  */
 import {
   mayHaveTakenEffect,
@@ -111,6 +118,12 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
     mutation.reset();
   }, [mutation]);
 
+  const { mutateAsync, variables } = mutation;
+  const resend = useCallback((): Promise<ResponseBody<P, M>> => {
+    if (variables === undefined) return Promise.reject(new Error('No request was sent.'));
+    return mutateAsync(variables);
+  }, [mutateAsync, variables]);
+
   return useMemo(
     () => ({
       submit: mutation.mutateAsync,
@@ -120,6 +133,7 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
       isProcessing: mutation.isPending,
       reset,
       reread,
+      resend,
     }),
     [
       mutation.mutateAsync,
@@ -129,6 +143,7 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
       mutation.isPending,
       reset,
       reread,
+      resend,
     ],
   );
 }

@@ -13,6 +13,7 @@ import {
   FACILITY_A,
   FACILITY_B,
   createTestApp,
+  facilityDirectoryOf,
   mePermissions,
   staffMe,
   todayFeed,
@@ -204,6 +205,51 @@ describe('facility switcher (scope from GET /v1/me)', () => {
         app.fake.requests.some((r) => r.route === '/today' && r.query.facilityId === FACILITY_B),
       ).toBe(true),
     );
+  });
+
+  it('§4.5: names and scope come from the facility directory; the shell never reads the Today feed', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': staffMe([]),
+        'GET /facilities': facilityDirectoryOf([FACILITY_A, FACILITY_B], {
+          outOfScope: [FACILITY_B],
+        }),
+      },
+    });
+    render(app.at('/workspace'));
+    await screen.findByRole('heading', { name: 'My assignments' });
+    const select = await screen.findByRole('combobox', { name: 'Facility' });
+    await waitFor(() =>
+      expect(
+        within(select)
+          .getAllByRole('option')
+          .map((o) => o.textContent),
+      ).toEqual(['All facilities', 'North Park 1']),
+    );
+    expect(app.fake.requests.filter((r) => r.route === '/facilities')).toHaveLength(1);
+    expect(app.fake.requests.some((r) => r.route === '/today')).toBe(false);
+  });
+
+  it('offers the GET /v1/me scope by reference when the facility directory cannot be read', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /facilities': () => fakeResponse(503, apiErrorBody('SERVICE_UNAVAILABLE')),
+      },
+    });
+    render(app.at('/workspace'));
+    const select = await screen.findByRole('combobox', { name: 'Facility' });
+    await waitFor(() =>
+      expect(
+        within(select)
+          .getAllByRole('option')
+          .map((o) => o.textContent),
+      ).toEqual([
+        'All my facilities',
+        `Facility ${FACILITY_A.slice(0, 8)}`,
+        `Facility ${FACILITY_B.slice(0, 8)}`,
+      ]),
+    );
+    expect(app.fake.requests.some((r) => r.route === '/today')).toBe(false);
   });
 
   it('shows a single facility as text and no switcher for a non-staff principal', async () => {

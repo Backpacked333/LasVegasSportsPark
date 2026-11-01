@@ -1,10 +1,15 @@
 /**
- * Facility switcher limited to the principal's facility scope as the API returns it
- * (`GET /v1/me` principal.facilityIds; an empty list means every facility in the organization,
- * §4.3). Names come from the Today feed's facilities when the viewer may read it; the API has no
- * facility directory for a principal's scope, so an unnamed facility shows a short reference.
+ * Facility switcher limited to the principal's facility scope as the API answers it (§4.3). Names
+ * and scope come from the facility directory, `GET /v1/facilities` (K-04; `inStaffScope` is the
+ * API's answer for this staff principal), within `GET /v1/me` `principal.facilityIds` when that is
+ * not empty: one cached read of configuration shared with every screen. The shell never reads the
+ * Today feed: that read computes every operational source and belongs to the Today screen alone
+ * (§4.5 bounded reads). While the directory has not answered, or when it fails, the scope from
+ * `GET /v1/me` (`principal.facilityIds`, empty = the whole organization) is offered, and an
+ * unnamed facility shows a short reference.
  */
 import { useEffect, useId, useMemo } from 'react';
+import { hasAnswered, useFacilityDirectory } from '../api/facility-directory';
 import { useApiQuery } from '../api/useApiQuery';
 import { useApp } from '../providers/AppProviders';
 
@@ -18,23 +23,30 @@ export function FacilitySwitcher() {
   const signedIn = session.status === 'signed_in';
   const me = useApiQuery({ path: '/me', enabled: signedIn });
   const isStaff = me.data?.principal.kind === 'staff';
-  const today = useApiQuery({
-    path: '/today',
-    enabled: signedIn && isStaff,
-    staleTime: 5 * 60_000,
-  });
+  const directory = useFacilityDirectory(signedIn && isStaff);
 
   const names = useMemo(
-    () => new Map((today.data?.facilities ?? []).map((f) => [f.facilityId, f.name])),
-    [today.data],
+    () => new Map((directory.data?.items ?? []).map((f) => [f.id, f.name])),
+    [directory.data],
   );
   const scoped = useMemo(() => me.data?.principal.facilityIds ?? [], [me.data]);
-  // Empty scope = whole organization: offer the facilities the API listed for this viewer.
-  const options = useMemo(() => (scoped.length > 0 ? scoped : [...names.keys()]), [scoped, names]);
+  const options = useMemo(
+    () =>
+      directory.data
+        ? directory.data.items
+            .filter(
+              (f) => f.inStaffScope === true && (scoped.length === 0 || scoped.includes(f.id)),
+            )
+            .map((f) => f.id)
+        : scoped,
+    [directory.data, scoped],
+  );
+  // Only once the scope is known: a choice is never dropped while the directory is still loading.
+  const scopeKnown = me.data !== undefined && hasAnswered(directory);
 
   useEffect(() => {
-    if (facilityId !== null && me.data && !options.includes(facilityId)) setFacilityId(null);
-  }, [facilityId, me.data, options, setFacilityId]);
+    if (facilityId !== null && scopeKnown && !options.includes(facilityId)) setFacilityId(null);
+  }, [facilityId, scopeKnown, options, setFacilityId]);
 
   if (!isStaff) return null;
   if (options.length === 1 && scoped.length === 1) {

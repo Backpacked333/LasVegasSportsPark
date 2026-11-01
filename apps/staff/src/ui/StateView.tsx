@@ -22,6 +22,7 @@ import {
 } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { Button } from './Button';
+import { CommandButton } from './CommandButton';
 import { StatusBadge } from './StatusBadge';
 
 interface ActionProps {
@@ -99,6 +100,10 @@ function body(props: StateViewProps): ReactNode {
     case 'error': {
       const recovery = recoveryActionFor(props.error);
       const onClick = recovery.retry ? props.onRetry : props.onAction;
+      // A command's "Try again" sends it again: offline it is disabled with "Needs a connection"
+      // (`CommandButton`), never a control that does nothing. A read's retry stays a plain button.
+      const RecoveryButton =
+        recovery.retry && props.error.method !== 'get' ? CommandButton : Button;
       return (
         <>
           <StatusBadge tone="danger" label="Something went wrong" />
@@ -107,7 +112,11 @@ function body(props: StateViewProps): ReactNode {
             Error code: {props.error.code}
             {props.error.correlationId ? `. Reference: ${props.error.correlationId}` : ''}
           </p>
-          {onClick ? <Button onClick={onClick}>{recovery.label}</Button> : <p>{recovery.label}</p>}
+          {onClick ? (
+            <RecoveryButton onClick={onClick}>{recovery.label}</RecoveryButton>
+          ) : (
+            <p>{recovery.label}</p>
+          )}
         </>
       );
     }

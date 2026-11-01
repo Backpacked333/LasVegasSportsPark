@@ -8,95 +8,101 @@
  * A person the API leaves out (or a read refused as not available) is shown as "Participant, name
  * not available" with a short reference, without implying that a record exists (§4.10).
  *
- * Facility time zone (SPK-SCHED-008): from the Today feed when the viewer may read it, otherwise
- * from `GET /v1/facilities/{id}` (any signed-in principal).
+ * Facility name, time zone and scope (SPK-SCHED-008, K-04): from the facility directory,
+ * `GET /v1/facilities` (with `inStaffScope`), or `GET /v1/facilities/{id}` for a facility the
+ * listing leaves out; any signed-in principal may read both. The facility-local date and day window
+ * are derived from that zone and the injected clock, so these hooks never read the Today feed
+ * (§4.5: the feed computes every operational source and is read only by the Today screen).
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { presentationForError } from '@sportspark/api-client';
 import { useQueries } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
+import { useFacilityDirectory, useFacilitySummary } from '../../api/facility-directory';
 import { useApiQuery } from '../../api/useApiQuery';
-import { useApi, useApp } from '../../providers/AppProviders';
+import { useApi, useApp, useNow } from '../../providers/AppProviders';
+import { localDateOf, localDaysWindow } from '../schedule-facilities/time';
 
 export interface OperatingFacility {
   /** The selected facility, or the only facility in the viewer's scope; null when ambiguous. */
   facilityId: string | null;
   name: string | null;
-  /** IANA zone from the Today feed, when the viewer may read it (SPK-SCHED-008). */
+  /** IANA zone from the facility directory (SPK-SCHED-008); null while unknown. */
   timezone: string | null;
-  /** The facility-local date of today, from the Today feed. */
+  /** The facility-local date of today (injected clock in the facility zone). */
   localDate: string | null;
-  /** Today's facility-local window, from the Today feed. */
+  /** Today's facility-local window, local midnight to local midnight, as UTC instants. */
   window: { start: string; end: string } | null;
   /** The viewer's account (actor of queued offline observations, §4.15). */
   accountId: string | null;
   personId: string | null;
   /** `/me` has not answered yet. */
   loading: boolean;
-  /** The Today feed has answered (or will not be read), so `window` and `timezone` are final. */
-  feedSettled: boolean;
+  /** The facility directory has answered (or cannot), so `window` and `timezone` are final. */
+  zoneSettled: boolean;
+}
+
+/** The local date of a zone at an instant; null for no zone or one the platform rejects. */
+function localDateIn(at: Date, timeZone: string | null): string | null {
+  if (!timeZone) return null;
+  try {
+    return localDateOf(at, timeZone);
+  } catch {
+    return null;
+  }
 }
 
 export function useOperatingFacility(): OperatingFacility {
   const { facilityId: selected, session } = useApp();
+  const now = useNow(60_000);
+  const signedIn = session.status === 'signed_in';
   const me = useApiQuery({ path: '/me' });
   const isStaff = me.data?.principal.kind === 'staff';
-  const today = useApiQuery({ path: '/today', enabled: isStaff, staleTime: 5 * 60_000 });
+  const directory = useFacilityDirectory(signedIn);
   const scoped = me.data?.principal.facilityIds ?? [];
-  const listed = today.data?.facilities ?? [];
+  // §4.3: the facilities the API says this staff principal may act at.
+  const inScope = isStaff ? (directory.data?.items ?? []).filter((f) => f.inStaffScope) : [];
   const facilityId =
     selected ??
     (scoped.length === 1
       ? (scoped[0] as string)
-      : scoped.length === 0 && listed.length === 1
-        ? (listed[0]?.facilityId ?? null)
+      : scoped.length === 0 && inScope.length === 1
+        ? (inScope[0]?.id ?? null)
         : null);
-  const facility = listed.find((f) => f.facilityId === facilityId);
-  // SPK-SCHED-008: the zone from the facility directory when the Today feed does not list it.
-  const todaySettled = !isStaff || today.data !== undefined || today.error !== null;
-  const directory = useApiQuery({
-    path: '/facilities/{id}',
-    request: { path: { id: facilityId ?? '' } },
-    enabled: facilityId !== null && me.data !== undefined && todaySettled && !facility,
-    staleTime: 60 * 60_000,
-  });
+  const { summary, settled } = useFacilitySummary(facilityId, signedIn && me.data !== undefined);
+  const timezone = summary?.timezone ?? null;
+  // SPK-SCHED-008: "today" is the facility-local day, local midnight to local midnight; a new
+  // window only when the local date changes, so reads keyed on it stay put during the day.
+  const localDate = localDateIn(now, timezone);
+  const window = useMemo(
+    () => (localDate && timezone ? localDaysWindow(localDate, 1, timezone) : null),
+    [localDate, timezone],
+  );
   return {
     facilityId,
-    name: facility?.name ?? directory.data?.name ?? null,
-    timezone: facility?.timezone ?? directory.data?.timezone ?? null,
-    localDate: facility?.localDate ?? null,
-    window: facility?.window ?? null,
+    name: summary?.name ?? null,
+    timezone,
+    localDate,
+    window,
     accountId: me.data?.principal.accountId ?? session.session?.accountId ?? null,
     personId: me.data?.principal.personId ?? null,
     loading: me.data === undefined && me.error === null,
-    feedSettled:
-      me.data !== undefined && (!isStaff || today.data !== undefined || today.error !== null),
+    zoneSettled: me.data !== undefined && settled,
   };
 }
 
 /**
- * The IANA zone of a facility a record names (SPK-SCHED-008): from the Today feed when it lists
- * the facility, otherwise from `GET /v1/facilities/{id}` (any signed-in principal); the same reads
- * and cache as `useOperatingFacility`. Null while it loads, when the record names no facility or
- * when the read fails: `formatInstant` then labels the device zone, so a device time is never
+ * The IANA zone of a facility a record names (SPK-SCHED-008): from the facility directory when it
+ * lists the facility, otherwise from `GET /v1/facilities/{id}` (any signed-in principal); the same
+ * reads and cache as `useOperatingFacility`. Null while it loads, when the record names no facility
+ * or when the read fails: `formatInstant` then labels the device zone, so a device time is never
  * presented as facility time.
  */
 export function useFacilityZone(facilityId: string | null | undefined): string | null {
-  const me = useApiQuery({ path: '/me' });
-  const isStaff = me.data?.principal.kind === 'staff';
-  const today = useApiQuery({ path: '/today', enabled: isStaff, staleTime: 5 * 60_000 });
-  const listed = facilityId
-    ? today.data?.facilities.find((f) => f.facilityId === facilityId)
-    : undefined;
-  const todaySettled = !isStaff || today.data !== undefined || today.error !== null;
-  const directory = useApiQuery({
-    path: '/facilities/{id}',
-    request: { path: { id: facilityId ?? '' } },
-    enabled: !!facilityId && me.data !== undefined && todaySettled && !listed,
-    staleTime: 60 * 60_000,
-  });
+  const { session } = useApp();
+  const { summary } = useFacilitySummary(facilityId, session.status === 'signed_in');
   if (!facilityId) return null;
-  return listed?.timezone ?? directory.data?.timezone ?? null;
+  return summary?.timezone ?? null;
 }
 
 export type PersonName =
