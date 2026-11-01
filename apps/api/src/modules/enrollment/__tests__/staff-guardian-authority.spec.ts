@@ -1,6 +1,8 @@
+import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createOfferingSessionFixture, createPolicyVersionFixture } from '../../catalog';
+import { authHeaderForPerson, createStaffMemberFixture } from '../../identity';
 import {
   acknowledge,
   adult,
@@ -25,11 +27,24 @@ describe('R3-TRACE-A-02: a staff member acting as a guardian has only a guardian
   let t: TestApp;
   let frontDesk: Actor;
   let programManager: Actor;
+  /** A second facility: staff scoped to it hold no role at the default facility's offerings. */
+  let facilityB: string;
 
   beforeAll(async () => {
     t = await enrollmentTestApp();
     frontDesk = await staff(t, ['front_desk']);
     programManager = await staff(t, ['program_manager']);
+    facilityB = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: facilityB,
+        organization_id: t.organizationId,
+        slug: `annex-${facilityB.slice(0, 8)}`,
+        name: 'Annex',
+        timezone: 'America/Los_Angeles',
+      })
+      .execute();
   });
   afterAll(async () => {
     await t.close();
@@ -47,6 +62,20 @@ describe('R3-TRACE-A-02: a staff member acting as a guardian has only a guardian
     expect((await post(t, `/v1/baskets/${held.id}/hold`, holder.header, {})).status).toBe(200);
     return setup;
   }
+
+  async function scopedStaff(
+    roles: Parameters<typeof createStaffMemberFixture>[1]['roles'],
+    facilityIds: string[],
+  ): Promise<Actor> {
+    const member = await createStaffMemberFixture(t, { roles, facilityIds });
+    return {
+      personId: member.personId,
+      accountId: member.accountId,
+      header: await authHeaderForPerson(t, member.personId),
+    };
+  }
+
+  const ids = (body: { items: Array<{ id: string }> }) => body.items.map((r) => r.id);
 
   async function kidOf(guardian: Actor, setup: OfferingSetup): Promise<string> {
     const kid = await child(t, [guardian]);
@@ -120,7 +149,12 @@ describe('R3-TRACE-A-02: a staff member acting as a guardian has only a guardian
       payer_person_id: scheduler.personId,
       requested_by_person_id: scheduler.personId,
     });
-    expect(stored.requested_by).toMatchObject({ kind: 'customer', staffRoles: [] });
+    // The whole snapshot is the customer's, the label included (never `staff:<role>:…`).
+    expect(stored.requested_by).toMatchObject({
+      kind: 'customer',
+      staffRoles: [],
+      actorLabel: `customer:${scheduler.accountId.slice(0, 8)}`,
+    });
     const family1 = await t.http
       .get(`/v1/waitlist-entries/${waiting.body.id as string}`)
       .set(family.header);
@@ -156,7 +190,7 @@ describe('R3-TRACE-A-02: a staff member acting as a guardian has only a guardian
     });
   });
 
-  it('SPK-REG-007 / SPK-REG-010: a scheduler transferring their own child into an offering that requires approval is refused; desk staff may', async () => {
+  it('SPK-REG-007 / SPK-REG-010: a transfer into an offering that requires approval is committed only by an approver (review_application); a scheduler for their own child and desk staff are refused', async () => {
     const approval = await createPolicyVersionFixture(t, {
       kind: 'eligibility',
       content: { requiresApproval: true },
@@ -189,7 +223,12 @@ describe('R3-TRACE-A-02: a staff member acting as a guardian has only a guardian
         .where('id', '=', enrollmentId)
         .executeTakeFirstOrThrow();
       expect(row.assisted_by_person_id).toBeNull();
-      expect(row.registered_by).toMatchObject({ kind: 'customer' });
+      expect(row.registered_by).toMatchObject({
+        kind: 'customer',
+        staffRoles: [],
+        actorLabel: `customer:${scheduler.accountId.slice(0, 8)}`,
+      });
+      expect(JSON.stringify(row.registered_by)).not.toContain('staff:');
       return { enrollmentId, revision: row.revision };
     };
 
@@ -227,19 +266,216 @@ describe('R3-TRACE-A-02: a staff member acting as a guardian has only a guardian
       ).status,
     ).toBe('confirmed');
 
-    // Registration staff acting on their role commit the transfer (it is the human decision).
-    const assisted = await post(
+    // Desk staff may transfer but not approve (enrollment.review_application is program
+    // administration's): they get APPROVAL_REQUIRED as a family does, and nothing moves.
+    const byDesk = await post(t, `/v1/enrollments/${own.enrollmentId}/transfer`, frontDesk.header, {
+      targetOfferingId: to.offeringId,
+      expectedRevision: own.revision,
+      commit: true,
+    });
+    expect(byDesk.status, JSON.stringify(byDesk.body)).toBe(409);
+    expect(byDesk.body.details).toMatchObject({
+      code: 'APPROVAL_REQUIRED',
+      action: 'enrollment.review_application',
+    });
+    expect(
+      (
+        await t.db
+          .selectFrom('enrollments')
+          .select('status')
+          .where('id', '=', own.enrollmentId)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('confirmed');
+    // A program manager scoped to another facility holds no approval at the target's.
+    const managerB = await scopedStaff(['program_manager'], [facilityB]);
+    const elsewhere = await post(
       t,
       `/v1/enrollments/${own.enrollmentId}/transfer`,
-      frontDesk.header,
+      managerB.header,
+      { targetOfferingId: to.offeringId, expectedRevision: own.revision, commit: true },
+    );
+    expect(elsewhere.status).toBe(404);
+
+    // Program administration acting on its role commits it: the transfer is the human decision,
+    // and the audit names the approver.
+    const approved = await post(
+      t,
+      `/v1/enrollments/${own.enrollmentId}/transfer`,
+      programManager.header,
       {
         targetOfferingId: to.offeringId,
         expectedRevision: own.revision,
         commit: true,
       },
     );
-    expect(assisted.status, JSON.stringify(assisted.body)).toBe(200);
-    expect(assisted.body.newEnrollment).toMatchObject({ status: 'confirmed' });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body.newEnrollment).toMatchObject({ status: 'confirmed' });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('target_type', '=', 'enrollment')
+      .where('target_id', '=', own.enrollmentId)
+      .where('action', '=', 'enrollment.transfer_enrollment')
+      .executeTakeFirstOrThrow();
+    expect(audit.details).toMatchObject({
+      approvalRequired: true,
+      approvedBy: {
+        personId: programManager.personId,
+        staffRoles: ['program_manager'],
+        action: 'enrollment.review_application',
+      },
+    });
+  });
+
+  it('SPK-IAM-001/003: a coach-guardian, and desk staff scoped to another facility, list their own child’s applications as GET shows them', async () => {
+    const free = await offering(t, { basePriceMinor: 0 });
+    const payer = await adult(t);
+    const coach = await staff(t, ['coach']);
+    const deskB = await scopedStaff(['front_desk'], [facilityB]);
+    const kid = await child(t, [payer, coach, deskB]);
+    await acknowledge(t, free, kid, payer.personId);
+    const basket = await basketWith(t, payer, [
+      { participantPersonId: kid, offeringId: free.offeringId },
+    ]);
+    const held = await post(t, `/v1/baskets/${basket.id}/hold`, payer.header, {});
+    expect(held.status, JSON.stringify(held.body)).toBe(200);
+    const applicationId = held.body.lines[0].applicationId as string;
+
+    for (const reader of [coach, deskB]) {
+      expect(
+        (await t.http.get(`/v1/applications/${applicationId}`).set(reader.header)).status,
+      ).toBe(200);
+      for (const query of [
+        `participantPersonId=${kid}`,
+        `participantPersonId=${kid}&offeringId=${free.offeringId}`,
+      ]) {
+        const listed = await t.http.get(`/v1/applications?${query}`).set(reader.header);
+        expect(listed.status, `${query}: ${JSON.stringify(listed.body)}`).toBe(200);
+        expect(ids(listed.body)).toEqual([applicationId]);
+        // Read as a guardian: the other adult's payment stays private (SPK-AT-004).
+        expect(listed.body.items[0].payerPersonId).toBeNull();
+      }
+    }
+
+    // Desk staff of another facility without a relationship see none of that child's records.
+    const strangerB = await scopedStaff(['front_desk'], [facilityB]);
+    const unscoped = await t.http
+      .get(`/v1/applications?participantPersonId=${kid}`)
+      .set(strangerB.header);
+    expect(unscoped.status).toBe(200);
+    expect(ids(unscoped.body)).toEqual([]);
+    const atA = await t.http
+      .get(`/v1/applications?participantPersonId=${kid}&offeringId=${free.offeringId}`)
+      .set(strangerB.header);
+    expect(atA.status).toBe(404);
+    // A coach with no relationship lists nothing either.
+    const otherCoach = await staff(t, ['coach']);
+    expect(
+      (await t.http.get(`/v1/applications?participantPersonId=${kid}`).set(otherCoach.header))
+        .status,
+    ).toBe(404);
+  });
+
+  it('§4.10, §4.14: a staff-only command on a record at a facility the caller cannot read answers NOT_FOUND, as its GET does; a reader of it gets ACCESS_DENIED', async () => {
+    const managerB = await scopedStaff(['program_manager'], [facilityB]);
+    const guardianManagerB = await scopedStaff(['program_manager'], [facilityB]);
+    const family = await adult(t);
+
+    // An application at the default facility.
+    const free = await offering(t, { basePriceMinor: 0 });
+    const kid = await child(t, [family, guardianManagerB]);
+    await acknowledge(t, free, kid, family.personId);
+    const basket = await basketWith(t, family, [
+      { participantPersonId: kid, offeringId: free.offeringId },
+    ]);
+    const held = await post(t, `/v1/baskets/${basket.id}/hold`, family.header, {});
+    expect(held.status, JSON.stringify(held.body)).toBe(200);
+    const applicationId = held.body.lines[0].applicationId as string;
+
+    // A waitlist entry at the default facility.
+    const full = await fullOffering();
+    const waiting = await kidOf(family, full);
+    const joined = await post(t, '/v1/waitlist-entries', family.header, {
+      offeringId: full.offeringId,
+      participantPersonId: waiting,
+      intent: 'youth',
+    });
+    expect(joined.status, JSON.stringify(joined.body)).toBe(201);
+
+    // A makeup redeemable only at the default facility.
+    const makeup = await post(t, '/v1/makeup-entitlements', programManager.header, {
+      participantPersonId: kid,
+      originKind: 'manual',
+      eligibleOfferingIds: [free.offeringId],
+      expiresAt: new Date(t.clock.now().getTime() + 30 * 86_400_000).toISOString(),
+      reason: 'Goodwill',
+    });
+    expect(makeup.status, JSON.stringify(makeup.body)).toBe(201);
+
+    const commands = (actor: Actor) => ({
+      readApplication: () => t.http.get(`/v1/applications/${applicationId}`).set(actor.header),
+      override: () =>
+        post(t, `/v1/applications/${applicationId}/override-eligibility`, actor.header, {
+          reason: 'Coach vouches',
+          expectedRevision: 1,
+        }),
+      accept: () =>
+        post(t, `/v1/applications/${applicationId}/accept`, actor.header, {
+          expectedRevision: 1,
+        }),
+      readWaitlist: () =>
+        t.http.get(`/v1/waitlist-entries/${joined.body.id as string}`).set(actor.header),
+      remove: () =>
+        post(t, `/v1/waitlist-entries/${joined.body.id as string}/remove`, actor.header, {
+          reason: 'Duplicate',
+          expectedRevision: joined.body.revision,
+        }),
+      readMakeup: () =>
+        t.http.get(`/v1/makeup-entitlements/${makeup.body.id as string}`).set(actor.header),
+      revoke: () =>
+        post(t, `/v1/makeup-entitlements/${makeup.body.id as string}/revoke`, actor.header, {
+          reason: 'Issued in error',
+          expectedRevision: makeup.body.revision,
+        }),
+    });
+
+    // Outside the records' facility and with no relationship: every one is NOT_FOUND.
+    for (const [name, run] of Object.entries(commands(managerB))) {
+      const res = await run();
+      expect(res.status, `${name}: ${JSON.stringify(res.body)}`).toBe(404);
+      expect(res.body.code, name).toBe('NOT_FOUND');
+    }
+    // The child's guardian may read the application and the makeup, so the staff-only commands
+    // say ACCESS_DENIED instead (the waitlist entry is another child's: still NOT_FOUND).
+    const guardian = commands(guardianManagerB);
+    expect((await guardian.readApplication()).status).toBe(200);
+    expect((await guardian.readMakeup()).status).toBe(200);
+    for (const run of [guardian.override, guardian.accept, guardian.revoke]) {
+      const res = await run();
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.code).toBe('ACCESS_DENIED');
+    }
+    expect((await guardian.remove()).status).toBe(404);
+    // Nothing changed.
+    expect(
+      (
+        await t.db
+          .selectFrom('makeup_entitlements')
+          .select('status')
+          .where('id', '=', makeup.body.id as string)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('active');
+    expect(
+      (
+        await t.db
+          .selectFrom('waitlist_entries')
+          .select('status')
+          .where('id', '=', joined.body.id as string)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('waiting');
   });
 
   it('SPK-AT-004: a coach who is the other guardian reads the child’s registration with the payer hidden, as any guardian does', async () => {

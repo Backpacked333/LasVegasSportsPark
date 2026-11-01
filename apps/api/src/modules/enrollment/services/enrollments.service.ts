@@ -1488,21 +1488,37 @@ export class EnrollmentsService implements EnrollmentPort {
           },
         );
       }
-      // R3-TRACE-A-02 (SPK-REG-007, SPK-REG-010, §2.1): a required approval is skipped only by a
-      // staff role that may transfer at both offerings' facilities (the transfer it commits is
-      // the human decision); a staff member moving their own child through `register` is a
-      // customer here and asks staff, as any family does.
+      // R3-TRACE-A-02 (SPK-REG-009): the transfer is staff-assisted only for a staff role that may
+      // transfer at both offerings' facilities; a staff member moving their own child through
+      // `register` is a customer here.
       const staffTransfer = await this.scope.actsAsStaff(
         principal,
         EnrollmentActions.transferEnrollment,
         organizationId,
         await this.scope.facilitiesOf(organizationId, [row.offering_id, target.offering.id], trx),
       );
-      if (evaluation.requiresApproval && !staffTransfer) {
+      // SPK-REG-007, SPK-REG-010, §2.1: a required approval is the human review the registration
+      // path reserves for `enrollment.review_application` (program administration). Committing the
+      // transfer is that decision only for a staff role that holds it at the target offering's
+      // facility, on top of transferring on its role; desk staff, like a family (or a staff member
+      // acting for their own child), get APPROVAL_REQUIRED and ask an approver.
+      const approvedBy =
+        evaluation.requiresApproval &&
+        staffTransfer &&
+        (await this.scope.actsAsStaff(
+          principal,
+          EnrollmentActions.reviewApplication,
+          organizationId,
+          target.offering.facilityId,
+        ))
+          ? principal
+          : null;
+      if (evaluation.requiresApproval && !approvedBy) {
         throw errors.resourceConflict(
-          'The target offering requires staff approval; ask staff to transfer.',
+          'The target offering requires approval by program administration; ask an approver to transfer.',
           {
             code: 'APPROVAL_REQUIRED',
+            action: EnrollmentActions.reviewApplication.id,
           },
         );
       }
@@ -1602,6 +1618,16 @@ export class EnrollmentsService implements EnrollmentPort {
           consequence,
           consequenceAccepted: consequence.kind !== 'none',
           acceptedConsequence: input.acceptedConsequence ?? null,
+          // SPK-REG-007: who gave the required approval this transfer stands on.
+          approvalRequired: evaluation.requiresApproval,
+          approvedBy: approvedBy
+            ? {
+                personId: approvedBy.personId,
+                actorLabel: approvedBy.actorLabel,
+                staffRoles: [...approvedBy.staffRoles],
+                action: EnrollmentActions.reviewApplication.id,
+              }
+            : null,
         },
       });
       await this.audit.record(trx, {

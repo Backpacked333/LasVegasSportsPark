@@ -72,16 +72,31 @@ export function organizationOf(principal: Principal): string {
  * customer-private record read as NOT_FOUND? Yes for anyone who may not even read the record
  * (another household, or a staff member whose roles and own relationships do not reach it), so its
  * existence never leaks; whoever may read it (their own child's, or a staff reader in scope) gets
- * the honest ACCESS_DENIED. The decision is the kernel's, never the principal's kind.
+ * the honest ACCESS_DENIED. The decision is the kernel's, never the principal's kind, and it is
+ * the read's own decision: `facilityIds` are the record's facilities, as its GET checks them (a
+ * record readable at any of them, such as a makeup redeemable at several, is readable; none given:
+ * organization-wide), so a staff reader scoped to another facility is hidden from as GET hides.
  */
 export async function hiddenFrom(
   authorization: AuthorizationService,
   principal: Principal,
   readAction: ActionDefinition,
   target: AuthorizationTargetInput,
+  facilityIds?: string | ReadonlyArray<string | null | undefined> | null,
 ): Promise<boolean> {
   if (principal.kind === 'system') return false;
-  return !(await authorization.decide(principal, readAction, target)).allowed;
+  const facilities = [
+    ...new Set(
+      (typeof facilityIds === 'string' ? [facilityIds] : (facilityIds ?? [])).filter(
+        (id): id is string => !!id,
+      ),
+    ),
+  ];
+  for (const facilityId of facilities.length > 0 ? facilities : [undefined]) {
+    const readTarget = facilityId ? { ...target, facilityId } : target;
+    if ((await authorization.decide(principal, readAction, readTarget)).allowed) return false;
+  }
+  return true;
 }
 
 /** The system principal enrollment uses for its own follow-up work (outbox handlers, timers). */
@@ -300,7 +315,19 @@ export function registrantSnapshot(
 ): RegistrationActorSnapshot {
   const snapshot = actorSnapshot(principal);
   if (staff || principal.kind !== 'staff') return snapshot;
-  return { ...snapshot, kind: 'customer', staffRoles: [] };
+  // The whole snapshot is the customer's: the label takes the form the principal resolver gives an
+  // account without staff roles (`customer:<account id prefix>`), never `staff:<roles>:…`.
+  return {
+    ...snapshot,
+    kind: 'customer',
+    staffRoles: [],
+    actorLabel: customerActorLabel(principal.accountId),
+  };
+}
+
+/** The actor label of a customer account (identity's principal resolver uses the same form). */
+export function customerActorLabel(accountId: string | null | undefined): string {
+  return accountId ? `customer:${accountId.slice(0, 8)}` : 'customer';
 }
 
 /** SPK-REG-009: the staff actor of an assisted record, apart from participant and payer. */

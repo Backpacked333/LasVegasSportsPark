@@ -54486,7 +54486,7 @@ export type components = {
             pass: components["schemas"]["Pass"];
             reference: string;
         };
-        /** @description SPK-YOUTH-004: `session_canceled` and `absence` require `originatingSessionId` (a session of the originating enrollment's offering when `originatingEnrollmentId` is given); `policy_event` requires `originReference`; `manual` may name neither. */
+        /** @description SPK-YOUTH-004: `session_canceled` and `absence` require `originatingSessionId`: a session of the originating enrollment's offering when `originatingEnrollmentId` is given, otherwise a session the participant took part in (a confirmed enrollment in its offering, or a session booking or trial for it); `policy_event` requires `originReference`; `manual` may name neither. */
         IssueMakeupRequest: {
             /** @default [] */
             eligibleOfferingIds?: string[];

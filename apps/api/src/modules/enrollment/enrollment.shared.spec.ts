@@ -1,7 +1,7 @@
 import type { Enrollment } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
 import { customerPrincipal, staffPrincipal } from '../../testing/principals';
-import { redactEnrollment, viewerOf } from './enrollment.shared';
+import { redactEnrollment, registrantSnapshot, viewerOf } from './enrollment.shared';
 
 const org = '01a16c09-0000-7000-8000-00000000000f';
 const payer = '01a16c09-0000-7000-8000-000000000011';
@@ -57,5 +57,41 @@ describe('SPK-AT-004 payer privacy', () => {
     expect(JSON.stringify(seen)).not.toContain(payer);
     // A customer never reads as staff, whatever a caller passes.
     expect(viewerOf(customerPrincipal(org, { personId: other }), true).staff).toBe(false);
+  });
+});
+
+describe('SPK-REG-009 registrant snapshot (R3-TRACE-A-02)', () => {
+  const accountId = '01a16c09-0000-7000-8000-0000000000aa';
+
+  it('records a staff member acting for their own family wholly as the customer they acted as', () => {
+    const scheduler = staffPrincipal(org, ['scheduler'], {
+      accountId,
+      personId: other,
+      actorLabel: `staff:scheduler:${accountId.slice(0, 8)}`,
+    });
+    expect(registrantSnapshot(scheduler, false)).toEqual({
+      kind: 'customer',
+      accountId,
+      personId: other,
+      staffRoles: [],
+      actorLabel: `customer:${accountId.slice(0, 8)}`,
+    });
+  });
+
+  it('keeps the staff actor of an assisted record and any customer as they are', () => {
+    const desk = staffPrincipal(org, ['front_desk'], {
+      accountId,
+      actorLabel: 'staff:front_desk:x',
+    });
+    expect(registrantSnapshot(desk, true)).toMatchObject({
+      kind: 'staff',
+      staffRoles: ['front_desk'],
+      actorLabel: 'staff:front_desk:x',
+    });
+    const parent = customerPrincipal(org, { accountId, actorLabel: 'customer:abc' });
+    expect(registrantSnapshot(parent, false)).toMatchObject({
+      kind: 'customer',
+      actorLabel: 'customer:abc',
+    });
   });
 });

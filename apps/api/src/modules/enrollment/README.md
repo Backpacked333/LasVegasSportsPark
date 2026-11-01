@@ -83,8 +83,10 @@ redemption_limit)` is the final guarantee.
 - **SPK-YOUTH-004 / R3-TRACE-B-02:** `makeup_entitlements_origin_referenced` (0520) refuses a
   `session_canceled` or `absence` makeup without its originating session and a `policy_event` one
   without a non-blank reference (`manual` may name neither); the issue command answers 400 for the
-  same cases (contract and service), for an unknown session, and for a session that is not one of
-  the originating enrollment's offering (read through catalog's sessions service). Rows written
+  same cases (contract and service), for an unknown session, for a session that is not one of
+  the originating enrollment's offering (read through catalog's sessions service), and, with no
+  originating enrollment, for a session the participant did not take part in (no confirmed
+  enrollment in its offering, no session booking or trial for it). Rows written
   before 0520 were not given an invented origin: a reference-less policy event is marked "not
   recorded", a session-less canceled-session or absence makeup became `manual` with what it claimed
   kept in its reference. **Verified**, `__tests__/enrollment-schema.spec.ts`,
@@ -100,7 +102,7 @@ redemption_limit)` is the final guarantee.
 | POST/GET | `/baskets`, `/baskets/{id}`, `/baskets/{id}/lines`, `/lines/{lineId}/remove`                              | the household adult (self) or desk staff (`enrollment.manage_basket`)                                              |
 | POST     | `/baskets/{id}/hold`, `/release`, `/complete`                                                             | same, re-checked per line; `release` refuses 409 `CHECKOUT_IN_PROGRESS` in a checkout; `complete` if nothing owed  |
 | GET      | `/enrollments`, `/enrollments/{id}`, `/enrollments/{id}/cancellation-preview`                             | `view` holders (payer and registrant redacted for other adults, SPK-AT-004), staff readers                         |
-| POST     | `/enrollments/{id}/cancel`, `/transfer` (`commit=false` preview), `/complete`                             | participant authority or desk staff; complete: program administration                                              |
+| POST     | `/enrollments/{id}/cancel`, `/transfer` (`commit=false` preview), `/complete`                             | participant authority or desk staff; a transfer target requiring approval and complete: program administration     |
 | POST/GET | `/waitlist-entries`, `/waitlist-entries/{id}`, `/withdraw`, `/remove`                                     | participant authority (`enrollment.join_waitlist`); listing and `remove` (reason required): program administration |
 | GET/POST | `/waitlist-offers/{id}`, `/accept`, `/decline`                                                            | participant authority                                                                                              |
 | POST/GET | `/placement-requests`, `/{id}`, `/{id}/candidates`, `/propose`, `/reject-proposal`, `/assign`, `/release` | request: participant authority; everything else league administration (`enrollment.manage_placement`)              |
@@ -115,8 +117,9 @@ Every consequential POST is `@Idempotent()` and zod-validated; every write runs 
 `NOT_FOUND` to anyone without authority (§4.10); organization scope comes from the token. A
 staff-only command (override, review, placement, waitlist removal, makeup revocation) answers
 `NOT_FOUND` to anyone who may not read the record (another household, or a staff member whose roles
-and own relationships do not reach it) and `ACCESS_DENIED` to whoever may read it (their own
-child's record, or a staff reader without the command's role). Adding a basket line needs `register` over both
+and own relationships do not reach it, a reader scoped to another facility included: the read is
+decided at the record's facility, as its GET decides it) and `ACCESS_DENIED` to whoever may read it
+(their own child's record, or a staff reader without the command's role). Adding a basket line needs `register` over both
 the basket's household adult and the participant, so authority over a shared child never opens
 another household's basket.
 
@@ -278,12 +281,19 @@ Payloads carry identifiers only (§4.14).
   principal's kind. A scheduler, coach or other staff member acting for their own child through
   `register` is a customer for that command: they cannot set a waitlist priority (only a role
   holding `enrollment.manage_waitlist` does, SPK-REG-008), skip the approval a transfer target
-  requires (SPK-REG-007/010; a role holding `enrollment.transfer_enrollment` at both offerings may),
-  record trial attendance (SPK-YOUTH-003), name another payer or basket owner (SPK-REG-009), or list
-  without naming a participant; their records carry no staff-assisted actor and a registrant
-  snapshot of kind `customer`, and their reads are redacted for payer privacy as any guardian's
-  are (SPK-AT-004, decided per record at its facility). The audit keeps the full principal.
-  **Verified**, `__tests__/staff-guardian-authority.spec.ts`, `enrollment.shared.spec.ts`.
+  requires, record trial attendance (SPK-YOUTH-003), name another payer or basket owner
+  (SPK-REG-009), or list without naming a participant. A required approval is the human review the
+  registration path reserves for `enrollment.review_application` (SPK-REG-007/010): only a role
+  holding it at the target offering's facility, on top of `enrollment.transfer_enrollment` at both
+  offerings, commits such a transfer; desk staff get 409 `APPROVAL_REQUIRED` as a family does, and
+  the transfer's audit names the approver. Listing one participant (`GET /applications`,
+  `/enrollments`) narrows through the read action, so a staff member's own self or guardian
+  authority lists every record GET shows them, at any facility. Their records carry no
+  staff-assisted actor and a registrant snapshot that is wholly a customer's (kind `customer`, no
+  staff roles, label `customer:<account>`, the same for rental and party requests), and their reads
+  are redacted for payer privacy as any guardian's are (SPK-AT-004, decided per record at its
+  facility). The audit keeps the full principal. **Verified**,
+  `__tests__/staff-guardian-authority.spec.ts`, `enrollment.shared.spec.ts`.
 - **Eligibility (SPK-REG-002):** pure evaluation (`eligibility/registration-eligibility.ts`) of the
   catalog's versioned eligibility policy at the offering's configured reference date, from the
   identity date of birth (never a stored age); unknown evidence is never a pass; outstanding forms

@@ -640,12 +640,18 @@ export class WaitlistService implements WaitlistPort {
         subjectPersonIds: [row.participant_person_id],
         protected:
           outcome === 'removed'
-            ? await hiddenFrom(this.authorization, principal, EnrollmentActions.readWaitlist, {
-                type: 'waitlist_entry',
-                id,
-                organizationId,
-                subjectPersonIds: [row.participant_person_id],
-              })
+            ? await hiddenFrom(
+                this.authorization,
+                principal,
+                EnrollmentActions.readWaitlist,
+                {
+                  type: 'waitlist_entry',
+                  id,
+                  organizationId,
+                  subjectPersonIds: [row.participant_person_id],
+                },
+                facilityId,
+              )
             : true,
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
@@ -931,18 +937,25 @@ export class WaitlistService implements WaitlistPort {
     return this.uow.run(async ({ trx }) => {
       const before = await this.loadEntry(trx, organizationId, id);
       if (!before) throw errors.protectedNotFound('waitlist_entry');
+      const facilityId = await this.scope.facilityOf(organizationId, before.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.manageWaitlist, {
         type: 'waitlist_entry',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, before.offering_id, trx),
+        facilityId,
         subjectPersonIds: [before.participant_person_id],
-        protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readWaitlist, {
-          type: 'waitlist_entry',
-          id,
-          organizationId,
-          subjectPersonIds: [before.participant_person_id],
-        }),
+        protected: await hiddenFrom(
+          this.authorization,
+          principal,
+          EnrollmentActions.readWaitlist,
+          {
+            type: 'waitlist_entry',
+            id,
+            organizationId,
+            subjectPersonIds: [before.participant_person_id],
+          },
+          facilityId,
+        ),
       });
       // Pools first in id order (as holds and offer generation take them), then the entries.
       await trx

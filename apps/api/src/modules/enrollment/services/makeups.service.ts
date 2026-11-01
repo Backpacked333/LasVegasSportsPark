@@ -123,8 +123,10 @@ export class MakeupsService {
     // R3-TRACE-B-02 (SPK-YOUTH-004): the entitlement references what it replaces. A missed or
     // canceled session names that session, a policy event names its reference; only `manual`
     // names neither (the database checks the same rule, 0520). With an originating enrollment the
-    // session is one of that enrollment's offering, read through catalog's service before the
-    // transaction (catalog reads never run inside it), once the caller may issue at all.
+    // session is one of that enrollment's offering; without one it is a session the participant
+    // took part in (a confirmed enrollment in its offering, or a session booking or trial for it).
+    // Both are read before the transaction (catalog reads never run inside it), once the caller
+    // may issue at all.
     if (
       (input.originKind === 'session_canceled' || input.originKind === 'absence') &&
       !input.originatingSessionId
@@ -156,6 +158,22 @@ export class MakeupsService {
           );
         }
         originOfferingId = origin.offering_id;
+      }
+    } else if (input.originatingSessionId) {
+      await requireIssuer();
+      const participant = await this.evaluator.participantOrNull(
+        undefined,
+        organizationId,
+        input.participantPersonId,
+      );
+      if (
+        participant &&
+        !(await this.tookPartIn(organizationId, participant.id, input.originatingSessionId))
+      ) {
+        throw errors.validation(
+          'The participant has no enrollment, session booking or trial in the originating session.',
+          { path: 'originatingSessionId' },
+        );
       }
     }
     return this.uow.run(async ({ trx }) => {
@@ -269,6 +287,52 @@ export class MakeupsService {
       });
       return this.view(trx, organizationId, (await this.load(trx, organizationId, id))!);
     });
+  }
+
+  /**
+   * R3-TRACE-B-02 (SPK-YOUTH-004): whether the participant took part in the session a makeup
+   * replaces: a session booking (pickup, makeup, trial or membership seat) or a trial for it, in
+   * any status (a canceled session cancels its bookings), or an enrollment that was confirmed in
+   * the session's offering. Enrollment's own tables, then catalog's sessions of those offerings
+   * through its service; called outside the command transaction.
+   */
+  private async tookPartIn(
+    organizationId: string,
+    participantPersonId: string,
+    sessionId: string,
+  ): Promise<boolean> {
+    const booked = await this.db
+      .selectFrom('session_bookings')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', participantPersonId)
+      .where('session_id', '=', sessionId)
+      .limit(1)
+      .executeTakeFirst();
+    if (booked) return true;
+    const trial = await this.db
+      .selectFrom('trial_participations')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', participantPersonId)
+      .where('session_id', '=', sessionId)
+      .limit(1)
+      .executeTakeFirst();
+    if (trial) return true;
+    const enrolled = await this.db
+      .selectFrom('enrollments')
+      .select('offering_id')
+      .distinct()
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', participantPersonId)
+      .where('confirmed_at', 'is not', null)
+      .orderBy('offering_id')
+      .execute();
+    for (const { offering_id } of enrolled) {
+      const sessions = await this.sessions.list(organizationId, offering_id);
+      if (sessions.some((s) => s.id === sessionId)) return true;
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -496,6 +560,11 @@ export class MakeupsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('makeup_entitlement');
+      const facilityIds = await this.scope.facilitiesOf(
+        organizationId,
+        row.eligible_offering_ids as string[],
+        trx,
+      );
       await this.scope.requireAt(
         principal,
         EnrollmentActions.issueMakeup,
@@ -503,14 +572,20 @@ export class MakeupsService {
           type: 'makeup_entitlement',
           id,
           organizationId,
-          protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readMakeup, {
-            type: 'makeup_entitlement',
-            id,
-            organizationId,
-            subjectPersonIds: [row.participant_person_id],
-          }),
+          protected: await hiddenFrom(
+            this.authorization,
+            principal,
+            EnrollmentActions.readMakeup,
+            {
+              type: 'makeup_entitlement',
+              id,
+              organizationId,
+              subjectPersonIds: [row.participant_person_id],
+            },
+            facilityIds,
+          ),
         },
-        await this.scope.facilitiesOf(organizationId, row.eligible_offering_ids as string[], trx),
+        facilityIds,
       );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'active')

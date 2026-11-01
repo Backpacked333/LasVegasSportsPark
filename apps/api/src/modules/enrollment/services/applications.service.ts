@@ -457,10 +457,16 @@ export class ApplicationsService {
         protected: true,
       });
     }
-    // §4.3, §4.14: facility-scoped staff list only their facilities' applications.
+    // §4.3, §4.14: facility-scoped staff list only their facilities' applications. A listing of
+    // one participant narrows through the read action (SPK-IAM-001/003), so a staff member's own
+    // self or guardian authority over that participant lists every application GET would show them
+    // (a coach-guardian, or desk staff scoped to another facility); the review queue narrows
+    // through `enrollment.list_applications`, which carries no customer authority.
     const offerings = await this.scope.listOfferings(
       principal,
-      EnrollmentActions.listApplications,
+      query.participantPersonId
+        ? EnrollmentActions.readApplication
+        : EnrollmentActions.listApplications,
       organizationId,
       query.participantPersonId,
     );
@@ -510,11 +516,12 @@ export class ApplicationsService {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('application');
       // Staff-only; a customer of another household must not learn that the application exists.
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.overrideEligibility, {
         type: 'application',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: await hiddenFrom(
           this.authorization,
@@ -526,6 +533,7 @@ export class ApplicationsService {
             organizationId,
             subjectPersonIds: [row.participant_person_id],
           },
+          facilityId,
         ),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
@@ -646,11 +654,12 @@ export class ApplicationsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('application');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.reviewApplication, {
         type: 'application',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: await hiddenFrom(
           this.authorization,
@@ -662,6 +671,7 @@ export class ApplicationsService {
             organizationId,
             subjectPersonIds: [row.participant_person_id],
           },
+          facilityId,
         ),
       });
       assertExpectedRevision(expectedRevision, row.revision);
