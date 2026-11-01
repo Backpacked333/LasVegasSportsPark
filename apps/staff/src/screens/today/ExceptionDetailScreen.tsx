@@ -13,6 +13,10 @@
  * Times are in the exception's facility zone (`GET /v1/facilities`, SPK-SCHED-008). The audit
  * history of the exception (`GET /v1/audit-records`) is offered to viewers who may read the audit
  * log. Offline the screen is read-only. A protected NOT_FOUND is shown as not available.
+ *
+ * A dead-lettered outbox or provider event offers Replay to its owner (`DeadLetterReplay.tsx`,
+ * R3-OPERATIONS-03); "Mark resolved" on it before the replay settles is refused
+ * (`dead_letter_replay_required`) and says to replay first, or close with a reason.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -39,6 +43,7 @@ import {
 import { EXCEPTIONS_KEY, EXCEPTION_KEY, SEVERITY_BADGE, TODAY_KEY } from './TodayScreen';
 import { AffectedRecordState } from './AffectedRecordState';
 import { AuditHistory } from './AuditHistory';
+import { DeadLetterReplay, ReplayRequiredNotice, isReplayRequired } from './DeadLetterReplay';
 import { NextActionLink } from './NextActionLink';
 import { useFacilityDirectory } from './useFacilityDirectory';
 
@@ -196,7 +201,11 @@ function LifecycleCommands({ exception }: { exception: OperationalException }) {
         onRetry={() => run('acknowledge')}
         onReload={reload}
       />
-      <CommandError error={resolve.error} onRetry={() => run('resolve')} onReload={reload} />
+      {isReplayRequired(resolve.error) ? (
+        <ReplayRequiredNotice />
+      ) : (
+        <CommandError error={resolve.error} onRetry={() => run('resolve')} onReload={reload} />
+      )}
       <CommandError error={close.error} onRetry={() => run('close')} onReload={reload} />
     </section>
   );
@@ -250,6 +259,7 @@ function ExceptionView({ exception }: { exception: OperationalException }) {
           </ul>
         )}
       </section>
+      <DeadLetterReplay exception={exception} />
       <LifecycleCommands exception={exception} />
       <section className="panel" aria-labelledby="history-title">
         <h3 id="history-title">Resolution history</h3>
