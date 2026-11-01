@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { PolicyKindSchema, z, type Principal } from '@sportspark/contracts';
+import {
+  PolicyKindSchema,
+  z,
+  type AssistantMissingEvidence,
+  type Principal,
+} from '@sportspark/contracts';
 import { PoliciesService, CatalogActions } from '../../catalog';
 import { MatchActions, ReadinessService } from '../../competition';
 import { FinanceActions, PaymentsService } from '../../finance';
@@ -62,19 +67,7 @@ export class QueryTools {
           asOf: feed.generatedAt,
           basis: 'evaluation',
         }));
-        const missing = feed.sources
-          .filter((s) => s.status !== 'ok')
-          .map((s) =>
-            missingEvidence(
-              'today_source',
-              s.facilityId ? `${s.source}:${s.facilityId}` : s.source,
-              'support.today_feed',
-              s.status === 'not_permitted' ? 'not_available' : 'source_unavailable',
-              s.status === 'not_permitted'
-                ? `The ${s.source} source is not available to you, so its issues are not included.`
-                : `The ${s.source} source could not be read; its issues are not included.`,
-            ),
-          );
+        const missing = todaySourceGaps(feed.sources);
         return {
           output: {
             generatedAt: feed.generatedAt,
@@ -405,4 +398,52 @@ export class QueryTools {
       },
     });
   }
+}
+
+/**
+ * What a Today read left out, as missing evidence (SPK-AUTO-002 "missing evidence is named"):
+ * a source that could not be read or is not available to the caller, and (R3-PERFORMANCE-01) a
+ * source the feed's per-request bound truncated, which is only partly included (`limit_reached`).
+ */
+export function todaySourceGaps(
+  sources: ReadonlyArray<{
+    source: string;
+    facilityId: string | null;
+    status: string;
+    truncated?: boolean;
+    omitted?: number | null;
+  }>,
+): AssistantMissingEvidence[] {
+  const gaps: AssistantMissingEvidence[] = [];
+  for (const s of sources) {
+    const id = s.facilityId ? `${s.source}:${s.facilityId}` : s.source;
+    if (s.status !== 'ok') {
+      gaps.push(
+        missingEvidence(
+          'today_source',
+          id,
+          'support.today_feed',
+          s.status === 'not_permitted' ? 'not_available' : 'source_unavailable',
+          s.status === 'not_permitted'
+            ? `The ${s.source} source is not available to you, so its issues are not included.`
+            : `The ${s.source} source could not be read; its issues are not included.`,
+        ),
+      );
+    } else if (s.truncated) {
+      gaps.push(
+        missingEvidence(
+          'today_source',
+          id,
+          'support.today_feed',
+          'limit_reached',
+          `The ${s.source} source is only partly included: ${
+            s.omitted === null || s.omitted === undefined
+              ? 'more records than shown'
+              : `${s.omitted} record(s)`
+          } were left out by the feed's per-request bound.`,
+        ),
+      );
+    }
+  }
+  return gaps;
 }

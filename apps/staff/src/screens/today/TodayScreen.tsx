@@ -211,24 +211,48 @@ function SourcesNote({
   names: ReadonlyMap<string, string>;
 }) {
   const limited = sources.filter((s) => s.status !== 'ok');
-  if (limited.length === 0) return null;
+  // R3-PERFORMANCE-01: a source the feed's per-request bound truncated is only partly included.
+  const partial = sources.filter((s) => s.status === 'ok' && s.truncated);
+  if (limited.length === 0 && partial.length === 0) return null;
+  const where = (s: Schema<'TodaySource'>) =>
+    s.facilityId ? facilityLabel(s.facilityId, names) : 'all facilities';
   return (
-    <section aria-label="Issue sources not included">
-      <h3>Not included</h3>
-      <ul className="list">
-        {limited.map((s) => (
-          <li key={`${s.source}-${s.facilityId ?? 'all'}`}>
-            <span>
-              {s.source} · {s.facilityId ? facilityLabel(s.facilityId, names) : 'all facilities'}
-            </span>
-            <StatusBadge
-              tone={s.status === 'unavailable' ? 'warning' : 'neutral'}
-              label={SOURCE_STATUS[s.status]}
-            />
-          </li>
-        ))}
-      </ul>
-    </section>
+    <>
+      {limited.length > 0 ? (
+        <section aria-label="Issue sources not included">
+          <h3>Not included</h3>
+          <ul className="list">
+            {limited.map((s) => (
+              <li key={`${s.source}-${s.facilityId ?? 'all'}`}>
+                <span>
+                  {s.source} · {where(s)}
+                </span>
+                <StatusBadge
+                  tone={s.status === 'unavailable' ? 'warning' : 'neutral'}
+                  label={SOURCE_STATUS[s.status]}
+                />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {partial.length > 0 ? (
+        <section aria-label="Issue sources partly included">
+          <h3>Partly included</h3>
+          <ul className="list">
+            {partial.map((s) => (
+              <li key={`${s.source}-${s.facilityId ?? 'all'}`}>
+                <span>
+                  {s.source} · {where(s)} ·{' '}
+                  {s.omitted === null ? 'more than shown' : `${s.omitted} more not shown`}
+                </span>
+                <StatusBadge tone="warning" label="Partly included" />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </>
   );
 }
 
