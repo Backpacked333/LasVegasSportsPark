@@ -1,6 +1,7 @@
-import { KeysetInstant, keysetInstant } from '../../kernel';
+import { KeysetInstant, keysetInstant, type RecoveryMode } from '../../kernel';
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import {
+  DomainError,
   decodeCursor,
   encodeCursor,
   errors,
@@ -519,4 +520,26 @@ export function keysetPage<R extends { id: string; cursor_at: string }>(
     nextCursor:
       rows.length > limit && last ? encodeCursor({ at: last.cursor_at, id: last.id }) : null,
   };
+}
+
+/**
+ * R3-OPERATIONS-02 / R3-DOCS-TRUTH-3-07 (§5.8, SPK-AT-028): while the organization recovers from a
+ * restore, no caller moves money or creates a financial obligation, whether it arrives over HTTP
+ * (the kernel's RecoveryGuard answers first) or in process (support's case refund, an automation
+ * apply, a migration import apply). The same answer as the guard: 503 INTEGRATION_UNAVAILABLE,
+ * `details.reason = recovery_mode`. Checked before anything is reserved, recorded or sent to a
+ * provider, so the command may run again unchanged after `POST /v1/recovery/resume`.
+ */
+export async function refuseDuringRecovery(
+  recovery: RecoveryMode,
+  organizationId: string,
+  db?: Db | Trx,
+): Promise<void> {
+  if (await recovery.isActive(organizationId, db)) {
+    throw new DomainError(
+      'INTEGRATION_UNAVAILABLE',
+      'Payments are paused while the service recovers from a restore. Try again later.',
+      { details: { reason: 'recovery_mode' } },
+    );
+  }
 }

@@ -20,6 +20,7 @@ import {
   assertExpectedRevision,
   snapshotActor,
   type Clock,
+  RecoveryMode,
 } from '../../../kernel';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import { FinanceActions } from '../finance.actions';
@@ -33,6 +34,7 @@ import {
   toCredit,
   type CreditRow,
   type Reader,
+  refuseDuringRecovery,
 } from '../finance.shared';
 import { LedgerService } from '../ledger/ledger.service';
 import { FinanceCustomerScope } from './customer-scope';
@@ -57,6 +59,7 @@ export class CreditsService {
     private readonly facts: MoneyFacts,
     @Inject(PERSON_DIRECTORY_PORT) private readonly people: PersonDirectoryPort,
     private readonly scope: FinanceCustomerScope,
+    private readonly recovery: RecoveryMode,
   ) {}
 
   async view(db: Reader, row: CreditRow): Promise<Credit> {
@@ -134,6 +137,9 @@ export class CreditsService {
       type: 'credit',
       organizationId,
     });
+    // §5.8 / SPK-AT-028: an in-process issue (a migration import apply) is refused during
+    // recovery like the HTTP route, before anything is recorded (R3-DOCS-TRUTH-3-07).
+    await refuseDuringRecovery(this.recovery, organizationId);
     const now = this.clock.now();
     if (input.expiresAt && new Date(input.expiresAt) <= now) {
       throw errors.validation('A credit cannot expire in the past.');
