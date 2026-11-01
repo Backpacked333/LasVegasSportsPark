@@ -534,9 +534,11 @@ export function hoursFromNow(now: Date, hours: number): Date {
 }
 
 /**
- * The longest scheduling event title (scheduling's `title` bound, max 200, as `POST /v1/events`
- * enforces). A fixture's title is composed from two captain-chosen team names of up to 200
- * characters each, so it is bounded here (R2-TENANCY-INPUT-02, SPK-COMMS-005).
+ * The longest scheduling event title (scheduling's `title` bound, max 200: `CreateEventSeriesBody.title`
+ * and `EventWriter.insertEvent`, `EVENT_TITLE_MAX`). There is no direct event-creation route:
+ * events are created through `EventSchedulingPort.createEvent`, series and schedule drafts. A
+ * fixture's title is composed from two captain-chosen team names of up to 200 characters each, so
+ * it is bounded here (R2-TENANCY-INPUT-02, SPK-COMMS-005, R3-DOCS-TRUTH-3-09).
  */
 export const FIXTURE_TITLE_MAX = 200;
 const FIXTURE_TITLE_SEPARATOR = ' v ';
