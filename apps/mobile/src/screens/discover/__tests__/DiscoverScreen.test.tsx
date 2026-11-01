@@ -4,7 +4,12 @@
  * SPK-UX-008 states, signed-out discovery, kind, format and date filters (CAT-01), Package G kinds
  * only while their switch is on, accessible rows, and "In progress" from the API's own lists.
  */
-import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
+import {
+  apiErrorBody,
+  fakeResponse,
+  type FakeHandler,
+  type FakeRequest,
+} from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import {
@@ -33,6 +38,36 @@ const PAUSED = offering({
   publicationState: 'registration_paused',
   price: null,
 });
+
+/**
+ * `GET /me/registration-checkouts` as the API answers it (money-reads.service myCheckouts): newest
+ * first, the `status` filter, cursor pages of `limit`. Twenty-five newer checkouts of other
+ * baskets come before this basket's checkout in recovery (R3-SCREEN-STATES-04).
+ */
+function checkoutsBehindNewerOnes(options: { failRecoveryPage?: () => boolean } = {}): FakeHandler {
+  const other = (n: number) => `0192f1a0-0000-7000-8000-0000000c${String(n).padStart(4, '0')}`;
+  const all = [
+    ...Array.from({ length: 25 }, (_, n) =>
+      checkout({ id: other(n), basketId: other(500 + n), quoteId: other(900 + n) }),
+    ),
+    checkout({ status: 'recovery_required' }),
+  ];
+  return (req: FakeRequest) => {
+    if (req.query.status && options.failRecoveryPage?.()) {
+      return fakeResponse(
+        503,
+        apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+      );
+    }
+    const matching = req.query.status ? all.filter((c) => c.status === req.query.status) : all;
+    const start = req.query.cursor ? Number(req.query.cursor) : 0;
+    const end = start + Number(req.query.limit ?? 50);
+    return fakeResponse(200, {
+      items: matching.slice(start, end),
+      nextCursor: end < matching.length ? String(end) : null,
+    });
+  };
+}
 
 describe('SCR-C-07 DiscoverScreen', () => {
   it('SPK-CAT-004: lists published offerings with their registration window, never a paused one as closed', async () => {
@@ -216,6 +251,54 @@ describe('SCR-C-07 DiscoverScreen', () => {
       status: 'offered',
       limit: '20',
     });
+  });
+
+  it('R3-SCREEN-STATES-04 §4.11: a checkout in recovery behind twenty newer checkouts has its row, and its basket is not listed as "Payment processing"', async () => {
+    const app = createRegistrationTestApp({
+      routes: {
+        'GET /offerings': page([]),
+        ...familyRoutes(),
+        'GET /me/registration-checkouts': checkoutsBehindNewerOnes(),
+        'GET /me/baskets': page([basket({ status: 'checking_out' })]),
+      },
+    });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId('discover-resume');
+    const row = await within(card).findByRole('button', {
+      name: 'Payment and registration, Payment received. We are completing your registration.',
+    });
+    expect(within(card).queryByRole('button', { name: /^Your basket/ })).toBeNull();
+    fireEvent.press(row);
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
+    const reads = app.fake.requests.filter((r) => r.route === '/me/registration-checkouts');
+    expect(reads.some((r) => r.query.status === 'recovery_required')).toBe(true);
+  });
+
+  it('R3-SCREEN-STATES-04: a failed read of the checkouts in recovery shows its code with "Try again", and "Nothing in progress" is not claimed', async () => {
+    let fail = true;
+    const app = createRegistrationTestApp({
+      routes: {
+        'GET /offerings': page([]),
+        ...familyRoutes(),
+        'GET /me/registration-checkouts': checkoutsBehindNewerOnes({
+          failRecoveryPage: () => fail,
+        }),
+        'GET /me/baskets': page([]),
+        'GET /me/waitlist-entries': page([]),
+      },
+    });
+    render(<DiscoverScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId('discover-resume');
+    expect(await within(card).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(within(card).queryByText('Nothing in progress right now.')).toBeNull();
+    fail = false;
+    fireEvent.press(within(card).getByRole('button', { name: 'Try again' }));
+    expect(
+      await within(card).findByRole('button', {
+        name: 'Payment and registration, Payment received. We are completing your registration.',
+      }),
+    ).toBeOnTheScreen();
+    await app.settle();
   });
 
   it('SPK-PAY-007: a checkout request whose answer never arrived comes first, until the API lists it', async () => {

@@ -6,7 +6,10 @@
  * places show the server's expiry with an informational countdown.
  *
  * A checkout already started for this basket is found in `GET /v1/me/registration-checkouts`, so
- * "See your payment" works after a restart or reinstall (SPK-UX-001).
+ * "See your payment" works after a restart or reinstall (SPK-UX-001): in the newest page of all
+ * the caller's checkouts, or among every page of those in recovery, which can be older than any
+ * number of newer checkouts (R3-SCREEN-STATES-04). While neither read has found it, a failed read
+ * is shown with its code and "Try again".
  *
  * Commands: remove a line (`POST /baskets/{id}/lines/{lineId}/remove`), get a price
  * (`POST /registration-quotes`, SCR-C-12), release held places (`POST /baskets/{id}/release`), and
@@ -23,7 +26,7 @@
  * quote is "not available"); stale (STALE_REVISION or a changed basket: reload); offline (basket
  * kept, price and checkout disabled); processing; success (quote ready).
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
+import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -37,9 +40,10 @@ import { INTENT_LABELS } from '../../features/registration/intents';
 import { JoinWaitlistButton } from '../../features/registration/JoinWaitlist';
 import { useParticipantNames } from '../../features/registration/participants';
 import {
-  checkoutOf,
+  basketCheckoutOf,
   MY_BASKETS_KEY,
   useMyCheckouts,
+  useRecoveryCheckouts,
 } from '../../features/registration/in-progress';
 import { useRegistrationProgress } from '../../features/registration/progress';
 import { useApiRecords } from '../../features/registration/queries';
@@ -51,6 +55,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing } from '../../ui/theme';
 
@@ -64,6 +69,29 @@ interface Failure {
 }
 
 export const RELEASE_REASON = 'Released by the customer in the app';
+
+/** A failure to show here: not "not available" (§4.10) and not offline (the banner says so). */
+function visibleFailure(error: ApiError | null): ApiError | null {
+  if (!error) return null;
+  const presentation = presentationForError(error);
+  return presentation === 'unavailable' || presentation === 'offline' ? null : error;
+}
+
+/**
+ * A failed read behind a checking-out basket's checkout (the newest page of all checkouts, or the
+ * first or a later page of those in recovery), with the way to read it again.
+ */
+function checkoutReadError(
+  checkouts: { error: ApiError | null; refetch: () => unknown },
+  recovery: ReturnType<typeof useRecoveryCheckouts>,
+): Failure | null {
+  const first = visibleFailure(checkouts.error);
+  if (first) return { error: first, retry: () => void checkouts.refetch() };
+  const recoveryFirst = recovery.data === undefined ? visibleFailure(recovery.error) : null;
+  if (recoveryFirst) return { error: recoveryFirst, retry: () => void recovery.refetch() };
+  const later = visibleFailure(recovery.nextPageError);
+  return later ? { error: later, retry: recovery.loadMore } : null;
+}
 
 /** A line needs forms when the API's eligibility names a missing acknowledgment. */
 export function lineNeedsForms(line: BasketLine): boolean {
@@ -191,8 +219,13 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const { progress } = useRegistrationProgress();
-  const checkouts = useMyCheckouts(basket.status === 'checking_out');
-  const checkout = checkoutOf(checkouts.data, { basketId: basket.id });
+  const checkingOut = basket.status === 'checking_out';
+  const checkouts = useMyCheckouts(checkingOut);
+  const recovery = useRecoveryCheckouts(checkingOut);
+  const checkout = basketCheckoutOf(checkouts.data, recovery.data, basket.id);
+  // Neither read found this basket's checkout and one of them failed: say so (SPK-UX-008).
+  const checkoutReadFailure =
+    !checkingOut || checkout ? null : checkoutReadError(checkouts, recovery);
   const [failure, setFailure] = useState<Failure | null>(null);
   const names = useParticipantNames(basket.lines.map((l) => l.participantPersonId));
   const offerings = useApiRecords(
@@ -254,6 +287,16 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
             : 'All places in this basket are confirmed together, or none are.'}
         </Body>
       </Section>
+      {checkoutReadFailure ? (
+        <Section title="Your payment">
+          <Body>The payment for this basket could not be looked up.</Body>
+          <StateView
+            variant="error"
+            error={checkoutReadFailure.error}
+            onRetry={checkoutReadFailure.retry}
+          />
+        </Section>
+      ) : null}
       {basket.status === 'held' && basket.holdExpiresAt ? (
         <ExpiryNotice
           expiresAt={basket.holdExpiresAt}
@@ -332,13 +375,13 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
             accessibilityHint="Prices every line from the facility's current price rules"
           />
         ) : null}
-        {basket.status === 'checking_out' && checkout ? (
+        {checkingOut && checkout ? (
           // The API lists this basket's checkout (SPK-UX-001: also after a reinstall).
           <Button
             label="See your payment"
             onPress={() => router.push(registrationRoutes.outcome(checkout.id))}
           />
-        ) : basket.status === 'checking_out' && progress.pendingCheckoutQuoteId ? (
+        ) : checkingOut && progress.pendingCheckoutQuoteId ? (
           // The checkout's answer never arrived (the app was closed mid-payment): the checkout
           // screen asks again for this quote, and the API returns the existing checkout.
           <Button

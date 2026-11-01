@@ -8,7 +8,8 @@
  *   (FIN-01), so a payment whose outcome is unknown or a `recovery_required` checkout is found
  *   again without anything kept on the device; `useRecoveryCheckouts` reads every page of the
  *   `recovery_required` ones, so a label that depends on them never misses an older one (the
- *   enrollment row and record), and `recoveryCheckoutsKnown` says when that list is complete;
+ *   enrollment row and record, the basket's "See your payment", Discover's "In progress"), and
+ *   `recoveryCheckoutsKnown` says when that list is complete;
  * - `GET /v1/me/waitlist-entries?status=offered`: entries with an open offer and its server
  *   expiry (ENR-01, SPK-REG-008).
  *
@@ -104,6 +105,44 @@ export function recoveryCheckoutsKnown(
     return pages.error !== null && presentationForError(pages.error) === 'unavailable';
   }
   return !pages.hasNextPage;
+}
+
+/**
+ * The checkout of a basket that is checking out (SCR-C-11 "See your payment", Discover's "In
+ * progress"): the basket's newest checkout that still needs attention in the first page of all the
+ * caller's checkouts, else its checkout in recovery from every page of those
+ * (`useRecoveryCheckouts`), which can be older than any number of newer checkouts
+ * (R3-SCREEN-STATES-04), else its newest listed checkout.
+ */
+export function basketCheckoutOf(
+  firstPage: { items: readonly Checkout[] } | undefined,
+  recovery: readonly Checkout[] | undefined,
+  basketId: string,
+): Checkout | null {
+  const listed = (firstPage?.items ?? []).filter((c) => c.basketId === basketId);
+  return (
+    listed.find(checkoutNeedsAttention) ??
+    recovery?.find((c) => c.basketId === basketId && c.status === 'recovery_required') ??
+    listed[0] ??
+    null
+  );
+}
+
+/**
+ * Checkouts that need attention, for Discover's "In progress": those in the first page of all the
+ * caller's checkouts (in flight or in recovery), then every checkout in recovery not among them,
+ * however old (R3-SCREEN-STATES-04). Newest first within each source.
+ */
+export function checkoutsNeedingAttention(
+  firstPage: { items: readonly Checkout[] } | undefined,
+  recovery: readonly Checkout[] | undefined,
+): Checkout[] {
+  const listed = (firstPage?.items ?? []).filter(checkoutNeedsAttention);
+  const seen = new Set(listed.map((c) => c.id));
+  return [
+    ...listed,
+    ...(recovery ?? []).filter((c) => c.status === 'recovery_required' && !seen.has(c.id)),
+  ];
 }
 
 export function useMyOffers(enabled = true) {
