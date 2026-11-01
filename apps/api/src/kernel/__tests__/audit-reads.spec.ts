@@ -136,6 +136,49 @@ describe('audit-log and provider-event reads (K-08, §4.14, §4.12)', () => {
     expect(await reader.forTarget(other.organizationId, 'probe', target)).toHaveLength(1);
   });
 
+  it('R3-PERFORMANCE-01: AuditReader.forTargets reads many records’ histories in one query, newest first and bounded per record', async () => {
+    const reader = t.app.get(AuditReader);
+    const second = newId();
+    const none = newId();
+    const uow = t.app.get(UnitOfWork);
+    const audit = t.app.get(AuditWriter);
+    await uow.run(({ trx }) =>
+      audit.record(trx, {
+        organizationId: t.organizationId,
+        actor: systemPrincipal(t.organizationId, 'kernel.test'),
+        action: 'kerneltest.second',
+        targetType: 'probe',
+        targetId: second,
+        reason: 'second target',
+      }),
+    );
+    // Executed statements (a subquery is compiled into its outer statement, not run on its own).
+    const queries: unknown[] = [];
+    const histories = await reader.forTargets(
+      t.organizationId,
+      'probe',
+      [target, second, none, target],
+      { limitPerTarget: 2 },
+      t.db.withPlugin({
+        transformQuery: (args) => args.node,
+        transformResult: (args) => {
+          queries.push(args.queryId);
+          return Promise.resolve(args.result);
+        },
+      }),
+    );
+    expect(queries).toHaveLength(1);
+    expect([...histories.keys()].sort()).toEqual([target, second, none].sort());
+    expect(histories.get(target)?.map((r) => r.reason)).toEqual(['override 2', 'override 1']);
+    expect(histories.get(second)?.map((r) => r.reason)).toEqual(['second target']);
+    expect(histories.get(none)).toEqual([]);
+    // never another organization's records
+    const elsewhere = await reader.forTargets(other.organizationId, 'probe', [target, second]);
+    expect(elsewhere.get(target)).toHaveLength(1);
+    expect(elsewhere.get(second)).toEqual([]);
+    expect(await reader.forTargets(t.organizationId, 'probe', [])).toEqual(new Map());
+  });
+
   it('§4.12, §4.14: provider events of the organization are listed without their payloads', async () => {
     const inbox = t.app.get(Inbox);
     await inbox.record({

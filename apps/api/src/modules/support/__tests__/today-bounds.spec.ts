@@ -145,11 +145,15 @@ describe('Today workspace bounds (R3-PERFORMANCE-01, SPK-UX-006)', () => {
     feed.sources.find((s) => s.source === name && s.facilityId === facilityId) as TodaySource;
 
   it('R3-PERFORMANCE-01 / SPK-UX-006: one read lists at most todayExceptionLimit exceptions with their history, most severe first, and names the rest', async () => {
-    const history = vi.spyOn(t.app.get(OperationalExceptions), 'history');
+    const history = vi.spyOn(t.app.get(OperationalExceptions), 'historyMany');
+    const single = vi.spyOn(t.app.get(OperationalExceptions), 'history');
     const feed = await feedOf();
-    // One audit read per listed exception, never one per open exception of the organization.
-    expect(history.mock.calls.map((c) => c[1]).sort()).toEqual([ids.critical, ids.high].sort());
+    // One audit read for the listed exceptions, never one per open exception of the organization.
+    expect(history).toHaveBeenCalledTimes(1);
+    expect([...(history.mock.calls[0]?.[1] ?? [])].sort()).toEqual([ids.critical, ids.high].sort());
+    expect(single).not.toHaveBeenCalled();
     history.mockRestore();
+    single.mockRestore();
 
     expect(byId(feed, `exception:${ids.critical}`)).toBeDefined();
     expect(byId(feed, `exception:${ids.high}`)).toBeDefined();

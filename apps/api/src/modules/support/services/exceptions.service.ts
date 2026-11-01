@@ -236,7 +236,8 @@ export class ExceptionsService {
 
   /**
    * Resolution history of the exceptions, oldest first, from the kernel's audited transitions
-   * (`OperationalExceptions.history`, K-10 / IF-29 through AuditReader).
+   * (`OperationalExceptions.historyMany`, K-10 / IF-29 through AuditReader): one audit read for all
+   * of them, never one per exception (R3-PERFORMANCE-01).
    */
   async history(
     db: Reader,
@@ -244,8 +245,11 @@ export class ExceptionsService {
     ids: readonly string[],
   ): Promise<Map<string, ResolutionHistoryEntry[]>> {
     const out = new Map<string, ResolutionHistoryEntry[]>();
-    for (const id of new Set(ids)) {
-      const records = await this.exceptions.history(organizationId, id, db);
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return out;
+    const byId = await this.exceptions.historyMany(organizationId, unique, db);
+    for (const id of unique) {
+      const records = byId.get(id) ?? [];
       out.set(
         id,
         [...records].reverse().map((r) => ({

@@ -196,6 +196,24 @@ export class OperationalExceptions {
     );
   }
 
+  /**
+   * R3-PERFORMANCE-01: `history` of many exceptions in one audit read (newest first per exception,
+   * the same 200-record bound each); every requested id is in the map.
+   */
+  async historyMany(
+    organizationId: string,
+    ids: readonly string[],
+    db?: Db | Trx,
+  ): Promise<Map<string, AuditRecord[]>> {
+    return this.auditReader.forTargets(
+      organizationId,
+      'operational_exception',
+      ids,
+      { limitPerTarget: 200 },
+      db,
+    );
+  }
+
   async raise(
     trx: Trx,
     input: RaiseExceptionInput,
