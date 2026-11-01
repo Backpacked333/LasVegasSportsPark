@@ -36,7 +36,9 @@ import type {
   TeamsTable,
 } from '@sportspark/db';
 import { sql, type Selectable } from 'kysely';
-import type { RequestWithContext } from '../../kernel';
+import type { ActionDefinition, AuthorizationService, RequestWithContext } from '../../kernel';
+import { localDateOf } from '../scheduling';
+import { MatchActions } from './competition-matches.actions';
 import type { FixtureSummary, TeamEntrySummary } from './ports';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records (§4.10). */
@@ -61,8 +63,61 @@ export const RESTRICTED_SOURCE_TYPES: ReadonlySet<string> = new Set([
   'incident',
 ]);
 
-export function isStaffLike(principal: Principal): boolean {
-  return principal.kind === 'staff' || principal.kind === 'system';
+/**
+ * Where a staff role must apply for {@link staffAuthority}: the organization, and the facility of
+ * the record when one is known (the division's facility for entries and rosters; the fixture's
+ * venue, else its division's facility, for fixtures, results, readiness and disputes). A record
+ * with no known facility (a season-wide list, a team, a discipline record, a division without a
+ * facility) is decided organization-wide.
+ */
+export interface StaffAuthorityTarget {
+  organizationId: string;
+  facilityId?: string | null;
+}
+
+/**
+ * R3-TRACE-A-01 (§2.1 "access depends on the specific action and scope, not merely a role label",
+ * SPK-IAM-001/003, §3.1 "a coach who is also a parent receives each permission only in its proper
+ * scope"): whether the principal acts on `action` with staff authority, meaning a system principal
+ * of the organization, or a staff principal holding one of the action's staff roles whose facility
+ * scope covers `target.facilityId` (when the caller names one; the kernel skips the facility check
+ * otherwise). The decision names no subject and no team entry, so the kernel can only allow it on
+ * the staff-role basis. Staff kind alone does not count: identity marks every holder of any staff
+ * role as kind `staff`, so a captain who is also an official or a coach is a captain on the
+ * customer path (registration windows, required approvals, redacted views) unless the action
+ * itself lists one of their roles, in that record's facility.
+ */
+export async function staffAuthority(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  action: ActionDefinition,
+  target: StaffAuthorityTarget,
+): Promise<boolean> {
+  if (principal.kind === 'system') return principal.organizationId === target.organizationId;
+  if (principal.kind !== 'staff') return false;
+  const decision = await authorization.decide(principal, action, {
+    type: action.id,
+    organizationId: target.organizationId,
+    facilityId: target.facilityId ?? null,
+  });
+  return decision.allowed;
+}
+
+/**
+ * R3-TRACE-A-01 (SPK-DISC-004, SPK-CAP-002, §4.10): whether the principal sees restricted detail in
+ * eligibility explanations, invitation and join previews, roster refusals and fixture readiness:
+ * exact ages, other-team counts and the ids of restricted records (suspensions, disputes,
+ * incidents, audit records). It belongs to the staff roles that read discipline
+ * (`competition.read_discipline`, league management) in the record's facility, never to a staff
+ * role that only reads, manages or invites to the entry (front desk, coach, official, support,
+ * finance), and never to a captain, player or guardian.
+ */
+export function readsRestrictedDetail(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  target: StaffAuthorityTarget,
+): Promise<boolean> {
+  return staffAuthority(authorization, principal, MatchActions.readDiscipline, target);
 }
 
 export const iso = (value: Date | string): string => new Date(value).toISOString();
@@ -98,22 +153,46 @@ export const ROSTER_LIMIT_STATUSES: readonly RosterPlayingStatus[] = ['active', 
 /**
  * Date on which age eligibility is evaluated (SPK-COMP-002 "Eligibility reference dates", §4.5:
  * never a stored age). Returned as a `YYYY-MM-DD` string.
+ *
+ * R3-TIME-MONEY-03 (SPK-SCHED-008): `match_date` and `calendar_year_start` are the facility-local
+ * calendar date (and its year) of `at` in `timezone`, the IANA zone of the facility where the game
+ * is played or the division is run: a 17:30 kickoff in Las Vegas is still that local day, never
+ * the next UTC day. `timezone` is null only when no facility is known; the UTC date is used then
+ * and {@link referenceDateZoneNote} says so in the reason.
  */
 export function referenceDateFor(
   rule: EligibilityReferenceDate,
   season: { starts_on: string },
   at: Date,
+  timezone: string | null,
 ): string {
+  const localDate = (): string =>
+    timezone ? localDateOf(timezone, at) : at.toISOString().slice(0, 10);
   switch (rule.rule) {
     case 'season_start':
       return season.starts_on;
     case 'calendar_year_start':
-      return `${at.getUTCFullYear()}-01-01`;
+      return `${localDate().slice(0, 4)}-01-01`;
     case 'match_date':
-      return at.toISOString().slice(0, 10);
+      return localDate();
     case 'fixed_date':
       return rule.date;
   }
+}
+
+/** Whether the reference date depends on the instant (and so on the facility's time zone). */
+export function referenceDateUsesInstant(rule: EligibilityReferenceDate): boolean {
+  return rule.rule === 'match_date' || rule.rule === 'calendar_year_start';
+}
+
+/** The note an age reason carries when an instant-based reference date fell back to UTC. */
+export function referenceDateZoneNote(
+  rule: EligibilityReferenceDate,
+  timezone: string | null,
+): string {
+  return referenceDateUsesInstant(rule) && !timezone
+    ? ' (UTC date: no facility time zone is known)'
+    : '';
 }
 
 /** Whole years between a date of birth and a reference date (both `YYYY-MM-DD`). */

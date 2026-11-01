@@ -44,9 +44,15 @@ import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { RESULT_CORRECTION_REVIEW } from '../competition-matches.policy';
 import { ASSIGNMENT_CHECK_PORT, type AssignmentCheckPort } from '../competition-matches.ports';
-import { detailsOf, toResultRevision, withRuleSetRoles } from '../competition-matches.shared';
+import {
+  customerResultView,
+  detailsOf,
+  toResultRevision,
+  withRuleSetRoles,
+} from '../competition-matches.shared';
 import { ResultMachine } from '../competition-matches.state-machines';
 import {
+  fixtureFacilityIdOf,
   loadRuleSetRow,
   loadSeasonRow,
   rosterRowsEffectiveAt,
@@ -54,9 +60,9 @@ import {
   type Reader,
 } from '../competition.queries';
 import {
-  isStaffLike,
   organizationOf,
   ruleSetContentOf,
+  staffAuthority,
   type SeasonRow,
 } from '../competition.shared';
 import { FixtureMachine } from '../competition.state-machines';
@@ -934,7 +940,11 @@ export class ResultsService {
   // -------------------------------------------------------------------------------------------
   // Reads
   // -------------------------------------------------------------------------------------------
-  /** Staff see every revision; customers who may read the fixture see its published history only. */
+  /**
+   * Staff see every revision; customers who may read the fixture see its published history only,
+   * in the customer view (R3-TRACE-B-03): no restricted incident or dispute ids, no official's
+   * notes, no staff identifiers.
+   */
   async listForFixture(principal: Principal, fixtureId: string): Promise<ResultRevision[]> {
     await this.fixtures.get(principal, fixtureId); // authorizes (protected NOT_FOUND, §4.10)
     const organizationId = organizationOf(principal);
@@ -945,10 +955,28 @@ export class ResultsService {
       .where('fixture_id', '=', fixtureId)
       .orderBy('revision_no')
       .execute();
-    const visible = isStaffLike(principal)
-      ? rows
-      : rows.filter((r) => r.status === 'official' || r.status === 'superseded');
-    return visible.map(toResultRevision);
+    if (await this.readsAsStaff(principal, organizationId, fixtureId)) {
+      return rows.map(toResultRevision);
+    }
+    return rows
+      .filter((r) => r.status === 'official' || r.status === 'superseded')
+      .map((r) => customerResultView(toResultRevision(r)));
+  }
+
+  /**
+   * R3-TRACE-A-01 / R3-TRACE-B-03: the staff view of results is for a staff role that reads them
+   * (or the system), never for a player or guardian because they also hold some staff role.
+   */
+  private async readsAsStaff(
+    principal: Principal,
+    organizationId: string,
+    fixtureId: string,
+  ): Promise<boolean> {
+    // in the fixture's facility (its venue, else its division's facility)
+    return staffAuthority(this.authorization, principal, MatchActions.readResults, {
+      organizationId,
+      facilityId: await fixtureFacilityIdOf(this.db, organizationId, fixtureId),
+    });
   }
 
   /**
@@ -1016,10 +1044,13 @@ export class ResultsService {
     const row = await this.loadRevision(this.db, organizationId, revisionId);
     if (!row) throw errors.protectedNotFound('result_revision');
     await this.fixtures.get(principal, row.fixture_id);
-    if (!isStaffLike(principal) && row.status !== 'official' && row.status !== 'superseded') {
+    if (await this.readsAsStaff(principal, organizationId, row.fixture_id)) {
+      return toResultRevision(row);
+    }
+    if (row.status !== 'official' && row.status !== 'superseded') {
       throw errors.protectedNotFound('result_revision');
     }
-    return toResultRevision(row);
+    return customerResultView(toResultRevision(row));
   }
 
   // -------------------------------------------------------------------------------------------

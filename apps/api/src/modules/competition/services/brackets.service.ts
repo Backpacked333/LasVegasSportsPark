@@ -29,7 +29,7 @@ import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { toBracketNode } from '../competition-matches.shared';
 import { loadSeasonRow, teamNamesOf, type Reader } from '../competition.queries';
-import { organizationOf } from '../competition.shared';
+import { organizationOf, staffAuthority } from '../competition.shared';
 import { readTarget } from './competitions.service';
 import { StandingsService } from './standings.service';
 
@@ -63,6 +63,24 @@ export class BracketsService {
   ) {}
 
   /** Bracket nodes with their slot holders' team names (CMP-01: one join per page). */
+  /** The facility of each division (R3-TRACE-A-01); divisions without one are left out. */
+  private async divisionFacilities(
+    organizationId: string,
+    divisionIds: ReadonlyArray<string | null>,
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(divisionIds.filter((id): id is string => id !== null))];
+    if (ids.length === 0) return new Map();
+    const rows = await this.db
+      .selectFrom('divisions')
+      .select(['id', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', ids)
+      .execute();
+    return new Map(
+      rows.flatMap((r) => (r.facility_id ? [[r.id, r.facility_id] as [string, string]] : [])),
+    );
+  }
+
   private async views(
     db: Reader,
     organizationId: string,
@@ -388,11 +406,27 @@ export class BracketsService {
       .orderBy('slot');
     if (query.divisionId) q = q.where('division_id', '=', query.divisionId);
     const rows = await q.execute();
-    // Customers see published nodes only; staff see the whole bracket.
-    const visible =
-      principal.kind === 'staff' || principal.kind === 'system'
-        ? rows
-        : rows.filter((r) => r.published);
+    // Customers see published nodes only; staff holding the read action see the whole bracket
+    // (R3-TRACE-A-01: by the action's staff roles in the division's facility, never the
+    // principal's kind).
+    const facilities = await this.divisionFacilities(
+      organizationId,
+      rows.map((r) => r.division_id),
+    );
+    const staffIn = new Map<string | null, boolean>();
+    const visible = [];
+    for (const row of rows) {
+      const facilityId = row.division_id ? (facilities.get(row.division_id) ?? null) : null;
+      let staff = staffIn.get(facilityId);
+      if (staff === undefined) {
+        staff = await staffAuthority(this.authorization, principal, MatchActions.readBrackets, {
+          organizationId,
+          facilityId,
+        });
+        staffIn.set(facilityId, staff);
+      }
+      if (staff || row.published) visible.push(row);
+    }
     return this.views(this.db, organizationId, visible);
   }
 

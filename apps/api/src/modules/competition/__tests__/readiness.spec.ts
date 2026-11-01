@@ -1,6 +1,7 @@
 import { systemPrincipal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
+import { createPersonFixture } from '../../identity';
 import {
   ClosuresService,
   EventsService,
@@ -333,6 +334,98 @@ describe('match readiness (SPK-READY-001..004, §4.8 GET /fixtures/{id}/readines
     );
     expect(redacted.source).toEqual({ type: 'suspension', id: null });
     expect(JSON.stringify(asPlayer.body)).not.toContain(suspensionId);
+  });
+
+  it('R3-TRACE-A-01 / SPK-DISC-004: an official reads every fixture’s readiness without restricted record ids; discipline staff keep them', async () => {
+    const fixtureId = await scheduled(home, away, '2027-03-20');
+    const suspensionId = await createSuspensionFixture(t, {
+      subjectPersonId: (home.players[1] as Actor).personId,
+      status: 'proposed',
+      scope: 'competitions',
+      competitionIds: [season.competitionId],
+      matchCount: 1,
+    });
+    const suspensionSources = (body: { issues: Array<{ source: { type: string } }> }) =>
+      body.issues.map((i) => i.source).filter((source) => source.type === 'suspension');
+    const official = await staffMember(t, ['official']);
+    const asOfficial = await readiness(fixtureId, official);
+    expect(asOfficial.status).toBe(200);
+    expect(suspensionSources(asOfficial.body).length).toBeGreaterThan(0);
+    expect(suspensionSources(asOfficial.body)).toEqual(
+      suspensionSources(asOfficial.body).map(() => ({ type: 'suspension', id: null })),
+    );
+    expect(JSON.stringify(asOfficial.body)).not.toContain(suspensionId);
+    // a scheduler and a coach read readiness too, redacted the same way
+    for (const roles of [['scheduler'], ['coach']] as const) {
+      const reader = await staffMember(t, [...roles]);
+      const res = await readiness(fixtureId, reader);
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(res.body)).not.toContain(suspensionId);
+    }
+    const asManager = await readiness(fixtureId, leagueManager);
+    expect(suspensionSources(asManager.body)).toContainEqual({
+      type: 'suspension',
+      id: suspensionId,
+    });
+  });
+
+  it('R3-TIME-MONEY-03 / SPK-COMP-002 / SPK-SCHED-008: a match-date age is read on the venue’s local date, so an evening kickoff never ages a player a day early', async () => {
+    const matchDate = await createSeasonFixture(t, {
+      status: 'active',
+      ruleSet: { eligibilityReferenceDate: { rule: 'match_date' } },
+    });
+    const u11 = await createDivisionFixture(t, {
+      seasonId: matchDate.seasonId,
+      criteria: { ageBand: { minAge: null, maxAge: 11 } },
+    });
+    const minimum = matchDate.ruleSet.minimumPlayers;
+    const sideOf = async (birthdays: string[]) => {
+      const captain = await adultCustomer(t);
+      const entry = await createTeamEntryFixture(t, {
+        seasonId: matchDate.seasonId,
+        captainPersonId: captain.personId,
+        divisionId: u11,
+      });
+      for (const dateOfBirth of birthdays) {
+        await addRosterMemberFixture(t, {
+          teamEntryId: entry.teamEntryId,
+          personId: await createPersonFixture(t, { kind: 'child', dateOfBirth }),
+        });
+      }
+      return entry.teamEntryId;
+    };
+    // 17:30 local on 20 February 2027 is 01:30 UTC on 21 February: this player turns 12 on the
+    // 21st, so they are still 11 at the venue on match day
+    const homeEntryId = await sideOf([
+      '2015-02-21',
+      ...Array.from({ length: minimum - 1 }, () => '2017-05-05'),
+    ]);
+    const awayEntryId = await sideOf(Array.from({ length: minimum }, () => '2017-05-05'));
+    const created = await t.http
+      .post('/v1/fixtures')
+      .set(leagueManager.header)
+      .set('Idempotency-Key', key())
+      .send({
+        seasonId: matchDate.seasonId,
+        divisionId: u11,
+        homeEntryId,
+        awayEntryId,
+        schedule: {
+          facilityId: t.facilityId,
+          resourceIds: [pitch.pitchId],
+          scheduledStart: at('2027-02-20', '17:30'),
+          scheduledEnd: at('2027-02-20', '18:30'),
+        },
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.fixture.scheduledStart).toBe('2027-02-21T01:30:00.000Z');
+    const res = await readiness(created.body.fixture.id, leagueManager);
+    expect(res.status).toBe(200);
+    expect(res.body.sides).toEqual([
+      expect.objectContaining({ teamEntryId: homeEntryId, eligiblePlayers: minimum }),
+      expect.objectContaining({ teamEntryId: awayEntryId, eligiblePlayers: minimum }),
+    ]);
+    expect(codes(res.body)).not.toHaveProperty('insufficient_eligible_roster');
   });
 
   it('§4.10: roster players and captains read readiness; outsiders get NOT_FOUND', async () => {

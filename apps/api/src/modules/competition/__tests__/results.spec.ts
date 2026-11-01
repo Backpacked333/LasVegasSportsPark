@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { seedOrganization } from '@sportspark/db';
-import { authHeaderForPerson, createStaffMemberFixture } from '../../identity';
+import {
+  authHeaderForPerson,
+  createPersonFixture,
+  createRelationshipFixture,
+  createStaffMemberFixture,
+} from '../../identity';
 import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
 import { ASSIGNMENT_CHECK_IMPL, type AssignmentCheckPort } from '../competition-matches.ports';
 import {
@@ -742,5 +747,85 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, Â
           .executeTakeFirstOrThrow()
       ).status,
     ).toBe('forfeit');
+  });
+
+  it('R3-TRACE-B-03 / SPK-DISC-001 / SPK-DISC-004: players and guardians read results in the customer view: no restricted incident or dispute ids, no official notes, no staff identifiers', async () => {
+    const fixtureId = await scheduleFixture(c, d, '2027-03-20', '18:00', '19:00');
+    await atKickoff(t, fixtureId);
+    const submitted = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 1,
+      awayScore: 1,
+      cards: [
+        { personId: c.player.personId, teamEntryId: c.teamEntryId, kind: 'yellow', minute: 12 },
+      ],
+      incidents: [
+        {
+          kind: 'injury',
+          subjectPersonId: c.player.personId,
+          teamEntryId: c.teamEntryId,
+          severity: 'high',
+          summary: 'Ankle injury in the second half',
+          narrative: 'Restricted medical narrative.',
+        },
+      ],
+      notes: 'Home bench warned twice; see the incident report.',
+    });
+    expect(submitted.status).toBe(201);
+    const published = await post(`/results/${submitted.body.id}/publish`, leagueManager, {
+      expectedRevision: submitted.body.revision,
+    });
+    expect(published.status).toBe(200);
+    const revisionId = published.body.revision.id as string;
+
+    // league staff keep the full record
+    const asStaff = (await get(`/fixtures/${fixtureId}/results`, leagueManager)).body as Array<{
+      details: { incidentIds: string[]; notes: string | null };
+      submittedBy: { personId: string | null };
+    }>;
+    expect(asStaff[0]?.details.incidentIds).toHaveLength(1);
+    expect(asStaff[0]?.details.notes).toBe('Home bench warned twice; see the incident report.');
+    expect(asStaff[0]?.submittedBy.personId).toBe(leagueManager.personId);
+
+    // an opposing-team player and a guardian of a child on the opposing roster
+    const child = await createPersonFixture(t, { kind: 'child' });
+    await addRosterMemberFixture(t, {
+      teamEntryId: d.teamEntryId,
+      personId: child,
+      effectiveFrom: new Date('2027-01-01T00:00:00Z'),
+    });
+    const guardian = await adultCustomer(t);
+    await createRelationshipFixture(t, {
+      actorPersonId: guardian.personId,
+      subjectPersonId: child,
+      permissions: ['view'],
+    });
+    const customerView = {
+      status: 'official',
+      homeScore: 1,
+      awayScore: 1,
+      details: {
+        cards: [expect.objectContaining({ personId: c.player.personId, kind: 'yellow' })],
+        abandonment: null,
+        incidentIds: [],
+        notes: null,
+        disputeId: null,
+      },
+      returnReason: null,
+      submittedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'staff' },
+      publishedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'staff' },
+    };
+    for (const reader of [d.player, guardian]) {
+      const list = await get(`/fixtures/${fixtureId}/results`, reader);
+      expect(list.status).toBe(200);
+      expect(list.body).toEqual([expect.objectContaining(customerView)]);
+      const one = await get(`/results/${revisionId}`, reader);
+      expect(one.status).toBe(200);
+      expect(one.body).toMatchObject(customerView);
+      const text = JSON.stringify([list.body, one.body]);
+      expect(text).not.toContain('Home bench warned');
+      expect(text).not.toContain(leagueManager.personId);
+      expect(text).not.toContain(leagueManager.accountId);
+    }
   });
 });
