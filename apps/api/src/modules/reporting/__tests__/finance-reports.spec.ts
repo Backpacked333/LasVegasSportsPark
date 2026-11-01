@@ -2,7 +2,12 @@ import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { drainOutboxChecked, type TestApp } from '../../../testing';
-import { createCreditFixture, FakePaymentTokens, FinanceModule } from '../../finance';
+import {
+  createCreditFixture,
+  FakePaymentProvider,
+  FakePaymentTokens,
+  FinanceModule,
+} from '../../finance';
 import { createPersonFixture } from '../../identity';
 import { DAY, get, HOUR, post, reportingTestApp, staff, valueOf, type Actor } from './support';
 
@@ -168,7 +173,7 @@ describe('financial reports (SPK-REPORT-002, SPK-PAY-009, SPK-PAY-011)', () => {
     expect(disclosures).toContain('a shortage never cancels an overage');
   });
 
-  it('SPK-PAY-011 / MET-050 (R3-REPORTING-04): point-of-sale card captures, drawer tenders and returns are reported beside customer receipts, never added to them', async () => {
+  it('SPK-PAY-011 / SPK-PAY-007 / MET-050 (R3-REPORTING-04): point-of-sale card captures, drawer tenders and returns are reported beside customer receipts, never added to them; a card return is paid only when its refund succeeds', async () => {
     t.clock.set(new Date('2027-04-01T16:00:00.000Z'));
     const periodStart = t.clock.now().toISOString();
     const customer = await createPersonFixture(t, { kind: 'adult' });
@@ -230,6 +235,26 @@ describe('financial reports (SPK-REPORT-002, SPK-PAY-009, SPK-PAY-011)', () => {
       reason: 'Damaged',
     });
     expect(cashReturn.status, JSON.stringify(cashReturn.body)).toBe(201);
+    // Two more card returns whose refunds do not succeed: one is lost track of (unknown), one is
+    // declined (failed). Each return row is recorded when its refund is reserved.
+    const cardSale = async (refundOutcome: 'timeout' | 'fail') => {
+      const s = await sale();
+      const paid = await post(t, `/v1/pos-sales/${s.saleId}/tenders`, desk, {
+        kind: 'card',
+        amountMinor: 3_000,
+        paymentMethodToken: FakePaymentTokens.succeed,
+      });
+      expect(paid.body.status, JSON.stringify(paid.body)).toBe('paid');
+      t.app.get(FakePaymentProvider).scriptRefunds(refundOutcome);
+      const returned = await post(t, `/v1/pos-sales/${s.saleId}/returns`, financeOperator, {
+        lines: [{ saleLineId: s.lineId, quantity: 1 }],
+        tenderKind: 'card',
+        reason: 'Changed mind',
+      });
+      expect(returned.status, JSON.stringify(returned.body)).toBe(201);
+    };
+    await cardSale('timeout');
+    await cardSale('fail');
     await drainOutboxChecked(t, { rounds: 25, batchSize: 200 });
     t.clock.advance(HOUR);
 
@@ -238,8 +263,8 @@ describe('financial reports (SPK-REPORT-002, SPK-PAY-009, SPK-PAY-011)', () => {
       periodEnd: t.clock.now().toISOString(),
     });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    // The card tender is a payment attempt and the card return a refund attempt (MET-045/047)...
-    expect(valueOf(res.body, 'MET-045', 'Succeeded payment attempts', 'USD')).toBe(3_000);
+    // The card tenders are payment attempts and the card returns refund attempts (MET-045/047)...
+    expect(valueOf(res.body, 'MET-045', 'Succeeded payment attempts', 'USD')).toBe(9_000);
     expect(
       valueOf(
         res.body,
@@ -247,34 +272,60 @@ describe('financial reports (SPK-REPORT-002, SPK-PAY-009, SPK-PAY-011)', () => {
         'Succeeded point-of-sale payment attempts (included above)',
         'USD',
       ),
-    ).toBe(3_000);
-    expect(valueOf(res.body, 'MET-047', 'Refund attempts submitted', 'USD')).toBe(3_000);
+    ).toBe(9_000);
+    expect(valueOf(res.body, 'MET-047', 'Refund attempts submitted', 'USD')).toBe(9_000);
     expect(
       valueOf(
         res.body,
         'MET-047',
-        'Point-of-sale card return refund attempts (included above)',
+        'Refund attempts on point-of-sale payments (included above)',
         'USD',
       ),
-    ).toBe(3_000);
+    ).toBe(9_000);
     // ...and the money is reported beside receipts: none of it is a receipt.
     const values = res.body.values as Value[];
     expect(values.some((v) => v.metric === 'MET-050' && v.label === 'Customer receipts')).toBe(
       false,
     );
-    expect(valueOf(res.body, 'MET-050', 'Point-of-sale card captures', 'USD')).toBe(3_000);
+    expect(valueOf(res.body, 'MET-050', 'Point-of-sale card captures', 'USD')).toBe(9_000);
     expect(
       valueOf(res.body, 'MET-050', 'Point-of-sale drawer tenders (cash and external)', 'USD'),
     ).toBe(3_000);
-    expect(valueOf(res.body, 'MET-050', 'Point-of-sale returns paid', 'USD')).toBe(6_000);
+    // Returns are what was recorded, never labelled paid: the cash return was paid from the drawer;
+    // the card returns are shown by the state of their refund attempts, and the refund whose
+    // outcome is unknown stays unknown (SPK-PAY-007).
+    expect(values.some((v) => v.metric === 'MET-050' && /returns paid$/.test(v.label))).toBe(false);
+    expect(valueOf(res.body, 'MET-050', 'Point-of-sale returns recorded', 'USD')).toBe(12_000);
     expect(
+      valueOf(
+        res.body,
+        'MET-050',
+        'Point-of-sale cash and external returns, paid at the return (included above)',
+        'USD',
+      ),
+    ).toBe(3_000);
+    const byRefundState = Object.fromEntries(
       values
-        .filter((v) => v.metric === 'MET-050')
-        .map((v) => v.dimensions.series)
-        .sort(),
-    ).toEqual(['pos_card', 'pos_drawer', 'pos_returns']);
-    expect((res.body.disclosures as string[]).join(' ')).toContain(
-      'Point-of-sale money creates no receipt',
+        .filter(
+          (v) =>
+            v.metric === 'MET-050' &&
+            v.label === 'Point-of-sale card returns by refund state (included above)',
+        )
+        .map((v) => [v.dimensions.refundState, v.value]),
     );
+    expect(byRefundState).toEqual({ succeeded: 3_000, unknown: 3_000, failed: 3_000 });
+    expect(
+      [
+        ...new Set(values.filter((v) => v.metric === 'MET-050').map((v) => v.dimensions.series)),
+      ].sort(),
+    ).toEqual(['pos_card', 'pos_drawer', 'pos_returns']);
+    const disclosures = (res.body.disclosures as string[]).join(' ');
+    expect(disclosures).toContain('Point-of-sale money creates no receipt');
+    expect(disclosures).toContain('an unknown refund stays unknown');
+    const definition = (res.body.metrics as Array<{ metricKey: string; numerator: string }>).find(
+      (m) => m.metricKey === 'MET-050',
+    )!;
+    expect(definition.numerator).toContain('returns recorded');
+    expect(definition.numerator).not.toContain('returns paid by return instant');
   });
 });

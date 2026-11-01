@@ -628,7 +628,7 @@ export interface ReportingSettlementsView {
 /**
  * Point-of-sale money (migration 1305, R3-REPORTING-04; SPK-PAY-011, MET-050): settled tenders by
  * when they settled, card captures reported after their tender failed by when their journal was
- * posted, and returns by when they were paid. No receipt records this money.
+ * posted, and returns by when they were recorded. No receipt records this money.
  */
 export interface ReportingPosMoneyView {
   movement_id: V<string>;
@@ -639,6 +639,11 @@ export interface ReportingPosMoneyView {
   currency: V<string>;
   amount_minor: V<number>;
   occurred_at: V<Date>;
+  /**
+   * Migration 1307: the refund attempt of a card return, recorded when the refund was reserved and
+   * before it was executed; null for tenders, late captures and cash or external returns.
+   */
+  refund_attempt_id: V<string | null>;
 }
 
 export interface ReportingOrderLinesView {

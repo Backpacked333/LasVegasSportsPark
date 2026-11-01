@@ -303,13 +303,26 @@ export class FinanceReports {
         .where('received_at', '<', end)
         .execute();
       // R3-REPORTING-04 (SPK-PAY-011, MET-050): point-of-sale money creates no receipt (migration
-      // 1305): settled tenders, late card captures and returns, each in its own series.
+      // 1305): settled tenders, late card captures and returns, each in its own series. A card
+      // return is recorded when its refund is only reserved, so it carries the state of its refund
+      // attempt as it stands now (migration 1307): an unknown refund stays unknown (SPK-PAY-007).
       const pos = await ctx.db
-        .selectFrom('reporting_pos_money_v')
-        .select(['movement', 'tender_kind', 'currency', 'amount_minor'])
-        .where('organization_id', '=', org)
-        .where('occurred_at', '>=', start)
-        .where('occurred_at', '<', end)
+        .selectFrom('reporting_pos_money_v as m')
+        .leftJoin('reporting_refund_attempts_v as ra', (j) =>
+          j
+            .onRef('ra.organization_id', '=', 'm.organization_id')
+            .onRef('ra.refund_attempt_id', '=', 'm.refund_attempt_id'),
+        )
+        .select([
+          'm.movement',
+          'm.tender_kind',
+          'm.currency',
+          'm.amount_minor',
+          'ra.status as refund_status',
+        ])
+        .where('m.organization_id', '=', org)
+        .where('m.occurred_at', '>=', start)
+        .where('m.occurred_at', '<', end)
         .execute();
       const sales = await ctx.db
         .selectFrom('reporting_order_lines_v')
@@ -484,7 +497,7 @@ export class FinanceReports {
         values.push(
           metricValue(
             'MET-047',
-            'Point-of-sale card return refund attempts (included above)',
+            'Refund attempts on point-of-sale payments (included above)',
             'minor_units',
             c.amount,
             { currency, dimensions: { paymentPurpose: POS_SALE } },
@@ -581,7 +594,7 @@ export class FinanceReports {
           items: pos.filter((m) => m.movement === 'tender' && m.tender_kind !== 'card'),
         },
         {
-          label: 'Point-of-sale returns paid',
+          label: 'Point-of-sale returns recorded',
           series: 'pos_returns',
           items: pos.filter((m) => m.movement === 'return'),
         },
@@ -599,6 +612,48 @@ export class FinanceReports {
             }),
           );
         }
+      }
+      // R3-REPORTING-04 (SPK-PAY-007, SPK-PAY-008): a returns figure is what was recorded, not
+      // what was paid. A cash return is paid from the drawer and an external one recorded with its
+      // evidence at the return; a card return is paid back only when its refund attempt succeeds,
+      // so card returns are shown by the state of that attempt, never assumed paid.
+      for (const [currency, c] of sumByCurrency(
+        pos.filter((m) => m.movement === 'return' && m.tender_kind !== 'card'),
+        (m) => m.currency,
+        (m) => Number(m.amount_minor),
+      )) {
+        values.push(
+          metricValue(
+            'MET-050',
+            'Point-of-sale cash and external returns, paid at the return (included above)',
+            'minor_units',
+            c.amount,
+            { currency, dimensions: { series: 'pos_returns', tender: 'cash_external' } },
+          ),
+        );
+      }
+      const cardReturns = new Map<string, { currency: string; state: string; amount: number }>();
+      for (const m of pos) {
+        if (m.movement !== 'return' || m.tender_kind !== 'card') continue;
+        const state = m.refund_status ?? 'unrecorded';
+        const k = JSON.stringify([m.currency, state]);
+        const g = cardReturns.get(k) ?? { currency: m.currency, state, amount: 0 };
+        g.amount += Number(m.amount_minor);
+        cardReturns.set(k, g);
+      }
+      for (const [, g] of [...cardReturns.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+        values.push(
+          metricValue(
+            'MET-050',
+            'Point-of-sale card returns by refund state (included above)',
+            'minor_units',
+            g.amount,
+            {
+              currency: g.currency,
+              dimensions: { series: 'pos_returns', tender: 'card', refundState: g.state },
+            },
+          ),
+        );
       }
       for (const [currency, c] of sumByCurrency(
         sales,
@@ -634,7 +689,7 @@ export class FinanceReports {
         rows,
         disclosures: [
           'Receipts and sales are shown side by side and never combined; receipts are not revenue (SPK-PAY-011, rule G6).',
-          'Point-of-sale money creates no receipt, so it is reported in its own series beside customer receipts and never added to them: card captures (settled card tenders by when they settled, and captures reported after a failed tender by when they were posted), drawer tenders (cash and external) and returns paid (MET-050). Point-of-sale card payments and card returns are also payment and refund attempts (purpose pos_sale), shown separately inside MET-045 and MET-047. Point-of-sale product sales are not order lines and are not in the sales series.',
+          'Point-of-sale money creates no receipt, so it is reported in its own series beside customer receipts and never added to them: card captures (settled card tenders by when they settled, and captures reported after a failed tender by when they were posted), drawer tenders (cash and external) and returns recorded, by when they were recorded (MET-050). A recorded return is not necessarily paid: cash and external returns are paid at the return, while a card return is paid back only when its refund attempt succeeds, so card returns are shown by the current state of that attempt (requested, processing, unknown, succeeded, failed or canceled) and an unknown refund stays unknown (SPK-PAY-007). Point-of-sale card payments are payment attempts (purpose pos_sale) shown separately inside MET-045; refunds of them (card returns, and late card captures given back) are refund attempts shown separately inside MET-047. Point-of-sale product sales are not order lines and are not in the sales series.',
           'An unknown outcome is never resolved by age (SPK-PAY-007).',
           'Payment attempts by state are those submitted to a provider in the period. Attempts never submitted have no submission instant: they are counted over all time at the request instant (section payment_attempts_never_submitted), not as part of the period (MET-045).',
           'Settlement differences are listed one row per reconciliation, with its kind and scope (the provider, or the facility of a cash drawer), period, expected and reported amounts. Totals are unnetted per currency, kind and scope: shortages, overages and their absolute sum are separate figures, so a shortage never cancels an overage (§5.5).',

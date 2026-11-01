@@ -24,6 +24,15 @@ const UNAVAILABILITY = new Set(['maintenance', 'block']);
 const CHANGES_AFTER_PUBLICATION = ['moved', 'resized', 'resource_changed', 'updated'] as const;
 const DAY_SETTINGS = [REPORTING_SETTING_NAMES.operatingDayStart] as const;
 
+/** R3-REPORTING-06 (MET-008, G13): how far attendance of an activity was captured by the as-of instant. */
+type AttendanceCapture = 'captured' | 'not_started' | 'checkins_only' | 'not_captured';
+const RATE_UNAVAILABLE: Record<Exclude<AttendanceCapture, 'captured'>, string> = {
+  not_started: 'not yet started at the as-of instant',
+  checkins_only:
+    'session check-ins only, no attendance observation (a check-in is not attendance, MET-009)',
+  not_captured: 'no attendance captured (no observation or admitted check-in)',
+};
+
 /**
  * R01 daily schedule, R02 expected arrivals and R03 attendance (SPK-REPORT-002), read through the
  * scheduling, catalog, enrollment, competition and entry views of migration 1300.
@@ -39,7 +48,7 @@ export class ScheduleReports {
     scope: 'facility',
     pointInTime: 'partial',
     pointInTimeNote:
-      'Cancellations and changes recorded after the as-of instant are ignored (their instants are recorded); publication is taken as it stands now. The stored run is the reproducible record.',
+      'Cancellations and MET-002 change facts recorded after the as-of instant are ignored (their instants are recorded); publication, times, spaces, titles and the day an event falls on are taken as they stand now, so a move recorded after the as-of instant still shows in a rerun. The stored run is the reproducible record.',
     settings: DAY_SETTINGS,
     compute: async (ctx, params) => {
       const facility = ctx.facility!;
@@ -352,14 +361,17 @@ export class ScheduleReports {
               ).map((p) => [p.person_id, p.canonical_person_id]),
             );
 
-      // R3-REPORTING-06/-07: an admitted session check-in received by the as-of instant and not
-      // withdrawn by then is attendance captured for its activity (SPK-ENTRY-008).
+      // R3-REPORTING-06/-07 (SPK-ENTRY-008): the activities with a session check-in admitted by the
+      // as-of instant and not withdrawn by then. A check-in is not an attendance observation
+      // (MET-007), so it never makes a rate: it only tells "check-ins only" apart from "nothing
+      // captured". One row per activity, not per check-in.
       const activityCheckins =
         activityIds.length === 0
           ? []
           : await ctx.db
               .selectFrom('reporting_session_checkins_v')
               .select(['activity_type', 'activity_id'])
+              .distinct()
               .where('organization_id', '=', ctx.organizationId)
               .where('facility_id', '=', facility.id)
               .where('activity_id', 'in', activityIds)
@@ -384,6 +396,8 @@ export class ScheduleReports {
         expectedAttended: 0,
         notStarted: 0,
         notStartedExpected: 0,
+        checkinsOnly: 0,
+        checkinsOnlyExpected: 0,
         notCaptured: 0,
         notCapturedExpected: 0,
         attended: 0,
@@ -442,22 +456,28 @@ export class ScheduleReports {
         const corrections = list.filter((o) => o.corrects_observation_id !== null).length;
         const offline = list.filter((o) => o.source === 'offline_sync').length;
         if (list.length === 0 && expected.size === 0) continue;
-        // R3-REPORTING-06 (MET-008, G13): an activity has a rate only when attendance was captured
-        // for it by the as-of instant (an observation or an admitted check-in). One with nothing
-        // captured has no rate, never 0: it is counted separately, as not yet started (scheduled
-        // start after the as-of instant) or as started without attendance captured.
-        const capture: 'captured' | 'not_started' | 'not_captured' =
-          list.length > 0 || checkedIn.has(key)
+        // R3-REPORTING-06 (MET-008 = MET-007 over MET-004, G13): an activity has a rate only when
+        // attendance was observed for it by the as-of instant. One without an observation has no
+        // rate, never 0, and leaves the denominator: it is counted separately, as not yet started
+        // (scheduled start after the as-of instant), as started with session check-ins only (a
+        // check-in is MET-009, not attendance), or as started with nothing captured.
+        const capture: AttendanceCapture =
+          list.length > 0
             ? 'captured'
             : info.start.getTime() > ctx.asOf.getTime()
               ? 'not_started'
-              : 'not_captured';
+              : checkedIn.has(key)
+                ? 'checkins_only'
+                : 'not_captured';
         if (capture === 'captured') {
           totals.expected += expected.size;
           totals.expectedAttended += expectedAttended;
         } else if (capture === 'not_started') {
           totals.notStarted += 1;
           totals.notStartedExpected += expected.size;
+        } else if (capture === 'checkins_only') {
+          totals.checkinsOnly += 1;
+          totals.checkinsOnlyExpected += expected.size;
         } else {
           totals.notCaptured += 1;
           totals.notCapturedExpected += expected.size;
@@ -485,13 +505,11 @@ export class ScheduleReports {
           attendanceCapture: capture,
           attendanceRate: capture === 'captured' ? ratio(expectedAttended, expected.size) : null,
           rateUnavailableReason:
-            capture === 'not_started'
-              ? 'not yet started at the as-of instant'
-              : capture === 'not_captured'
-                ? 'no attendance captured (no observation or admitted check-in)'
-                : expected.size === 0
-                  ? 'no expected participant'
-                  : null,
+            capture === 'captured'
+              ? expected.size === 0
+                ? 'no expected participant'
+                : null
+              : RATE_UNAVAILABLE[capture],
         });
       }
 
@@ -509,20 +527,31 @@ export class ScheduleReports {
         .reduce((sum, v) => sum + v.party_size, 0);
       // R3-REPORTING-07 (MET-009, SPK-ENTRY-008): a check-in withdrawn by the as-of instant (a
       // mistaken check-in, or one withdrawn when the activity was canceled) keeps its admission
-      // instant but is not admitted; it is counted separately.
-      const admittedInWindow = await ctx.db
+      // instant but is not admitted; it is counted separately. Both counts are one aggregate row.
+      const checkinCounts = await ctx.db
         .selectFrom('reporting_session_checkins_v')
-        .select(['withdrawn_at'])
+        .select((eb) => [
+          eb.fn
+            .countAll<number | string>()
+            .filterWhere((w) =>
+              w.or([w('withdrawn_at', 'is', null), w('withdrawn_at', '>', ctx.asOf)]),
+            )
+            .as('admitted'),
+          eb.fn
+            .countAll<number | string>()
+            .filterWhere((w) =>
+              w.and([w('withdrawn_at', 'is not', null), w('withdrawn_at', '<=', ctx.asOf)]),
+            )
+            .as('withdrawn'),
+        ])
         .where('organization_id', '=', ctx.organizationId)
         .where('facility_id', '=', facility.id)
         .where('admitted_at', '>=', new Date(window.start))
         .where('admitted_at', '<', new Date(window.end))
         .where('admitted_at', '<=', ctx.asOf)
-        .execute();
-      const withdrawnByAsOf = admittedInWindow.filter(
-        (c) => c.withdrawn_at !== null && new Date(c.withdrawn_at).getTime() <= ctx.asOf.getTime(),
-      ).length;
-      const admittedCheckins = admittedInWindow.length - withdrawnByAsOf;
+        .executeTakeFirst();
+      const admittedCheckins = Number(checkinCounts?.admitted ?? 0);
+      const withdrawnByAsOf = Number(checkinCounts?.withdrawn ?? 0);
 
       return {
         scope: { from: params.from, to: params.to },
@@ -537,7 +566,7 @@ export class ScheduleReports {
             ratio(totals.expectedAttended, totals.expected),
             {
               unavailableReason:
-                'no expected participant of an activity that started with attendance captured in the range',
+                'no expected participant of an activity with attendance observed by the as-of instant in the range',
             },
           ),
           metricValue(
@@ -553,6 +582,20 @@ export class ScheduleReports {
             'count',
             totals.notStartedExpected,
             { dimensions: { capture: 'not_started' } },
+          ),
+          metricValue(
+            'MET-008',
+            'Started activities with session check-ins only (no rate)',
+            'count',
+            totals.checkinsOnly,
+            { dimensions: { capture: 'checkins_only' } },
+          ),
+          metricValue(
+            'MET-008',
+            'Expected participants of activities with session check-ins only',
+            'count',
+            totals.checkinsOnlyExpected,
+            { dimensions: { capture: 'checkins_only' } },
           ),
           metricValue(
             'MET-008',
@@ -607,7 +650,7 @@ export class ScheduleReports {
         disclosures: [
           'Attended means present, late or left early after corrections; conflicting current observations are held for review and counted in neither attended nor absent (§4.15).',
           'Facility arrivals and session check-ins are separate counts, never summed and never called occupancy (SPK-ENTRY-008). A check-in withdrawn by the as-of instant is not admitted and is counted separately.',
-          'The attendance rate covers activities with attendance captured by the as-of instant (an observation or an admitted check-in). Activities with nothing captured have no rate and are counted separately, as not yet started or as started without attendance captured: attendance not captured is not zero (G13).',
+          'The attendance rate (MET-007 over MET-004) covers activities with an attendance observation received by the as-of instant. Activities without one have no rate and are counted separately: not yet started, started with session check-ins only (a check-in is counted by MET-009 and is evidence of use for MET-069, not attendance), or started with nothing captured. Attendance not captured is not zero (G13).',
           'Counts only: no participant is named (rule G9).',
         ],
       };

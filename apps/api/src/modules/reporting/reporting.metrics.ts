@@ -196,13 +196,13 @@ export const METRICS: readonly MetricSpec[] = [
     businessQuestion: 'What share of expected participants attended?',
     grain: 'activity',
     numerator:
-      'Expected participants who attended (MET-007 restricted to MET-004), of activities with attendance captured',
+      'Expected participants who attended (MET-007 restricted to MET-004), of activities with an attendance observation received by the as-of instant',
     denominator:
-      'Expected participants (MET-004) of activities with attendance captured by the as-of instant (at least one observation, or an admitted check-in not withdrawn by then)',
+      'Expected participants (MET-004) of activities with at least one attendance observation received by the as-of instant',
     timeBasis: 'As MET-007',
     exclusions: [
       'activities with no expected participant are unavailable, never 100 percent (G13)',
-      'activities with no attendance captured by the as-of instant: counted separately (not yet started, or started without attendance captured), their rate unavailable, never 0 percent (G13)',
+      'activities without an attendance observation by the as-of instant: counted separately (not yet started; started with session check-ins only, a check-in being MET-009 and not attendance; or started with nothing captured), their rate unavailable, never 0 percent (G13)',
     ],
     dimensions: ['activity type'],
     currency: 'none',
@@ -642,7 +642,7 @@ export const METRICS: readonly MetricSpec[] = [
       'state',
       'purpose',
       'currency',
-      'payment purpose (point-of-sale card returns shown separately)',
+      'payment purpose (refund attempts on point-of-sale payments, card returns and late card captures given back, shown separately)',
     ],
     currency: 'minor_units',
     freshness: 'F1',
@@ -695,19 +695,24 @@ export const METRICS: readonly MetricSpec[] = [
     businessQuestion: 'How much money came in, and how much was sold, in the period?',
     grain: 'period',
     numerator:
-      'Totals never combined: customer receipts received in the period; point-of-sale money in the period, which creates no receipt, each in its own series (card captures: settled card tenders by settlement instant and captures reported after a failed tender by posting instant; drawer tenders, cash and external, by settlement instant; returns paid by return instant); and order lines of orders fulfilled in the period',
+      'Totals never combined: customer receipts received in the period; point-of-sale money in the period, which creates no receipt, each in its own series (card captures: settled card tenders by settlement instant and captures reported after a failed tender by posting instant; drawer tenders, cash and external, by settlement instant; returns recorded by return instant, cash and external returns paid at the return and card returns by the current state of their refund attempt, paid back only when it succeeded); and order lines of orders fulfilled in the period',
     denominator: 'none',
     timeBasis: PERIOD_INSTANT,
     exclusions: [
       'receipts are not revenue (G6)',
       'point-of-sale product sales are not order lines and are not in the sales series',
+      'a card return whose refund attempt has not succeeded is never reported as paid; an unknown refund stays unknown (SPK-PAY-007)',
     ],
-    dimensions: ['currency', 'series (receipts, pos_card, pos_drawer, pos_returns, sales)'],
+    dimensions: [
+      'currency',
+      'series (receipts, pos_card, pos_drawer, pos_returns, sales)',
+      'return tender (card, cash and external) and card refund state',
+    ],
     currency: 'minor_units',
     freshness: 'F1',
     accessScope: FIN,
     unit: 'minor_units',
-    requirementIds: ['SPK-REPORT-002', 'SPK-PAY-011', 'SPK-REPORT-004'],
+    requirementIds: ['SPK-REPORT-002', 'SPK-PAY-011', 'SPK-PAY-007', 'SPK-REPORT-004'],
   },
   // R11 Maintenance restrictions ----------------------------------------------------------------
   {
@@ -1121,16 +1126,15 @@ export const METRICS: readonly MetricSpec[] = [
     businessQuestion: 'How many adult teams come back next season?',
     grain: 'team (continuing identity)',
     numerator:
-      'Teams with an entry in the anchor season approved by the as-of instant and not withdrawn by then that hold such an entry in the comparison season',
-    denominator:
-      'Teams with an entry in the anchor season approved by the as-of instant and not withdrawn by then',
+      'Teams (continuing identity) with an accepted entry in the anchor season, approved by the as-of instant, that hold an accepted entry in the comparison season',
+    denominator: 'Teams with an entry in the anchor season approved by the as-of instant',
     timeBasis:
-      'Anchor and comparison seasons named in the request (K2), as of the as-of instant (approval and withdrawal instants)',
+      'Anchor and comparison seasons named in the request (K2), as of the as-of instant (approval instants)',
     exclusions: [
-      'entries never approved (applied, rejected)',
-      'entries withdrawn by the as-of instant (a withdrawal after it does not change the figures, G3)',
+      'entries never approved by the as-of instant (applied, rejected, or withdrawn before acceptance)',
+      'an accepted entry withdrawn later is not excluded: it still qualifies for its season (metric dictionary MET-079) and is counted separately, per season, when withdrawn by the as-of instant',
     ],
-    dimensions: ['anchor season', 'comparison season'],
+    dimensions: ['anchor season', 'comparison season', 'accepted entries withdrawn later'],
     currency: 'none',
     freshness: 'F1',
     accessScope: RET,
@@ -1145,13 +1149,13 @@ export const METRICS: readonly MetricSpec[] = [
     businessQuestion: 'How many adult players participate again, regardless of who paid?',
     grain: 'person',
     numerator:
-      'Adult persons (merged duplicates resolved to the survivor) with an active roster membership on an entry approved by the as-of instant and not withdrawn by then, or a confirmed individual-league enrollment in the season offering, in the anchor season who hold one in the comparison season',
+      'Adult persons (merged duplicates resolved to the survivor) with an active roster membership on an entry accepted (approved) by the as-of instant, withdrawn later or not, or a confirmed individual-league enrollment in the season offering, in the anchor season who hold one in the comparison season',
     denominator: 'Adult persons with qualifying participation in the anchor season',
     timeBasis: 'As MET-079',
     exclusions: [
       'guest and substitute appearances',
       'children',
-      'entries withdrawn by the as-of instant (as MET-079)',
+      'roster memberships on entries never approved by the as-of instant (as MET-079)',
     ],
     dimensions: ['anchor season', 'comparison season'],
     currency: 'none',

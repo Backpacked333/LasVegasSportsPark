@@ -2,6 +2,9 @@ import { newId, systemPrincipal } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
+import { createOfferingFixture, createOfferingSessionFixture } from '../../catalog';
+import { createEnrollmentFixture } from '../../enrollment';
+import { createAttendanceObservationFixture } from '../../entry';
 import { createPersonFixture } from '../../identity';
 import {
   at,
@@ -17,13 +20,15 @@ type Row = Record<string, string | number | boolean | null>;
 /** A day of its own for the schedule changes, and one for the check-ins. */
 const SCHEDULE_DAY = '2027-02-10';
 const CHECKIN_DAY = '2027-02-12';
+const CHECKIN_ONLY_DAY = '2027-02-14';
 
 /**
  * Facts the operating reports read as of the as-of instant (SPK-REPORT-002, metric dictionary G3):
  * MET-002 counts the changes recorded for a published event, never its first publication, however
  * that publication was reached (R3-REPORTING-01; SPK-SCHED-005, SPK-FIX-005); MET-009 and the
  * MET-069 observed-use overlay never count a check-in withdrawn by the as-of instant
- * (R3-REPORTING-07; SPK-ENTRY-008).
+ * (R3-REPORTING-07; SPK-ENTRY-008); a check-in is not attendance, so an activity with check-ins
+ * and no observation has no MET-008 rate and leaves its denominator (R3-REPORTING-06; G13).
  */
 describe('schedule changes and check-in withdrawals as of the as-of instant (SPK-REPORT-002)', () => {
   let t: TestApp;
@@ -130,6 +135,15 @@ describe('schedule changes and check-in withdrawals as of the as-of instant (SPK
     });
     expect(earlier.status, JSON.stringify(earlier.body)).toBe(200);
     expect(valueOf(earlier.body, 'MET-002', 'Changed or canceled after publication')).toBe(0);
+    // Only the change facts honour the as-of instant: the row keeps the event's current times, and
+    // the freshness note says so rather than claiming the rerun ignores the move (SPK-REPORT-007).
+    expect((earlier.body.rows as Row[]).find((r) => r.eventId === direct.id)).toMatchObject({
+      start: at(SCHEDULE_DAY, '11:00'),
+      changeTypes: '',
+    });
+    expect(earlier.body.freshness.note).toContain(
+      'publication, times, spaces, titles and the day an event falls on are taken as they stand now',
+    );
     const definition = (
       res.body.metrics as Array<{ metricKey: string; numerator: string; exclusions: string[] }>
     ).find((m) => m.metricKey === 'MET-002')!;
@@ -221,5 +235,126 @@ describe('schedule changes and check-in withdrawals as of the as-of instant (SPK
     const before = await get(t, '/v1/reports/utilization', gm, { ...day, asOf: beforeWithdrawal });
     expect(before.status, JSON.stringify(before.body)).toBe(200);
     expect(valueOf(before.body, 'MET-069', 'Observed-use unit-hours')).toBeCloseTo(2, 4);
+  });
+
+  it('SPK-REPORT-002 / G13 (R3-REPORTING-06): a started session with check-ins and no attendance observation has no rate and leaves the MET-008 denominator; its check-ins still count for MET-009', async () => {
+    t.clock.set(new Date(at(CHECKIN_ONLY_DAY, '08:00')));
+    const managerId = (await staff(t, ['program_manager'])).personId;
+    const { offeringId } = await createOfferingFixture(t, {
+      responsibleManagerPersonId: managerId,
+      kind: 'term',
+      startsOn: CHECKIN_ONLY_DAY,
+      endsOn: '2027-03-31',
+      basePriceMinor: 9000,
+    });
+    const sessionId = await createOfferingSessionFixture(t, {
+      offeringId,
+      scheduledStart: new Date(at(CHECKIN_ONLY_DAY, '17:00')),
+      scheduledEnd: new Date(at(CHECKIN_ONLY_DAY, '18:00')),
+    });
+    const participants: Array<{ personId: string; enrollmentId: string }> = [];
+    for (let i = 0; i < 4; i += 1) {
+      const personId = await createPersonFixture(t, { kind: 'adult' });
+      const enrollmentId = await createEnrollmentFixture(t, {
+        offeringId,
+        participantPersonId: personId,
+      });
+      participants.push({ personId, enrollmentId });
+    }
+    // Every expected participant is admitted at the desk (written as the entry module leaves an
+    // admitted check-in; test helper only). Nobody takes attendance.
+    t.clock.set(new Date(at(CHECKIN_ONLY_DAY, '16:55')));
+    for (const { personId, enrollmentId } of participants) {
+      await t.db
+        .insertInto('session_checkins')
+        .values({
+          id: newId(),
+          organization_id: t.organizationId,
+          facility_id: t.facilityId,
+          visit_id: null,
+          person_id: personId,
+          activity_type: 'session',
+          activity_id: sessionId,
+          offering_id: offeringId,
+          offering_session_id: sessionId,
+          scheduling_event_id: null,
+          activity_start: new Date(at(CHECKIN_ONLY_DAY, '17:00')),
+          activity_end: new Date(at(CHECKIN_ONLY_DAY, '18:00')),
+          basis_kind: 'enrollment',
+          enrollment_id: enrollmentId,
+          session_booking_id: null,
+          basis_reference: newId(),
+          status: 'admitted',
+          checked_in_at: t.clock.now(),
+          evaluated_at: t.clock.now(),
+          admitted_at: t.clock.now(),
+          withdrawn_at: null,
+          withdrawn_reason: null,
+          recorded_by: json({ kind: 'system', actorLabel: 'reporting-tests' }),
+          recorded_by_person_id: null,
+        })
+        .execute();
+    }
+    t.clock.set(new Date(at(CHECKIN_ONLY_DAY, '20:00')));
+    const day = { facilityId: t.facilityId, from: CHECKIN_ONLY_DAY, to: CHECKIN_ONLY_DAY };
+
+    const res = await get(t, '/v1/reports/attendance', gm, day);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(valueOf(res.body, 'MET-009', 'Session check-ins admitted')).toBe(4);
+    // A check-in is not an attendance observation (MET-007): no rate, never 0 (G13).
+    expect(valueOf(res.body, 'MET-008', 'Attendance rate')).toBeNull();
+    expect(
+      valueOf(res.body, 'MET-008', 'Started activities with session check-ins only (no rate)'),
+    ).toBe(1);
+    expect(
+      valueOf(
+        res.body,
+        'MET-008',
+        'Expected participants of activities with session check-ins only',
+      ),
+    ).toBe(4);
+    expect(
+      valueOf(res.body, 'MET-008', 'Started activities without attendance captured (no rate)'),
+    ).toBe(0);
+    const row = (res.body.rows as Row[]).find((r) => r.activityId === sessionId)!;
+    expect(row).toMatchObject({
+      expected: 4,
+      attended: 0,
+      attendanceCapture: 'checkins_only',
+      attendanceRate: null,
+    });
+    expect(row.rateUnavailableReason).toContain('check-ins only');
+    const definition = (
+      res.body.metrics as Array<{ metricKey: string; denominator: string; exclusions: string[] }>
+    ).find((m) => m.metricKey === 'MET-008')!;
+    expect(definition.denominator).toContain('attendance observation');
+    expect(definition.denominator).not.toContain('check-in');
+    const atCheckins = t.clock.now().toISOString();
+
+    // Once attendance is taken for the session, it has a rate over its expected participants.
+    t.clock.set(new Date(at(CHECKIN_ONLY_DAY, '20:05')));
+    await createAttendanceObservationFixture(t, {
+      personId: participants[0]!.personId,
+      activity: { type: 'session', offeringId, sessionId },
+      observedAt: new Date(at(CHECKIN_ONLY_DAY, '17:05')),
+    });
+    const observed = await get(t, '/v1/reports/attendance', gm, day);
+    expect(observed.status, JSON.stringify(observed.body)).toBe(200);
+    expect(valueOf(observed.body, 'MET-008', 'Attendance rate')).toBe(0.25);
+    expect(
+      valueOf(observed.body, 'MET-008', 'Started activities with session check-ins only (no rate)'),
+    ).toBe(0);
+    expect((observed.body.rows as Row[]).find((r) => r.activityId === sessionId)).toMatchObject({
+      attendanceCapture: 'captured',
+      attendanceRate: 0.25,
+    });
+
+    // Rerun as of the earlier instant, before the observation was received (G3).
+    const rerun = await get(t, '/v1/reports/attendance', gm, { ...day, asOf: atCheckins });
+    expect(rerun.status, JSON.stringify(rerun.body)).toBe(200);
+    expect(valueOf(rerun.body, 'MET-008', 'Attendance rate')).toBeNull();
+    expect((rerun.body.rows as Row[]).find((r) => r.activityId === sessionId)).toMatchObject({
+      attendanceCapture: 'checkins_only',
+    });
   });
 });

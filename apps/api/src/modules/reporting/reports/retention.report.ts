@@ -71,7 +71,7 @@ export class RetentionReport {
     scope: 'organization',
     pointInTime: 'partial',
     pointInTimeNote:
-      'Approvals, team-entry withdrawals, confirmations, cancellations, transfers, fulfilments and refunds after the as-of instant are ignored (their instants are recorded); roster membership status and rental booking status are taken as they stand now.',
+      'Approvals, confirmations, cancellations, transfers, fulfilments and refunds after the as-of instant are ignored (their instants are recorded); a team-entry withdrawal never removes an accepted entry from its season and is counted apart only when recorded by the as-of instant; roster membership status and rental booking status are taken as they stand now.',
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
@@ -80,6 +80,8 @@ export class RetentionReport {
     let anchor: Set<string>;
     let comparison: Set<string>;
     let notOffered = new Set<string>();
+    /** Team cohorts: qualifying entries of each season withdrawn after acceptance by the as-of instant. */
+    let withdrawnAfterAcceptance: { anchor: number; comparison: number } | null = null;
     let anchorLabel: string;
     let comparisonLabel: string;
     const disclosures: string[] = [
@@ -108,17 +110,23 @@ export class RetentionReport {
       disclosures.push(
         `Comparable season named by the request: ${anchorSeason.season_name} → ${comparisonSeason.season_name} (K2; comparability is DEC-002 / DEC-048).`,
       );
+      const anchorEntries = await this.entriesAcceptedBy(ctx, params.anchorSeasonId);
+      const comparisonEntries = await this.entriesAcceptedBy(ctx, params.comparisonSeasonId);
+      withdrawnAfterAcceptance = {
+        anchor: anchorEntries.filter((e) => e.withdrawnByAsOf).length,
+        comparison: comparisonEntries.filter((e) => e.withdrawnByAsOf).length,
+      };
       if (cohort === 'adult_teams') {
-        anchor = await this.teamsOf(ctx, params.anchorSeasonId);
-        comparison = await this.teamsOf(ctx, params.comparisonSeasonId);
+        anchor = new Set(anchorEntries.map((e) => e.team_id));
+        comparison = new Set(comparisonEntries.map((e) => e.team_id));
         disclosures.push(
-          'A team is its continuing identity, not its season entry (K5); an entry qualifies when it was approved by the as-of instant and not withdrawn by then (K3; whether an entry withdrawn after acceptance still counts for its season is pending K3).',
+          'A team is its continuing identity, not its season entry (K5); it qualifies for a season with an entry accepted (approved) by the as-of instant (K3, MET-079). Only an entry withdrawn before acceptance is excluded: an accepted entry withdrawn later still qualifies, and those are counted separately per season.',
         );
       } else {
-        anchor = await this.playersOf(ctx, params.anchorSeasonId);
-        comparison = await this.playersOf(ctx, params.comparisonSeasonId);
+        anchor = await this.playersOf(ctx, params.anchorSeasonId, anchorEntries);
+        comparison = await this.playersOf(ctx, params.comparisonSeasonId, comparisonEntries);
         disclosures.push(
-          'Adult players with an active roster membership on an approved entry, or a confirmed individual-league enrollment in the season offering, regardless of who paid; guests and substitutes do not qualify (K3); merged duplicates count once (G7).',
+          'Adult players with an active roster membership on an entry accepted by the as-of instant (withdrawn later or not), or a confirmed individual-league enrollment in the season offering, regardless of who paid; guests and substitutes do not qualify (K3); merged duplicates count once (G7).',
         );
       }
     } else {
@@ -208,6 +216,24 @@ export class RetentionReport {
         metricValue(metric, 'Cohort size', 'count', outcome.cohortSize, { dimensions: { cohort } }),
         metricValue(metric, 'Returned', 'count', outcome.returned, { dimensions: { cohort } }),
         metricValue(metric, 'Not offered', 'count', outcome.notOffered, { dimensions: { cohort } }),
+        ...(withdrawnAfterAcceptance === null
+          ? []
+          : [
+              metricValue(
+                metric,
+                'Accepted entries withdrawn later (still qualify)',
+                'count',
+                withdrawnAfterAcceptance.anchor,
+                { dimensions: { cohort, season: 'anchor' } },
+              ),
+              metricValue(
+                metric,
+                'Accepted entries withdrawn later (still qualify)',
+                'count',
+                withdrawnAfterAcceptance.comparison,
+                { dimensions: { cohort, season: 'comparison' } },
+              ),
+            ]),
       ],
       columns: [
         column('cohort', 'Cohort'),
@@ -245,36 +271,38 @@ export class RetentionReport {
   }
 
   /**
-   * R3-REPORTING-08 (G3, SPK-REPORT-007): the season's entries approved by the as-of instant and
-   * not withdrawn by then. Both instants are recorded (migration 1306), so a withdrawal after the
-   * as-of instant never changes a rerun at that instant. The current status is not the filter: an
-   * approved entry withdrawn later keeps its approval instant (`team_entries_no_stale_approval`).
+   * R3-REPORTING-08 (MET-079 and K3 of the metric dictionary; G3, SPK-REPORT-007): the season's
+   * accepted team entries, those approved by the as-of instant. The dictionary excludes only
+   * entries withdrawn before acceptance (they never carry an approval instant,
+   * `team_entries_no_stale_approval`), so an accepted entry withdrawn later still qualifies; it is
+   * flagged so the report can count it apart. The current status is not the filter and the
+   * approval instant is recorded, so a later withdrawal never changes a rerun at that instant.
    */
-  private async entriesApprovedAt(
+  private async entriesAcceptedBy(
     ctx: ReportContext,
     seasonId: string,
-  ): Promise<Array<{ team_entry_id: string; team_id: string }>> {
+  ): Promise<Array<{ team_entry_id: string; team_id: string; withdrawnByAsOf: boolean }>> {
     const rows = await ctx.db
       .selectFrom('reporting_team_entries_v')
-      .select(['team_entry_id', 'team_id', 'approved_at', 'withdrawn_at'])
+      .select(['team_entry_id', 'team_id', 'withdrawn_at'])
       .where('organization_id', '=', ctx.organizationId)
       .where('season_id', '=', seasonId)
       .where('approved_at', 'is not', null)
+      .where('approved_at', '<=', ctx.asOf)
       .execute();
-    return rows.filter(
-      (r) =>
-        r.approved_at !== null &&
-        new Date(r.approved_at) <= ctx.asOf &&
-        (r.withdrawn_at === null || new Date(r.withdrawn_at) > ctx.asOf),
-    );
+    return rows.map((r) => ({
+      team_entry_id: r.team_entry_id,
+      team_id: r.team_id,
+      withdrawnByAsOf: r.withdrawn_at !== null && new Date(r.withdrawn_at) <= ctx.asOf,
+    }));
   }
 
-  private async teamsOf(ctx: ReportContext, seasonId: string): Promise<Set<string>> {
-    return new Set((await this.entriesApprovedAt(ctx, seasonId)).map((r) => r.team_id));
-  }
-
-  private async playersOf(ctx: ReportContext, seasonId: string): Promise<Set<string>> {
-    const entryIds = (await this.entriesApprovedAt(ctx, seasonId)).map((e) => e.team_entry_id);
+  private async playersOf(
+    ctx: ReportContext,
+    seasonId: string,
+    entries: ReadonlyArray<{ team_entry_id: string }>,
+  ): Promise<Set<string>> {
+    const entryIds = entries.map((e) => e.team_entry_id);
     const players = new Set<string>();
     if (entryIds.length > 0) {
       const roster = await ctx.db
