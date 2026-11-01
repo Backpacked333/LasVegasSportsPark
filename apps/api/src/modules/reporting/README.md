@@ -18,7 +18,12 @@ cost input are composite keys to accounts and persons of the row's organization;
 space belongs to its facility); `1302_reporting_space_status_and_order_totals.sql` (space status
 history view, order total on the order-line view); `1303_reporting_requirement_retirement.sql`
 (REP-03: the requirements view exposes `retired_at`, read from the whole row so it is right
-whichever order it and workforce migration 0704 are applied in).
+whichever order it and workforce migration 0704 are applied in); `1304_reporting_event_changes.sql`
+(R3-REPORTING-01: the scheduling module's `scheduling.event_changed` facts, read-only);
+`1305_reporting_pos_money.sql` (R3-REPORTING-04: point-of-sale tenders, late card captures and
+returns, read-only); `1306_reporting_team_entry_withdrawals.sql` (R3-REPORTING-08: the team-entry
+view gains `withdrawn_at`); `1307_reporting_pos_return_refunds.sql` (R3-REPORTING-04 rework: the
+point-of-sale money view gains a card return's `refund_attempt_id`).
 
 The module never writes another module's records. It reads them through the read-only
 `reporting_*_v` views of migration 1300 (each refuses writes with an INSTEAD OF trigger and exposes
@@ -58,7 +63,31 @@ installments, credits, payment and refund attempts, receipts, settlements, order
 restrictions, maintenance tasks, notifications, delivery attempts, notification recipients.
 Migration 1302 adds the space status changes (`reporting_resource_status_changes_v`: the scheduling
 module's clock-stamped, append-only audit records of `scheduling.resource_updated` that set a
-status) and the order total on each order line.
+status) and the order total on each order line. Migration 1304 adds the event change facts
+(`reporting_event_changes_v`: the scheduling module's durable, clock-stamped
+`scheduling.event_changed` domain events, exposing only the event, change kind, revision, instant,
+publication and closure ids; never the payload's details), 1305 point-of-sale money
+(`reporting_pos_money_v`: settled tenders by settlement instant, card captures reported after a
+failed tender by posting instant, returns by return instant; no customer, staff member or product),
+1306 the withdrawal instant of a team entry and 1307 the refund attempt of a card return.
+
+## Review round 3 fixes (stage 7, §6.7 labels)
+
+All **Verified** by the tests named, on PGlite and PostgreSQL (`TEST_DATABASE_URL`); every changed
+metric text is a new definition version when the definitions are seeded.
+
+| Finding           | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Tests                                                                                                                                                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R3-PERFORMANCE-03 | Match readiness evaluates at most `REPORTING_LIMITS.maxReadinessFixtures` fixtures, the competition module's own bound (`SEASON_READINESS_MAX_FIXTURES` = 100, CMP-01); more answers `VALIDATION_FAILED` `TOO_MANY_FIXTURES` (`limit`) before any evaluation, live or as a run                                                                                                                                                                                                                                       | `match-readiness-bound.spec.ts`                                                                                                                                                                                            |
+| R3-REPORTING-01   | MET-002 counts a published event as changed only when a `scheduling.event_changed` fact of change `moved`, `resized`, `resource_changed` or `updated` was recorded by the as-of instant (1304), never from `published_revision > 1`; rows carry `changeTypes`                                                                                                                                                                                                                                                        | `schedule-and-checkin-facts.spec.ts` ("a draft published once by a schedule draft is not changed after publication")                                                                                                       |
+| R3-REPORTING-02   | MET-049: one row per reconciliation (id, kind and scope, period, expected, reported, signed difference); totals per currency, kind and scope are shortages, overages and their absolute sum, never a signed sum                                                                                                                                                                                                                                                                                                      | `finance-reports.spec.ts` ("a shortage at one drawer and an overage at another … never netted")                                                                                                                            |
+| R3-REPORTING-03   | MET-043 counts active credits not expired at the as-of instant; lapsed active credits are reported separately as expired                                                                                                                                                                                                                                                                                                                                                                                             | `finance-reports.spec.ts` ("an active credit past its expiry is not outstanding")                                                                                                                                          |
+| R3-REPORTING-04   | MET-050 gains point-of-sale series (card captures, drawer tenders, returns recorded) beside customer receipts (1305); a card return is recorded when its refund is only reserved, so card returns are shown by the current state of their refund attempt (1307) and an unknown refund stays unknown (SPK-PAY-007); cash and external returns are paid at the return. MET-045 shows its point-of-sale share; MET-047 shows refund attempts on point-of-sale payments (card returns and late card captures given back) | `finance-reports.spec.ts` ("point-of-sale card captures, drawer tenders and returns are reported beside customer receipts … a card return is paid only when its refund succeeds")                                          |
+| R3-REPORTING-05   | MET-083 describes the REP-02 rule: bookers of rental and party bookings, confirmed or completed, by first occurrence and facility-local operating day                                                                                                                                                                                                                                                                                                                                                                | `rental-retention.spec.ts` ("the MET-083 definition … describes the booking rule it computes")                                                                                                                             |
+| R3-REPORTING-06   | MET-008 (MET-007 over MET-004) has a rate only for activities with an attendance observation received by the as-of instant; others are counted separately with a null rate and a reason, never 0: not yet started, started with session check-ins only (a check-in is MET-009, not attendance), or started with nothing captured                                                                                                                                                                                     | `operating-reports.spec.ts` ("the attendance rate counts only activities with attendance captured"), `schedule-and-checkin-facts.spec.ts` ("a started session with check-ins and no attendance observation has no rate …") |
+| R3-REPORTING-07   | MET-009 and the MET-069 observed-use overlay ignore check-ins withdrawn by the as-of instant; MET-009 counts them separately. Both MET-009 counts are one filtered aggregate in SQL, and the capture and observed-use reads return one row per activity, not per check-in                                                                                                                                                                                                                                            | `schedule-and-checkin-facts.spec.ts` ("a check-in withdrawn by the as-of instant …")                                                                                                                                       |
+| R3-REPORTING-08   | Adult-team and player cohorts qualify entries accepted (approved) by the as-of instant, whatever their current status: the metric dictionary's MET-079 excludes only entries withdrawn before acceptance, so an accepted entry withdrawn later still qualifies and is counted apart per season (withdrawn by the as-of instant, 1306); a withdrawal after a stored run's as-of instant reproduces with `matched: true`                                                                                               | `retention.spec.ts` ("an accepted team entry withdrawn later still qualifies for its season …")                                                                                                                            |
+| R3-REPORTING-09   | Every CSV preamble line is one RFC 4180 cell through `csvCell` (`csvPreambleLine`), so staff-entered text (space names in disclosures) never ends the cell or starts a formula cell                                                                                                                                                                                                                                                                                                                                  | `reporting.spec.ts`, `exports.spec.ts` ("a space name with a comma, a quote and a formula stays inside its preamble cell")                                                                                                 |
 
 ## Report envelope (every response)
 
@@ -79,7 +108,7 @@ readiness). Runs stored before REP-03 carry neither and keep their digests.
 | `GET /v1/reports/daily-schedule`                                                                                                                          | `reporting.view_operations_reports` (FD, LM, PM, SC, FA, GM, SA, SO)                                                   | MET-001..003                                                                                                |
 | `GET /v1/reports/expected-arrivals`                                                                                                                       | operations                                                                                                             | MET-004, MET-006; rows carry `offeringId`, `sessionId`                                                      |
 | `GET /v1/reports/attendance`                                                                                                                              | operations                                                                                                             | MET-004, MET-007..009, MET-011, MET-012                                                                     |
-| `GET /v1/reports/match-readiness`                                                                                                                         | operations                                                                                                             | MET-013..015, live only                                                                                     |
+| `GET /v1/reports/match-readiness`                                                                                                                         | operations                                                                                                             | MET-013..015, live only; ≤ 100 fixtures else `VALIDATION_FAILED` `TOO_MANY_FIXTURES`                        |
 | `GET /v1/reports/uncovered-assignments`                                                                                                                   | operations                                                                                                             | MET-017, MET-018, live only                                                                                 |
 | `GET /v1/reports/maintenance-restrictions`                                                                                                                | operations                                                                                                             | MET-054, MET-056, MET-057, live only                                                                        |
 | `GET /v1/reports/communication-failures`                                                                                                                  | operations (organization-wide)                                                                                         | MET-059..062, live only                                                                                     |
@@ -133,13 +162,18 @@ found. Facility-scoped staff see only their facilities and cannot read organizat
   falls in the period by each facility's local operating day and whose status is `confirmed` or
   `completed`; a customer returned when they hold such a booking in the comparison period (a
   request never confirmed is not a return). Booking status is read as it stands now. An enrollment
-  line of a rental offering (the pre-booking path) is not a booking and does not count.
+  line of a rental offering (the pre-booking path) is not a booking and does not count; the MET-083
+  definition says so (R3-REPORTING-05). A team entry qualifies for the adult-team and player
+  cohorts when it was accepted (approved) by the as-of instant; as the metric dictionary's MET-079
+  excludes only entries withdrawn before acceptance, one withdrawn later still qualifies and is
+  counted apart (R3-REPORTING-08).
 - **SPK-REPORT-006** — observed signals and any forecast are separate columns; the only forecast
   method offered (`trailing_mean`) is an engineering baseline named in the response.
 - **SPK-REPORT-007** — a stored run is the reproducible record (append-only, digest); reports whose
   inputs are append-only and clock-stamped (attendance observations and corrections, releases,
-  closure applications and lifts, space status changes, approvals, confirmations, fulfilments,
-  refunds, cost inputs recorded and withdrawn) honour the as-of instant,
+  closure applications and lifts, space status changes, event change facts, approvals, team-entry
+  withdrawals, check-in withdrawals, confirmations, fulfilments, refunds, cost inputs recorded and
+  withdrawn) honour the as-of instant,
   so a rerun at the same instant after a correction reproduces the figures (test "reports are
   reproducible after a correction"). Live-only reports refuse a past as-of instant. Exports need
   their own action, are requester-bound, single use, audited at creation, download, revocation and
@@ -162,9 +196,11 @@ found. Facility-scoped staff see only their facilities and cannot read organizat
   each has no `where` clause and its inner joins follow not-null foreign keys (its left joins never
   drop a row), so it passes every base row through. Each such column in `packages/db/src/schema/reporting.ts` therefore lists exactly the
   states its base table's check constraint allows; the restriction status is the facilities
-  `RestrictionStatus` itself, `withdrawn` (migration 0903) included. One view does filter:
-  `reporting_resource_status_changes_v` (migration 1302) keeps only audited status changes, and its
-  `status` is untyped text. Test "§4.6 / SPK-FAC-003: every state a reporting view passes through
+  `RestrictionStatus` itself, `withdrawn` (migration 0903) included. Three views do filter:
+  `reporting_resource_status_changes_v` (migration 1302) keeps only audited status changes,
+  `reporting_event_changes_v` (1304) only `scheduling.event_changed` facts and
+  `reporting_pos_money_v` (1305) only settled tenders, late captures and returns; their `status`,
+  `change` and `tender_kind` are untyped text (the POS `movement` is produced by the view itself). Test "§4.6 / SPK-FAC-003: every state a reporting view passes through
   is typed exactly as its base check lists it (a withdrawn restriction included)" proves that each
   of the 32 typed columns' views has no `where` clause and compares each typed union with the
   database (the compiler rejects a listed state the type lacks).
@@ -206,7 +242,8 @@ malformed value refuses boot) and every report response names the ones it used. 
 | `REPORTING_OPERATING_DAY_START`      | DEC-001 (Operations)             | a reported day is the facility-local calendar day, and the response says so                              | `HH:MM`: a reported day runs from that local time to the same time the next day  |
 
 Technical bounds stay constants (`REPORTING_LIMITS`): at most 366 days per request; hourly
-start-time bands.
+start-time bands; at most 100 fixtures per match-readiness request (the competition module's
+`SEASON_READINESS_MAX_FIXTURES`, R3-PERFORMANCE-03).
 
 ## Known gaps
 
@@ -220,6 +257,13 @@ start-time bands.
 - Reservation creation is not clock-stamped by the scheduling module, so utilization as of an
   earlier instant still includes reservations created later (disclosed in every response);
   roster membership status and session schedules are read as they stand now.
+- The daily schedule selects events by their current scheduled start and shows their current
+  times, spaces, title and publication; only cancellations and the MET-002 change facts honour the
+  as-of instant. A move recorded after the as-of instant therefore still shows in a rerun at that
+  instant (an event moved to another day leaves that day's rerun); the stored run is the
+  reproducible record, and the response's freshness note says so (R3-REPORTING-01).
+- The payment reconciliation report is live only: a card return's refund state is the attempt's
+  current state.
 - Space status history comes from the scheduling module's audit records of status changes
   (spaces are created active; every status change is audited in its transaction). A status
   written outside the scheduling module would have no history and is not counted as closed.

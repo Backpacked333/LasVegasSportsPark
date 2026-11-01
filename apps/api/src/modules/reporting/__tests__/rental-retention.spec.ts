@@ -185,6 +185,46 @@ describe('rental customer retention (SPK-REPORT-005, REP-02; IF-36)', () => {
     expect(after.body.rows[0]).toMatchObject({ cohortSize: 1, returned: 1, newInComparison: 0 });
   });
 
+  it('SPK-REPORT-001 / SPK-REPORT-005 (R3-REPORTING-05): the MET-083 definition every response carries describes the booking rule it computes (REP-02)', async () => {
+    fake.bookings = [];
+    const res = await report(PERIODS);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const definition = (
+      res.body.metrics as Array<{
+        metricKey: string;
+        grain: string;
+        numerator: string;
+        denominator: string;
+        timeBasis: string;
+        exclusions: string[];
+        dimensions: string[];
+      }>
+    ).find((m) => m.metricKey === 'MET-083')!;
+    // Bookers of rental and party bookings (BOOKING_QUERY_PORT), not payers of rental enrollments.
+    expect(definition.grain).toMatch(/^booker/);
+    expect(definition.numerator).toMatch(/Bookers of rental and party bookings/);
+    expect(definition.numerator).toMatch(/confirmed or completed/);
+    expect(definition.numerator).toMatch(/first occurrence/);
+    expect(definition.denominator).toMatch(/Bookers of rental and party bookings/);
+    expect(`${definition.numerator} ${definition.denominator}`).not.toMatch(/payer|enrollment/i);
+    // The time basis is the first occurrence by facility-local operating day, not the offering start.
+    expect(definition.timeBasis).toMatch(
+      /First occurrence of each booking by its facility's local operating day/,
+    );
+    expect(definition.timeBasis).not.toMatch(/Offering start/);
+    expect(definition.exclusions).toEqual(
+      expect.arrayContaining([
+        'canceled bookings',
+        'enrollment lines of rental offerings (the pre-booking path is not a booking)',
+      ]),
+    );
+    expect(definition.dimensions.join(' ')).toMatch(/rental and party bookings both count/);
+    // The period disclosure names the booking basis, not offering start dates.
+    const disclosures = (res.body.disclosures as string[]).join(' ');
+    expect(disclosures).toContain('by the first occurrence of each booking');
+    expect(disclosures).not.toContain('by offering start date');
+  });
+
   it('SPK-REPORT-005: without bookings in the anchor period the cohort reports zero with a note', async () => {
     fake.bookings = [];
     const res = await report(PERIODS);

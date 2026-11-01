@@ -1,5 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { AssignmentTargetType, FixtureReadiness, ReportRow } from '@sportspark/contracts';
+import {
+  errors,
+  type AssignmentTargetType,
+  type FixtureReadiness,
+  type ReportRow,
+} from '@sportspark/contracts';
 import { ReadinessService } from '../../competition';
 import { ASSIGNMENT_COVERAGE_PORT, type AssignmentCoveragePort } from '../../workforce';
 import { column, type ReportDefinition } from '../engine/report-definition';
@@ -61,7 +66,22 @@ export class OperationsReports {
         .where('status', 'not in', ['canceled', 'played', 'forfeit'])
         .orderBy('scheduled_start')
         .orderBy('fixture_id')
+        .limit(ctx.policy.maxReadinessFixtures + 1)
         .execute();
+      // R3-PERFORMANCE-03 (SPK-REPORT-002): every fixture is evaluated live by the competition
+      // rules, so the request is bounded the way the competition module bounds its own season
+      // readiness work (SEASON_READINESS_MAX_FIXTURES, CMP-01), before any evaluation runs.
+      if (fixtures.length > ctx.policy.maxReadinessFixtures) {
+        throw errors.validation(
+          `More than ${ctx.policy.maxReadinessFixtures} fixtures match; narrow the window with from and to.`,
+          {
+            code: 'TOO_MANY_FIXTURES',
+            limit: ctx.policy.maxReadinessFixtures,
+            from: params.from,
+            to: params.to,
+          },
+        );
+      }
       const counts = { ready: 0, warning: 0, blocked: 0, unknown: 0 };
       const severities = { blocking: 0, warning: 0, info: 0, unknown: 0 };
       const rows: ReportRow[] = [];
@@ -146,6 +166,7 @@ export class OperationsReports {
           'Readiness is derived on every read (SPK-READY-004); unknown evidence is never counted as ready (SPK-READY-002).',
           'Issue codes only: restricted sources (discipline, disputes) are not identified in this report (SPK-DISC-004).',
           'Readiness is read through the competition module at the request instant, not in one snapshot with the fixture list (REP-03).',
+          `At most ${ctx.policy.maxReadinessFixtures} fixtures are evaluated per request (the competition module's readiness bound); a wider window is refused with TOO_MANY_FIXTURES.`,
         ],
       };
     },
