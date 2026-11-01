@@ -389,6 +389,12 @@ module's route classification counts once MIG-00 lands.
 
 ## Kernel notes
 
+- **Recovery and shutdown (R3-OPERATIONS-05, R3-OPERATIONS-10, §5.8, §4.12):** while an
+  organization recovers from a restore the delivery worker claims none of its queued attempts, so
+  nothing reaches a messaging provider until `POST /v1/recovery/resume`
+  (`__tests__/delivery-recovery.spec.ts`); `DeliveryWorker.stop()` claims nothing more and resolves
+  once the batch in flight has recorded its outcomes, so the worker process's bounded stop waits
+  for a hand-off instead of cutting it off (`__tests__/worker-stop.spec.ts`). **Verified**.
 - The kernel's outbox dispatcher runs every handler inside a transaction with its consumption
   record, so the provider call cannot live in the `communications.delivery_requested` handler
   itself (§4.11). The handler does the transactional half (recipient re-check, attempts) and

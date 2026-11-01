@@ -17,6 +17,7 @@ import {
   type AppConfig,
   type Clock,
   type Trx,
+  RecoveryMode,
 } from '../../../kernel';
 import {
   DeliveryDelivered,
@@ -98,6 +99,8 @@ export class DeliveryWorker {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private started = false;
+  /** The drain in flight, so `stop` can wait for it (R3-OPERATIONS-10). */
+  private inFlight: Promise<void> | null = null;
 
   constructor(
     @Inject(DATABASE) private readonly db: Db,
@@ -112,6 +115,7 @@ export class DeliveryWorker {
     private readonly resolver: AudienceResolver,
     private readonly addresses: RecipientAddresses,
     private readonly notifications: NotificationsService,
+    private readonly recovery: RecoveryMode,
   ) {}
 
   start(): void {
@@ -121,12 +125,18 @@ export class DeliveryWorker {
     void this.tick();
   }
 
-  stop(): void {
+  /**
+   * R3-OPERATIONS-10 (§4.12, §5.8): stops claiming and resolves once the drain in flight has
+   * recorded the outcome of every attempt it claimed, so a hand-off is not cut off by the process
+   * exit and settled `unknown` later. The kernel awaits it, bounded by WORKER_SHUTDOWN_TIMEOUT_MS.
+   */
+  stop(): Promise<void> {
     this.started = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    return this.inFlight ?? Promise.resolve();
   }
 
   /** Best-effort nudge after a dispatch commits; the poll loop is the durable path. */
@@ -135,17 +145,22 @@ export class DeliveryWorker {
     setTimeout(() => void this.tick(), 25);
   }
 
-  private async tick(): Promise<void> {
-    if (this.running) return;
+  private tick(): Promise<void> {
+    if (this.running || !this.started) return this.inFlight ?? Promise.resolve();
     this.running = true;
-    try {
-      let summary = await this.runOnce();
-      while (summary.claimed > 0) summary = await this.runOnce();
-    } catch (error) {
-      this.logger.error(`delivery loop failed: ${String(error)}`);
-    } finally {
-      this.running = false;
-    }
+    this.inFlight = (async () => {
+      try {
+        // A stopping worker claims nothing more; the batch in hand is finished.
+        let summary = await this.runOnce();
+        while (this.started && summary.claimed > 0) summary = await this.runOnce();
+      } catch (error) {
+        this.logger.error(`delivery loop failed: ${String(error)}`);
+      } finally {
+        this.running = false;
+        this.inFlight = null;
+      }
+    })();
+    return this.inFlight;
   }
 
   /** Processes one batch; safe to call concurrently from several workers. */
@@ -170,6 +185,14 @@ export class DeliveryWorker {
   private async claim(limit: number): Promise<ClaimedAttempt[]> {
     const now = this.clock.now();
     const leaseUntil = new Date(now.getTime() + this.policy.deliveryLeaseSeconds * 1000);
+    // R3-OPERATIONS-05 (§5.8, SPK-AT-028): nothing is handed to a messaging provider for an
+    // organization recovering from a restore; its queued attempts wait, unclaimed, until
+    // POST /v1/recovery/resume, so section 7 step 9 reviews notices before they are re-sent.
+    const paused = await this.recovery.activeOrganizations();
+    const notPaused =
+      paused.length === 0
+        ? sql``
+        : sql`and organization_id not in (${sql.join(paused.map((id) => sql`${id}::uuid`))})`;
     return this.db.transaction().execute(async (trx) => {
       const result = await sql<ClaimedAttempt>`
         with claimed as (
@@ -178,6 +201,7 @@ export class DeliveryWorker {
             and channel <> 'in_app'
             and ready_at is not null and ready_at <= ${now}
             and (locked_until is null or locked_until < ${now})
+            ${notPaused}
           order by ready_at, id
           limit ${limit}
           for update skip locked
