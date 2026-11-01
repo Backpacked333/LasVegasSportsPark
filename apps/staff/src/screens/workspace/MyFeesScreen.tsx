@@ -10,11 +10,18 @@
  * (`WORKSPACE_HISTORY_DAYS`), not the API's 30-day default, so a fee approved or exported after a
  * monthly payroll run stays with its assignment, and the empty state names the period it covers.
  * Fee records of older assignments come from the viewer's own fee list
- * (`GET /v1/fee-submissions?personId=<self>`, workforce.read_fees by self authority, paged), each
- * with its assignment (`GET /v1/assignments/{id}`, own assignment), so no fee record drops off.
+ * (`GET /v1/fee-submissions?personId=<self>`, workforce.read_fees by self authority, paged), so no
+ * fee record drops off. Their assignments are read in bulk, not one read per fee: the viewer's
+ * completed assignments that started before the period (`GET /v1/assignments?personId=<self>
+ * &status=completed&to=<period start>`, workforce.view_assignments by self authority, paged), joined
+ * by id; the next page of assignments is read only while a listed fee's assignment is not loaded.
+ * The fee list comes oldest first (the API orders it by submission and offers no other order), so
+ * the records are shown in that order and the screen says so: the ones nearest the period, still
+ * being approved or exported, follow with "Load more". A newest-first order or a "submitted
+ * before" filter on `GET /v1/fee-submissions` is a workforce follow-up.
  */
 import type { Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -42,8 +49,12 @@ import {
 
 type RateBasis = Schema<'RateBasis'>;
 type FeeSubmission = Schema<'FeeSubmission'>;
+type StaffAssignment = Schema<'StaffAssignment'>;
 
 const MY_FEES_KEY = ['api', '/fee-submissions'] as const;
+
+/** Page size of the earlier fee records and of their assignments (the API's largest page). */
+const EARLIER_PAGE = 200;
 
 export function MyFeesScreen() {
   const now = useNow(60 * 60_000);
@@ -84,38 +95,67 @@ export function MyFeesScreen() {
         shown={new Set((assignments.data?.items ?? []).map((i) => i.assignment.id))}
         ready={assignments.data !== undefined}
         since={since}
+        from={from}
       />
     </section>
   );
 }
 
 /**
- * The viewer's fee records whose assignment is not listed above (it ended before the period),
- * newest first among those loaded; "Load more" while the API says more exist.
+ * The viewer's fee records whose assignment is not listed above (it ended before the period), in
+ * the API's order (oldest first, said on screen), each with its assignment from one bulk read;
+ * "Load more" while the API says more exist.
  */
 function EarlierFees({
   shown,
   ready,
   since,
+  from,
 }: {
   shown: ReadonlySet<string>;
   ready: boolean;
   since: string;
+  /** The start of the period above: the earlier assignments started before it. */
+  from: string;
 }) {
   const me = useApiQuery({ path: '/me' });
   const personId = me.data?.principal.personId ?? null;
+  const enabled = personId !== null && ready;
   const fees = useApiPages({
     path: '/fee-submissions',
-    request: { query: { personId: personId ?? '', limit: 100 } },
-    enabled: personId !== null && ready,
+    request: { query: { personId: personId ?? '', limit: EARLIER_PAGE } },
+    enabled,
   });
+  const assignments = useApiPages({
+    path: '/assignments',
+    request: {
+      query: { personId: personId ?? '', status: 'completed', to: from, limit: EARLIER_PAGE },
+    },
+    enabled,
+  });
+  const byId = useMemo(
+    () => new Map((assignments.data ?? []).map((a) => [a.id, a] as const)),
+    [assignments.data],
+  );
+  const earlier = (fees.data ?? []).filter((f) => !shown.has(f.assignmentId));
+  const missing = earlier.some((f) => !byId.has(f.assignmentId));
+  const { hasNextPage, isFetchingNextPage, nextPageError, fetchStatus, loadMore } = assignments;
+  const assignmentsError = assignments.error ?? nextPageError;
+  useEffect(() => {
+    // A listed fee whose assignment is not loaded yet: read the next page of assignments.
+    if (missing && hasNextPage && !isFetchingNextPage && !nextPageError && fetchStatus === 'idle')
+      loadMore();
+  }, [missing, hasNextPage, isFetchingNextPage, nextPageError, fetchStatus, loadMore]);
   if (!ready || (me.data !== undefined && personId === null)) return null;
-  const earlier = (fees.data ?? [])
-    .filter((f) => !shown.has(f.assignmentId))
-    .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
   return (
     <section className="ops-section" aria-labelledby="earlier-fees-title">
       <h3 id="earlier-fees-title">Fee records before {since}</h3>
+      {earlier.length > 0 ? (
+        <p className="caption" data-testid="earlier-fees-order">
+          Oldest first, as the service lists them: more recent records, the ones nearest {since},
+          follow{fees.hasNextPage ? ' with “Load more”' : ''}.
+        </p>
+      ) : null}
       <QueryBoundary
         query={fees}
         label="your earlier fee records"
@@ -128,25 +168,40 @@ function EarlierFees({
         {() => (
           <ul className="ops-cards" aria-label="Earlier fee records">
             {earlier.map((fee) => (
-              <EarlierFeeCard key={fee.id} fee={fee} />
+              <EarlierFeeCard key={fee.id} fee={fee} assignment={byId.get(fee.assignmentId)} />
             ))}
           </ul>
         )}
       </QueryBoundary>
       <LoadMore pages={fees} label="fee records" />
+      {assignmentsError && earlier.length > 0 ? (
+        <div role="alert">
+          <p className="caption">
+            The assignments of these fee records could not be read; the records are shown without
+            them.
+          </p>
+          <StateView
+            variant="error"
+            error={assignmentsError}
+            onRetry={() =>
+              assignments.error ? void assignments.refetch() : assignments.loadMore()
+            }
+          />
+        </div>
+      ) : null}
     </section>
   );
 }
 
-/** One earlier fee record with its own assignment (title, time, role), read by id. */
-function EarlierFeeCard({ fee }: { fee: FeeSubmission }) {
-  const assignment = useApiQuery({
-    path: '/assignments/{id}',
-    request: { path: { id: fee.assignmentId } },
-    staleTime: 60 * 60_000,
-  });
-  const zone = useFacilityZone(assignment.data?.facilityId);
-  const a = assignment.data;
+/** One earlier fee record with its assignment (title, time, role) from the bulk read. */
+function EarlierFeeCard({
+  fee,
+  assignment: a,
+}: {
+  fee: FeeSubmission;
+  assignment: StaffAssignment | undefined;
+}) {
+  const zone = useFacilityZone(a?.facilityId);
   const title = a?.targetTitle ?? `Assignment ${fee.assignmentId.slice(0, 8)}`;
   return (
     <li aria-label={title}>

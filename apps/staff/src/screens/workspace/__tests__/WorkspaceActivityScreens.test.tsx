@@ -477,15 +477,23 @@ describe('SCR-W-08 periods: no fee record drops off after the API default lookba
             nextCursor: null,
           },
         },
-        'GET /assignments/{id}': {
+        'GET /assignments': {
           status: 200,
-          body: assignmentRecord({
-            id: OLD_ASSIGNMENT,
-            status: 'completed',
-            targetTitle: 'U14 Spring final',
-            scheduledStart: '2026-03-01T18:00:00.000Z',
-            scheduledEnd: '2026-03-01T19:30:00.000Z',
-          }),
+          body: {
+            items: [
+              {
+                ...assignmentRecord({
+                  id: OLD_ASSIGNMENT,
+                  status: 'completed',
+                  targetTitle: 'U14 Spring final',
+                  scheduledStart: '2026-03-01T18:00:00.000Z',
+                  scheduledEnd: '2026-03-01T19:30:00.000Z',
+                }),
+                availableActions: [],
+              },
+            ],
+            nextCursor: null,
+          },
         },
       }),
     });
@@ -494,9 +502,128 @@ describe('SCR-W-08 periods: no fee record drops off after the API default lookba
     expect(within(record).getByText('Exported')).toBeInTheDocument();
     expect(within(record).getByText(/approved \$25\.00/)).toBeInTheDocument();
     expect(screen.queryByText(/\bPaid\b/)).toBeNull();
-    expect(app.fake.requests.find((r) => r.route === '/assignments/{id}')?.params).toEqual({
-      id: OLD_ASSIGNMENT,
+    // One bulk read of the viewer's own completed assignments before the period, never one per fee.
+    expect(app.fake.requests.find((r) => r.route === '/assignments')?.query).toEqual({
+      personId: ME_PERSON_ID,
+      status: 'completed',
+      to: FROM,
+      limit: '200',
     });
+    expect(app.fake.requests.some((r) => r.route === '/assignments/{id}')).toBe(false);
+  });
+
+  it('R3-SCREEN-STATES-03 SCR-W-08: over several pages, the fee nearest the period follows with "Load more", said on screen, each with its assignment from bulk reads', async () => {
+    const user = userEvent.setup();
+    const OLDEST = '0192f1a0-0000-7000-8000-0000000005e1';
+    const NEAREST = '0192f1a0-0000-7000-8000-0000000005e2';
+    const staffItem = (id: string, title: string, start: string) => ({
+      ...assignmentRecord({
+        id,
+        status: 'completed',
+        targetTitle: title,
+        scheduledStart: start,
+        scheduledEnd: start.replace('T18', 'T19'),
+      }),
+      availableActions: [],
+    });
+    const app = createTestApp({
+      routes: routes([], {
+        // The API lists fees oldest first; the one nearest the period is on the second page.
+        'GET /fee-submissions': (request) =>
+          request.query.cursor === 'fees-2'
+            ? fakeResponse(200, {
+                items: [
+                  feeSubmission({
+                    id: '0192f1a0-0000-7000-8000-0000000005e4',
+                    assignmentId: NEAREST,
+                    status: 'approved',
+                    approvedAmountMinor: 2500,
+                    submittedAt: '2026-04-25T20:00:00.000Z',
+                  }),
+                ],
+                nextCursor: null,
+              })
+            : fakeResponse(200, {
+                items: [
+                  feeSubmission({
+                    id: '0192f1a0-0000-7000-8000-0000000005e3',
+                    assignmentId: OLDEST,
+                    status: 'exported',
+                    approvedAmountMinor: 2500,
+                    exportBatchId: '0192f1a0-0000-7000-8000-0000000005d3',
+                    exportedAt: '2026-02-03T08:00:00.000Z',
+                    submittedAt: '2026-02-01T20:00:00.000Z',
+                  }),
+                ],
+                nextCursor: 'fees-2',
+              }),
+        // The assignments, also oldest first and paged.
+        'GET /assignments': (request) =>
+          request.query.cursor === 'assignments-2'
+            ? fakeResponse(200, {
+                items: [staffItem(NEAREST, 'U14 Spring semi-final', '2026-04-24T18:00:00.000Z')],
+                nextCursor: null,
+              })
+            : fakeResponse(200, {
+                items: [staffItem(OLDEST, 'U14 Winter cup', '2026-01-31T18:00:00.000Z')],
+                nextCursor: 'assignments-2',
+              }),
+      }),
+    });
+    render(app.at('/workspace/fees'));
+    const list = await screen.findByRole('list', { name: 'Earlier fee records' });
+    expect(
+      await within(list).findByRole('listitem', { name: 'U14 Winter cup' }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('earlier-fees-order')).toHaveTextContent(
+      `Oldest first, as the service lists them: more recent records, the ones nearest ${formatHistoryStart(FROM)}, follow with “Load more”.`,
+    );
+    // The first page's fee has its assignment: the next page of assignments is not read yet.
+    expect(app.fake.requests.filter((r) => r.route === '/assignments')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Load more fee records' }));
+    const nearest = await within(list).findByRole('listitem', { name: 'U14 Spring semi-final' });
+    expect(within(nearest).getByText('Approved')).toBeInTheDocument();
+    // Listed in the API's order, as the screen says: the record nearest the period comes last.
+    expect(Array.from(list.children).map((li) => li.getAttribute('aria-label'))).toEqual([
+      'U14 Winter cup',
+      'U14 Spring semi-final',
+    ]);
+    expect(screen.getByTestId('earlier-fees-order')).not.toHaveTextContent('Load more');
+    // Its assignment came from the next page of the bulk read, never from one read per fee.
+    const reads = app.fake.requests.filter((r) => r.route === '/assignments');
+    expect(reads.map((r) => r.query.cursor)).toEqual([undefined, 'assignments-2']);
+    expect(app.fake.requests.some((r) => r.route === '/assignments/{id}')).toBe(false);
+  });
+
+  it('SCR-W-08: when the assignments of earlier fees cannot be read, the fee records stay listed and the failure is shown with its code', async () => {
+    const app = createTestApp({
+      routes: routes([], {
+        'GET /fee-submissions': {
+          status: 200,
+          body: {
+            items: [
+              feeSubmission({
+                id: '0192f1a0-0000-7000-8000-0000000005d2',
+                assignmentId: OLD_ASSIGNMENT,
+                status: 'exported',
+                approvedAmountMinor: 2500,
+                exportBatchId: '0192f1a0-0000-7000-8000-0000000005d3',
+                exportedAt: '2026-04-03T08:00:00.000Z',
+              }),
+            ],
+            nextCursor: null,
+          },
+        },
+        'GET /assignments': () => fakeResponse(503, apiErrorBody('INTERNAL_ERROR')),
+      }),
+    });
+    render(app.at('/workspace/fees'));
+    const record = await screen.findByRole('listitem', {
+      name: `Assignment ${OLD_ASSIGNMENT.slice(0, 8)}`,
+    });
+    expect(within(record).getByText('Exported')).toBeInTheDocument();
+    const alert = await screen.findByText(/The assignments of these fee records could not be read/);
+    expect(alert.closest('[role="alert"]')).toHaveTextContent('INTERNAL_ERROR');
   });
 
   it('opens an assignment older than the default lookback from the workspace history', async () => {
