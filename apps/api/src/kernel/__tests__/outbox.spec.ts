@@ -1,8 +1,10 @@
 import { defineEvent, z, type DomainEvent } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { staffPrincipal } from '../../testing/principals';
 import { createTestApp, type TestApp } from '../../testing/test-app';
 import { currentTransaction } from '../database/transaction-context';
 import { UnitOfWork } from '../database/unit-of-work';
+import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
 import { EventHandlerRegistry } from '../outbox/event-handler.registry';
 import { Outbox } from '../outbox/outbox';
 import { OutboxDispatcher, retryDelayMs } from '../outbox/outbox-dispatcher';
@@ -120,13 +122,54 @@ describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)', () =>
     const again = await dispatcher.runOnce();
     expect(again).toMatchObject({ claimed: 1, dispatched: 1 });
     expect(received.filter((r) => r.event.id === event.id)).toHaveLength(2);
+    // Handlers that already consumed the event are not run again, and (stage-7 review of
+    // R3-OPERATIONS-01) the redelivery records no further job attempts for them.
     const attempts = await t.db
       .selectFrom('job_attempts')
       .select(['handler', 'outcome'])
       .where('source_id', '=', event.id)
-      .orderBy('attempt_number')
+      .orderBy('handler')
       .execute();
-    expect(attempts.filter((a) => a.outcome === 'skipped')).toHaveLength(2);
+    expect(attempts).toEqual([
+      { handler: 'flaky', outcome: 'succeeded' },
+      { handler: 'recorder', outcome: 'succeeded' },
+    ]);
+  });
+
+  it('§4.12: a handler racing another worker for the same event is skipped through its consumption record', async () => {
+    const event = await uow.run((ctx) =>
+      outbox.enqueue(ctx.trx, Pinged, {
+        organizationId: t.organizationId,
+        aggregateType: 'ping',
+        aggregateId: 'race',
+        payload: { n: 7 },
+      }),
+    );
+    // Another worker consumed `recorder` after this run read the consumptions.
+    const spy = vi
+      .spyOn(dispatcher as unknown as { consumedBy: () => Promise<Set<string>> }, 'consumedBy')
+      .mockImplementationOnce(async () => {
+        await t.db
+          .insertInto('event_consumptions')
+          .values({ handler: 'recorder', event_id: event.id })
+          .execute();
+        return new Set();
+      });
+    expect(await dispatcher.runOnce()).toMatchObject({ dispatched: 1 });
+    spy.mockRestore();
+    const attempts = await t.db
+      .selectFrom('job_attempts')
+      .select(['handler', 'outcome'])
+      .where('source_id', '=', event.id)
+      .orderBy('handler')
+      .execute();
+    expect(attempts).toEqual([
+      { handler: 'flaky', outcome: 'succeeded' },
+      { handler: 'recorder', outcome: 'skipped' },
+    ]);
+    expect(received.filter((r) => r.event.id === event.id).map((r) => r.handler)).toEqual([
+      'flaky',
+    ]);
   });
 
   it('retries a failing handler with backoff without re-running handlers that succeeded', async () => {
@@ -504,6 +547,143 @@ describe('transactional outbox and durable dispatch (§4.12, SPK-AT-023)', () =>
         registry.on('test.handler_removed', 'removed.handler', async () => undefined),
       ).toThrow(/retired/);
       expect(() => registry.retire(Pinged.type, 'recorder', 'x')).toThrow(/registered/);
+    });
+
+    const waitExceptionsOf = (id: string) =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .selectAll()
+        .where('dedupe_key', '=', `outbox-wait:${id}`)
+        .orderBy('opened_at')
+        .execute();
+    const escalateAfterMs = () => t.config.OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS * 1000;
+
+    it('§5.11 / R3-OPERATIONS-01: an event that waits past OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS opens one owned exception naming the missing handlers, and the dispatch that settles it resolves it', async () => {
+      const event = await producedByNewerBuild('test.wait_escalated', 'w1', ['renamed.handler']);
+      const startedAt = t.clock.now();
+      expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+      expect(new Date((await rowOf(event.id)).waiting_since!).getTime()).toBe(startedAt.getTime());
+      expect(await waitExceptionsOf(event.id)).toEqual([]);
+
+      // Waiting passes before the bound: still no exception, and waiting_since keeps its start.
+      t.clock.advance(escalateAfterMs() - 1000);
+      expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+      expect(await waitExceptionsOf(event.id)).toEqual([]);
+      t.clock.advance(1000 + t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+      expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+      const [opened, ...more] = await waitExceptionsOf(event.id);
+      expect(more).toEqual([]);
+      expect(opened).toMatchObject({
+        category: 'reliability.outbox_waiting_for_handler',
+        owner_queue: 'system_administrator',
+        status: 'open',
+        severity: 'high',
+        affected_type: 'rollback',
+        affected_id: 'w1',
+        organization_id: t.organizationId,
+      });
+      expect(opened!.details).toMatchObject({
+        eventId: event.id,
+        eventType: 'test.wait_escalated',
+        missingHandlers: ['renamed.handler'],
+        waitingSince: startedAt.toISOString(),
+      });
+      const waiting = await rowOf(event.id);
+      expect(waiting).toMatchObject({ status: 'pending', attempts: 0 });
+      expect(new Date(waiting.waiting_since!).getTime()).toBe(startedAt.getTime());
+
+      // Later passes keep the one exception (deduplicated), and it cannot be resolved by hand.
+      t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+      expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+      expect(await waitExceptionsOf(event.id)).toHaveLength(1);
+      const exceptions = t.app.get(OperationalExceptions);
+      await expect(
+        uow.run(({ trx }) =>
+          exceptions.transition(
+            trx,
+            staffPrincipal(t.organizationId, ['general_manager']),
+            opened!.id,
+            'resolved',
+            { reason: 'looked at it' },
+          ),
+        ),
+      ).rejects.toMatchObject({
+        code: 'INVALID_TRANSITION',
+        details: { code: 'handler_wait_unsettled', eventId: event.id, eventStatus: 'pending' },
+      });
+
+      // A build that declares the handler retired (or registers it) settles the event; the
+      // dispatch resolves the exception in the same transaction.
+      registry.retire('test.wait_escalated', 'renamed.handler', 'renamed to handler.v2');
+      t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+      expect(await dispatcher.runOnce()).toMatchObject({ dispatched: 1 });
+      expect(await rowOf(event.id)).toMatchObject({ status: 'dispatched', waiting_since: null });
+      expect(await waitExceptionsOf(event.id)).toEqual([
+        expect.objectContaining({ id: opened!.id, status: 'resolved' }),
+      ]);
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select(['action', 'reason'])
+        .where('target_type', '=', 'operational_exception')
+        .where('target_id', '=', opened!.id)
+        .execute();
+      expect(audit).toEqual([expect.objectContaining({ action: 'exceptions.resolved' })]);
+    });
+
+    it('§5.11: a wait exception closed by hand is not raised again during the same wait', async () => {
+      const event = await producedByNewerBuild('test.wait_closed', 'w2', ['gone.handler']);
+      expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+      t.clock.advance(escalateAfterMs());
+      expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+      const [opened] = await waitExceptionsOf(event.id);
+      const exceptions = t.app.get(OperationalExceptions);
+      await uow.run(({ trx }) =>
+        exceptions.transition(
+          trx,
+          staffPrincipal(t.organizationId, ['system_administrator']),
+          opened!.id,
+          'closed',
+          { reason: 'Known: the next release declares gone.handler retired' },
+        ),
+      );
+      t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+      expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+      expect((await waitExceptionsOf(event.id)).map((e) => e.status)).toEqual(['closed']);
+      // The retire declaration lands: the event settles; the closed exception stays closed.
+      registry.retire('test.wait_closed', 'gone.handler', 'removed with the old notice flow');
+      t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+      expect(await dispatcher.runOnce()).toMatchObject({ dispatched: 1 });
+      expect((await rowOf(event.id)).status).toBe('dispatched');
+      expect((await waitExceptionsOf(event.id)).map((e) => e.status)).toEqual(['closed']);
+    });
+
+    it('§5.11 / R3-OPERATIONS-01: the handlers that already ran are not run or recorded again while the event waits', async () => {
+      const ran: string[] = [];
+      registry.on('test.wait_attempts', 'present.handler', async (e) => {
+        ran.push(e.id);
+      });
+      const event = await producedByNewerBuild('test.wait_attempts', 'w3', [
+        'missing.handler',
+        'present.handler',
+      ]);
+      for (let pass = 0; pass < 4; pass += 1) {
+        expect(await dispatcher.runOnce()).toMatchObject({ deferred: 1 });
+        t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+      }
+      expect(ran).toEqual([event.id]);
+      const attempts = await t.db
+        .selectFrom('job_attempts')
+        .select(['handler', 'attempt_number', 'outcome'])
+        .where('source_id', '=', event.id)
+        .execute();
+      expect(attempts).toEqual([
+        { handler: 'present.handler', attempt_number: 1, outcome: 'succeeded' },
+      ]);
+      registry.on('test.wait_attempts', 'missing.handler', async (e) => {
+        ran.push(`missing:${e.id}`);
+      });
+      expect(await dispatcher.runOnce()).toMatchObject({ dispatched: 1 });
+      expect(ran).toEqual([event.id, `missing:${event.id}`]);
     });
 
     it('R3-OPERATIONS-01: a row recorded before expectations existed (null) is settled by the handlers this build has', async () => {

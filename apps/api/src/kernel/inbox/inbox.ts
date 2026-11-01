@@ -6,7 +6,13 @@ import type { Clock } from '../clock';
 import type { AppConfig } from '../config';
 import { runWithTransaction } from '../database/transaction-context';
 import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
-import { INBOX_DEAD_LETTER_CATEGORY, resolveReplayedDeadLetter } from '../outbox/dead-letters';
+import {
+  escalateHandlerWait,
+  INBOX_DEAD_LETTER_CATEGORY,
+  INBOX_WAITING_CATEGORY,
+  resolveHandlerWait,
+  resolveReplayedDeadLetter,
+} from '../outbox/dead-letters';
 import { runAfterCommitHooks, type HandlerContext } from '../outbox/event-handler.registry';
 import { retryDelayMs } from '../outbox/outbox-dispatcher';
 import { APP_CONFIG, CLOCK, DATABASE } from '../tokens';
@@ -43,7 +49,11 @@ const INBOX_FAILURE_OWNER = 'system_administrator';
  * registers for its provider (`expected_handlers`, consumption names `inbox:<provider>:<name>`),
  * and it is processed only once each has run here or is `retire`d; a build that lacks one (a
  * rollback, a rolling deploy) runs the handlers it has and leaves the event, uncounted, for a build
- * that has the rest, retried after OUTBOX_MISSING_HANDLER_RETRY_SECONDS.
+ * that has the rest, retried after OUTBOX_MISSING_HANDLER_RETRY_SECONDS. As in the outbox the wait
+ * is bounded for its owner (§5.11, migration 0015): after OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS
+ * a `reliability.inbox_waiting_for_handler` exception (system administration) names the missing
+ * handlers and is resolved when the event is processed; an event without an organization is logged
+ * at error instead. Handlers that already consumed the event are not run again.
  */
 @Injectable()
 export class Inbox {
@@ -81,6 +91,20 @@ export class Inbox {
     const names = this.retired.get(provider) ?? new Set<string>();
     names.add(name);
     this.retired.set(provider, names);
+  }
+
+  /**
+   * Every registered inbox handler and every retired one, by provider (the committed handler
+   * manifest compares them, `__tests__/event-handler-manifest.spec.ts`).
+   */
+  registrations(): { registered: Map<string, string[]>; retired: Map<string, string[]> } {
+    const registered = new Map<string, string[]>();
+    for (const [provider, list] of this.handlers) {
+      registered.set(provider, list.map((h) => h.name).sort());
+    }
+    const retired = new Map<string, string[]>();
+    for (const [provider, names] of this.retired) retired.set(provider, [...names].sort());
+    return { registered, retired };
   }
 
   /** The consumption names an event of this provider expects (sorted), recorded with it. */
@@ -203,8 +227,16 @@ export class Inbox {
       };
       const attempt = row.attempts + 1;
       const failures: string[] = [];
-      for (const { name, handler } of this.handlers.get(row.provider) ?? []) {
+      const registered = this.handlers.get(row.provider) ?? [];
+      const consumed = await this.consumedBy(
+        row.id,
+        registered.map((h) => consumptionName(row.provider, h.name)),
+      );
+      for (const { name, handler } of registered) {
         const handlerName = consumptionName(row.provider, name);
+        // Already ran for this event (a pass while it waits for a missing handler): skip it. The
+        // consumption insert below still guards a run by another worker at the same moment.
+        if (consumed.has(handlerName)) continue;
         const hooks: Array<() => void | Promise<void>> = [];
         try {
           const ran = await this.db.transaction().execute(async (trx) => {
@@ -240,22 +272,63 @@ export class Inbox {
       const missing = this.missingFor(row.provider, row.expected_handlers);
       if (failures.length === 0 && missing.length > 0) {
         // R3-OPERATIONS-01: wait, uncounted, for a build that registers the missing handlers.
+        const waitingSince = row.waiting_since ? new Date(row.waiting_since) : now;
         const waiting = `waiting for handler(s) ${missing.join(', ')}: the build that recorded this event registers them and build ${this.config.APP_VERSION} (worker ${this.config.WORKER_ID}) does not`;
-        const updated = await this.db
-          .updateTable('inbox_events')
-          .set({
-            last_error: waiting.slice(0, 4000),
-            available_at: new Date(
-              now.getTime() + this.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000,
-            ),
-            locked_by: null,
-            locked_until: null,
-          })
-          .where('id', '=', row.id)
-          .where('locked_by', '=', lease)
-          .executeTakeFirst();
-        if (Number(updated.numUpdatedRows) > 0) {
-          this.logger.warn(`inbox event ${row.id} (${row.provider}) left waiting: ${waiting}`);
+        // §5.11: past the bounded wait the owner is told (once per wait, deduplicated).
+        const escalate =
+          now.getTime() - waitingSince.getTime() >=
+          this.config.OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS * 1000;
+        const defer = async (executor: Db) => {
+          const updated = await executor
+            .updateTable('inbox_events')
+            .set({
+              last_error: waiting.slice(0, 4000),
+              available_at: new Date(
+                now.getTime() + this.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000,
+              ),
+              waiting_since: waitingSince,
+              locked_by: null,
+              locked_until: null,
+            })
+            .where('id', '=', row.id)
+            .where('locked_by', '=', lease)
+            .executeTakeFirst();
+          return Number(updated.numUpdatedRows) > 0;
+        };
+        const organizationId = row.organization_id;
+        let outcome: 'superseded' | 'deferred' | 'escalated';
+        if (escalate && organizationId) {
+          outcome = await this.db.transaction().execute(async (trx) => {
+            if (!(await defer(trx))) return 'superseded' as const;
+            const raised = await escalateHandlerWait(trx, this.exceptions, {
+              organizationId,
+              source: 'inbox',
+              eventId: row.id,
+              eventType: `${row.provider}/${row.event_type}`,
+              affectedType: 'inbox_event',
+              affectedId: row.id,
+              missingHandlers: missing,
+              waitingSince,
+              appVersion: this.config.APP_VERSION,
+              workerId: this.config.WORKER_ID,
+            });
+            return raised ? ('escalated' as const) : ('deferred' as const);
+          });
+        } else if (!(await defer(this.db))) {
+          outcome = 'superseded';
+        } else {
+          outcome = escalate ? 'escalated' : 'deferred';
+        }
+        if (outcome !== 'superseded') {
+          if (outcome === 'escalated') {
+            // An event without an organization cannot open an organization's exception: the error
+            // log on every pass is the platform operator's signal.
+            this.logger.error(
+              `inbox event ${row.id} (${row.provider}/${row.provider_event_id}) has waited since ${waitingSince.toISOString()} for handler(s) ${missing.join(', ')}, which build ${this.config.APP_VERSION} does not register; ${organizationId ? `raised ${INBOX_WAITING_CATEGORY} for system administration` : 'it has no organization, so no exception could be raised'}`,
+            );
+          } else {
+            this.logger.warn(`inbox event ${row.id} (${row.provider}) left waiting: ${waiting}`);
+          }
           summary.deferred += 1;
         }
       } else if (failures.length === 0) {
@@ -267,6 +340,7 @@ export class Inbox {
               processed_at: now,
               attempts: attempt,
               last_error: null,
+              waiting_since: null,
               locked_by: null,
               locked_until: null,
             })
@@ -277,16 +351,19 @@ export class Inbox {
         };
         const organizationId = row.organization_id;
         const settled =
-          row.replayed_at && organizationId
-            ? // R3-OPERATIONS-03: a replayed dead letter's exception is resolved with the outcome.
+          (row.replayed_at || row.waiting_since) && organizationId
+            ? // R3-OPERATIONS-03: a replayed dead letter's exception is resolved with the outcome,
+              // and so is the exception of an event that waited for a handler (migration 0015).
               await this.db.transaction().execute(async (trx) => {
                 if (!(await settle(trx))) return false;
-                await resolveReplayedDeadLetter(trx, this.exceptions, {
+                const resolve = {
                   organizationId,
-                  source: 'inbox',
+                  source: 'inbox' as const,
                   eventId: row.id,
                   actorLabel: 'kernel.inbox',
-                });
+                };
+                if (row.replayed_at) await resolveReplayedDeadLetter(trx, this.exceptions, resolve);
+                if (row.waiting_since) await resolveHandlerWait(trx, this.exceptions, resolve);
                 return true;
               })
             : await settle(this.db);
@@ -352,6 +429,18 @@ export class Inbox {
     return summary;
   }
 
+  /** Of `names` (consumption names), those that already consumed the event. */
+  private async consumedBy(eventId: string, names: string[]): Promise<Set<string>> {
+    if (names.length === 0) return new Set();
+    const rows = await this.db
+      .selectFrom('event_consumptions')
+      .select('handler')
+      .where('event_id', '=', eventId)
+      .where('handler', 'in', names)
+      .execute();
+    return new Set(rows.map((r) => r.handler));
+  }
+
   /** Hands claimed, unprocessed events back (lease cleared) so another worker takes them now. */
   private async release(ids: string[], lease: string): Promise<number> {
     if (ids.length === 0) return 0;
@@ -386,7 +475,7 @@ export class Inbox {
         where i.id = claimed.id
         returning i.id, i.provider, i.provider_event_id, i.organization_id, i.event_type, i.payload,
                   i.signature_verified, i.received_at, i.attempts, i.max_attempts, i.expected_handlers,
-                  i.status, i.replayed_at
+                  i.status, i.replayed_at, i.waiting_since
       `.execute(trx);
       return result.rows;
     });
@@ -414,6 +503,7 @@ interface InboxRow {
   /** `received` or `failed`: the states a claim selects. */
   status: Extract<InboxEventState, 'received' | 'failed'>;
   replayed_at: Date | string | null;
+  waiting_since: Date | string | null;
 }
 
 /** The consumption name of an inbox handler (event_consumptions.handler). */

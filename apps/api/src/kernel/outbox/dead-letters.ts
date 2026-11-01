@@ -224,21 +224,141 @@ export async function resolveReplayedDeadLetter(
     actorLabel: string;
   },
 ): Promise<void> {
-  const exceptionId = await openDeadLetterException(
-    trx,
-    input.organizationId,
-    deadLetterKey(input.source, input.eventId),
-  );
+  await resolveOpenException(trx, exceptions, {
+    organizationId: input.organizationId,
+    dedupeKey: deadLetterKey(input.source, input.eventId),
+    categories: [OUTBOX_DEAD_LETTER_CATEGORY, INBOX_DEAD_LETTER_CATEGORY],
+    actorLabel: input.actorLabel,
+    reason: 'The replayed follow-up was delivered',
+    resolution: { resolvedBy: input.actorLabel, source: input.source, eventId: input.eventId },
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Waiting for a missing handler (§5.11, completing R3-OPERATIONS-01)
+// ---------------------------------------------------------------------------------------------
+
+export const OUTBOX_WAITING_CATEGORY = 'reliability.outbox_waiting_for_handler';
+export const INBOX_WAITING_CATEGORY = 'reliability.inbox_waiting_for_handler';
+/** Who owns an event that waits for a handler: a deploy question, so system administration. */
+export const HANDLER_WAIT_OWNER = 'system_administrator';
+
+/** The exception dedupe key of an outbox or inbox event that waits for a missing handler. */
+export const handlerWaitKey = (source: 'outbox' | 'inbox', eventId: string) =>
+  `${source}-wait:${eventId}`;
+
+/**
+ * Tells the owner that an event has waited too long for handlers its producing build registered
+ * and the processing build lacks (§5.11 "operational issues must have owners"; migration 0015,
+ * OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS). Runs in the worker's transaction with the
+ * event's deferral, so it is raised once per wait: while it is open it is deduplicated, and one
+ * closed by hand during this wait (an owner who accepted it) is not raised again. Returns whether
+ * a new exception was opened.
+ */
+export async function escalateHandlerWait(
+  trx: Trx,
+  exceptions: OperationalExceptions,
+  input: {
+    organizationId: string;
+    source: 'outbox' | 'inbox';
+    eventId: string;
+    eventType: string;
+    affectedType: string;
+    affectedId: string;
+    missingHandlers: readonly string[];
+    waitingSince: Date;
+    appVersion: string;
+    workerId: string;
+  },
+): Promise<boolean> {
+  const dedupeKey = handlerWaitKey(input.source, input.eventId);
+  const earlier = await trx
+    .selectFrom('operational_exceptions')
+    .select('id')
+    .where('organization_id', '=', input.organizationId)
+    .where('dedupe_key', '=', dedupeKey)
+    .where('opened_at', '>=', input.waitingSince)
+    .executeTakeFirst();
+  if (earlier) return false;
+  const { deduplicated } = await exceptions.raise(trx, {
+    organizationId: input.organizationId,
+    category: input.source === 'outbox' ? OUTBOX_WAITING_CATEGORY : INBOX_WAITING_CATEGORY,
+    severity: 'high',
+    title: `Follow-up for ${input.eventType} is waiting for handler(s) ${input.missingHandlers.join(', ')} that the running build does not register`,
+    affectedType: input.affectedType,
+    affectedId: input.affectedId,
+    ownerQueue: HANDLER_WAIT_OWNER,
+    dedupeKey,
+    details: {
+      source: input.source,
+      eventId: input.eventId,
+      eventType: input.eventType,
+      missingHandlers: [...input.missingHandlers],
+      waitingSince: input.waitingSince.toISOString(),
+      build: input.appVersion,
+      workerId: input.workerId,
+      resolution:
+        'Deploy a build that registers these handlers, or one that declares them retired (EventHandlerRegistry.retire, Inbox.retire); the worker then settles the event and resolves this exception.',
+    },
+  });
+  return !deduplicated;
+}
+
+/**
+ * Resolves the wait exception of an event the worker has just settled, in the worker's transaction
+ * (after the event's status write). A no-op when none is open (never raised, or closed by hand).
+ */
+export async function resolveHandlerWait(
+  trx: Trx,
+  exceptions: OperationalExceptions,
+  input: {
+    organizationId: string;
+    source: 'outbox' | 'inbox';
+    eventId: string;
+    actorLabel: string;
+  },
+): Promise<void> {
+  await resolveOpenException(trx, exceptions, {
+    organizationId: input.organizationId,
+    dedupeKey: handlerWaitKey(input.source, input.eventId),
+    categories: [OUTBOX_WAITING_CATEGORY, INBOX_WAITING_CATEGORY],
+    actorLabel: input.actorLabel,
+    reason: 'Every handler the event expected has run or is retired; the follow-up settled',
+    resolution: { resolvedBy: input.actorLabel, source: input.source, eventId: input.eventId },
+  });
+}
+
+/**
+ * Resolves the open (or acknowledged) exception with this key, as the worker. The row is locked
+ * first and its status read under the lock (R3-OPERATIONS-03): an operator who closes it at the
+ * same moment either commits first (the lock waits, then the row no longer qualifies and nothing is
+ * done) or waits for this transaction (and then closes a resolved exception). Without the lock the
+ * worker read it open, the close committed, and the transition refused INVALID_TRANSITION inside
+ * the worker's settle transaction, rolling back the event's own dispatch.
+ */
+async function resolveOpenException(
+  trx: Trx,
+  exceptions: OperationalExceptions,
+  input: {
+    organizationId: string;
+    dedupeKey: string;
+    categories: readonly string[];
+    actorLabel: string;
+    reason: string;
+    resolution: Record<string, unknown>;
+  },
+): Promise<void> {
+  const exceptionId = await openExceptionByKey(trx, input.organizationId, input.dedupeKey, {
+    categories: input.categories,
+    lock: true,
+  });
   if (!exceptionId) return;
   await exceptions.transition(
     trx,
     systemPrincipal(input.organizationId, input.actorLabel),
     exceptionId,
     'resolved',
-    {
-      reason: 'The replayed follow-up was delivered',
-      resolution: { resolvedBy: input.actorLabel, source: input.source, eventId: input.eventId },
-    },
+    { reason: input.reason, resolution: input.resolution },
   );
 }
 
@@ -247,14 +367,26 @@ async function openDeadLetterException(
   organizationId: string,
   dedupeKey: string,
 ): Promise<string | null> {
-  const row = await trx
+  return openExceptionByKey(trx, organizationId, dedupeKey, {
+    categories: [OUTBOX_DEAD_LETTER_CATEGORY, INBOX_DEAD_LETTER_CATEGORY],
+    lock: false,
+  });
+}
+
+async function openExceptionByKey(
+  trx: Trx,
+  organizationId: string,
+  dedupeKey: string,
+  options: { categories: readonly string[]; lock: boolean },
+): Promise<string | null> {
+  const query = trx
     .selectFrom('operational_exceptions')
     .select('id')
     .where('organization_id', '=', organizationId)
     .where('dedupe_key', '=', dedupeKey)
-    .where('category', 'in', [OUTBOX_DEAD_LETTER_CATEGORY, INBOX_DEAD_LETTER_CATEGORY])
-    .where('status', 'in', ['open', 'acknowledged'])
-    .executeTakeFirst();
+    .where('category', 'in', [...options.categories])
+    .where('status', 'in', ['open', 'acknowledged']);
+  const row = await (options.lock ? query.forUpdate() : query).executeTakeFirst();
   return row?.id ?? null;
 }
 

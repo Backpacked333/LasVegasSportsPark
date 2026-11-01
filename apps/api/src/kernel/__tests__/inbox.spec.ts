@@ -329,4 +329,68 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
     inbox.retire('fake-rollback', 'gone', 'merged into existing');
     expect(await inbox.runOnce()).toMatchObject({ processed: 1, deferred: 0 });
   });
+
+  it('§5.11 / R3-OPERATIONS-01: a provider event that waits past OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS opens one owned exception, its present handler runs once, and processing it resolves the exception', async () => {
+    const ran: string[] = [];
+    inbox.on('fake-wait', 'present', async (event) => {
+      ran.push(event.providerEventId);
+    });
+    const { id } = await inbox.record({
+      provider: 'fake-wait',
+      providerEventId: 'wait_1',
+      eventType: 'refund.succeeded',
+      payload: {},
+      organizationId: t.organizationId,
+      signatureVerified: true,
+    });
+    await t.db
+      .updateTable('inbox_events')
+      .set({ expected_handlers: ['inbox:fake-wait:missing', 'inbox:fake-wait:present'] })
+      .where('id', '=', id)
+      .execute();
+    const startedAt = t.clock.now();
+    const exceptionsOf = () =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .selectAll()
+        .where('dedupe_key', '=', `inbox-wait:${id}`)
+        .execute();
+    expect(await inbox.runOnce()).toMatchObject({ deferred: 1 });
+    expect(await exceptionsOf()).toEqual([]);
+    t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS * 1000);
+    expect(await inbox.runOnce()).toMatchObject({ deferred: 1 });
+    t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+    expect(await inbox.runOnce()).toMatchObject({ deferred: 1 });
+    const [opened, ...more] = await exceptionsOf();
+    expect(more).toEqual([]);
+    expect(opened).toMatchObject({
+      category: 'reliability.inbox_waiting_for_handler',
+      owner_queue: 'system_administrator',
+      status: 'open',
+      affected_type: 'inbox_event',
+      affected_id: id,
+    });
+    expect(opened!.details).toMatchObject({
+      eventId: id,
+      missingHandlers: ['inbox:fake-wait:missing'],
+      waitingSince: startedAt.toISOString(),
+    });
+    // The present handler ran on the first pass only.
+    expect(ran).toEqual(['wait_1']);
+
+    inbox.on('fake-wait', 'missing', async (event) => {
+      ran.push(`missing:${event.providerEventId}`);
+    });
+    t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+    expect(await inbox.runOnce()).toMatchObject({ processed: 1 });
+    expect(ran).toEqual(['wait_1', 'missing:wait_1']);
+    expect((await exceptionsOf()).map((e) => e.status)).toEqual(['resolved']);
+    expect(
+      await t.db
+        .selectFrom('inbox_events')
+        .select(['status', 'waiting_since', 'attempts'])
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: 'processed', waiting_since: null, attempts: 1 });
+  });
 });

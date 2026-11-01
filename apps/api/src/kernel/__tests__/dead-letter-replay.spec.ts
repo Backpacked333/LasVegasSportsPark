@@ -1,5 +1,6 @@
 import { newId, systemPrincipal } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { staffPrincipal } from '../../testing/principals';
 import { createTestApp, type TestApp } from '../../testing/test-app';
@@ -201,6 +202,49 @@ describe('dead-letter replay (R3-OPERATIONS-03, §5.11, §4.12)', () => {
     expect((await exceptionFor(`outbox:${id}`)).status).toBe('closed');
     broken = false;
     expect(await dispatcher.runOnce()).toMatchObject({ dispatched: 1 });
+  });
+
+  it('R3-OPERATIONS-03: an operator who closes the dead-letter exception while the worker settles the replayed event does not roll the dispatch back (PGlite and TEST_DATABASE_URL)', async () => {
+    const id = await deadLetteredOutboxEvent();
+    const exception = await exceptionFor(`outbox:${id}`);
+    const manager = staffPrincipal(t.organizationId, ['general_manager']);
+    expect((await replay(`/v1/outbox-events/${id}/replay`, manager)).status).toBe(200);
+    broken = false;
+    let lockTaken!: () => void;
+    const taken = new Promise<void>((resolve) => {
+      lockTaken = resolve;
+    });
+    // The operator's close holds the exception row until the worker waits on it (PostgreSQL); under
+    // PGlite the two transactions run one after the other.
+    const closing = uow.run(async ({ trx }) => {
+      await exceptions.transition(trx, manager, exception.id, 'closed', {
+        reason: 'Refunded by hand; the follow-up is no longer wanted',
+      });
+      lockTaken();
+      if (!t.database.concurrent) return;
+      const self = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(trx);
+      const pid = self.rows[0]!.pid;
+      // Polled on another connection: a transaction keeps its first view of pg_stat_activity.
+      for (let poll = 0; poll < 250; poll += 1) {
+        const blocked = await sql<{ n: number }>`
+          select count(*)::int as n from pg_stat_activity where ${pid} = any(pg_blocking_pids(pid))
+        `.execute(t.db);
+        if ((blocked.rows[0]?.n ?? 0) > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error('the worker never waited on the exception row');
+    });
+    await taken;
+    const [summary] = await Promise.all([dispatcher.runOnce(), closing]);
+    expect(summary).toMatchObject({ dispatched: 1 });
+    expect(
+      await t.db
+        .selectFrom('outbox_events')
+        .select('status')
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: 'dispatched' });
+    expect((await exceptionFor(`outbox:${id}`)).status).toBe('closed');
   });
 
   it('R3-OPERATIONS-03 / §4.11: a dead-lettered provider event is replayed by system administration and its exception resolved once processed', async () => {

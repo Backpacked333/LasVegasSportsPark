@@ -131,6 +131,16 @@ export const ConfigSchema = z
      */
     OUTBOX_MISSING_HANDLER_RETRY_SECONDS: z.coerce.number().int().min(1).default(300),
     /**
+     * How long an outbox or inbox event may wait for a missing handler (see
+     * OUTBOX_MISSING_HANDLER_RETRY_SECONDS) before its owner is told (§5.11 "operational issues
+     * must have owners"; technical value, longer than a rolling deploy). From then on the worker
+     * keeps an operational exception open for it (`reliability.outbox_waiting_for_handler` or
+     * `reliability.inbox_waiting_for_handler`, system administration) naming the missing handlers,
+     * and resolves it once the event settles. The event itself keeps waiting: the wait ends when a
+     * build that registers the handlers, or declares them retired, processes it.
+     */
+    OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS: z.coerce.number().int().min(1).default(3600),
+    /**
      * How long the worker waits on SIGTERM or SIGINT for the work in flight (the outbox and inbox
      * event in hand, a background worker pass, a periodic job pass, an idempotency sweep) before it
      * closes the application and the database and exits (R3-OPERATIONS-10; technical value: keep it

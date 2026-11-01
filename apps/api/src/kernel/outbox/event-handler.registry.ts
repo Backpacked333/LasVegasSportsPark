@@ -63,7 +63,10 @@ export interface HandlerOptions {
  * is removed on purpose must be declared `retire`d under the same name, so events recorded while
  * it existed do not wait for it forever. Handlers are registered unconditionally in
  * `onModuleInit` (never by process role or environment), so the API processes that record events
- * and the workers that dispatch them expect the same handlers.
+ * and the workers that dispatch them expect the same handlers. The committed handler manifest
+ * (`apps/api/src/__tests__/event-handler-manifest.json`) lists every name per event type, and its
+ * test fails the build when a listed name is neither registered nor retired, so a rename or a
+ * removal without `retire` cannot ship; a new handler is added to the manifest with its module.
  */
 @Injectable()
 export class EventHandlerRegistry {
@@ -135,5 +138,12 @@ export class EventHandlerRegistry {
 
   list(): RegisteredHandler[] {
     return [...this.byType.values()].flat();
+  }
+
+  /** The retired handler names, by event type (sorted). */
+  retiredNames(): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    for (const [eventType, names] of this.retired) out.set(eventType, [...names.keys()].sort());
+    return out;
   }
 }
