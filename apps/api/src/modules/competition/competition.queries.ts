@@ -329,3 +329,58 @@ export async function teamNamesOf(
     .execute();
   return new Map(rows.map((r) => [r.id, r.name]));
 }
+
+/**
+ * The facility a fixture belongs to (R3-TRACE-A-01, R3-TRACE-A-04, SPK-SCHED-008): its venue
+ * (copied from its scheduling event), else its division's facility. Null when neither is known.
+ */
+export async function fixtureFacilityId(
+  db: Reader,
+  organizationId: string,
+  fixture: { venue_facility_id: string | null; division_id: string | null },
+): Promise<string | null> {
+  if (fixture.venue_facility_id) return fixture.venue_facility_id;
+  if (!fixture.division_id) return null;
+  const division = await db
+    .selectFrom('divisions')
+    .select('facility_id')
+    .where('organization_id', '=', organizationId)
+    .where('id', '=', fixture.division_id)
+    .executeTakeFirst();
+  return division?.facility_id ?? null;
+}
+
+/** {@link fixtureFacilityId} for a fixture known by id (null when the fixture is not found). */
+export async function fixtureFacilityIdOf(
+  db: Reader,
+  organizationId: string,
+  fixtureId: string,
+): Promise<string | null> {
+  const fixture = await db
+    .selectFrom('fixtures')
+    .select(['venue_facility_id', 'division_id'])
+    .where('organization_id', '=', organizationId)
+    .where('id', '=', fixtureId)
+    .executeTakeFirst();
+  return fixture ? fixtureFacilityId(db, organizationId, fixture) : null;
+}
+
+/** The facility of a team entry's division (R3-TRACE-A-01); null when unplaced or not found. */
+export async function entryFacilityId(
+  db: Reader,
+  organizationId: string,
+  teamEntryId: string,
+): Promise<string | null> {
+  const row = await db
+    .selectFrom('team_entries')
+    .leftJoin('divisions', (join) =>
+      join
+        .onRef('divisions.organization_id', '=', 'team_entries.organization_id')
+        .onRef('divisions.id', '=', 'team_entries.division_id'),
+    )
+    .select('divisions.facility_id')
+    .where('team_entries.organization_id', '=', organizationId)
+    .where('team_entries.id', '=', teamEntryId)
+    .executeTakeFirst();
+  return row?.facility_id ?? null;
+}

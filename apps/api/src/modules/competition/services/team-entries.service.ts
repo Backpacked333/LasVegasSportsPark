@@ -187,13 +187,25 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     // R3-TRACE-A-01 (§2.1, SPK-CAP-004/005): staff powers follow a staff role that holds this
     // action, never the principal's kind. A captain who is also an official or a coach renews or
     // creates as a captain: inside the registration window, as their own captain, unplaced.
+    // In the facility of the division the entry is placed in, when it names one (§4.3); a
+    // season has no facility of its own.
+    const placement = input.divisionId
+      ? await this.db
+          .selectFrom('divisions')
+          .select('facility_id')
+          .where('organization_id', '=', organizationId)
+          .where('season_id', '=', input.seasonId)
+          .where('id', '=', input.divisionId)
+          .executeTakeFirst()
+      : undefined;
+    const scope = { organizationId, facilityId: placement?.facility_id ?? null };
     const staff = await staffAuthority(
       this.authorization,
       principal,
       input.renewFromEntryId
         ? CompetitionActions.renewTeamEntry
         : CompetitionActions.createTeamEntry,
-      { organizationId },
+      scope,
     );
     if (!staff && (input.teamId || input.captainPersonId || input.divisionId)) {
       throw errors.accessDenied(
@@ -202,9 +214,12 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     }
     if (
       input.divisionId &&
-      !(await staffAuthority(this.authorization, principal, CompetitionActions.approveTeamEntry, {
-        organizationId,
-      }))
+      !(await staffAuthority(
+        this.authorization,
+        principal,
+        CompetitionActions.approveTeamEntry,
+        scope,
+      ))
     ) {
       // Placing an entry in a division is the approval action's power (SPK-COMP-004).
       throw errors.accessDenied('Only league management places an entry in a division.', {
@@ -976,6 +991,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       // R3-TRACE-A-01: staff who read the workspace through a staff role, not every staff kind.
       staff: await staffAuthority(this.authorization, principal, CompetitionActions.readTeamEntry, {
         organizationId,
+        facilityId,
       }),
       timezone: facility?.timezone ?? null,
     };
@@ -1025,6 +1041,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       const canManage =
         (await staffAuthority(this.authorization, principal, CompetitionActions.readTeamEntry, {
           organizationId,
+          facilityId: context.division?.facility_id,
         })) ||
         (principal.personId !== null &&
           (await this.teamAuthority.hasTeamRole(

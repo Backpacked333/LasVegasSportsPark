@@ -59,6 +59,7 @@ import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
 import {
   effectiveRoles,
+  fixtureFacilityId,
   loadSeasonRow,
   rosterRowsEffectiveAt,
   statusAt,
@@ -433,6 +434,8 @@ export class FixturesService implements FixturePort {
     const organizationId = organizationOf(principal);
     const { fixture, operationId } = plan;
     let event: Event | null = null;
+    /** The facility of the game this command canceled (for the season's obligation follow-up). */
+    let canceledFacilityId: string | null = null;
     try {
       if (plan.step === 'create_event' && plan.schedule) {
         event = await this.scheduling.createEvent(principal, {
@@ -464,6 +467,7 @@ export class FixturesService implements FixturePort {
         });
       } else if (plan.step === 'cancel_event' && fixture.scheduling_event_id) {
         const current = await this.scheduling.getEvent(principal, fixture.scheduling_event_id);
+        canceledFacilityId = current.facilityId;
         if (current.status !== 'canceled') {
           await this.scheduling.cancelEvent(principal, fixture.scheduling_event_id, {
             reason: plan.reason ?? `fixture ${plan.change}`,
@@ -567,6 +571,24 @@ export class FixturesService implements FixturePort {
         correlationId,
         operationId,
       );
+      // R3-TRACE-A-04 (SPK-FIX-002, SPK-AT-010 step 5): the command wrote the fixture's status in
+      // this transaction, so the later scheduling sync finds nothing to change; the season's
+      // incomplete-season exception follows here. A postponement or unscheduling loses the game
+      // (opens or keeps it, with owner and deadline); a schedule or cancel that leaves nothing
+      // unscheduled resolves it.
+      if (updated.status !== before.status) {
+        await this.obligations.seasonScheduleChanged(trx, {
+          organizationId,
+          facilityId:
+            event?.facilityId ??
+            canceledFacilityId ??
+            (await fixtureFacilityId(trx, organizationId, updated)),
+          seasonId: updated.season_id,
+          fixtureId: updated.id,
+          eventId: event?.id ?? before.scheduling_event_id,
+          lost: isUnplaced(updated.status) && !isUnplaced(before.status),
+        });
+      }
       return { fixture: toFixture(updated), operationId, operationStatus: 'succeeded' };
     });
     return { result };
@@ -862,8 +884,18 @@ export class FixturesService implements FixturePort {
       throw error;
     }
     if (current.sourceType !== 'fixture' || current.sourceId !== fixture.id) return;
-    // the fixture moved on to another event (rescheduled through a new one): this one is stale
-    if (fixture.scheduling_event_id !== null && fixture.scheduling_event_id !== current.id) return;
+    // The fixture moved on to another event (rescheduled through a new one): this one is stale.
+    // Unless the linked event is canceled and this published event is its replacement: a draft
+    // that cancels a fixture's game and creates another (R3-TRACE-A-04) may be delivered in either
+    // order, and a canceled event is terminal, so it is never the fixture's game again.
+    if (fixture.scheduling_event_id !== null && fixture.scheduling_event_id !== current.id) {
+      if (
+        current.status !== 'published' ||
+        !(await this.eventCanceled(system, fixture.scheduling_event_id))
+      ) {
+        return;
+      }
+    }
     if (current.status === 'canceled') {
       // EventMachine: canceled is terminal, so a canceled event is never linked again.
       if (fixture.status !== 'scheduled' || fixture.scheduling_event_id !== current.id) return;
@@ -892,16 +924,19 @@ export class FixturesService implements FixturePort {
           event.correlationId,
           event.operationId,
         );
-        // R3-TRACE-A-04 (SPK-FIX-002): a fixture whose game scheduling canceled (a closure, a
-        // direct cancellation, a published draft) is a remaining obligation with an owner and a
-        // deadline, never a silent postponement.
+        // R3-TRACE-A-04 (SPK-FIX-002): a fixture whose game scheduling canceled outside a draft
+        // (a closure, a direct cancellation) is a remaining obligation with an owner and a
+        // deadline, never a silent postponement. A published draft's cancellation was already
+        // counted by the publication's own obligation check, in its transaction; here it is only
+        // reconciled, so a draft that cancels a game and creates its replacement never opens
+        // the exception between the two deliveries.
         await this.obligations.seasonScheduleChanged(ctx.trx, {
           organizationId,
           facilityId: current.facilityId,
           seasonId: updated.season_id,
           fixtureId: updated.id,
           eventId: current.id,
-          lost: true,
+          lost: payload.publicationId === null,
         });
       }
       return;
@@ -960,6 +995,16 @@ export class FixturesService implements FixturePort {
           lost: false,
         });
       }
+    }
+  }
+
+  /** Whether the scheduling event is canceled or gone (read inside the handler's transaction). */
+  private async eventCanceled(system: Principal, eventId: string): Promise<boolean> {
+    try {
+      return (await this.scheduling.getEvent(system, eventId)).status === 'canceled';
+    } catch (error) {
+      if (DomainError.is(error) && error.code === 'NOT_FOUND') return true;
+      throw error;
     }
   }
 
@@ -1043,6 +1088,18 @@ export class FixturesService implements FixturePort {
       correlationId,
       null,
     );
+    // R3-TRACE-A-04: a forfeit of an unplaced fixture leaves the season's open work; the last one
+    // resolves the season's incomplete-season exception.
+    if (isUnplaced(fixture.status)) {
+      await this.obligations.seasonScheduleChanged(trx, {
+        organizationId,
+        facilityId: await fixtureFacilityId(trx, organizationId, updated),
+        seasonId: updated.season_id,
+        fixtureId: updated.id,
+        eventId: updated.scheduling_event_id,
+        lost: false,
+      });
+    }
     return toFixtureSummary(updated);
   }
 
@@ -1190,11 +1247,13 @@ export class FixturesService implements FixturePort {
   private async authorizeRead(principal: Principal, fixture: FixtureRow, at: Date): Promise<void> {
     const organizationId = fixture.organization_id;
     const base = { type: 'fixture', id: fixture.id, organizationId, protected: true };
-    // R3-TRACE-A-01 (§3.1): a staff role that reads fixtures reads every fixture; anyone else, a
-    // staff member whose roles do not cover the read included, reads as a player or guardian.
+    // R3-TRACE-A-01 (§3.1): a staff role that reads fixtures reads every fixture of its facility
+    // scope (the venue, else the division's facility); anyone else, a staff member whose roles or
+    // facilities do not cover the read included, reads as a player or guardian.
     if (
       await staffAuthority(this.authorization, principal, CompetitionActions.readFixture, {
         organizationId,
+        facilityId: await fixtureFacilityId(executorFor(this.db), organizationId, fixture),
       })
     ) {
       return;
@@ -1379,6 +1438,11 @@ export class FixturesService implements FixturePort {
     );
     return { summary, mine };
   }
+}
+
+/** A fixture that still needs a game: it counts in its season's remaining obligations (SPK-FIX-002). */
+function isUnplaced(status: FixtureStatus): boolean {
+  return status === 'unscheduled' || status === 'postponed';
 }
 
 function commitmentsOf(fixture: FixtureRow) {

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { systemPrincipal } from '@sportspark/contracts';
+import type { FixtureStatus } from '@sportspark/db';
 import {
   CLOCK,
   FacilityDirectory,
@@ -48,6 +49,14 @@ export class FixtureObligationsService implements FixtureObligationPort {
     const seasonIds = new Set<string>();
     /** Fixtures whose published game this publication cancels, by season (R3-TRACE-A-04). */
     const unplaced = new Map<string, string>();
+    /** Events this publication cancels: a fixture linked to one of them loses that game. */
+    const canceledEventIds = new Set(
+      check.changes.flatMap((c) =>
+        c.kind === 'cancel' && c.targetEventId ? [c.targetEventId] : [],
+      ),
+    );
+    /** Fixtures a create of this draft gives a game, with the change that does it. */
+    const createdFor = new Map<string, number>();
     for (const change of check.changes) {
       const proposed = change.proposed;
       // R3-TRACE-A-04 (SPK-FIX-002): a change to a fixture's published game is about that fixture
@@ -57,9 +66,14 @@ export class FixtureObligationsService implements FixtureObligationPort {
         : null;
       if (linked) {
         if (change.kind === 'cancel') {
-          // the fixture is postponed when the cancellation lands: it remains to be scheduled
-          seasonIds.add(linked.season_id);
-          unplaced.set(linked.id, linked.season_id);
+          // Only a scheduled fixture is postponed when the cancellation lands (the sync's own
+          // rule) and so remains to be scheduled. A played, forfeit, abandoned or canceled
+          // fixture keeps its outcome: canceling its game frees the resource and creates no
+          // obligation.
+          if (linked.status === 'scheduled') {
+            seasonIds.add(linked.season_id);
+            unplaced.set(linked.id, linked.season_id);
+          }
           continue;
         }
         const sourceType = proposed.sourceType ?? 'fixture';
@@ -107,6 +121,20 @@ export class FixtureObligationsService implements FixtureObligationPort {
         }
         draftFixtureIds.add(fixture.id);
         seasonIds.add(fixture.season_id);
+        if (change.kind === 'create') {
+          const earlier = createdFor.get(fixture.id);
+          if (earlier !== undefined) {
+            obligations.push({
+              code: 'fixture_already_scheduled',
+              message: `Changes ${earlier} and ${change.sequence} would both give fixture ${fixture.id} a published game.`,
+              owner: 'league_manager',
+              deadline: null,
+              blocking: true,
+            });
+          } else {
+            createdFor.set(fixture.id, change.sequence);
+          }
+        }
         if (fixture.away_entry_id === null) {
           obligations.push({
             code: 'bye_has_no_game',
@@ -129,11 +157,14 @@ export class FixtureObligationsService implements FixtureObligationPort {
             blocking: true,
           });
         }
+        // A draft that cancels the fixture's current game and creates its replacement leaves it
+        // exactly one game (cancel + create is a move to another resource or day).
         if (
           change.kind === 'create' &&
           fixture.status === 'scheduled' &&
           fixture.scheduling_event_id !== null &&
-          fixture.scheduling_event_id !== change.targetEventId
+          fixture.scheduling_event_id !== change.targetEventId &&
+          !canceledEventIds.has(fixture.scheduling_event_id)
         ) {
           obligations.push({
             code: 'fixture_already_scheduled',
@@ -198,15 +229,15 @@ export class FixtureObligationsService implements FixtureObligationPort {
   /** Opens or resolves the season's incomplete-season exception (same transaction as publication). */
   private async followUp(
     trx: Trx,
-    check: FixtureObligationCheck,
+    check: { organizationId: string; facilityId: string | null; draftId?: string },
     seasonId: string,
     remaining: number,
     deadline: Date,
-    options: { cause?: { fixtureId: string; eventId: string } } = {},
+    options: { cause?: { fixtureId: string; eventId: string | null } } = {},
   ): Promise<void> {
     const dedupeKey = `incomplete_season:${seasonId}`;
-    // a publication names its draft; a sync outside one names the fixture and event that changed
-    const origin = options.cause ?? { draftId: check.draftId };
+    // a publication names its draft; a change outside one names the fixture and event that changed
+    const origin = options.cause ?? { draftId: check.draftId ?? null };
     if (remaining > 0) {
       await this.exceptions.raise(trx, {
         organizationId: check.organizationId,
@@ -258,11 +289,11 @@ export class FixtureObligationsService implements FixtureObligationPort {
     db: Reader,
     organizationId: string,
     eventId: string,
-  ): Promise<{ id: string; season_id: string } | null> {
+  ): Promise<{ id: string; season_id: string; status: FixtureStatus } | null> {
     return (
       (await db
         .selectFrom('fixtures')
-        .select(['id', 'season_id'])
+        .select(['id', 'season_id', 'status'])
         .where('organization_id', '=', organizationId)
         .where('scheduling_event_id', '=', eventId)
         .executeTakeFirst()) ?? null
@@ -270,22 +301,25 @@ export class FixtureObligationsService implements FixtureObligationPort {
   }
 
   /**
-   * R3-TRACE-A-04 (SPK-FIX-002, SPK-AT-010 step 5): a fixture lost or regained its game outside a
-   * draft publication's obligation check (a closure that cancels affected events, a direct event
-   * cancellation, a late sync). Called by the fixture sync inside its own transaction. When the
-   * season now has unscheduled fixtures and `lost` is true, the season's one
-   * `competition.incomplete_season` exception is opened (or kept) with the league manager as owner
-   * and the remaining-fixture deadline; when nothing is unscheduled any more, the open one is
-   * resolved. A regained game never opens one.
+   * R3-TRACE-A-04 (SPK-FIX-002, SPK-AT-010 step 5): a fixture lost or regained its game, or left
+   * the season's open work, outside a draft publication's obligation check: a competition fixture
+   * command (schedule, reschedule, postpone, unschedule, cancel), a recorded outcome (a forfeit of
+   * an unplaced fixture), or the fixture sync after a closure or a direct event cancellation.
+   * Called inside the caller's transaction, after the fixture row is written. When the season now
+   * has unscheduled fixtures and `lost` is true, the season's one `competition.incomplete_season`
+   * exception is opened (or kept) with the league manager as owner and the remaining-fixture
+   * deadline (capped at the end of the season's last local day when `facilityId` is known); when
+   * nothing is unscheduled any more, the open one is resolved. A change that loses nothing never
+   * opens one.
    */
   async seasonScheduleChanged(
     trx: Trx,
     input: {
       organizationId: string;
-      facilityId: string;
+      facilityId: string | null;
       seasonId: string;
       fixtureId: string;
-      eventId: string;
+      eventId: string | null;
       lost: boolean;
     },
   ): Promise<void> {
@@ -297,30 +331,24 @@ export class FixtureObligationsService implements FixtureObligationPort {
       .where('status', 'in', ['unscheduled', 'postponed'])
       .where('away_entry_id', 'is not', null)
       .execute();
-    const check: FixtureObligationCheck = {
-      organizationId: input.organizationId,
-      facilityId: input.facilityId,
-      draftId: '',
-      changes: [],
-    };
+    const cause = { fixtureId: input.fixtureId, eventId: input.eventId };
     if (remaining.length === 0) {
-      await this.followUp(trx, check, input.seasonId, 0, this.clock.now(), {
-        cause: { fixtureId: input.fixtureId, eventId: input.eventId },
-      });
+      await this.followUp(trx, input, input.seasonId, 0, this.clock.now(), { cause });
       return;
     }
     if (!input.lost) return;
     const season = await loadSeasonRow(trx, input.organizationId, input.seasonId);
-    const seasonEnd = season
-      ? await this.dayAfter(trx, input.organizationId, input.facilityId, season.ends_on)
-      : null;
+    const seasonEnd =
+      season && input.facilityId
+        ? await this.dayAfter(trx, input.organizationId, input.facilityId, season.ends_on)
+        : null;
     await this.followUp(
       trx,
-      check,
+      input,
       input.seasonId,
       remaining.length,
       unscheduledFixtureDeadline(this.clock.now(), seasonEnd),
-      { cause: { fixtureId: input.fixtureId, eventId: input.eventId } },
+      { cause },
     );
   }
 

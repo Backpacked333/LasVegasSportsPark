@@ -36,13 +36,13 @@ import {
 } from '../competition-matches.ports';
 import { MatchActions } from '../competition-matches.actions';
 import { CompetitionActions } from '../competition.actions';
-import { loadRuleSetRow, loadSeasonRow } from '../competition.queries';
+import { fixtureFacilityIdOf, loadRuleSetRow, loadSeasonRow } from '../competition.queries';
 import {
   RESTRICTED_SOURCE_TYPES,
   iso,
   organizationOf,
+  readsRestrictedDetail,
   ruleSetContentOf,
-  staffAuthority,
 } from '../competition.shared';
 import {
   READINESS_CHECK_REGISTRY,
@@ -107,12 +107,15 @@ export class ReadinessService {
     // Authorization: whoever may read the fixture may read its readiness (protected NOT_FOUND, §4.10).
     const detail = await this.fixtures.get(principal, fixtureId);
     const organizationId = organizationOf(principal);
-    // R3-TRACE-A-01: restricted record ids reach a reader with a staff role that reads readiness,
-    // never a captain, player or guardian because they also hold some other staff role.
-    const staff = await staffAuthority(this.authorization, principal, MatchActions.readReadiness, {
+    // R3-TRACE-A-01 (SPK-DISC-004): every reader of the fixture reads its readiness; restricted
+    // record ids (suspensions, disputes, incidents, audit records) reach only a staff role that
+    // reads discipline in the fixture's facility, never an official, coach or scheduler who reads
+    // readiness, nor a captain, player or guardian because they also hold some other staff role.
+    const restrictedDetail = await readsRestrictedDetail(this.authorization, principal, {
       organizationId,
+      facilityId: await fixtureFacilityIdOf(this.db, organizationId, fixtureId),
     });
-    return this.assess(organizationId, detail, { restricted: !staff });
+    return this.assess(organizationId, detail, { restricted: !restrictedDetail });
   }
 
   /**

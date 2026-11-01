@@ -2,7 +2,12 @@ import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
-import { createPersonFixture, createRelationshipFixture } from '../../identity';
+import {
+  authHeaderForPerson,
+  createPersonFixture,
+  createRelationshipFixture,
+  createStaffMemberFixture,
+} from '../../identity';
 import { proposedRuleSetContent } from '../competition.policy';
 import { SUSPENSION_CHECK_IMPL, type SuspensionCheckPort } from '../ports';
 import {
@@ -332,5 +337,139 @@ describe('R3-TRACE-A-01: staff powers follow the action’s staff roles, never t
       .where('dispute_id', '=', disputeId)
       .execute();
     expect(appeals).toEqual([]);
+  });
+  /** Restricted detail is absent: no exact age, no other-team count, no restricted record id. */
+  function expectRedacted(reasons: Array<{ code: string; message: string; source: unknown }>) {
+    const age = reasons.find((r) => r.code === 'above_division_age');
+    expect(age?.message).toMatch(/^Above the division maximum age of 11 on /);
+    expect(JSON.stringify(reasons)).not.toMatch(/Age \d+/);
+    expect(reasons.find((r) => r.code === 'suspended')?.source).toEqual({
+      type: 'suspension',
+      id: null,
+    });
+    expect(JSON.stringify(reasons)).not.toContain('suspension-77');
+  }
+
+  it('SPK-DISC-004 / SPK-CAP-002: restricted detail belongs to discipline staff; a coach who captains, a coach and front desk with no role on the entry read explanations and invitation previews redacted', async () => {
+    const coach = await staffMember(t, ['coach']);
+    const season = await createSeasonFixture(t, { status: 'open' });
+    const u11 = await createDivisionFixture(t, {
+      seasonId: season.seasonId,
+      criteria: { ageBand: { minAge: null, maxAge: 11 } },
+    });
+    const entry = await createTeamEntryFixture(t, {
+      seasonId: season.seasonId,
+      captainPersonId: coach.personId,
+      divisionId: u11,
+    });
+    const tooOld = await createPersonFixture(t, { kind: 'child', dateOfBirth: '2012-06-01' });
+    suspended.add(tooOld);
+    try {
+      const otherCoach = await staffMember(t, ['coach']);
+      for (const actor of [coach, otherCoach, frontDesk]) {
+        const res = await get(`/team-entries/${entry.teamEntryId}/eligibility`, actor, {
+          personId: tooOld,
+        });
+        expect(res.status).toBe(200);
+        expectRedacted(res.body.reasons);
+      }
+      for (const actor of [coach, frontDesk]) {
+        const invited = await post(`/team-entries/${entry.teamEntryId}/invitations`, actor, {
+          recipientPersonId: tooOld,
+        });
+        expect(invited.status).toBe(422);
+        expectRedacted(invited.body.details.reasons);
+      }
+      const asManager = await get(`/team-entries/${entry.teamEntryId}/eligibility`, leagueManager, {
+        personId: tooOld,
+      });
+      expect(
+        asManager.body.reasons.find((r: { code: string }) => r.code === 'above_division_age')
+          .message,
+      ).toMatch(/^Age 14 on /);
+      expect(
+        asManager.body.reasons.find((r: { code: string }) => r.code === 'suspended').source,
+      ).toEqual({ type: 'suspension', id: 'suspension-77' });
+    } finally {
+      suspended.delete(tooOld);
+    }
+  });
+
+  it('§2.1 / §4.3: staff powers apply in the role’s facility scope; league management scoped to another facility places, explains and reads nothing here as staff', async () => {
+    const annex = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: annex,
+        organization_id: t.organizationId,
+        slug: `annex-${annex.slice(-12)}`,
+        name: 'Annex',
+        timezone: 'America/Los_Angeles',
+        address: null,
+      })
+      .execute();
+    const scopedTo = async (facilityId: string): Promise<Actor> => {
+      const staff = await createStaffMemberFixture(t, {
+        roles: ['league_manager'],
+        facilityIds: [facilityId],
+      });
+      return {
+        personId: staff.personId,
+        accountId: staff.accountId,
+        header: await authHeaderForPerson(t, staff.personId),
+      };
+    };
+    const annexManager = await scopedTo(annex);
+    const localManager = await scopedTo(t.facilityId);
+    const season = await createSeasonFixture(t, { status: 'open' });
+    // the division is run at this test organization's main facility
+    const division = await createDivisionFixture(t, {
+      seasonId: season.seasonId,
+      facilityId: t.facilityId,
+    });
+    const captain = await createPersonFixture(t, { kind: 'adult' });
+    const body = (name: string) => ({
+      seasonId: season.seasonId,
+      team: { name },
+      captainPersonId: captain,
+      divisionId: division,
+    });
+    const refused = await post('/team-entries', annexManager, body('Annex placed'));
+    expect(refused.status).toBe(403);
+    const placed = await post('/team-entries', localManager, body('Locally placed'));
+    expect(placed.status).toBe(201);
+    const entryId = placed.body.entry.id as string;
+
+    const player = await createPersonFixture(t, { kind: 'adult' });
+    suspended.add(player);
+    try {
+      expect(
+        (await get(`/team-entries/${entryId}/eligibility`, annexManager, { personId: player }))
+          .status,
+      ).toBe(404);
+      const local = await get(`/team-entries/${entryId}/eligibility`, localManager, {
+        personId: player,
+      });
+      expect(local.status).toBe(200);
+      expect(
+        local.body.reasons.find((r: { code: string }) => r.code === 'suspended').source,
+      ).toEqual({ type: 'suspension', id: 'suspension-77' });
+    } finally {
+      suspended.delete(player);
+    }
+
+    const other = await createTeamEntryFixture(t, {
+      seasonId: season.seasonId,
+      captainPersonId: await createPersonFixture(t, { kind: 'adult' }),
+      divisionId: division,
+    });
+    const fixtureId = await createFixtureFixture(t, {
+      seasonId: season.seasonId,
+      divisionId: division,
+      homeEntryId: entryId,
+      awayEntryId: other.teamEntryId,
+    });
+    expect((await get(`/fixtures/${fixtureId}`, annexManager)).status).toBe(404);
+    expect((await get(`/fixtures/${fixtureId}`, localManager)).status).toBe(200);
   });
 });

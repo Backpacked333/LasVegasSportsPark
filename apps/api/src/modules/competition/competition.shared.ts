@@ -38,6 +38,7 @@ import type {
 import { sql, type Selectable } from 'kysely';
 import type { ActionDefinition, AuthorizationService, RequestWithContext } from '../../kernel';
 import { localDateOf } from '../scheduling';
+import { MatchActions } from './competition-matches.actions';
 import type { FixtureSummary, TeamEntrySummary } from './ports';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records (§4.10). */
@@ -62,7 +63,13 @@ export const RESTRICTED_SOURCE_TYPES: ReadonlySet<string> = new Set([
   'incident',
 ]);
 
-/** Where a staff role must apply for {@link staffAuthority}: the organization, and a facility when the target has one. */
+/**
+ * Where a staff role must apply for {@link staffAuthority}: the organization, and the facility of
+ * the record when one is known (the division's facility for entries and rosters; the fixture's
+ * venue, else its division's facility, for fixtures, results, readiness and disputes). A record
+ * with no known facility (a season-wide list, a team, a discipline record, a division without a
+ * facility) is decided organization-wide.
+ */
 export interface StaffAuthorityTarget {
   organizationId: string;
   facilityId?: string | null;
@@ -72,12 +79,13 @@ export interface StaffAuthorityTarget {
  * R3-TRACE-A-01 (§2.1 "access depends on the specific action and scope, not merely a role label",
  * SPK-IAM-001/003, §3.1 "a coach who is also a parent receives each permission only in its proper
  * scope"): whether the principal acts on `action` with staff authority, meaning a system principal
- * of the organization, or a staff principal holding one of the action's staff roles within that
- * role's facility scope. The decision names no subject and no team entry, so the kernel can only
- * allow it on the staff-role basis. Staff kind alone does not count: identity marks every holder of
- * any staff role as kind `staff`, so a captain who is also an official or a coach is a captain on
- * the customer path (registration windows, required approvals, redacted views) unless the action
- * itself lists one of their roles.
+ * of the organization, or a staff principal holding one of the action's staff roles whose facility
+ * scope covers `target.facilityId` (when the caller names one; the kernel skips the facility check
+ * otherwise). The decision names no subject and no team entry, so the kernel can only allow it on
+ * the staff-role basis. Staff kind alone does not count: identity marks every holder of any staff
+ * role as kind `staff`, so a captain who is also an official or a coach is a captain on the
+ * customer path (registration windows, required approvals, redacted views) unless the action
+ * itself lists one of their roles, in that record's facility.
  */
 export async function staffAuthority(
   authorization: Pick<AuthorizationService, 'decide'>,
@@ -93,6 +101,23 @@ export async function staffAuthority(
     facilityId: target.facilityId ?? null,
   });
   return decision.allowed;
+}
+
+/**
+ * R3-TRACE-A-01 (SPK-DISC-004, SPK-CAP-002, §4.10): whether the principal sees restricted detail in
+ * eligibility explanations, invitation and join previews, roster refusals and fixture readiness:
+ * exact ages, other-team counts and the ids of restricted records (suspensions, disputes,
+ * incidents, audit records). It belongs to the staff roles that read discipline
+ * (`competition.read_discipline`, league management) in the record's facility, never to a staff
+ * role that only reads, manages or invites to the entry (front desk, coach, official, support,
+ * finance), and never to a captain, player or guardian.
+ */
+export function readsRestrictedDetail(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  target: StaffAuthorityTarget,
+): Promise<boolean> {
+  return staffAuthority(authorization, principal, MatchActions.readDiscipline, target);
 }
 
 export const iso = (value: Date | string): string => new Date(value).toISOString();

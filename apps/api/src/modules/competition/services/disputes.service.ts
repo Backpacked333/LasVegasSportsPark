@@ -32,7 +32,13 @@ import { MatchEvents } from '../competition-matches.events';
 import { DISPUTE_CAPTAIN_ROLE } from '../competition-matches.policy';
 import { toDispute } from '../competition-matches.shared';
 import { DisputeMachine } from '../competition-matches.state-machines';
-import { loadRuleSetRow, loadSeasonRow, type Reader } from '../competition.queries';
+import {
+  fixtureFacilityId,
+  fixtureFacilityIdOf,
+  loadRuleSetRow,
+  loadSeasonRow,
+  type Reader,
+} from '../competition.queries';
 import {
   hoursFromNow,
   organizationOf,
@@ -95,6 +101,7 @@ export class DisputesService {
       if (
         await staffAuthority(this.authorization, principal, MatchActions.submitDispute, {
           organizationId,
+          facilityId: await fixtureFacilityId(trx, organizationId, fixture),
         })
       ) {
         await this.authorization.require(principal, MatchActions.submitDispute, {
@@ -445,6 +452,7 @@ export class DisputesService {
       out.length === 0 &&
       !(await staffAuthority(this.authorization, principal, MatchActions.readDispute, {
         organizationId,
+        facilityId: await fixtureFacilityIdOf(this.db, organizationId, fixtureId),
       }))
     ) {
       // Customers without authority over any dispute of the fixture learn nothing (§4.10).

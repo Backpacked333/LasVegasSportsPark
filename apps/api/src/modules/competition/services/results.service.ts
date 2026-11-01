@@ -52,6 +52,7 @@ import {
 } from '../competition-matches.shared';
 import { ResultMachine } from '../competition-matches.state-machines';
 import {
+  fixtureFacilityIdOf,
   loadRuleSetRow,
   loadSeasonRow,
   rosterRowsEffectiveAt,
@@ -954,7 +955,9 @@ export class ResultsService {
       .where('fixture_id', '=', fixtureId)
       .orderBy('revision_no')
       .execute();
-    if (await this.readsAsStaff(principal, organizationId)) return rows.map(toResultRevision);
+    if (await this.readsAsStaff(principal, organizationId, fixtureId)) {
+      return rows.map(toResultRevision);
+    }
     return rows
       .filter((r) => r.status === 'official' || r.status === 'superseded')
       .map((r) => customerResultView(toResultRevision(r)));
@@ -964,9 +967,15 @@ export class ResultsService {
    * R3-TRACE-A-01 / R3-TRACE-B-03: the staff view of results is for a staff role that reads them
    * (or the system), never for a player or guardian because they also hold some staff role.
    */
-  private readsAsStaff(principal: Principal, organizationId: string): Promise<boolean> {
+  private async readsAsStaff(
+    principal: Principal,
+    organizationId: string,
+    fixtureId: string,
+  ): Promise<boolean> {
+    // in the fixture's facility (its venue, else its division's facility)
     return staffAuthority(this.authorization, principal, MatchActions.readResults, {
       organizationId,
+      facilityId: await fixtureFacilityIdOf(this.db, organizationId, fixtureId),
     });
   }
 
@@ -1035,7 +1044,9 @@ export class ResultsService {
     const row = await this.loadRevision(this.db, organizationId, revisionId);
     if (!row) throw errors.protectedNotFound('result_revision');
     await this.fixtures.get(principal, row.fixture_id);
-    if (await this.readsAsStaff(principal, organizationId)) return toResultRevision(row);
+    if (await this.readsAsStaff(principal, organizationId, row.fixture_id)) {
+      return toResultRevision(row);
+    }
     if (row.status !== 'official' && row.status !== 'superseded') {
       throw errors.protectedNotFound('result_revision');
     }

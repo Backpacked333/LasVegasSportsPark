@@ -336,6 +336,39 @@ describe('match readiness (SPK-READY-001..004, §4.8 GET /fixtures/{id}/readines
     expect(JSON.stringify(asPlayer.body)).not.toContain(suspensionId);
   });
 
+  it('R3-TRACE-A-01 / SPK-DISC-004: an official reads every fixture’s readiness without restricted record ids; discipline staff keep them', async () => {
+    const fixtureId = await scheduled(home, away, '2027-03-20');
+    const suspensionId = await createSuspensionFixture(t, {
+      subjectPersonId: (home.players[1] as Actor).personId,
+      status: 'proposed',
+      scope: 'competitions',
+      competitionIds: [season.competitionId],
+      matchCount: 1,
+    });
+    const suspensionSources = (body: { issues: Array<{ source: { type: string } }> }) =>
+      body.issues.map((i) => i.source).filter((source) => source.type === 'suspension');
+    const official = await staffMember(t, ['official']);
+    const asOfficial = await readiness(fixtureId, official);
+    expect(asOfficial.status).toBe(200);
+    expect(suspensionSources(asOfficial.body).length).toBeGreaterThan(0);
+    expect(suspensionSources(asOfficial.body)).toEqual(
+      suspensionSources(asOfficial.body).map(() => ({ type: 'suspension', id: null })),
+    );
+    expect(JSON.stringify(asOfficial.body)).not.toContain(suspensionId);
+    // a scheduler and a coach read readiness too, redacted the same way
+    for (const roles of [['scheduler'], ['coach']] as const) {
+      const reader = await staffMember(t, [...roles]);
+      const res = await readiness(fixtureId, reader);
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(res.body)).not.toContain(suspensionId);
+    }
+    const asManager = await readiness(fixtureId, leagueManager);
+    expect(suspensionSources(asManager.body)).toContainEqual({
+      type: 'suspension',
+      id: suspensionId,
+    });
+  });
+
   it('R3-TIME-MONEY-03 / SPK-COMP-002 / SPK-SCHED-008: a match-date age is read on the venue’s local date, so an evening kickoff never ages a player a day early', async () => {
     const matchDate = await createSeasonFixture(t, {
       status: 'active',
