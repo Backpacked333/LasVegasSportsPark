@@ -26,7 +26,14 @@ import {
   type TransitionCaseInput,
   type UpdateCaseInput,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RefusedDuringRecovery,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CaseActionsService } from '../services/case-actions.service';
 import { CasesService } from '../services/cases.service';
 import { CorrelationId, IdempotencyKeyHeader } from './request-context.decorators';
@@ -142,7 +149,14 @@ export class CasesController {
     return this.actions.resendNotification(principal, params.id, body, requestKey, correlationId);
   }
 
+  /**
+   * R3-OPERATIONS-02 (§5.8, SPK-AT-028): runs finance's refund, so it is paused with finance's own
+   * money commands while the organization recovers from a restore (503 INTEGRATION_UNAVAILABLE
+   * `recovery_mode`, before the idempotency key is claimed). Notes, links and settling an unknown
+   * outcome stay available: they move no money.
+   */
   @Post(':id/request-refund')
+  @RefusedDuringRecovery()
   @Idempotent()
   requestRefund(
     @CurrentPrincipal() principal: Principal,

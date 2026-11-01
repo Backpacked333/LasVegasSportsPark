@@ -1,7 +1,8 @@
 import { CORRELATION_ID_HEADER, errors, newId } from '@sportspark/contracts';
 import { sql, type SqlBool } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createTestApp, type TestApp } from '../../../testing';
+import { RecoveryMode, UnitOfWork } from '../../../kernel';
+import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { createCapturedPaymentFixture, RefundsService } from '../../finance';
 import { createOrganizationPeople, type OrganizationPeople } from '../../identity';
 import { MigrationModule, createAuthorityAssignmentFixture } from '../../migration';
@@ -1143,5 +1144,130 @@ describe('helper outcomes that are never recorded (§4.7 invariant 12)', () => {
       operation: 'succeeded',
       exceptions: [{ category: 'support.helper_outcome_unknown', status: 'resolved' }],
     });
+  });
+});
+
+/**
+ * R3-OPERATIONS-02 (§5.8, SPK-AT-028 "external facts reconciled before normal operations resume"):
+ * after a restore the refundable funds may be the restored, stale ones, so a refund requested from
+ * a case is paused like finance's own refund route — at the edge and in the helper itself — until
+ * the general manager resumes normal operation.
+ */
+describe('request-refund during recovery after a restore (SPK-AT-028)', () => {
+  let t: TestApp;
+  let manager: Actor;
+  let people: OrganizationPeople;
+
+  beforeAll(async () => {
+    t = await supportTestApp();
+    manager = await staffMember(t, ['general_manager']);
+    people = await createOrganizationPeople(t);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  const refundsOf = (paymentAttemptId: string) =>
+    t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'status'])
+      .where('payment_attempt_id', '=', paymentAttemptId)
+      .execute();
+  const refundable = (paymentAttemptId: string) =>
+    t.db
+      .selectFrom('payment_refundables')
+      .select(['reserved_minor', 'refunded_minor'])
+      .where('payment_attempt_id', '=', paymentAttemptId)
+      .executeTakeFirstOrThrow();
+
+  it('SPK-AT-028 / §5.8: a refund requested from a case is refused while recovery is active — nothing is reserved or recorded — and the same request succeeds once normal operation resumes', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 4000,
+    });
+    const opened = await post(t, '/v1/cases', manager, {
+      category: 'payment',
+      title: 'Charged twice',
+      subjectPersonId: people.adult.personId,
+    });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(201);
+    const caseId = opened.body.id as string;
+
+    // The restore: the organization enters recovery (the boot path, for this organization).
+    t.clock.advance(60_000);
+    const enteredAt = t.clock.now().toISOString();
+    const recovery = t.app.get(RecoveryMode);
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) => recovery.enter(trx, t.organizationId, 'restore-r3-operations-02'));
+    expect(await recovery.isActive(t.organizationId)).toBe(true);
+
+    const idem = key();
+    const body = {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 1500,
+      reason: 'Charged twice for the same week',
+    };
+    const refused = await post(t, `/v1/cases/${caseId}/request-refund`, manager, body, idem);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(503);
+    expect(refused.body).toMatchObject({
+      code: 'INTEGRATION_UNAVAILABLE',
+      nextAction: 'retry_later',
+      details: { reason: 'recovery_mode' },
+    });
+
+    // An in-process caller of the helper is refused the same way (the service holds the gate).
+    const principal = staffPrincipal(t.organizationId, ['general_manager'], {
+      personId: manager.personId,
+      accountId: manager.accountId,
+    });
+    const inProcess = await t.app
+      .get(CaseActionsService)
+      .requestRefund(principal, caseId, body, key(), null)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(inProcess).toMatchObject({
+      code: 'INTEGRATION_UNAVAILABLE',
+      details: { reason: 'recovery_mode' },
+    });
+
+    // Nothing moved and nothing was recorded: no refund, no reservation, no case action.
+    expect(await refundsOf(payment.paymentAttemptId)).toEqual([]);
+    expect(await refundable(payment.paymentAttemptId)).toEqual({
+      reserved_minor: 0,
+      refunded_minor: 0,
+    });
+    expect((await get(t, `/v1/cases/${caseId}`, manager)).body.actions).toEqual([]);
+    // Work that moves no money continues.
+    const note = await post(t, `/v1/cases/${caseId}/notes`, manager, {
+      body: 'Refund waits for recovery to finish.',
+    });
+    expect(note.status, JSON.stringify(note.body)).toBe(201);
+
+    // Provider facts reconciled — the processor settled nothing since the restore — and the
+    // general manager hands authority back (§5.8).
+    t.clock.advance(60_000);
+    const settled = await post(t, '/v1/settlement-reconciliations', manager, {
+      kind: 'processor_settlement',
+      provider: 'fake-payments',
+      periodStart: enteredAt,
+      periodEnd: t.clock.now().toISOString(),
+      currency: 'USD',
+      reportedMinor: 0,
+      externalReference: 'settlement-after-restore',
+    });
+    expect(settled.status, JSON.stringify(settled.body)).toBe(201);
+    expect(settled.body.status).toBe('balanced');
+    const resumed = await post(t, '/v1/recovery/resume', manager, {
+      reason: 'provider facts reconciled',
+    });
+    expect(resumed.status, JSON.stringify(resumed.body)).toBe(200);
+    // The refused request claimed no idempotency key: the same request now runs, once.
+    const retried = await post(t, `/v1/cases/${caseId}/request-refund`, manager, body, idem);
+    expect(retried.status, JSON.stringify(retried.body)).toBe(201);
+    expect(retried.body.action).toMatchObject({ actionId: 'finance.refund', status: 'succeeded' });
+    expect(await refundsOf(payment.paymentAttemptId)).toHaveLength(1);
   });
 });
