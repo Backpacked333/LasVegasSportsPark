@@ -331,12 +331,15 @@ the source; a team's status defaults to `active` (competition's import default).
   guarded only at their routes.
 - **Size:** the apply runs synchronously in the request (rows in their own small transactions);
   very large batches would need chunked or background apply. HTTP bodies are bound by the server's
-  body limit, so large snapshots are staged in chunks. The creation-audit lookups that remain
-  (a resumed apply's earlier reservations, reconciliation's `unlinked_creation` check in chunks
-  of 500 correlation ids) filter `audit_records` by correlation id, which no index serves yet
-  (**proposed** follow-up in the core migration range: a partial index on
-  `(organization_id, correlation_id)`), so each lookup reads the organization's creation audit
-  records of that type.
+  body limit `HTTP_BODY_LIMIT_BYTES` (2 MiB by default), which is less than one staging request's
+  row and CSV maxima allow together: a larger `POST /import-batches` or
+  `POST /import-batches/{id}/rows` answers 400 `VALIDATION_FAILED` `details.code = body_too_large`
+  (documented in the contract, R3-SECURITY-02), so large snapshots are staged in chunks. The
+  creation-audit lookups that remain (a resumed apply's earlier reservations, reconciliation's
+  `unlinked_creation` check in chunks of 500 correlation ids) filter `audit_records` by
+  correlation id, served by the partial index `audit_records_correlation_idx` on
+  `(organization_id, correlation_id)` (core migration 0016, R3-PERFORMANCE-05,
+  `kernel/__tests__/audit-indexes.spec.ts`).
 - **Post-apply review:** an exception raised during an apply can be rejected or deferred
   afterwards; accepting it needs a new batch (re-import).
 - **Cutover and recovery runbooks (§5.7, §5.8):** the module provides the mechanisms (authority

@@ -425,7 +425,10 @@ export const CreateImportBatchBody = withCommandMeta({
   csv: z.array(CsvDocumentSchema).max(17).default([]),
 })
   .strict()
-  .openapi('CreateImportBatchRequest');
+  .openapi('CreateImportBatchRequest', {
+    description:
+      'R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`).',
+  });
 export type CreateImportBatchInput = z.infer<typeof CreateImportBatchBody>;
 
 export const AppendImportRowsBody = withCommandMeta({
@@ -433,7 +436,10 @@ export const AppendImportRowsBody = withCommandMeta({
   csv: z.array(CsvDocumentSchema).max(17).default([]),
 })
   .strict()
-  .openapi('AppendImportRowsRequest');
+  .openapi('AppendImportRowsRequest', {
+    description:
+      'R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`).',
+  });
 export type AppendImportRowsInput = z.infer<typeof AppendImportRowsBody>;
 
 export const ValidateImportBatchBody = withCommandMeta({})
