@@ -26,7 +26,9 @@ import { CommandError, CommandSuccess } from '../../../features/operations/feedb
 import { SelectField, TextAreaField, fieldErrorsOf } from '../../../features/operations/fields';
 import { formatInstant, humanize } from '../../../features/operations/format';
 import { RECOMMENDATION_STATUS } from '../../../features/operations/labels';
+import { useApp } from '../../../providers/AppProviders';
 import { Button } from '../../../ui/Button';
+import { CommandButton } from '../../../ui/CommandButton';
 import { LoadMore } from '../../../ui/LoadMore';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
@@ -122,7 +124,10 @@ function RecommendForm({
   );
   const command = useApiCommand('post', '/progression-recommendations');
   const apiErrors = fieldErrorsOf(command.error);
+  const { online } = useApp();
   const submit = () => {
+    // Offline nothing is saved or queued (§4.15): the control is disabled and the input is kept.
+    if (!online) return;
     const next: Record<string, string> = {};
     if (!target) next.target = 'Choose an offering or a program.';
     else if (!choice)
@@ -247,9 +252,9 @@ function RecommendForm({
         error={problems.suitability ?? apiErrors.suitability}
       />
       <div className="ops-actions">
-        <Button type="submit" busy={command.isProcessing}>
+        <CommandButton type="submit" busy={command.isProcessing}>
           Save the recommendation as a draft
-        </Button>
+        </CommandButton>
       </div>
       {command.error && Object.keys(apiErrors).length === 0 ? (
         <CommandError error={command.error} onRetry={submit} subject="This participant" />
@@ -279,17 +284,21 @@ function RecommendationCard({
     permissions.isPermitted(ACTIONS.withdrawRecommendation, subject.facilityId) === true;
   const share = useApiCommand('post', '/progression-recommendations/{id}/share');
   const withdraw = useApiCommand('post', '/progression-recommendations/{id}/withdraw');
+  const { online } = useApp();
   const [withdrawing, setWithdrawing] = useState(false);
   const [reason, setReason] = useState('');
   const [missing, setMissing] = useState(false);
   const badge = RECOMMENDATION_STATUS[r.status];
   const eligibility = eligibilityOf(r.eligibility);
-  const doShare = () =>
+  const doShare = () => {
+    if (!online) return;
     void share
       .submit({ path: { id: r.id }, body: { expectedRevision: r.revision } })
       .then(onChange)
       .catch(() => undefined);
+  };
   const doWithdraw = () => {
+    if (!online) return;
     if (!reason.trim()) {
       setMissing(true);
       return;
@@ -348,9 +357,9 @@ function RecommendationCard({
       </div>
       <div className="ops-actions">
         {r.status === 'draft' && capabilityOn && mayRecommend ? (
-          <Button busy={share.isProcessing} onClick={doShare}>
+          <CommandButton busy={share.isProcessing} onClick={doShare}>
             Share with the family
-          </Button>
+          </CommandButton>
         ) : null}
         {r.status !== 'withdrawn' && mayWithdraw ? (
           <Button
@@ -378,9 +387,9 @@ function RecommendationCard({
             required
             error={missing ? 'A reason is required.' : undefined}
           />
-          <Button type="submit" busy={withdraw.isProcessing}>
+          <CommandButton type="submit" busy={withdraw.isProcessing}>
             Confirm withdrawal
-          </Button>
+          </CommandButton>
         </form>
       ) : null}
       {share.error ? (

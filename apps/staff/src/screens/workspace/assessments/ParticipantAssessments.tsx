@@ -31,7 +31,9 @@ import { CommandError, CommandSuccess } from '../../../features/operations/feedb
 import { TextAreaField } from '../../../features/operations/fields';
 import { formatInstant } from '../../../features/operations/format';
 import { ASSESSMENT_STATUS, ASSESSMENT_VISIBILITY } from '../../../features/operations/labels';
+import { useApp } from '../../../providers/AppProviders';
 import { Button } from '../../../ui/Button';
+import { CommandButton } from '../../../ui/CommandButton';
 import { LoadMore } from '../../../ui/LoadMore';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StateView } from '../../../ui/StateView';
@@ -158,6 +160,7 @@ function AssessmentRow({
   const permissions = usePermissions();
   const queryClient = useQueryClient();
   const commands = useKeyedCommands({ invalidate: [ASSESSMENTS_KEY] });
+  const { online } = useApp();
   const [mode, setMode] = useState<'edit' | 'correct' | 'withdraw' | 'return' | null>(null);
   // Two audited free texts, never shared: the withdrawal reason and the note to the author.
   const [withdrawReason, setWithdrawReason] = useState('');
@@ -194,6 +197,8 @@ function AssessmentRow({
   };
   const body = { expectedRevision: a.revision };
   const run = (k: (typeof keys)[number]) => {
+    // Offline nothing is sent or queued (§4.15): the controls are disabled.
+    if (!online) return;
     if ((k === 'withdraw' && !withdrawReason.trim()) || (k === 'return' && !returnNote.trim())) {
       setMissing(true);
       return;
@@ -251,23 +256,23 @@ function AssessmentRow({
           </Button>
         ) : null}
         {can.submit ? (
-          <Button
+          <CommandButton
             aria-label={`Submit for review: ${label}`}
             busy={commands.outcome(`submit|${a.id}`).status === 'pending'}
             onClick={() => run('submit')}
           >
             Submit for review
-          </Button>
+          </CommandButton>
         ) : null}
         {can.review ? (
           <>
-            <Button
+            <CommandButton
               aria-label={`Approve ${label}`}
               busy={commands.outcome(`approve|${a.id}`).status === 'pending'}
               onClick={() => run('approve')}
             >
               {a.visibility === 'family' ? 'Approve and publish' : 'Approve and record'}
-            </Button>
+            </CommandButton>
             <Button
               variant="secondary"
               aria-label={`Return ${label}`}
@@ -336,9 +341,9 @@ function AssessmentRow({
             error={missing ? 'A reason is required.' : undefined}
           />
           <div className="ops-actions">
-            <Button type="submit" busy={pending}>
+            <CommandButton type="submit" busy={pending}>
               {mode === 'withdraw' ? 'Confirm withdrawal' : 'Return to the author'}
-            </Button>
+            </CommandButton>
             <Button variant="secondary" onClick={() => setMode(null)}>
               Cancel
             </Button>
@@ -348,7 +353,15 @@ function AssessmentRow({
       {error ? (
         <CommandError
           error={error}
-          onRetry={failed ? () => run(failed) : undefined}
+          onRetry={
+            failed
+              ? () => {
+                  // The request that was sent, unchanged (same key, §4.9), never one rebuilt from
+                  // the list read again since, which may already show the next revision.
+                  if (online) void commands.resend(`${failed}|${a.id}`);
+                }
+              : undefined
+          }
           onReload={reload}
           subject="This assessment"
         />

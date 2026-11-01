@@ -576,6 +576,36 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
     expect(screen.getByText(/the permission scheduling\.manage_events/)).toBeInTheDocument();
   });
 
+  it('SCR-S-04 offline: a series preview needs a connection and is never sent as an unknown outcome (§4.15)', async () => {
+    const user = userEvent.setup();
+    const series = event({
+      id: 'e-s3',
+      title: 'Thursday futsal',
+      seriesId: 'series-1',
+      occurrenceIndex: 2,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': page([series]),
+        'POST /event-series/{id}/edits': { status: 200, body: {} },
+      }),
+    });
+    render(app.at('/schedule/drafts/d1'));
+    await screen.findByRole('option', { name: /Thursday futsal/ });
+    await user.selectOptions(screen.getByLabelText('Event'), 'e-s3');
+    await user.click(screen.getByLabelText('Cancel it'));
+    await user.click(screen.getByLabelText('The entire series'));
+    act(() => app.connectivity.set(false));
+    const previewButton = screen.getByRole('button', { name: 'Preview affected events' });
+    await waitFor(() => expect(previewButton).toBeDisabled());
+    expect(previewButton).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(previewButton);
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(previewButton).toBeEnabled());
+    expect(app.fake.requests.some((r) => r.route === '/event-series/{id}/edits')).toBe(false);
+    expect(screen.queryByTestId('state-outcome-unknown')).toBeNull();
+  });
+
   it('a published draft is read-only', async () => {
     const app = createTestApp({
       routes: routes({

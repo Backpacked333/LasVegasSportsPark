@@ -62,7 +62,10 @@ approval. **Pending decision** = needs an operator answer; the screen shows the 
   a newer revision than the one shown when the user pressed it is flagged again.
 - **Series edits (SPK-SCHED-007).** A wider scope is previewed (`preview: true`, nothing is
   committed) and the exact listed events are added to the draft as individual changes, so nothing
-  is published or announced before the draft (see API issue 1).
+  is published or announced before the draft (see API issue 1). The preview is a request to the
+  API, so offline "Preview affected events" is disabled with "Needs a connection" (§4.15), while
+  single-event changes are still added to the draft. **Verified** in jsdom
+  (`ScheduleDraftEditorScreen.test.tsx`).
 - **Publication (SPK-SCHED-006, SPK-FIX-002).** The group publishes whole or not at all;
   STALE_REVISION, RESOURCE_CONFLICT and unmet fixture obligations read "Nothing was published".
   Remaining obligations of a successful publication are listed with owner and deadline. The

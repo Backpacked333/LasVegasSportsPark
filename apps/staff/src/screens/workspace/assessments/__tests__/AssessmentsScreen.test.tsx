@@ -15,6 +15,7 @@ import {
 } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { act } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   CHILD_1,
@@ -274,6 +275,54 @@ describe('SCR-W-07 AssessmentsScreen', () => {
     expect(submit?.params).toEqual({ id: ASSESSMENT });
     expect(submit?.body).toEqual({ expectedRevision: 3 });
     expect(submit?.headers['idempotency-key']).not.toEqual(post?.headers['idempotency-key']);
+  });
+
+  it('SCR-W-07 offline (draft kept): saving and submitting need a connection, the typed draft stays and nothing is sent after reconnecting (§4.15)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes(
+        {},
+        {
+          'GET /participants/{personId}/assessments': page([assessment()]),
+          'POST /assessments': { status: 201, body: assessment() },
+          'POST /assessments/{id}/submit': {
+            status: 200,
+            body: assessment({ status: 'submitted', revision: 4 }),
+          },
+        },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    await assessAlex(user);
+    const row = await screen.findByRole('listitem', {
+      name: 'ball_control, observed 2026-10-20',
+    });
+    await user.click(screen.getByRole('button', { name: 'Record an assessment' }));
+    const form = screen.getByRole('form', { name: 'Record an assessment of Alex Rivera' });
+    await user.type(within(form).getByLabelText('Skill area key'), 'passing');
+    await user.type(within(form).getByLabelText('Observation date'), '2026-10-21');
+    act(() => app.connectivity.set(false));
+    const save = within(form).getByRole('button', { name: 'Save as draft' });
+    const submit = within(row).getByRole('button', {
+      name: 'Submit for review: ball_control, observed 2026-10-20',
+    });
+    for (const button of [save, submit]) {
+      await waitFor(() => expect(button).toBeDisabled());
+      expect(button).toHaveAccessibleDescription('Needs a connection.');
+      await user.click(button);
+    }
+    expect(within(form).getByRole('status')).toHaveTextContent(
+      'You are offline: saving the assessment needs a connection. What you entered stays here.',
+    );
+    // Enter in a field does not save either.
+    await user.type(within(form).getByLabelText('Skill area key'), '{Enter}');
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(save).toBeEnabled());
+    // The draft is kept, and nothing was sent or held to be sent on reconnecting.
+    expect(within(form).getByLabelText('Skill area key')).toHaveValue('passing');
+    expect(within(form).getByLabelText('Observation date')).toHaveValue('2026-10-21');
+    expect(app.fake.requests.filter((r) => r.method !== 'GET')).toHaveLength(0);
+    expect(app.queryClient.getMutationCache().getAll()).toHaveLength(0);
   });
 
   it('shows the API’s template mismatch with its code and keeps the input', async () => {

@@ -10,14 +10,17 @@
  * that would change are listed, and they are added to the draft as individual changes so that
  * nothing is published or announced before the draft is (SPK-SCHED-005 "drafts do not send final
  * customer notices"). Past, played or attended occurrences keep their identity (the API leaves them
- * out of the preview).
+ * out of the preview). Changes are added to the draft offline too (the editor keeps and saves them
+ * on reconnecting); the preview is a request to the API, so offline "Preview affected events" is
+ * disabled with "Needs a connection" (§4.15) instead of failing as an unknown outcome.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState, type FormEvent } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { useNow } from '../../providers/AppProviders';
+import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { CommandButton } from '../../ui/CommandButton';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
 import type { FacilityContext } from '../../features/schedule-facilities/facility-scope';
 import { namesOf, resourceNames } from '../../features/schedule-facilities/inventory';
@@ -224,6 +227,7 @@ export function ExistingEventForm({
 }) {
   const tz = facility.timezone;
   const now = useNow();
+  const { online } = useApp();
   const names = resourceNames(resources);
   const [day, setDay] = useState(facility.localDate ?? localDateOf(now, tz));
   const range = localDaysWindow(day, 1, tz);
@@ -335,6 +339,7 @@ export function ExistingEventForm({
   };
 
   const requestPreview = () => {
+    if (!online) return;
     if (!event?.seriesId || !scope || scope === 'one' || !action || !series.data) return;
     const changes =
       action === 'cancel'
@@ -535,11 +540,15 @@ export function ExistingEventForm({
           {problem}
         </span>
       ) : null}
-      <Button type="submit" disabled={disabled} busy={previewCommand.isProcessing}>
-        {event?.seriesId && scope && scope !== 'one'
-          ? 'Preview affected events'
-          : 'Add change to draft'}
-      </Button>
+      {event?.seriesId && scope && scope !== 'one' ? (
+        <CommandButton type="submit" disabled={disabled} busy={previewCommand.isProcessing}>
+          Preview affected events
+        </CommandButton>
+      ) : (
+        <Button type="submit" disabled={disabled}>
+          Add change to draft
+        </Button>
+      )}
       {previewCommand.error ? (
         <CommandError
           error={previewCommand.error}
