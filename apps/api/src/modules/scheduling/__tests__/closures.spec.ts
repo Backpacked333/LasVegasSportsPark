@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperationalExceptions, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { CLOSURE_PORT, type ClosurePort } from '../ports';
+import { ClosureImpactContributors } from '../services/closure-impact-contributors';
 import { ClosuresService } from '../services/closures.service';
 import { EventsService } from '../services/events.service';
 import { SchedulingModule } from '../scheduling.module';
@@ -442,6 +443,171 @@ describe('closures: impact preview, apply, lift (SPK-SCHED-009, SPK-FAC-003/004,
       .query({ facilityId: facility, status: 'active' })
       .set(auth);
     expect(list.body.map((c: { id: string }) => c.id)).toContain(closure.id);
+  });
+
+  // runs before any staff contributor is registered on this app (registration lasts for the app)
+  it('SPK-SCHED-009 / R3-TRACE-A-06: until a module owning staff assignments answers, staff is reported and stored as not identified (null), never as none', async () => {
+    const game = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.pitchId],
+      start: at('2026-11-20', '10:00'),
+      end: at('2026-11-20', '11:00'),
+      title: 'Game with officials nobody has listed',
+      sourceType: 'fixture',
+      sourceId: newId(),
+    });
+    const interval = { start: at('2026-11-20', '09:00'), end: at('2026-11-20', '12:00') };
+    const res = await t.http
+      .get('/v1/closure-impact')
+      .query({ facilityId: facility, ...interval })
+      .set(auth);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.affectedEvents.map((e: { eventId: string }) => e.eventId)).toEqual([game.id]);
+    expect(res.body.staff).toBeNull();
+    expect(res.body.summary.staff).toBeNull();
+    // the stored impact keeps "not identified"; it is not frozen as "no staff affected"
+    const closure = await closures.createClosure(facilitiesOperator, {
+      facilityId: facility,
+      interval,
+      reason: 'Pitch inspection',
+      source: 'manual',
+    });
+    expect(closure.impact).toMatchObject({ staff: null, summary: { staff: null } });
+    const stored = await t.db
+      .selectFrom('closures')
+      .select('impact')
+      .where('id', '=', closure.id)
+      .executeTakeFirstOrThrow();
+    expect(stored.impact).toMatchObject({ staff: null, summary: { staff: null } });
+    // an impact recorded before staff was part of it reads as not identified too
+    await sql`update closures set impact = (impact - 'staff') || jsonb_build_object('summary', (impact->'summary') - 'staff') where id = ${closure.id}`.execute(
+      t.db,
+    );
+    const older = await t.http.get(`/v1/closures/${closure.id}`).set(auth);
+    expect(older.status, JSON.stringify(older.body)).toBe(200);
+    expect(older.body.impact.staff).toBeNull();
+    expect(older.body.impact.summary.staff).toBeNull();
+    expect(older.body.impact.summary.games).toBe(1);
+    await closures.withdrawClosure(facilitiesOperator, closure.id, {
+      reason: 'Inspection moved',
+      expectedRevision: closure.revision,
+    });
+    // a closure that affects no event has no assignment on one: that is a definite none
+    const empty = await closures.previewImpact(facilitiesOperator, {
+      facilityId: facility,
+      interval: { start: at('2026-11-20', '13:00'), end: at('2026-11-20', '14:00') },
+    });
+    expect(empty.affectedEvents).toEqual([]);
+    expect(empty.staff).toEqual([]);
+    expect(empty.summary.staff).toBe(0);
+  });
+
+  it('SPK-SCHED-009 / R3-TRACE-A-06: the preview and the applied closure name the staff assigned to the affected events', async () => {
+    const referee = newId();
+    const coach = newId();
+    const game = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.pitchId],
+      start: at('2026-11-21', '10:00'),
+      end: at('2026-11-21', '11:00'),
+      title: 'Staffed league game',
+      sourceType: 'fixture',
+      sourceId: newId(),
+    });
+    const practice = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.northHalfId],
+      start: at('2026-11-21', '12:00'),
+      end: at('2026-11-21', '13:00'),
+      kind: 'practice',
+      title: 'Staffed practice',
+    });
+    const later = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.pitchId],
+      start: at('2026-11-21', '18:00'),
+      end: at('2026-11-21', '19:00'),
+      title: 'Evening game outside the closure',
+    });
+    const assignment = (eventId: string, personId: string, kind: string, role: string) => ({
+      assignmentId: newId(),
+      personId,
+      eventId,
+      kind,
+      role,
+      status: 'accepted',
+    });
+    const onGame = [
+      assignment(game.id, referee, 'official', 'referee'),
+      assignment(game.id, coach, 'coach', 'head_coach'),
+    ];
+    const onPractice = [assignment(practice.id, coach, 'coach', 'head_coach')];
+    const outside = assignment(later.id, newId(), 'official', 'referee');
+    // the module owning staff assignments answers for the events it is given (workforce in the app)
+    const seen: string[][] = [];
+    t.app.get(ClosureImpactContributors).register('test.staff_assignments', async (_db, o, evs) => {
+      expect(o).toBe(org);
+      seen.push(evs.map((e) => e.eventId).sort());
+      const ids = new Set(evs.map((e) => e.eventId));
+      // a slip naming an event outside the closure is never reported
+      return {
+        staff: [...onGame, ...onPractice, outside].filter(
+          (a) => ids.has(a.eventId) || a === outside,
+        ),
+      };
+    });
+    const interval = { start: at('2026-11-21', '09:00'), end: at('2026-11-21', '14:00') };
+    const res = await t.http
+      .get('/v1/closure-impact')
+      .query({ facilityId: facility, ...interval })
+      .set(auth);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const expected = [...onGame, ...onPractice].sort(
+      (a, b) => a.eventId.localeCompare(b.eventId) || a.assignmentId.localeCompare(b.assignmentId),
+    );
+    expect(res.body.staff).toEqual(expected);
+    expect(res.body.summary).toMatchObject({ games: 1, programs: 1, staff: 2 });
+    expect(seen.at(-1)).toEqual([game.id, practice.id].sort());
+    // the owner answered and no live assignment is on these events: a definite none
+    const unstaffed = await createScheduledEvent(events, {
+      organizationId: org,
+      facilityId: facility,
+      resourceIds: [pitch.southHalfId],
+      start: at('2026-11-21', '15:00'),
+      end: at('2026-11-21', '16:00'),
+      kind: 'rental',
+      title: 'Unstaffed rental',
+    });
+    const none = await closures.previewImpact(facilitiesOperator, {
+      facilityId: facility,
+      interval: { start: at('2026-11-21', '14:30'), end: at('2026-11-21', '16:30') },
+    });
+    expect(none.affectedEvents.map((e) => e.eventId)).toEqual([unstaffed.id]);
+    expect(none.staff).toEqual([]);
+    expect(none.summary.staff).toBe(0);
+
+    const closure = await closures.createClosure(facilitiesOperator, {
+      facilityId: facility,
+      interval,
+      reason: 'Lightning',
+      source: 'manual',
+    });
+    expect(closure.impact?.staff).toEqual(expected);
+    const applied = await closures.applyClosure(facilitiesOperator, closure.id, {
+      mode: 'leave_for_resolution',
+      expectedRevision: 1,
+    });
+    expect(applied.impact?.staff).toEqual(expected);
+    expect(applied.impact?.summary.staff).toBe(2);
+    const read = await t.http.get(`/v1/closures/${closure.id}`).set(auth);
+    expect(read.body.impact.staff).toEqual(expected);
+    expect(read.body.impact.staff.map((a: { eventId: string }) => a.eventId)).not.toContain(
+      later.id,
+    );
   });
 
   it('authorization and idempotency: front desk cannot close, other organizations see nothing, replays return the same closure', async () => {

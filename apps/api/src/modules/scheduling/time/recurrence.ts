@@ -33,7 +33,12 @@ export interface MaterializeOptions {
   maxOccurrences: number;
 }
 
-/** Candidate local dates of a rule in order, each with its occurrence index. */
+/**
+ * Candidate local dates of a rule in order, each with its occurrence index. At most
+ * `maxOccurrences` are returned: a rule that describes more is cut short here without any signal,
+ * so a caller that must not drop dates checks `describesMoreThan` first and refuses the rule
+ * (R3-TIME-MONEY-04, SPK-SCHED-007).
+ */
 export function candidateDates(
   rule: RecurrenceRule,
   maxOccurrences: number,
@@ -76,6 +81,16 @@ export function candidateDates(
     if (!continueWeeks) break;
   }
   return out;
+}
+
+/**
+ * Whether the rule describes more than `max` candidate dates (before exceptions and skipped
+ * times are removed). `count` is bounded by the schema, `until` is not, so a rule such as "daily
+ * until two years from now" passes validation and is refused here instead of being truncated to
+ * its first `max` dates (R3-TIME-MONEY-04, SPK-SCHED-007). Enumerates at most `max + 1` dates.
+ */
+export function describesMoreThan(rule: RecurrenceRule, max: number): boolean {
+  return candidateDates(rule, max + 1).length > max;
 }
 
 export function materializeOccurrences(

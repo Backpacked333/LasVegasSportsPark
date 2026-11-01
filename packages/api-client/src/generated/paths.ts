@@ -51321,6 +51321,18 @@ export type components = {
                 sourceId: string;
                 sourceType: string;
             }[];
+            /** @default null */
+            staff?: {
+                /** Format: uuid */
+                assignmentId: string;
+                /** Format: uuid */
+                eventId: string;
+                kind: string;
+                /** Format: uuid */
+                personId: string;
+                role: string;
+                status: string;
+            }[] | null;
             summary: {
                 customers: number;
                 equipment: number;
@@ -51331,6 +51343,8 @@ export type components = {
                 people: number;
                 programs: number;
                 rentals: number;
+                /** @default null */
+                staff?: number | null;
                 teams: number;
             };
         };
@@ -58551,10 +58565,14 @@ export type components = {
             reason?: string;
         };
         SeriesEditChanges: {
+            /** @enum {string} */
+            ambiguousPolicy?: "first" | "second";
             cancel?: boolean;
             cleanupMinutes?: number;
             durationMinutes?: number;
             localStartTime?: string;
+            /** @enum {string} */
+            nonexistentPolicy?: "shift_forward" | "skip";
             resourceIds?: string[];
             setupMinutes?: number;
             title?: string;
