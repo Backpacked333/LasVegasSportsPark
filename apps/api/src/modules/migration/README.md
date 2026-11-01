@@ -180,7 +180,12 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
     (identity's transactional `ensureAuthority`), opening obligations and credits (finance: no
     payment attempt, no receipt, no notice) keep the earlier path: a reserved mapping whose id is
     the correlation id of the owning module's audit record, recovered after an interruption, never
-    created twice. A creation already in flight when an apply loses its lock cannot be fenced: an
+    created twice. Only a mapping an earlier attempt reserved is looked up in that audit record; a
+    mapping the apply has just reserved has a new id, so nothing can have been created for it yet
+    and a first apply makes no audit lookup per row (`apply-recovery.spec.ts`, "a first apply of
+    households, opening obligations and credits makes no creation-audit lookup per row" and "an
+    apply interrupted after identity created a household resumes and links it"). A creation
+    already in flight when an apply loses its lock cannot be fenced: an
     opening credit or obligation carries its mapping id as its source (finance's unique keys), so
     a second one is refused; a household the stale apply created anyway raises an owned
     `migration.orphaned_creation` exception and is reported by reconciliation
@@ -326,7 +331,12 @@ the source; a team's status defaults to `active` (competition's import default).
   guarded only at their routes.
 - **Size:** the apply runs synchronously in the request (rows in their own small transactions);
   very large batches would need chunked or background apply. HTTP bodies are bound by the server's
-  body limit, so large snapshots are staged in chunks.
+  body limit, so large snapshots are staged in chunks. The creation-audit lookups that remain
+  (a resumed apply's earlier reservations, reconciliation's `unlinked_creation` check in chunks
+  of 500 correlation ids) filter `audit_records` by correlation id, which no index serves yet
+  (**proposed** follow-up in the core migration range: a partial index on
+  `(organization_id, correlation_id)`), so each lookup reads the organization's creation audit
+  records of that type.
 - **Post-apply review:** an exception raised during an apply can be rejected or deferred
   afterwards; accepting it needs a new batch (re-import).
 - **Cutover and recovery runbooks (§5.7, §5.8):** the module provides the mechanisms (authority
