@@ -159,15 +159,17 @@ export async function staffAuthorityApplies(
 }
 
 /**
- * §4.14, SPK-AT-025: the facility lists of a person's staff memberships that are in force or
- * scheduled to start (`effective_from` is deliberately not compared with now, so a future-dated
- * assignment counts too). An empty list in the result is an organization-wide membership.
+ * §4.14, SPK-AT-025, §2.1: the facility lists of every staff membership of a person that has not
+ * been ended (`status = 'active'`), whatever its window: in force, scheduled to start, or past its
+ * `effective_to`. Neither date is compared with now. A lapsed membership is not ended: nothing
+ * ends it, `PATCH /staff-memberships/{id}` can extend or reopen it, and a merge moves it with the
+ * person. So the login that holds it gets the role back on the next extension. An empty list in
+ * the result is an organization-wide membership.
  */
 export async function staffMembershipFacilityLists(
   db: Db,
   organizationId: string,
   personId: string,
-  now: Date,
 ): Promise<string[][]> {
   const rows = await db
     .selectFrom('staff_memberships')
@@ -175,7 +177,6 @@ export async function staffMembershipFacilityLists(
     .where('organization_id', '=', organizationId)
     .where('person_id', '=', personId)
     .where('status', '=', 'active')
-    .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', now)]))
     .orderBy('id')
     .execute();
   return rows.map((r) => [...r.facility_ids]);
@@ -231,14 +232,19 @@ export function requireStaffAssignmentScope(
 
 /**
  * §4.14 (least privilege, privileged staff), SPK-AT-025, SPK-IAM-002: taking control of the login
- * of a person who holds a staff membership (provisioning an account linked to them, recovering
- * theirs onto another provider identity, or issuing a self claim on them) needs the authority that
- * assigns staff roles (`identity.manage_staff_membership`), held over every facility of those
- * memberships (§2.1, §4.3, R3-SECURITY-01: an organization-wide membership needs an
- * organization-wide administrator). Otherwise a role that cannot grant staff roles (support, front
- * desk), or the administrator of another facility, could take over an account that can, and then
- * grant itself more. Verification evidence, rate limits and a second approver for recovery stay
- * pending (DEC-018 recovery, DEC-091 privileged multifactor authentication).
+ * of a person who holds a staff membership needs the authority that assigns staff roles
+ * (`identity.manage_staff_membership`), held over every facility of those memberships (§2.1,
+ * §4.3, R3-SECURITY-01: an organization-wide membership needs an organization-wide
+ * administrator). Taking control means provisioning an account linked to them, recovering theirs
+ * onto another provider identity, or issuing a self claim on them. Changing their person status
+ * needs the same authority: the principal resolver confers nothing on a person who is not active,
+ * so deactivating or reactivating them ends or restores every staff role they hold. Without this
+ * check a role that cannot grant staff roles (support, front desk), or the administrator of another
+ * facility, could take over an account that can grant them, and then grant itself more, or switch
+ * staff authority off and on. "Holds a staff membership" means any membership not ended,
+ * whatever its window (`staffMembershipFacilityLists`). Verification evidence, rate limits and a
+ * second approver for recovery stay pending (DEC-018 recovery, DEC-091 privileged multifactor
+ * authentication).
  */
 export async function requireStaffLoginAuthority(
   authorization: Pick<AuthorizationService, 'require'>,
@@ -246,10 +252,9 @@ export async function requireStaffLoginAuthority(
   principal: Principal,
   organizationId: string,
   personId: string | null | undefined,
-  now: Date,
 ): Promise<void> {
   if (!personId) return;
-  const memberships = await staffMembershipFacilityLists(db, organizationId, personId, now);
+  const memberships = await staffMembershipFacilityLists(db, organizationId, personId);
   if (memberships.length === 0) return;
   await authorization.require(principal, IdentityActions.manageStaffMembership, {
     type: 'staff_membership',

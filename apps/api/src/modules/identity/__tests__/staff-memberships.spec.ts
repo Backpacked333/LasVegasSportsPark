@@ -567,4 +567,198 @@ describe('staff memberships (§2.1, §4.14) and households (§4.5)', () => {
       .execute();
     expect(persons.map((p) => p.status)).toEqual(['active', 'active']);
   });
+
+  it('§4.14 / SPK-AT-025: changing the person status of staff needs the authority over their memberships, both ways', async () => {
+    const f2 = await seedFacility();
+    const alice = await createStaffMemberFixture(t, {
+      roles: ['system_administrator'],
+      facilityIds: [t.facilityId],
+    });
+    const deskF1 = await createStaffMemberFixture(t, {
+      roles: ['front_desk'],
+      facilityIds: [t.facilityId],
+    });
+    const deskF2 = await createStaffMemberFixture(t, { roles: ['front_desk'], facilityIds: [f2] });
+    const root = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const target = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const aliceHeader = await authHeaderForPerson(t, alice.personId);
+    const rootHeader = await authHeaderForPerson(t, root.personId);
+    const targetHeader = await authHeaderForPerson(t, target.personId);
+    const setStatus = async (
+      header: Record<string, string>,
+      personId: string,
+      status: 'active' | 'inactive',
+      expectedRevision: number,
+    ) =>
+      t.http
+        .patch(`/v1/people/${personId}`)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ status, expectedRevision, reason: 'access review' });
+    const personRow = (personId: string) =>
+      t.db
+        .selectFrom('persons')
+        .select(['status', 'revision'])
+        .where('id', '=', personId)
+        .executeTakeFirstOrThrow();
+
+    // deactivating an organization-wide administrator: a facility-scoped administrator and a
+    // front desk (here or at another facility) are refused, and the administrator keeps access
+    for (const header of [
+      aliceHeader,
+      await authHeaderForPerson(t, deskF1.personId),
+      await authHeaderForPerson(t, deskF2.personId),
+    ]) {
+      const refused = await setStatus(header, target.personId, 'inactive', 1);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+      expect(refused.body.code).toBe('ACCESS_DENIED');
+    }
+    expect(await personRow(target.personId)).toEqual({ status: 'active', revision: 1 });
+    expect((await t.http.get('/v1/me').set(targetHeader)).status).toBe(200);
+
+    // an organization-wide administrator deactivates it; staff authority ends on the next request
+    const off = await setStatus(rootHeader, target.personId, 'inactive', 1);
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+    expect((await t.http.get('/v1/me').set(targetHeader)).status).toBe(401);
+
+    // reactivating it is refused to the same callers, so the deactivation holds
+    for (const header of [
+      aliceHeader,
+      await authHeaderForPerson(t, deskF1.personId),
+      await authHeaderForPerson(t, deskF2.personId),
+    ]) {
+      const refused = await setStatus(header, target.personId, 'active', 2);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(403);
+      expect(refused.body.code).toBe('ACCESS_DENIED');
+    }
+    expect(await personRow(target.personId)).toEqual({ status: 'inactive', revision: 2 });
+    expect((await t.http.get('/v1/me').set(targetHeader)).status).toBe(401);
+    const on = await setStatus(rootHeader, target.personId, 'active', 2);
+    expect(on.status, JSON.stringify(on.body)).toBe(200);
+    const me = await t.http.get('/v1/me').set(targetHeader);
+    expect(me.status).toBe(200);
+    expect(me.body.principal).toMatchObject({
+      staffRoles: ['system_administrator'],
+      facilityIds: [],
+    });
+
+    // within its own facilities the scoped administrator still does it; a front desk still
+    // changes the status of a person who holds no staff membership
+    const local = await setStatus(aliceHeader, deskF1.personId, 'inactive', 1);
+    expect(local.status, JSON.stringify(local.body)).toBe(200);
+    const customer = await createPersonFixture(t, { kind: 'adult' });
+    const plain = await setStatus(
+      await authHeaderForPerson(t, deskF2.personId),
+      customer,
+      'inactive',
+      1,
+    );
+    expect(plain.status, JSON.stringify(plain.body)).toBe(200);
+  });
+
+  it('§4.14 / SPK-AT-025: a staff membership past its end date but never ended still guards the login and the merge', async () => {
+    const day = 86_400_000;
+    const now = t.clock.now().getTime();
+    const lapsed = await createStaffMemberFixture(t, {
+      roles: ['general_manager'],
+      effectiveFrom: new Date(now - 30 * day),
+      effectiveTo: new Date(now - day),
+    });
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const alice = await createStaffMemberFixture(t, {
+      roles: ['system_administrator'],
+      facilityIds: [t.facilityId],
+    });
+    const deskF1 = await createStaffMemberFixture(t, {
+      roles: ['front_desk'],
+      facilityIds: [t.facilityId],
+    });
+    const root = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const aliceHeader = await authHeaderForPerson(t, alice.personId);
+    const lapsedHeader = await authHeaderForPerson(t, lapsed.personId);
+    // the membership confers nothing today, but it is not ended
+    const before = await t.http.get('/v1/me').set(lapsedHeader);
+    expect(before.status).toBe(200);
+    expect(before.body.principal.staffRoles).toEqual([]);
+
+    // recovery onto another identity needs an organization-wide administrator
+    const relinked = await t.http
+      .post(`/v1/accounts/${lapsed.accountId}/relink`)
+      .set(await authHeaderForPerson(t, support.personId))
+      .set('Idempotency-Key', key())
+      .send({
+        issuer: t.config.AUTH_ISSUER,
+        subject: `attacker-${newId()}`,
+        reason: 'lost phone',
+        expectedRevision: 1,
+      });
+    expect(relinked.status, JSON.stringify(relinked.body)).toBe(403);
+    expect(relinked.body.code).toBe('ACCESS_DENIED');
+    const account = await t.db
+      .selectFrom('accounts')
+      .select('revision')
+      .where('id', '=', lapsed.accountId)
+      .executeTakeFirstOrThrow();
+    expect(account.revision).toBe(1);
+
+    // a person status change and a merge by a facility-scoped administrator are refused too
+    const deactivated = await t.http
+      .patch(`/v1/people/${lapsed.personId}`)
+      .set(await authHeaderForPerson(t, deskF1.personId))
+      .set('Idempotency-Key', key())
+      .send({ status: 'inactive', expectedRevision: 1 });
+    expect(deactivated.status, JSON.stringify(deactivated.body)).toBe(403);
+    const mine = await createPersonFixture(t, { kind: 'adult' });
+    const flagged = await t.http
+      .post('/v1/duplicate-candidates')
+      .set(aliceHeader)
+      .set('Idempotency-Key', key())
+      .send({ personAId: lapsed.personId, personBId: mine, reasons: ['same name'] });
+    expect(flagged.status, JSON.stringify(flagged.body)).toBe(201);
+    for (const survivorPersonId of [mine, lapsed.personId]) {
+      const merged = await t.http
+        .post(`/v1/duplicate-candidates/${flagged.body.id}/merge`)
+        .set(aliceHeader)
+        .set('Idempotency-Key', key())
+        .send({ survivorPersonId, reason: 'same person' });
+      expect(merged.status, JSON.stringify(merged.body)).toBe(403);
+      expect(merged.body.code).toBe('ACCESS_DENIED');
+    }
+    const membership = await t.db
+      .selectFrom('staff_memberships')
+      .select(['person_id', 'status'])
+      .where('id', '=', lapsed.membershipId)
+      .executeTakeFirstOrThrow();
+    expect(membership).toEqual({ person_id: lapsed.personId, status: 'active' });
+
+    // reopening it hands the role back to the login that held it all along
+    const reopened = await t.http
+      .patch(`/v1/staff-memberships/${lapsed.membershipId}`)
+      .set(await authHeaderForPerson(t, root.personId))
+      .set('Idempotency-Key', key())
+      .send({ effectiveTo: null, expectedRevision: 1, reason: 'next season' });
+    expect(reopened.status, JSON.stringify(reopened.body)).toBe(200);
+    const after = await t.http.get('/v1/me').set(lapsedHeader);
+    expect(after.body.principal.staffRoles).toEqual(['general_manager']);
+
+    // once ended, the membership no longer guards the login: support may recover it
+    const ended = await createStaffMemberFixture(t, { roles: ['finance_operator'] });
+    const end = await t.http
+      .post(`/v1/staff-memberships/${ended.membershipId}/end`)
+      .set(await authHeaderForPerson(t, root.personId))
+      .set('Idempotency-Key', key())
+      .send({ reason: 'left', expectedRevision: 1 });
+    expect(end.status, JSON.stringify(end.body)).toBe(200);
+    const recovered = await t.http
+      .post(`/v1/accounts/${ended.accountId}/relink`)
+      .set(await authHeaderForPerson(t, support.personId))
+      .set('Idempotency-Key', key())
+      .send({
+        issuer: t.config.AUTH_ISSUER,
+        subject: `recovered-${newId()}`,
+        reason: 'lost phone',
+        expectedRevision: 1,
+      });
+    expect(recovered.status, JSON.stringify(recovered.body)).toBe(200);
+  });
 });

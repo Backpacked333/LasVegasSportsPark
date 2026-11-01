@@ -52,6 +52,7 @@ import {
   maskContactValue,
   normalizeContactValue,
   personColumns,
+  requireStaffLoginAuthority,
   staffAuthorityApplies,
   toContactPoint,
   toPerson,
@@ -253,10 +254,16 @@ export class PeopleService implements PersonDirectoryPort {
 
   /**
    * PATCH /v1/people/{id} (SPK-IAM-001, SPK-IAM-003, §4.9). Self, holders of `register` and staff
-   * may change a person (Proposed: `register` covers the registration data of a child, its names,
-   * date of birth and contact points, like DEC-090 for availability). The answer is the person only
-   * when the caller may also read it (identity.read_person); a `register`-only holder gets the id
-   * and the new revision (R3-TRACE-A-05), so `register` never silently yields `view`.
+   * may change a person (Proposed, pending DEC-094: `register` covers the registration data of a
+   * child, its names, date of birth and contact points, like DEC-090 for availability). The answer
+   * is the person only when the caller may also read it (identity.read_person); a `register`-only
+   * holder gets the id and the new revision (R3-TRACE-A-05), so `register` never silently yields
+   * `view`.
+   *
+   * Only a staff role that covers person updates changes `status`. When the person holds staff
+   * memberships, a status change also needs the authority that manages them, over every facility
+   * they cover (§2.1, §4.3, §4.14, SPK-AT-025). The principal resolver confers nothing on a person
+   * who is not active, so the change ends or restores every staff role the person holds.
    */
   async updatePerson(
     principal: Principal,
@@ -267,6 +274,18 @@ export class PeopleService implements PersonDirectoryPort {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
+      if (input.status !== undefined) {
+        // §4.9: locked before the staff memberships are read. A membership being created
+        // share-locks the person (lockPersonsForShare), so it either commits first and is counted
+        // below, or waits and then finds the person inactive.
+        await trx
+          .selectFrom('persons')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', id)
+          .forNoKeyUpdate()
+          .execute();
+      }
       const current = await this.loadPerson(trx, organizationId, id);
       if (!current) throw errors.protectedNotFound('person');
       await this.authorization.require(principal, IdentityActions.updatePerson, {
@@ -294,6 +313,12 @@ export class PeopleService implements PersonDirectoryPort {
         ))
       ) {
         throw errors.accessDenied('Only staff may change a person status.');
+      }
+      if (input.status !== undefined && input.status !== current.status) {
+        // §2.1, §4.3, §4.14, SPK-AT-025 (R3-SECURITY-01): deactivating or reactivating a person
+        // with staff memberships ends or restores their staff authority. The same rule applies to
+        // POST /staff-memberships/{id}/end and to taking over a staff login.
+        await requireStaffLoginAuthority(this.authorization, trx, principal, organizationId, id);
       }
       const result = await trx
         .updateTable('persons')
@@ -330,31 +355,11 @@ export class PeopleService implements PersonDirectoryPort {
         payload: { personId: id, revision: current.revision + 1 },
         correlationId,
       });
-      if (!(await this.mayReadPerson(principal, organizationId, id))) {
+      if (!(await this.mayViewPerson(principal, organizationId, id))) {
         return { id, revision: current.revision + 1, detailWithheld: true as const };
       }
       return this.detail(trx, organizationId, id);
     });
-  }
-
-  /**
-   * SPK-IAM-003, §4.10 (R3-TRACE-A-05): whether a command may answer with the person's record.
-   * Changing a person needs identity.update_person (`register`); reading it needs
-   * identity.read_person (`view`), decided separately so one permission never implies the other.
-   */
-  private async mayReadPerson(
-    principal: Principal,
-    organizationId: string,
-    personId: string,
-  ): Promise<boolean> {
-    const decision = await this.authorization.decide(principal, IdentityActions.readPerson, {
-      type: 'person',
-      id: personId,
-      organizationId,
-      subjectPersonIds: [personId],
-      protected: true,
-    });
-    return decision.allowed;
   }
 
   /**
@@ -438,7 +443,7 @@ export class PeopleService implements PersonDirectoryPort {
         input.expectedRevision,
       );
       // SPK-IAM-003 (R3-TRACE-A-05): the contact point itself only to a caller who may read the person.
-      const readable = await this.mayReadPerson(principal, organizationId, personId);
+      const readable = await this.mayViewPerson(principal, organizationId, personId);
       if (contact.is_primary) {
         return readable
           ? toContactPoint(contact)
@@ -847,6 +852,13 @@ export class PeopleService implements PersonDirectoryPort {
   // -------------------------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------------------------
+  /**
+   * SPK-IAM-003, §4.10: whether the caller may read the person's record (identity.read_person,
+   * `view`, as a protected record). The one rule for every place that decides it: the directory
+   * reads, and the commands that answer with the record (R3-TRACE-A-05). Changing a person needs
+   * identity.update_person (`register`), decided separately, so one permission never implies the
+   * other.
+   */
   private async mayViewPerson(
     principal: Principal,
     organizationId: string,

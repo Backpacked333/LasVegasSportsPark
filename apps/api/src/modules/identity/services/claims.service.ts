@@ -121,7 +121,6 @@ export class ClaimsService {
           principal,
           organizationId,
           subjectPersonId,
-          this.clock.now(),
         );
       }
       const id = newId();
@@ -238,7 +237,6 @@ export class ClaimsService {
             trx,
             organizationId,
             claim.subject_person_id,
-            now,
           );
           if (
             memberships.length > 0 &&
