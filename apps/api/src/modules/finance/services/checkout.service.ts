@@ -38,6 +38,10 @@ import {
   type EnrollmentPort,
 } from '../../enrollment';
 import { FinanceActions } from '../finance.actions';
+import {
+  DISCOUNT_REDEMPTION_REFERENCE,
+  participantRedemptions,
+} from '../pricing/discount-redemptions';
 import { FinanceEvents } from '../finance.events';
 import {
   outcomeUnknownDetails,
@@ -559,11 +563,12 @@ export class CheckoutService {
       })
       .execute();
     const lineByBasketLine = new Map(started.lines.map((l) => [l.id, l]));
+    const orderLineIds = new Map(quoteLines.map((line) => [line.id, newId()]));
     await trx
       .insertInto('order_lines')
       .values(
         quoteLines.map((line) => ({
-          id: newId(),
+          id: orderLineIds.get(line.id) as string,
           organization_id: organizationId,
           order_id: orderId,
           quote_line_id: line.id,
@@ -622,7 +627,11 @@ export class CheckoutService {
           order_id: orderId,
           payer_person_id: payerPersonId,
           currency: quote.currency,
-          total_minor: quote.total_minor - quote.credits_applied_minor,
+          // R3-TIME-MONEY-08 (SPK-PAY-006, SPK-PAY-004): the plan total is what its installments
+          // add up to, the order total; credits applied are allocations against installment 1,
+          // never a reduction of the total (migration 0617 refuses a plan whose installments
+          // differ from it).
+          total_minor: quote.total_minor,
           installment_count: future.length + 1,
           payment_authorization: json({
             paymentMethodRef: token,
@@ -749,13 +758,31 @@ export class CheckoutService {
         throw errors.internal('A quote applied the same credit twice.');
       }
     }
-    for (const discount of quote.discounts as unknown as QuoteDiscountLine[]) {
+    // R3-TIME-MONEY-01 (SPK-PAY-003): each applied discount is redeemed once per participant whose
+    // lines it reduced, in that participant's name: the person catalog's per-person evaluation and
+    // its per-person guard (0207/0208) count, so a per-person limit is never offered and then
+    // refused. Each redemption also takes one unit of the discount's organization-wide
+    // `redemption_limit` (a Proposed engineering default pending POL-011 / DEC-007). Catalog's
+    // evaluation still checks that limit once per discount, not per participant (deferred catalog
+    // change R3-TIME-MONEY-01b): until it lands, a basket with more discounted participants than
+    // redemptions left is quoted with the discount and refused here with DISCOUNT_REDEMPTION_LIMIT
+    // (README "Known gaps"; `__tests__/discount-redemption.spec.ts`).
+    const redemptions = participantRedemptions(
+      quote.discounts as unknown as QuoteDiscountLine[],
+      quoteLines.map((line) => ({
+        orderLineId: orderLineIds.get(line.id) as string,
+        sequence: line.sequence,
+        participantPersonId: line.participant_person_id,
+        discounts: line.discount_lines as unknown as QuoteDiscountLine[],
+      })),
+    );
+    for (const redemption of redemptions) {
       await this.pricing.redeemDiscount(trx, organizationId, {
-        discountDefinitionId: discount.discountDefinitionId,
-        referenceType: 'order',
-        referenceId: orderId,
-        personId: payerPersonId,
-        amountMinor: discount.amountMinor,
+        discountDefinitionId: redemption.discountDefinitionId,
+        referenceType: DISCOUNT_REDEMPTION_REFERENCE,
+        referenceId: redemption.orderLineId,
+        personId: redemption.personId,
+        amountMinor: redemption.amountMinor,
         currency: quote.currency,
         actor,
         correlationId,
