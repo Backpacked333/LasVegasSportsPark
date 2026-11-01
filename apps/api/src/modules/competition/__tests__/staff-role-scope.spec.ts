@@ -289,6 +289,88 @@ describe('R3-TRACE-A-01: staff powers follow the action’s staff roles, never t
     expect((await get('/suspensions', coach, { subjectPersonId: stranger })).status).toBe(404);
   });
 
+  it('SPK-IAM-001 / §3.1 (R3-TRACE-A-03): a coach or official creates their own team entry as captain; naming another captain is refused', async () => {
+    const season = await createSeasonFixture(t, { status: 'open' });
+    for (const role of ['coach', 'official'] as const) {
+      const actor = await staffMember(t, [role]);
+      const res = await post('/team-entries', actor, {
+        seasonId: season.seasonId,
+        team: { name: `Own ${role} team` },
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.entry).toMatchObject({ appliedByPersonId: actor.personId, divisionId: null });
+      const roles = await t.db
+        .selectFrom('team_roles')
+        .select(['person_id', 'role'])
+        .where('team_entry_id', '=', res.body.entry.id as string)
+        .execute();
+      expect(roles).toEqual([{ person_id: actor.personId, role: 'captain' }]);
+    }
+    const coach = await staffMember(t, ['coach']);
+    const otherAdult = await createPersonFixture(t, { kind: 'adult' });
+    const named = await post('/team-entries', coach, {
+      seasonId: season.seasonId,
+      team: { name: 'Someone else captains' },
+      captainPersonId: otherAdult,
+    });
+    expect(named.status).toBe(403);
+    expect(named.body.code).toBe('ACCESS_DENIED');
+    // front desk holds the create action's staff role and may still name the captain
+    const byDesk = await post('/team-entries', frontDesk, {
+      seasonId: season.seasonId,
+      team: { name: 'Desk-entered team' },
+      captainPersonId: otherAdult,
+    });
+    expect(byDesk.status).toBe(201);
+    const deskRoles = await t.db
+      .selectFrom('team_roles')
+      .select(['person_id', 'role'])
+      .where('team_entry_id', '=', byDesk.body.entry.id as string)
+      .execute();
+    expect(deskRoles).toEqual([{ person_id: otherAdult, role: 'captain' }]);
+  });
+
+  it('SPK-DISC-002 / §3.1 (R3-TRACE-A-03): a coach reads suspensions and decisions about themselves and their child with view, never about others', async () => {
+    const season = await createSeasonFixture(t, { status: 'active' });
+    const coach = await staffMember(t, ['coach']);
+    const child = await createPersonFixture(t, { kind: 'child' });
+    await createRelationshipFixture(t, {
+      actorPersonId: coach.personId,
+      subjectPersonId: child,
+      permissions: ['view'],
+    });
+    const stranger = await createPersonFixture(t, { kind: 'adult' });
+    const decide = async (subjectPersonId: string) => {
+      const res = await post('/disciplinary-decisions', leagueManager, {
+        subjectPersonId,
+        ruleSetId: season.ruleSetId,
+        basis: 'serious foul play',
+        decision: 'suspension',
+        suspension: {
+          scope: 'competitions',
+          competitionIds: [season.competitionId],
+          matchCount: 1,
+          completionCriteria: 'one match served',
+        },
+        policyReferences: ['POL-029'],
+      });
+      expect(res.status).toBe(201);
+      return res.body as { id: string; suspensionId: string };
+    };
+    for (const subject of [coach.personId, child]) {
+      const decision = await decide(subject);
+      expect((await get(`/disciplinary-decisions/${decision.id}`, coach)).status).toBe(200);
+      expect((await get(`/suspensions/${decision.suspensionId}`, coach)).status).toBe(200);
+      const list = await get('/suspensions', coach, { subjectPersonId: subject });
+      expect(list.status).toBe(200);
+      expect((list.body as { id: string }[]).map((s) => s.id)).toContain(decision.suspensionId);
+    }
+    const about = await decide(stranger);
+    expect((await get(`/disciplinary-decisions/${about.id}`, coach)).status).toBe(404);
+    expect((await get(`/suspensions/${about.suspensionId}`, coach)).status).toBe(404);
+    expect((await get('/suspensions', coach, { subjectPersonId: stranger })).status).toBe(404);
+  });
+
   it('SPK-RESULT-005 / SPK-DISC-002: an official may not appeal a dispute outcome they neither submitted nor competed in', async () => {
     const official = await staffMember(t, ['official']);
     const season = await createSeasonFixture(t, { status: 'active' });
