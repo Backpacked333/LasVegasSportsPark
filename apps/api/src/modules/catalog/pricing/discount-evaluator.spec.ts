@@ -309,4 +309,74 @@ describe('discount evaluation (SPK-PAY-003)', () => {
       expect(result.evaluatedAt).toBe(AT.toISOString());
     });
   });
+
+  describe('organization-wide redemption limit counts discounted participants (R3-TIME-MONEY-01b)', () => {
+    it('SPK-PAY-003: with one redemption left, only the first participant’s lines are discounted', () => {
+      const result = evaluate(
+        [
+          line('a1', 10_000, { participantPersonId: 'kid-a' }),
+          line('b1', 10_000, { participantPersonId: 'kid-b' }),
+          line('a2', 5_000, { participantPersonId: 'kid-a' }),
+        ],
+        [
+          definition({
+            amountKind: 'fixed',
+            amountValue: 1_000,
+            currency: 'USD',
+            redemptionLimit: 3,
+            redeemedCount: 2,
+          }),
+        ],
+      );
+      const discount = result.discounts[0]!;
+      expect(discount.applied).toBe(true);
+      expect(discount.allocations.map((a) => a.lineId).sort()).toEqual(['a1', 'a2']);
+      expect(discount.amountMinor).toBe(1_000);
+      expect(discount.explanation).toContain(
+        'limited to 1 participant(s): 1 of 3 redemption(s) left',
+      );
+      expect(result.lines.find((l) => l.lineId === 'b1')?.discountMinor).toBe(0);
+    });
+
+    it('SPK-PAY-003: lines without a participant each count as one participant', () => {
+      const result = evaluate(
+        [line('x', 10_000), line('y', 10_000)],
+        [definition({ redemptionLimit: 1, redeemedCount: 0 })],
+      );
+      expect(result.discounts[0]?.allocations.map((a) => a.lineId)).toEqual(['x']);
+    });
+
+    it('SPK-PAY-003: enough redemptions left for every participant leaves the evaluation unchanged', () => {
+      const result = evaluate(
+        [
+          line('a', 10_000, { participantPersonId: 'kid-a' }),
+          line('b', 10_000, { participantPersonId: 'kid-b' }),
+        ],
+        [definition({ redemptionLimit: 5, redeemedCount: 3 })],
+      );
+      expect(result.discounts[0]?.allocations.map((a) => a.lineId).sort()).toEqual(['a', 'b']);
+      expect(result.discounts[0]?.explanation.join(' ')).not.toContain('limited to');
+    });
+
+    it('SPK-PAY-003: minLines is checked again on the lines the redemptions left cover', () => {
+      const result = evaluate(
+        [
+          line('a', 10_000, { participantPersonId: 'kid-a' }),
+          line('b', 10_000, { participantPersonId: 'kid-b' }),
+        ],
+        [
+          definition({
+            eligibilityRules: { minLines: 2 },
+            redemptionLimit: 1,
+            redeemedCount: 0,
+          }),
+        ],
+      );
+      expect(result.discounts[0]?.applied).toBe(false);
+      expect(result.discounts[0]?.explanation).toContain(
+        'not applied: needs at least 2 eligible lines, found 1 within the redemptions left',
+      );
+      expect(result.totalDiscountMinor).toBe(0);
+    });
+  });
 });

@@ -167,6 +167,17 @@ that subtotal, then capped; allocation across lines is proportional (largest rem
 `allocate`), largest-first, first-line or even, never below zero per line. Every line carries a
 human-readable `explanation[]` so a quote can be re-explained later (SPK-PAY-002).
 
+`redemption_limit` counts one redemption per discounted participant: finance redeems each applied
+discount once per participant whose lines it reduced, with reference type `order_line`
+(R3-TIME-MONEY-01). The evaluation therefore discounts only the eligible lines of the first
+participants, in line order, that the redemptions left cover (a line without a participant counts
+as its own participant), explains it as "limited to N participant(s)", and checks `minLines` again
+on that reduced set, so a quote never offers what checkout refuses with
+`DISCOUNT_REDEMPTION_LIMIT` (**Verified**, R3-TIME-MONEY-01b: `pricing/discount-evaluator.spec.ts`
+"organization-wide redemption limit counts discounted participants"; finance
+`__tests__/discount-redemption.spec.ts`). What the limit counts is a **Proposed** engineering
+default pending POL-011 / DEC-007.
+
 ## Package G definitions (CAT-02) — implemented behind capability switches
 
 Whether the complex uses memberships, session packages, rentals, parties or pickup sessions is

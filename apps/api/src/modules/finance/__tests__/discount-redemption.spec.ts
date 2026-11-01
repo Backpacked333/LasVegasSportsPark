@@ -288,14 +288,10 @@ describe('discount redemptions follow the participant (R3-TIME-MONEY-01, SPK-PAY
     await drain(t);
   });
 
-  it('KNOWN GAP R3-TIME-MONEY-01b (deferred catalog change): with one redemption left, two discounted children are quoted the discount and refused at checkout', async () => {
-    // Today: catalog's evaluation checks the organization-wide limit once per discount, while
-    // checkout redeems once per discounted participant (a Proposed default pending POL-011 /
-    // DEC-007), so the automatic discount, which the payer cannot remove, is quoted, refused and
-    // quoted again. Target once catalog limits the discount to as many participants as
-    // redemptions are left (and checks minLines again on them): the quote discounts one child's
-    // line only (discountMinor 1000, totalMinor 19000), checkout answers 201 completed, and the
-    // ledger holds one redeem for that child; replace these assertions with that.
+  it('SPK-PAY-003 / SPK-PAY-002 (R3-TIME-MONEY-01b): with one redemption left, two children are quoted the discount on the first child only and checkout completes', async () => {
+    // The organization-wide limit counts one redemption per discounted participant (a Proposed
+    // engineering default pending POL-011 / DEC-007): catalog's evaluation discounts only as many
+    // participants as redemptions are left, so the quote never offers what checkout refuses.
     const guardian = await adult(t);
     const [only] = await offerings(1);
     const discountId = await createDiscountFixture(t, {
@@ -307,16 +303,21 @@ describe('discount redemptions follow the participant (R3-TIME-MONEY-01, SPK-PAY
       eligibilityRules: { offeringIds: [only!.offeringId] },
     });
     const both = await basketFor(t, guardian, [only!, only!]);
+    const [firstChild] = both.participants as [string, string];
     const quote = await quoteFor(t, guardian, both.basketId);
     expect(quote).toMatchObject({ discountMinor: 1_000, totalMinor: 19_000 });
-    const refused = await pay(guardian, quote.id);
-    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
-    expect(refused.body).toMatchObject({
-      code: 'RESOURCE_CONFLICT',
-      details: { code: 'DISCOUNT_REDEMPTION_LIMIT', redemptionLimit: 1 },
+    const paid = await pay(guardian, quote.id);
+    expect(paid.status, JSON.stringify(paid.body)).toBe(201);
+    expect(paid.body.status).toBe('completed');
+    const entries = await ledger(discountId);
+    expect(
+      entries.map((e) => [e.kind, e.person_id, e.reference_type, Number(e.amount_minor)]),
+    ).toEqual([['redeem', firstChild, 'order_line', 1_000]]);
+    // the limit is now used up: a new basket is quoted without the discount
+    const next = await basketFor(t, guardian, [only!]);
+    expect(await quoteFor(t, guardian, next.basketId)).toMatchObject({
+      discountMinor: 0,
+      totalMinor: 10_000,
     });
-    expect(await ledger(discountId)).toEqual([]);
-    const again = await quoteFor(t, guardian, both.basketId);
-    expect(again).toMatchObject({ discountMinor: 1_000 });
   });
 });

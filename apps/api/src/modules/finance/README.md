@@ -229,8 +229,11 @@ contribution's amount and status, never a player's payment or method.
   allowance (`__tests__/discount-redemption.spec.ts`). **Proposed engineering default, pending
   POL-011 / DEC-007:** every redemption also takes one unit of the discount's organization-wide
   `redemption_limit` (catalog counts one per redeem), so that limit counts discounted
-  participants, not orders; catalog's quote evaluation does not count participants against it yet
-  (Known gaps, R3-TIME-MONEY-01b). A checkout prepared before this change recorded one redemption
+  participants, not orders; catalog's quote evaluation discounts only as many participants, in
+  line order, as the limit has redemptions left, and checks `minLines` again on them
+  (**Verified**, R3-TIME-MONEY-01b: `catalog/pricing/discount-evaluator.spec.ts`; test "with one
+  redemption left, two children are quoted the discount on the first child only and checkout
+  completes"). A checkout prepared before this change recorded one redemption
   per discount for the whole order (reference `order`, the order id, in the payer's name); its
   abort, whenever it happens, releases that reference instead
   (`LEGACY_ORDER_REDEMPTION_REFERENCE`; test "a checkout prepared before per-participant
@@ -607,17 +610,6 @@ outcome recording and reconciliation are never gated.
 - Compensation does not yet release the order's discount redemptions (per-person discount limits),
   and an open future installment obligation partly paid before compensation is canceled for its
   full amount (the same as abort).
-- **Known gap, merge-blocking deferral R3-TIME-MONEY-01b (catalog):** catalog's quote evaluation
-  checks a discount's organization-wide `redemption_limit` once per discount, while checkout
-  redeems once per discounted participant (above): a basket with more discounted participants than
-  redemptions left is quoted with the discount, refused at checkout with `RESOURCE_CONFLICT`
-  (`DISCOUNT_REDEMPTION_LIMIT`), and quoted with it again. For an automatic discount the payer
-  cannot remove it, so that basket cannot be checked out until the limit is raised or the discount
-  retired. The base behaviour (one redemption per order) did not have this gap. Closing it needs
-  catalog's evaluator to limit the discount to as many participants as redemptions are left and
-  to check `minLines` again on that reduced set; the test "KNOWN GAP R3-TIME-MONEY-01b" in
-  `__tests__/discount-redemption.spec.ts` records today's behaviour and is replaced by the target
-  when the catalog change lands.
 - `written_off` obligations, credit revocation and the accounting of credit expiry (breakage) have
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
 - Revenue recognition (deferred → earned) is not implemented (DEC-022); the accounting export

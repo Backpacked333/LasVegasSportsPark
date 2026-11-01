@@ -16,8 +16,8 @@ import { errors, type QuoteDiscountLine } from '@sportspark/contracts';
  *
  * Every redemption also takes one unit of the discount's organization-wide `redemption_limit`
  * (catalog counts one per redeem), so that limit counts discounted participants: a Proposed
- * engineering default pending POL-011 / DEC-007. Catalog's quote evaluation does not yet count
- * participants against the redemptions left (deferred catalog change R3-TIME-MONEY-01b).
+ * engineering default pending POL-011 / DEC-007. Catalog's quote evaluation discounts only as many
+ * participants as redemptions are left (R3-TIME-MONEY-01b), so a quote and its checkout agree.
  *
  * Pure and deterministic: the same quote and lines always give the same redemptions in the same
  * order (quote discount order, then line sequence).
