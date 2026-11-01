@@ -268,10 +268,25 @@ cannot set `source` or the id. `Program.source` is in every program read, which 
 - **Pending** DEC-016 and the Register E records: every Package G switch defaults to off; the
   catalog definitions exist but nothing books, redeems or renews them until enrollment and finance
   implement the effects and an administrator enables the capability.
-- A person who holds any staff role is a `staff` principal and therefore cannot be the signer of an
-  acknowledgment, even for their own child (the brief's "staff cannot be the signer"). A coach who
-  is also a guardian needs a customer-only session or a desk colleague to record the guardian's
-  signature; lifting this needs a kernel notion of "acting as customer" (pending DEC-004).
+- **Pending** DEC-004 (stage-3 "not doing": acting as customer for staff guardians): every session
+  of a person with an active staff membership is a `staff` principal (identity `buildPrincipal`;
+  there is no customer-only session), and `AcknowledgmentsService.record` chooses the
+  staff-assisted path from `principal.kind`. Such a person therefore cannot be the signer of an
+  acknowledgment, neither for themselves nor for their own child (the brief's "staff cannot be the
+  signer"): without `signedByPersonId` the request is refused (400), naming themselves is refused
+  (403) and the database refuses a staff-kind recorder who is the signer
+  (`acknowledgments_staff_never_signer`). A coach or official holds no `ACKNOWLEDGMENT_STAFF` role,
+  so they cannot record anyone's signature either. Until the decision, a desk colleague (front desk,
+  program or league manager, support operator, administrator) records the guardian's signature with
+  `signedByPersonId` naming them; without that record enrollment refuses the basket hold or booking
+  that needs the form (`MISSING_ACKNOWLEDGMENT`). **Verified**
+  `__tests__/policies-and-acknowledgments.spec.ts` "DEC-004 pending (SPK-REG-009, R3-TRACE-A-03)
+  ...". **Proposed** for when DEC-004 settles how a
+  staff member's own signature is told apart from desk assistance: the kernel already lets a staff
+  principal use their own self and relationship authority (`AuthorizationService.decide`), so the
+  service would take the staff-assisted path only when another signer is named by a holder of an
+  `ACKNOWLEDGMENT_STAFF` role, and the constraint would keep applying to the rows recorded as
+  staff-assisted.
 - Resolved (CAT-04, verified): the per-person discount limit is now a database guarantee
   (migration 0207). `redeem()` locks the definition then the counter (the order discount updates
   use) and keeps its ledger count as early feedback; the trigger's

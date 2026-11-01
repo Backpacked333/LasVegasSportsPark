@@ -569,6 +569,54 @@ describe('policy versions and acknowledgments (§4.4 Policies, SPK-REG-002, SPK-
       expect(coachTry.status).toBe(403);
     });
 
+    it('DEC-004 pending (SPK-REG-009, R3-TRACE-A-03): a guardian who holds a staff role is never the signer; a desk colleague records their signature', async () => {
+      // Recorded gap (README "Known gaps"): every session of a person with an active staff
+      // membership is a staff principal, so a coach who is also a parent cannot sign their
+      // child's form themselves. The documented route is a desk colleague naming them as signer.
+      const people = await createOrganizationPeople(t, {
+        guardianPermissions: ['view', 'complete_forms'],
+      });
+      await createStaffMemberFixture(t, { roles: ['coach'], personId: people.adult.personId });
+      const coachParent = await authHeaderForPerson(t, people.adult.personId);
+      const form = await createPolicyVersionFixture(t, { kind: 'form' });
+      const unnamed = await t.http
+        .post('/v1/acknowledgments')
+        .set(coachParent)
+        .set('Idempotency-Key', key())
+        .send({ subjectPersonId: people.child.personId, policyVersionId: form });
+      expect(unnamed.status).toBe(400);
+      expect(unnamed.body.code).toBe('VALIDATION_FAILED');
+      const asSelf = await t.http
+        .post('/v1/acknowledgments')
+        .set(coachParent)
+        .set('Idempotency-Key', key())
+        .send({
+          subjectPersonId: people.child.personId,
+          policyVersionId: form,
+          signedByPersonId: people.adult.personId,
+        });
+      expect(asSelf.status).toBe(403);
+      expect(asSelf.body.code).toBe('ACCESS_DENIED');
+
+      const assisted = await t.http
+        .post('/v1/acknowledgments')
+        .set(frontDesk)
+        .set('Idempotency-Key', key())
+        .send({
+          subjectPersonId: people.child.personId,
+          policyVersionId: form,
+          signedByPersonId: people.adult.personId,
+          evidence: { channel: 'desk_tablet' },
+        });
+      expect(assisted.status).toBe(201);
+      expect(assisted.body).toMatchObject({
+        basis: 'guardian',
+        signedByPersonId: people.adult.personId,
+        recordedByKind: 'staff',
+        recordedByPersonId: frontDesk.personId,
+      });
+    });
+
     it('SPK-REG-009: the signing time is server-stamped for customers; staff may backdate a paper form only within the policy and with evidence', async () => {
       const people = await createOrganizationPeople(t, {
         guardianPermissions: ['view', 'complete_forms'],
