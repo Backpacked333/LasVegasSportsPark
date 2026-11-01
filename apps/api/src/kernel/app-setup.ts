@@ -1,6 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
-import type { AppConfig } from './config';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import { ConfigSchema, type AppConfig } from './config';
+import { bodyDepthMiddleware } from './http/body-depth.middleware';
 import { correlationMiddleware } from './http/correlation.middleware';
+import { responseHeadersMiddleware } from './http/response-headers.middleware';
 
 export const API_PREFIX = 'v1';
 
@@ -20,7 +23,23 @@ export const CORS_ALLOWED_HEADERS = [
 export const CORS_EXPOSED_HEADERS = ['X-Correlation-Id', 'Idempotent-Replayed'] as const;
 export const CORS_METHODS = ['GET', 'POST', 'PATCH', 'DELETE'] as const;
 
-/** Shared HTTP setup for the server entrypoint and the test harness. */
+/** The body limit when no configuration is given (the `HTTP_BODY_LIMIT_BYTES` default). */
+const DEFAULT_BODY_LIMIT_BYTES = ConfigSchema.shape.HTTP_BODY_LIMIT_BYTES.parse(undefined);
+/** The nesting limit when no configuration is given (the `HTTP_BODY_MAX_DEPTH` default). */
+const DEFAULT_BODY_MAX_DEPTH = ConfigSchema.shape.HTTP_BODY_MAX_DEPTH.parse(undefined);
+
+/**
+ * Shared HTTP setup for the server entrypoint and the test harness. Call it before `init()` /
+ * `listen()`: the body parsers registered here replace the framework's default ones.
+ *
+ * - The correlation id comes first, so every answer (also a refused body) carries one (§4.10).
+ * - Every answer is `Cache-Control: no-store` and `nosniff`, and the framework is not named
+ *   (`X-Powered-By` off) (R3-SECURITY-04, §4.14).
+ * - Request bodies are read up to `HTTP_BODY_LIMIT_BYTES` (R3-SECURITY-02); a larger, badly encoded
+ *   or interrupted body answers 400 VALIDATION_FAILED through the error filter (R3-SECURITY-03),
+ *   never a 5xx a client would retry; so does a body nested deeper than `HTTP_BODY_MAX_DEPTH`
+ *   (`body_too_deep`), checked right after the parsers, before any route.
+ */
 export function configureApp(app: INestApplication, config?: AppConfig): INestApplication {
   const origins = config?.CORS_ALLOWED_ORIGINS;
   if (config && origins && origins.length > 0) {
@@ -33,7 +52,16 @@ export function configureApp(app: INestApplication, config?: AppConfig): INestAp
       maxAge: config.CORS_MAX_AGE_SECONDS,
     });
   }
+  const express = app.getHttpAdapter().getInstance() as { disable(setting: string): unknown };
+  express.disable('x-powered-by');
   app.use(correlationMiddleware);
+  app.use(responseHeadersMiddleware);
+  const limit = config?.HTTP_BODY_LIMIT_BYTES ?? DEFAULT_BODY_LIMIT_BYTES;
+  const expressApp = app as NestExpressApplication;
+  expressApp.useBodyParser('json', { limit });
+  expressApp.useBodyParser('urlencoded', { limit, extended: true });
+  // Registered after the parsers, so it sees the parsed body; a refusal reaches the error filter.
+  app.use(bodyDepthMiddleware(config?.HTTP_BODY_MAX_DEPTH ?? DEFAULT_BODY_MAX_DEPTH));
   app.setGlobalPrefix(API_PREFIX);
   app.enableShutdownHooks();
   return app;

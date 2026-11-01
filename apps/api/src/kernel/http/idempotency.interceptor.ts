@@ -72,14 +72,49 @@ export function canonicalHash(value: unknown): string {
   return createHash('sha256').update(canonicalize(value)).digest('hex');
 }
 
-function canonicalize(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null);
-  if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalize(v)}`);
-  return `{${entries.join(',')}}`;
+/**
+ * The canonical text of a JSON value: object keys sorted, `undefined` members dropped. Iterative
+ * (R3-SECURITY-03): it runs before request validation on every `@Idempotent()` command, so a deeply
+ * nested body (20,000 levels is only about 40 KB) must not exhaust the stack and answer 500 before
+ * the validation pipe refuses it. The text is the same as the earlier recursive form produced, so
+ * keys stored before this change keep matching their retries.
+ */
+export function canonicalize(value: unknown): string {
+  const out: string[] = [];
+  // Work items: a value to write, or literal text (brackets, separators, keys) to emit as is.
+  const stack: Array<{ text: string } | { value: unknown }> = [{ value }];
+  while (stack.length > 0) {
+    const item = stack.pop()!;
+    if ('text' in item) {
+      out.push(item.text);
+      continue;
+    }
+    const current = item.value;
+    if (current === null || typeof current !== 'object') {
+      out.push(JSON.stringify(current ?? null));
+      continue;
+    }
+    if (Array.isArray(current)) {
+      stack.push({ text: ']' });
+      for (let i = current.length - 1; i >= 0; i -= 1) {
+        stack.push({ value: current[i] });
+        if (i > 0) stack.push({ text: ',' });
+      }
+      stack.push({ text: '[' });
+      continue;
+    }
+    const entries = Object.entries(current as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    stack.push({ text: '}' });
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const [k, v] = entries[i]!;
+      stack.push({ value: v });
+      stack.push({ text: `${i > 0 ? ',' : ''}${JSON.stringify(k)}:` });
+    }
+    stack.push({ text: '{' });
+  }
+  return out.join('');
 }
 
 /**

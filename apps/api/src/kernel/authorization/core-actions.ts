@@ -37,6 +37,38 @@ export const CoreActions = defineActions({
     staffRoles: ['general_manager', 'system_administrator'],
     requirements: ['§1.6', '§6.5', 'DEC-016'],
   },
+  /**
+   * R3-OPERATIONS-03 (§5.11 supported resolution actions, §4.12): re-run a dead-lettered outbox or
+   * provider event once its cause is fixed. The general manager and system administration for any
+   * queue; `replayOwnDeadLetter` for the queue of one's own staff role.
+   */
+  replayDeadLetter: {
+    id: 'core.replay_dead_letter',
+    description:
+      'Replay a dead-lettered outbox or provider event once its cause is fixed (any queue; audited)',
+    staffRoles: ['general_manager', 'system_administrator'],
+    requirements: ['§5.11', '§4.12', 'SPK-UX-006'],
+  },
+  /**
+   * Allowed only when the principal holds the staff role the dead letter's failure owner names
+   * (narrowed to that role, like `exceptions.manage_own_queue`).
+   */
+  replayOwnDeadLetter: {
+    id: 'core.replay_own_dead_letter',
+    description: "Replay a dead-lettered event in the queue of one's own staff role (audited)",
+    staffRoles: [
+      'front_desk',
+      'league_manager',
+      'program_manager',
+      'scheduler',
+      'finance_operator',
+      'facilities_operator',
+      'general_manager',
+      'system_administrator',
+      'support_operator',
+    ],
+    requirements: ['§5.11', '§4.12', 'SPK-UX-006'],
+  },
   manageCapabilities: {
     id: 'core.manage_capabilities',
     description:

@@ -97,7 +97,14 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
         t.clock.now().getTime() + retryDelayMs(attempt),
       );
       // Not before its retry time: an immediate poll leaves it alone and uses no attempt.
-      expect(await inbox.runOnce()).toEqual({ processed: 0, failed: 0, dead: 0, ignored: 0 });
+      expect(await inbox.runOnce()).toEqual({
+        processed: 0,
+        failed: 0,
+        dead: 0,
+        ignored: 0,
+        deferred: 0,
+        released: 0,
+      });
       expect((await row()).attempts).toBe(attempt);
       t.clock.advance(retryDelayMs(attempt));
       expect(await inbox.runOnce()).toMatchObject({ failed: 1 });
@@ -197,7 +204,14 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
       })
       .where('id', '=', id)
       .execute();
-    expect(await inbox.runOnce()).toEqual({ processed: 0, failed: 0, dead: 0, ignored: 0 });
+    expect(await inbox.runOnce()).toEqual({
+      processed: 0,
+      failed: 0,
+      dead: 0,
+      ignored: 0,
+      deferred: 0,
+      released: 0,
+    });
     t.clock.advance(t.config.OUTBOX_LOCK_LEASE_SECONDS * 1000 + 1);
     expect(await inbox.runOnce()).toMatchObject({ processed: 1 });
     expect(handled.filter((e) => e === 'evt_leased')).toHaveLength(1);
@@ -260,5 +274,123 @@ describe('provider inbox (§4.11 webhooks, §4.12)', () => {
       .execute();
     expect(await inbox.runOnce()).toMatchObject({ processed: 1 });
     expect(hooks).toEqual(['ctx_1:attempt-2']);
+  });
+
+  it('R3-OPERATIONS-01 / §4.7 invariant 12: a provider event waits, uncounted, for a handler its recording build registered and this build lacks', async () => {
+    const ran: string[] = [];
+    inbox.on('fake-rollback', 'existing', async (event) => {
+      ran.push(`existing:${event.providerEventId}`);
+    });
+    const { id } = await inbox.record({
+      provider: 'fake-rollback',
+      providerEventId: 'rb_1',
+      eventType: 'payment.succeeded',
+      payload: {},
+      organizationId: t.organizationId,
+      signatureVerified: true,
+    });
+    const row = () =>
+      t.db.selectFrom('inbox_events').selectAll().where('id', '=', id).executeTakeFirstOrThrow();
+    expect((await row()).expected_handlers).toEqual(['inbox:fake-rollback:existing']);
+    // Stands in for the newer build that recorded it with one more handler.
+    await t.db
+      .updateTable('inbox_events')
+      .set({ expected_handlers: ['inbox:fake-rollback:added', 'inbox:fake-rollback:existing'] })
+      .where('id', '=', id)
+      .execute();
+    expect(await inbox.runOnce()).toMatchObject({ processed: 0, deferred: 1 });
+    expect(ran).toEqual(['existing:rb_1']);
+    const waiting = await row();
+    expect(waiting).toMatchObject({ status: 'received', attempts: 0, locked_by: null });
+    expect(waiting.last_error).toContain('inbox:fake-rollback:added');
+
+    inbox.on('fake-rollback', 'added', async (event) => {
+      ran.push(`added:${event.providerEventId}`);
+    });
+    t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+    expect(await inbox.runOnce()).toMatchObject({ processed: 1 });
+    expect(ran).toEqual(['existing:rb_1', 'added:rb_1']);
+    expect(await row()).toMatchObject({ status: 'processed', last_error: null });
+
+    // A retired handler is not waited for.
+    const second = await inbox.record({
+      provider: 'fake-rollback',
+      providerEventId: 'rb_2',
+      eventType: 'payment.succeeded',
+      payload: {},
+      organizationId: t.organizationId,
+      signatureVerified: true,
+    });
+    await t.db
+      .updateTable('inbox_events')
+      .set({ expected_handlers: ['inbox:fake-rollback:gone'] })
+      .where('id', '=', second.id)
+      .execute();
+    inbox.retire('fake-rollback', 'gone', 'merged into existing');
+    expect(await inbox.runOnce()).toMatchObject({ processed: 1, deferred: 0 });
+  });
+
+  it('§5.11 / R3-OPERATIONS-01: a provider event that waits past OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS opens one owned exception, its present handler runs once, and processing it resolves the exception', async () => {
+    const ran: string[] = [];
+    inbox.on('fake-wait', 'present', async (event) => {
+      ran.push(event.providerEventId);
+    });
+    const { id } = await inbox.record({
+      provider: 'fake-wait',
+      providerEventId: 'wait_1',
+      eventType: 'refund.succeeded',
+      payload: {},
+      organizationId: t.organizationId,
+      signatureVerified: true,
+    });
+    await t.db
+      .updateTable('inbox_events')
+      .set({ expected_handlers: ['inbox:fake-wait:missing', 'inbox:fake-wait:present'] })
+      .where('id', '=', id)
+      .execute();
+    const startedAt = t.clock.now();
+    const exceptionsOf = () =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .selectAll()
+        .where('dedupe_key', '=', `inbox-wait:${id}`)
+        .execute();
+    expect(await inbox.runOnce()).toMatchObject({ deferred: 1 });
+    expect(await exceptionsOf()).toEqual([]);
+    t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS * 1000);
+    expect(await inbox.runOnce()).toMatchObject({ deferred: 1 });
+    t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+    expect(await inbox.runOnce()).toMatchObject({ deferred: 1 });
+    const [opened, ...more] = await exceptionsOf();
+    expect(more).toEqual([]);
+    expect(opened).toMatchObject({
+      category: 'reliability.inbox_waiting_for_handler',
+      owner_queue: 'system_administrator',
+      status: 'open',
+      affected_type: 'inbox_event',
+      affected_id: id,
+    });
+    expect(opened!.details).toMatchObject({
+      eventId: id,
+      missingHandlers: ['inbox:fake-wait:missing'],
+      waitingSince: startedAt.toISOString(),
+    });
+    // The present handler ran on the first pass only.
+    expect(ran).toEqual(['wait_1']);
+
+    inbox.on('fake-wait', 'missing', async (event) => {
+      ran.push(`missing:${event.providerEventId}`);
+    });
+    t.clock.advance(t.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000);
+    expect(await inbox.runOnce()).toMatchObject({ processed: 1 });
+    expect(ran).toEqual(['wait_1', 'missing:wait_1']);
+    expect((await exceptionsOf()).map((e) => e.status)).toEqual(['resolved']);
+    expect(
+      await t.db
+        .selectFrom('inbox_events')
+        .select(['status', 'waiting_since', 'attempts'])
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: 'processed', waiting_since: null, attempts: 1 });
   });
 });

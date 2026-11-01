@@ -268,6 +268,7 @@ export class OperationalExceptions {
             'revision',
             'category',
             'owner_queue',
+            'dedupe_key',
           ])
           .where('organization_id', '=', principal.organizationId)
           .where('id', '=', id)
@@ -316,6 +317,9 @@ export class OperationalExceptions {
         { details: { code: 'recovery_resume_required' } },
       );
     }
+    if (to === 'resolved') {
+      await this.refuseUnsettledDeadLetter(trx, current);
+    }
     const now = this.clock.now();
     const updated = await trx
       .updateTable('operational_exceptions')
@@ -345,6 +349,68 @@ export class OperationalExceptions {
       reason: options.reason ?? null,
       correlationId: options.correlationId ?? null,
     });
+  }
+
+  /**
+   * R3-OPERATIONS-03 (§5.11, recovery runbook "never mark resolved without the effect happening"):
+   * a dead letter's exception is resolved only once its event has settled (the worker resolves it
+   * itself after a replay). While the event is still dead, or replayed but not yet settled, the
+   * exception can be closed with a reason, not resolved. The same holds for the exception of an
+   * event that waits for a missing handler (migration 0015): the worker resolves it when the event
+   * settles.
+   */
+  private async refuseUnsettledDeadLetter(
+    trx: Trx,
+    current: { organization_id: string; category: string; dedupe_key: string | null },
+  ): Promise<void> {
+    const guarded = SETTLEMENT_GUARDED_CATEGORIES[current.category];
+    if (!guarded || !current.dedupe_key?.startsWith(guarded.keyPrefix)) return;
+    const { source, waiting } = guarded;
+    const eventId = current.dedupe_key.slice(guarded.keyPrefix.length);
+    const event =
+      source === 'outbox'
+        ? await trx
+            .selectFrom('outbox_events')
+            .select('status')
+            .where('organization_id', '=', current.organization_id)
+            .where('id', '=', eventId)
+            .executeTakeFirst()
+        : await trx
+            .selectFrom('inbox_events')
+            .select('status')
+            .where('organization_id', '=', current.organization_id)
+            .where('id', '=', eventId)
+            .executeTakeFirst();
+    if (!event) return;
+    const settled =
+      source === 'outbox' ? event.status === 'dispatched' : event.status === 'processed';
+    if (settled) return;
+    if (waiting) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        'This follow-up has not happened yet: the event still waits for handlers the running build does not register. Deploy a build that registers them or declares them retired; the exception is resolved when the event settles. Close the exception with a reason instead to stop being told.',
+        {
+          details: {
+            code: 'handler_wait_unsettled',
+            source,
+            eventId,
+            eventStatus: event.status,
+          },
+        },
+      );
+    }
+    throw new DomainError(
+      'INVALID_TRANSITION',
+      `This follow-up has not happened yet. Replay the event once its cause is fixed (POST /v1/${source === 'outbox' ? 'outbox-events' : 'provider-events'}/${eventId}/replay); the exception is resolved when it settles. Close the exception with a reason instead if the follow-up is no longer wanted.`,
+      {
+        details: {
+          code: 'dead_letter_replay_required',
+          source,
+          eventId,
+          eventStatus: event.status,
+        },
+      },
+    );
   }
 
   async listOpen(
@@ -384,6 +450,28 @@ export class OperationalExceptions {
     return query.execute();
   }
 }
+
+/**
+ * Exceptions the worker resolves once their outbox or inbox event settles, never by hand before
+ * (R3-OPERATIONS-03 dead letters; migration 0015 waits for a missing handler), by category, with
+ * the dedupe-key prefix that precedes the event id (`dead-letters.ts`).
+ */
+const SETTLEMENT_GUARDED_CATEGORIES: Readonly<
+  Record<string, { source: 'outbox' | 'inbox'; keyPrefix: string; waiting: boolean }>
+> = {
+  'reliability.outbox_dead_letter': { source: 'outbox', keyPrefix: 'outbox:', waiting: false },
+  'reliability.inbox_dead_letter': { source: 'inbox', keyPrefix: 'inbox:', waiting: false },
+  'reliability.outbox_waiting_for_handler': {
+    source: 'outbox',
+    keyPrefix: 'outbox-wait:',
+    waiting: true,
+  },
+  'reliability.inbox_waiting_for_handler': {
+    source: 'inbox',
+    keyPrefix: 'inbox-wait:',
+    waiting: true,
+  },
+};
 
 /**
  * `exceptions.manage_own_queue` narrowed to the one staff role the queue names, so a role held

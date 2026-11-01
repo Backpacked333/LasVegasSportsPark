@@ -287,6 +287,44 @@ export const AssignmentMachine = defineStateMachine<AssignmentState, AssignmentE
   },
 });
 
+// ---------------------------------------------------------------------------------------------
+// Outbox event (kernel, §4.12): pending, dispatched, dead. A dead letter returns to pending only by
+// an audited replay (R3-OPERATIONS-03, §5.11 supported resolution actions).
+// ---------------------------------------------------------------------------------------------
+export type OutboxEventState = 'pending' | 'dispatched' | 'dead';
+export type OutboxEventEvent = 'dispatch' | 'dead_letter' | 'replay';
+export const OutboxEventMachine = defineStateMachine<OutboxEventState, OutboxEventEvent>({
+  name: 'OutboxEvent',
+  initial: 'pending',
+  states: ['pending', 'dispatched', 'dead'],
+  terminal: ['dispatched'],
+  transitions: {
+    pending: { dispatch: 'dispatched', dead_letter: 'dead' },
+    dispatched: {},
+    dead: { replay: 'pending' },
+  },
+});
+
+// ---------------------------------------------------------------------------------------------
+// Inbox (provider) event (kernel, §4.11, §4.12): received, processed, failed, ignored, dead. A dead
+// letter returns to received only by an audited replay (R3-OPERATIONS-03).
+// ---------------------------------------------------------------------------------------------
+export type InboxEventState = 'received' | 'processed' | 'failed' | 'ignored' | 'dead';
+export type InboxEventEvent = 'process' | 'fail' | 'ignore' | 'dead_letter' | 'replay';
+export const InboxEventMachine = defineStateMachine<InboxEventState, InboxEventEvent>({
+  name: 'InboxEvent',
+  initial: 'received',
+  states: ['received', 'processed', 'failed', 'ignored', 'dead'],
+  terminal: ['processed', 'ignored'],
+  transitions: {
+    received: { process: 'processed', fail: 'failed', ignore: 'ignored', dead_letter: 'dead' },
+    failed: { process: 'processed', fail: 'failed', ignore: 'ignored', dead_letter: 'dead' },
+    processed: {},
+    ignored: {},
+    dead: { replay: 'received' },
+  },
+});
+
 export const ALL_STATE_MACHINES = [
   ApplicationMachine,
   EnrollmentMachine,
@@ -298,4 +336,6 @@ export const ALL_STATE_MACHINES = [
   CheckoutMachine,
   ResultMachine,
   AssignmentMachine,
+  OutboxEventMachine,
+  InboxEventMachine,
 ] as const;
