@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ageInYears,
   assertKindMatchesDateOfBirth,
+  assignmentScopeCovers,
+  claimIssuerCoversStaffLogin,
   hashToken,
   isGrantEffective,
   isWithinEffectiveDates,
@@ -51,5 +53,40 @@ describe('identity pure rules', () => {
   it('normalizes contact values deterministically', () => {
     expect(normalizeContactValue('email', '  Parent@Example.TEST ')).toBe('parent@example.test');
     expect(normalizeContactValue('phone', '+1 (702) 555-0100')).toBe('+17025550100');
+  });
+
+  it('§2.1 / §4.14 (R3-SECURITY-01): an assignment scope covers a membership only within its facilities', () => {
+    expect(assignmentScopeCovers(null, [])).toBe(true);
+    expect(assignmentScopeCovers(null, ['f1', 'f2'])).toBe(true);
+    expect(assignmentScopeCovers(['f1'], [])).toBe(false);
+    expect(assignmentScopeCovers(['f1'], ['f1'])).toBe(true);
+    expect(assignmentScopeCovers(['f1'], ['f1', 'f2'])).toBe(false);
+    expect(assignmentScopeCovers([], ['f1'])).toBe(false);
+  });
+
+  it('SPK-AT-025 / §2.1: a self claim hands over a staff login only if its issuer administered every facility', () => {
+    const admin = { kind: 'staff', staffRoles: ['system_administrator'] };
+    expect(claimIssuerCoversStaffLogin({ kind: 'system' }, [[]])).toBe(true);
+    expect(
+      claimIssuerCoversStaffLogin({ ...admin, staffAssignmentScope: null }, [[], ['f2']]),
+    ).toBe(true);
+    expect(claimIssuerCoversStaffLogin({ ...admin, staffAssignmentScope: ['f1'] }, [['f1']])).toBe(
+      true,
+    );
+    expect(claimIssuerCoversStaffLogin({ ...admin, staffAssignmentScope: ['f1'] }, [[]])).toBe(
+      false,
+    );
+    expect(
+      claimIssuerCoversStaffLogin({ ...admin, staffAssignmentScope: ['f1'] }, [['f1'], ['f2']]),
+    ).toBe(false);
+    // no recorded scope (an older snapshot) or no assigning role: fails closed
+    expect(claimIssuerCoversStaffLogin(admin, [['f1']])).toBe(false);
+    expect(
+      claimIssuerCoversStaffLogin(
+        { kind: 'staff', staffRoles: ['support_operator'], staffAssignmentScope: null },
+        [['f1']],
+      ),
+    ).toBe(false);
+    expect(claimIssuerCoversStaffLogin(null, [['f1']])).toBe(false);
   });
 });

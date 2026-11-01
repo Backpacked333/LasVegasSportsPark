@@ -31306,8 +31306,8 @@ export type paths = {
         options?: never;
         head?: never;
         /**
-         * Update a person with an expected revision
-         * @description Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).
+         * Update a person with an expected revision; answers the person only to a caller who may read it, otherwise the id and new revision
+         * @description Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).
          */
         patch: {
             parameters: {
@@ -31335,7 +31335,7 @@ export type paths = {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["PersonDetail"];
+                        "application/json": components["schemas"]["UpdatePersonResponse"];
                     };
                 };
                 /** @description Validation failed */
@@ -31712,8 +31712,8 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Make a contact point the primary one of its kind (one transaction)
-         * @description Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).
+         * Make a contact point the primary one of its kind (one transaction); the contact point is answered only to a caller who may read the person
+         * @description Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).
          */
         post: {
             parameters: {
@@ -31742,7 +31742,7 @@ export type paths = {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ContactPoint"];
+                        "application/json": components["schemas"]["MakePrimaryContactPointResponse"];
                     };
                 };
                 /** @description Validation failed */
@@ -51514,6 +51514,16 @@ export type components = {
             /** Format: date-time */
             verifiedAt: string | null;
         };
+        ContactPointChangeAcknowledgement: {
+            /** @enum {boolean} */
+            detailWithheld: true;
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ContactPointKind"];
+            /** Format: uuid */
+            personId: string;
+            personRevision: number;
+        };
         /** @enum {string} */
         ContactPointKind: "email" | "phone";
         ContactPointRemoved: {
@@ -54854,6 +54864,7 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
         };
+        MakePrimaryContactPointResponse: components["schemas"]["ContactPoint"] | components["schemas"]["ContactPointChangeAcknowledgement"];
         MakeupEntitlement: {
             /** Format: date-time */
             createdAt: string;
@@ -56078,6 +56089,13 @@ export type components = {
             /** Format: uuid */
             personId: string;
             relationships: components["schemas"]["Relationship"][];
+        };
+        PersonChangeAcknowledgement: {
+            /** @enum {boolean} */
+            detailWithheld: true;
+            /** Format: uuid */
+            id: string;
+            revision: number;
         };
         PersonDetail: components["schemas"]["Person"] & {
             contactPoints: components["schemas"]["ContactPoint"][];
@@ -59717,6 +59735,7 @@ export type components = {
             /** @enum {string} */
             status?: "active" | "inactive";
         };
+        UpdatePersonResponse: components["schemas"]["PersonDetail"] | components["schemas"]["PersonChangeAcknowledgement"];
         UpdatePosProductRequest: {
             chargePolicyKeys?: string[];
             expectedRevision: number;

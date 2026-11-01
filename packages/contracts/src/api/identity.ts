@@ -139,6 +139,25 @@ export const PersonDetailSchema = PersonSchema.extend({
 }).openapi('PersonDetail');
 export type PersonDetail = z.infer<typeof PersonDetailSchema>;
 
+/**
+ * SPK-IAM-003, §4.10 (R3-TRACE-A-05): what `PATCH /people/{id}` answers a caller who may change the
+ * person (self, `register`, staff) but may not read the record (`identity.read_person`: `view`):
+ * the id and the new revision only, so `register` never silently yields `view`. Callers who may
+ * read the person get the full `PersonDetail`; `detailWithheld` tells the two apart.
+ */
+export const PersonChangeAcknowledgementSchema = z
+  .object({
+    id: z.uuid(),
+    revision: Revision,
+    detailWithheld: z.literal(true),
+  })
+  .openapi('PersonChangeAcknowledgement');
+export type PersonChangeAcknowledgement = z.infer<typeof PersonChangeAcknowledgementSchema>;
+export const UpdatePersonResponseSchema = z
+  .union([PersonDetailSchema, PersonChangeAcknowledgementSchema])
+  .openapi('UpdatePersonResponse');
+export type UpdatePersonResponse = z.infer<typeof UpdatePersonResponseSchema>;
+
 // ---------------------------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------------------------
@@ -690,6 +709,28 @@ export const ContactPointRemovedResponse = z
   .object({ removedContactPointId: z.uuid() })
   .openapi('ContactPointRemoved');
 export type ContactPointRemoved = z.infer<typeof ContactPointRemovedResponse>;
+/**
+ * SPK-IAM-003 (R3-TRACE-A-05): what make-primary answers a caller who may change the person's
+ * contact points (`register`) but may not read the person (`view`): the contact point's id and
+ * kind (email or phone, the category it named), the person and the person's new revision; never
+ * the contact value or its verification.
+ */
+export const ContactPointChangeAcknowledgementSchema = z
+  .object({
+    id: z.uuid(),
+    personId: z.uuid(),
+    kind: ContactPointKindSchema,
+    personRevision: Revision,
+    detailWithheld: z.literal(true),
+  })
+  .openapi('ContactPointChangeAcknowledgement');
+export type ContactPointChangeAcknowledgement = z.infer<
+  typeof ContactPointChangeAcknowledgementSchema
+>;
+export const MakePrimaryContactPointResponseSchema = z
+  .union([ContactPointSchema, ContactPointChangeAcknowledgementSchema])
+  .openapi('MakePrimaryContactPointResponse');
+export type MakePrimaryContactPointResponse = z.infer<typeof MakePrimaryContactPointResponseSchema>;
 
 /** ID-03: a person named on an invitation, by display name only. */
 export const InvitationPartySchema = z
@@ -1004,11 +1045,12 @@ register({
 register({
   method: 'patch',
   path: '/people/{id}',
-  summary: 'Update a person with an expected revision',
-  requirements: 'SPK-IAM-001, §4.9',
+  summary:
+    'Update a person with an expected revision; answers the person only to a caller who may read it, otherwise the id and new revision',
+  requirements: 'SPK-IAM-001, SPK-IAM-003, §4.9',
   params: IdParams,
   body: UpdatePersonBody,
-  response: PersonDetailSchema,
+  response: UpdatePersonResponseSchema,
   idempotent: true,
 });
 register({
@@ -1284,11 +1326,12 @@ register({
 register({
   method: 'post',
   path: '/people/{id}/contact-points/{contactPointId}/make-primary',
-  summary: 'Make a contact point the primary one of its kind (one transaction)',
-  requirements: 'SPK-IAM-001, §4.9',
+  summary:
+    'Make a contact point the primary one of its kind (one transaction); the contact point is answered only to a caller who may read the person',
+  requirements: 'SPK-IAM-001, SPK-IAM-003, §4.9',
   params: ContactPointParams,
   body: MakePrimaryContactPointBody,
-  response: ContactPointSchema,
+  response: MakePrimaryContactPointResponseSchema,
   status: 200,
   idempotent: true,
 });
