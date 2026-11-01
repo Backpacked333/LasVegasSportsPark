@@ -249,6 +249,27 @@ expiresAt`): expires an active hold once due, gives the place back, emits
   and for `memberships` the renewal notices still owed become due at once
   (`renewal_notice_due_at` cleared). Disabling needs no follow-up: every gate reads the switch.
 
+- `enrollment.booking_follow_cancellation` on `enrollment.enrollment_canceled`.
+- `enrollment.booking_follow_confirmation` on `enrollment.enrollment_confirmed`.
+- `enrollment.booking_follow_event` on `scheduling.event_changed`.
+- `enrollment.booking_staffing` on `workforce.assignment_changed`.
+- `enrollment.follow_person_merge` on `identity.persons_merged`.
+- `enrollment.issue_package` on `enrollment.enrollment_confirmed`.
+- `enrollment.membership_canceled` on `enrollment.enrollment_canceled`.
+- `enrollment.membership_completed` on `enrollment.enrollment_completed`.
+- `enrollment.notify_assessment_published` on `enrollment.assessment_published`.
+- `enrollment.notify_placement` on `enrollment.placement_assigned`.
+- `enrollment.notify_recommendation_shared` on `enrollment.recommendation_shared`.
+- `enrollment.notify_registration_outcome` on `enrollment.application_decided`.
+- `enrollment.notify_waitlist_offer` on `enrollment.waitlist_offer_made`.
+- `enrollment.revoke_package` on `enrollment.enrollment_canceled`.
+- `enrollment.start_membership` on `enrollment.enrollment_confirmed`.
+
+The Package G, youth and booking handlers above are described with their behaviour in the sections
+below; this list is complete for the module (`__tests__/readme-handlers.spec.ts` compares it with
+`EventHandlerRegistry`, R3-DOCS-TRUTH-3-08), and `docs/architecture/overview.md` §7.1 is the
+inventory across modules.
+
 All are idempotent under replay.
 
 ## Events (`enrollment.events.ts`)
