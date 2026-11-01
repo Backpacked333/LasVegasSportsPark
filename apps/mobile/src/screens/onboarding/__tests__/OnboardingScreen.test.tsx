@@ -362,6 +362,80 @@ describe('SCR-C-01 OnboardingScreen', () => {
     expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
   });
 
+  it('NA-04 §4.13: a session that expires on the setup screen returns to the claim code when the same account signs in again', async () => {
+    let expired = true;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () =>
+          expired
+            ? apiError(401, 'AUTHENTICATION_REQUIRED', { nextAction: 'authenticate' })
+            : fakeResponse(200, me({ person: null })),
+      },
+    });
+    let controls: AppContextValue | null = null;
+    function Device({ onboarding }: { onboarding: boolean }) {
+      controls = useApp();
+      return onboarding ? <OnboardingRoute /> : null;
+    }
+    const view = render(<Device onboarding={false} />, { wrapper: app.wrapper });
+    await waitFor(() => expect(controls?.session.status).toBe('signed_in'));
+    // The stored session has quietly expired; the person opens the front desk's claim link.
+    holdSecretOf({ to: 'claim', token: TOKEN });
+    view.rerender(<Device onboarding />);
+    expect(
+      await screen.findByText('Your session ended. Sign in again to continue.'),
+    ).toBeOnTheScreen();
+    expect(readLinkSecret('claim')).toBeNull();
+
+    // The same account signs in again: the setup screen is where they left it, code filled in.
+    expired = false;
+    await act(async () => {
+      await controls?.signIn({ ...TEST_SESSION, token: 'renewed-token' });
+    });
+    expect(await screen.findByLabelText('Claim code')).toHaveProp('value', TOKEN);
+    expect(screen.getByText('Filled in from the link you opened.')).toBeOnTheScreen();
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+  });
+
+  it('R3-SECURITY-07 §4.13: after a session expires, another account signing in is not offered the claim code', async () => {
+    let expired = true;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () =>
+          expired
+            ? apiError(401, 'AUTHENTICATION_REQUIRED', { nextAction: 'authenticate' })
+            : fakeResponse(200, me({ person: null })),
+      },
+    });
+    let controls: AppContextValue | null = null;
+    function Device({ onboarding }: { onboarding: boolean }) {
+      controls = useApp();
+      return onboarding ? <OnboardingRoute /> : null;
+    }
+    const view = render(<Device onboarding={false} />, { wrapper: app.wrapper });
+    await waitFor(() => expect(controls?.session.status).toBe('signed_in'));
+    holdSecretOf({ to: 'claim', token: TOKEN });
+    view.rerender(<Device onboarding />);
+    expect(
+      await screen.findByText('Your session ended. Sign in again to continue.'),
+    ).toBeOnTheScreen();
+
+    expired = false;
+    await act(async () => {
+      await controls?.signIn({
+        ...TEST_SESSION,
+        token: 'other-token',
+        accountId: '0192f1a0-0000-7000-8000-0000000000bb',
+      });
+    });
+    expect(
+      await screen.findByLabelText('Step 2 of 4, Participant record, Not linked yet'),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Claim code')).toHaveProp('value', '');
+    expect(screen.queryByText('Filled in from the link you opened.')).toBeNull();
+    expect(readLinkSecret('claim')).toBeNull();
+  });
+
   it('§4.13: a claim link opened while signed out is still offered once that person signs in', async () => {
     const app = createTestApp({ session: null, routes: { 'GET /me': ok(me({ person: null })) } });
     let controls: AppContextValue | null = null;

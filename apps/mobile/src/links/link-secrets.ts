@@ -5,12 +5,17 @@
  * storage and never logged. Restarting the app forgets it: the person opens the link again.
  *
  * A held secret belongs to whoever was signed in when its link arrived (§4.13 session expiry and
- * recovery; R3-SECURITY-07). `AppProviders` reports every session change through
- * `linkSecretsFollowSession` before any screen sees the new session:
+ * recovery; R3-SECURITY-07). `AppProviders` reports every session change before any screen sees
+ * the new session, through `linkSecretsFollowSession` (load, sign-in, sign-out) and
+ * `linkSecretsSessionExpired` (the API rejected the session):
  *
- * - ending the session (sign out, or the API rejecting it) drops every secret held for the account,
- *   as the query cache is dropped;
- * - signing in as another account drops the previous account's secrets;
+ * - signing out drops every secret held for the account, as the query cache is dropped;
+ * - an expired session is not a sign-out: nothing is offered while nobody is signed in, but the
+ *   secrets of the account whose session ended wait for it, so the same account signing in again
+ *   comes back to the invitation or claim it opened (§6.2 "Expired session", NA-04
+ *   "re-authentication returns the person to where they were");
+ * - signing in as another account (or as a session that does not name its account) drops the
+ *   previous account's secrets, also those kept through an expiry;
  * - a link opened while nobody is signed in (or before the stored session has loaded) is kept for
  *   the account that signs in next, which is how "open the link, then sign in" works.
  *
@@ -31,13 +36,16 @@ interface HeldSecret {
 const secrets = new Map<string, HeldSecret>();
 const listeners = new Set<() => void>();
 let currentOwner: LinkSecretOwner = null;
+/** `currentOwner` is an account the session named, not a stand-in for an unnamed session. */
+let currentOwnerNamed = false;
 let unnamedSessions = 0;
 
 function keyOf(kind: LinkSecretKind, id?: string): string {
   return id ? `${kind}:${id}` : kind;
 }
 
-function setOwner(next: LinkSecretOwner): void {
+function setOwner(next: LinkSecretOwner, named: boolean): void {
+  currentOwnerNamed = next !== null && named;
   if (next === currentOwner) return;
   currentOwner = next;
   for (const listener of listeners) listener();
@@ -58,13 +66,15 @@ export function forgetLinkSecret(kind: LinkSecretKind, id?: string): void {
 }
 
 /**
- * The session changed: `null` when nobody is signed in now, otherwise the signed-in session.
- * Secrets of any other account are dropped; secrets opened while nobody was signed in pass to the
- * account signing in.
+ * The session changed: `null` when nobody is signed in now (signed out, or no stored session),
+ * otherwise the signed-in session. Secrets of any other account are dropped, including those kept
+ * through an expiry for an account other than this one; secrets opened while nobody was signed in
+ * pass to the account signing in.
  */
 export function linkSecretsFollowSession(session: { accountId: string | null } | null): void {
   // A session that does not name its account cannot be told apart from another one: it gets an
   // owner of its own, so nothing held before it carries over (fail closed).
+  const named = session !== null && session.accountId !== null;
   const next: LinkSecretOwner =
     session === null ? null : (session.accountId ?? `unnamed-session-${++unnamedSessions}`);
   for (const [key, held] of secrets) {
@@ -74,7 +84,23 @@ export function linkSecretsFollowSession(session: { accountId: string | null } |
       secrets.delete(key);
     }
   }
-  setOwner(next);
+  setOwner(next, named);
+}
+
+/**
+ * The API rejected the session (AUTHENTICATION_REQUIRED: expired or revoked, §4.13). Nothing is
+ * offered while nobody is signed in, but the secrets of the account whose session ended are kept
+ * for it: when the same account signs in again (`linkSecretsFollowSession` with its id) they are
+ * offered again, so re-authentication returns the person to the invitation or claim they opened
+ * (§6.2 "Expired session", NA-04). Another account signing in, a session that does not name its
+ * account, or a sign-out drops them. An unnamed session could never be recognised again, so its
+ * secrets are dropped now.
+ */
+export function linkSecretsSessionExpired(): void {
+  if (currentOwner !== null && !currentOwnerNamed) {
+    for (const [key, held] of secrets) if (held.owner === currentOwner) secrets.delete(key);
+  }
+  setOwner(null, false);
 }
 
 /** The owner reads are answered for now (for `useLinkSecret`). */
@@ -93,5 +119,5 @@ export function subscribeLinkSecretOwner(listener: () => void): () => void {
 /** Test isolation: nothing held, nobody signed in. */
 export function clearLinkSecrets(): void {
   secrets.clear();
-  setOwner(null);
+  setOwner(null, false);
 }

@@ -26,7 +26,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Reachability } from '../connectivity/sources';
-import { linkSecretsFollowSession } from '../links/link-secrets';
+import { linkSecretsFollowSession, linkSecretsSessionExpired } from '../links/link-secrets';
 import type { AppServices } from './services';
 
 export type SessionStatus = 'loading' | 'signed_out' | 'signed_in';
@@ -127,9 +127,10 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
         now: services.now,
         onUpdateRequired: (error) => setUpdateRequired(error),
         onAuthenticationRequired: () => {
-          // Session expiry and recovery (§4.13): drop the secret, keep nothing cached for the user,
-          // and drop the link secrets held for the account (R3-SECURITY-07).
-          linkSecretsFollowSession(null);
+          // Session expiry and recovery (§4.13): drop the secret and keep nothing cached for the
+          // user. Link secrets are no longer offered, but wait for the same account to sign in
+          // again (NA-04); another account never gets them (R3-SECURITY-07).
+          linkSecretsSessionExpired();
           void services.sessionStore.clear().finally(() => {
             client.clear();
             setSession({ status: 'signed_out', session: null, expired: true });

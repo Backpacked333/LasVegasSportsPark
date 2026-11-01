@@ -1,7 +1,9 @@
 /**
  * Link secrets belong to the account signed in when the link arrived (§4.13 session expiry and
- * recovery, §4.14 protected secrets; R3-SECURITY-07): ending the session or signing in as another
- * account drops them, and a link opened while signed out passes to the account that signs in.
+ * recovery, §4.14 protected secrets; R3-SECURITY-07): signing out or signing in as another account
+ * drops them; an expired session keeps them, unoffered, for the same account to sign in again
+ * (§6.2 "Expired session", NA-04); a link opened while signed out passes to the account that signs
+ * in.
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, render, renderHook, waitFor } from '@testing-library/react-native';
@@ -14,6 +16,7 @@ import {
   forgetLinkSecret,
   holdLinkSecret,
   linkSecretsFollowSession,
+  linkSecretsSessionExpired,
   readLinkSecret,
 } from '../link-secrets';
 import { useLinkSecret } from '../useLinkSecret';
@@ -80,28 +83,131 @@ describe('R3-SECURITY-07 link secrets follow the session (§4.13, §4.14)', () =
     expect(result.current).toBeNull();
   });
 
-  it('§4.13 session expiry: an AUTHENTICATION_REQUIRED answer drops the link secrets held for the account', async () => {
+  it('NA-04 expired session, same account signs in again: the invitation token is offered again; another account signs in: it is not', () => {
+    linkSecretsFollowSession(A);
+    holdLinkSecret('invitation', TOKEN, ID);
+    holdLinkSecret('claim', TOKEN);
+    linkSecretsSessionExpired();
+    // Nobody is signed in: nothing is offered.
+    expect(readLinkSecret('invitation', ID)).toBeNull();
+    expect(readLinkSecret('claim')).toBeNull();
+    linkSecretsFollowSession(A);
+    expect(readLinkSecret('invitation', ID)).toBe(TOKEN);
+    expect(readLinkSecret('claim')).toBe(TOKEN);
+
+    linkSecretsSessionExpired();
+    linkSecretsFollowSession(B);
+    expect(readLinkSecret('invitation', ID)).toBeNull();
+    expect(readLinkSecret('claim')).toBeNull();
+    // Dropped, not hidden: A signing in afterwards gets nothing either.
+    linkSecretsFollowSession(A);
+    expect(readLinkSecret('invitation', ID)).toBeNull();
+  });
+
+  it('§4.13: a secret kept through an expiry is dropped by a session that does not name its account, and by a sign-out', () => {
+    linkSecretsFollowSession(A);
+    holdLinkSecret('claim', TOKEN);
+    linkSecretsSessionExpired();
+    linkSecretsFollowSession({ accountId: null });
+    linkSecretsFollowSession(A);
+    expect(readLinkSecret('claim')).toBeNull();
+
+    holdLinkSecret('claim', TOKEN);
+    linkSecretsSessionExpired();
+    linkSecretsFollowSession(null);
+    linkSecretsFollowSession(A);
+    expect(readLinkSecret('claim')).toBeNull();
+  });
+
+  it('§4.13: an unnamed session’s secrets are dropped when it expires; a link opened after the expiry goes to whoever signs in', () => {
+    linkSecretsFollowSession({ accountId: null });
+    holdLinkSecret('claim', TOKEN);
+    linkSecretsSessionExpired();
+    linkSecretsFollowSession(A);
+    expect(readLinkSecret('claim')).toBeNull();
+
+    linkSecretsSessionExpired();
+    // A second rejection while signed out keeps what was opened since.
+    holdLinkSecret('invitation', TOKEN, ID);
+    linkSecretsSessionExpired();
+    linkSecretsFollowSession(B);
+    expect(readLinkSecret('invitation', ID)).toBe(TOKEN);
+  });
+
+  it('NA-04 useLinkSecret offers nothing while the session is expired and the token again once the same account is back', () => {
+    linkSecretsFollowSession(A);
+    holdLinkSecret('invitation', TOKEN, ID);
+    const { result } = renderHook(() => useLinkSecret('invitation', ID));
+    expect(result.current).toBe(TOKEN);
+    act(() => linkSecretsSessionExpired());
+    expect(result.current).toBeNull();
+    act(() => linkSecretsFollowSession(A));
+    expect(result.current).toBe(TOKEN);
+  });
+
+  function expiringApp() {
+    let expired = true;
     const app = createTestApp({
       routes: {
         'GET /me': () =>
-          fakeResponse(
-            401,
-            apiErrorBody('AUTHENTICATION_REQUIRED', { nextAction: 'authenticate' }),
-          ),
+          expired
+            ? fakeResponse(
+                401,
+                apiErrorBody('AUTHENTICATION_REQUIRED', { nextAction: 'authenticate' }),
+              )
+            : fakeResponse(200, {}),
       },
     });
-    let session: ReturnType<typeof useApp>['session'] | null = null;
+    let context: ReturnType<typeof useApp> | null = null;
     function Probe({ read }: { read: boolean }) {
-      session = useApp().session;
+      context = useApp();
       const me = useApiQuery({ path: '/me', enabled: read });
       return <Text>{me.status}</Text>;
     }
+    return {
+      app,
+      Probe,
+      context: () => context,
+      renew: () => {
+        expired = false;
+      },
+    };
+  }
+
+  it('§4.13 NA-04: after AUTHENTICATION_REQUIRED the same account signing in again gets its invitation token back', async () => {
+    const { app, Probe, context, renew } = expiringApp();
     const view = render(<Probe read={false} />, { wrapper: app.wrapper });
-    await waitFor(() => expect(session?.status).toBe('signed_in'));
+    await waitFor(() => expect(context()?.session.status).toBe('signed_in'));
     holdLinkSecret('invitation', TOKEN, ID); // opened while the account is signed in
     view.rerender(<Probe read />);
-    await waitFor(() => expect(session?.expired).toBe(true));
+    await waitFor(() => expect(context()?.session.expired).toBe(true));
     expect(await app.sessionStore.load()).toBeNull();
+    expect(readLinkSecret('invitation', ID)).toBeNull();
+    renew();
+    await act(async () => {
+      await context()?.signIn({ ...TEST_SESSION, token: 'renewed-token' });
+    });
+    expect(readLinkSecret('invitation', ID)).toBe(TOKEN);
+  });
+
+  it('§4.13 R3-SECURITY-07: after AUTHENTICATION_REQUIRED another account signing in is not offered the invitation token', async () => {
+    const { app, Probe, context, renew } = expiringApp();
+    const view = render(<Probe read={false} />, { wrapper: app.wrapper });
+    await waitFor(() => expect(context()?.session.status).toBe('signed_in'));
+    holdLinkSecret('invitation', TOKEN, ID);
+    view.rerender(<Probe read />);
+    await waitFor(() => expect(context()?.session.expired).toBe(true));
+    renew();
+    await act(async () => {
+      await context()?.signIn({ ...TEST_SESSION, token: 'other-token', ...B });
+    });
+    expect(readLinkSecret('invitation', ID)).toBeNull();
+    await act(async () => {
+      await context()?.signOut();
+    });
+    await act(async () => {
+      await context()?.signIn(TEST_SESSION);
+    });
     expect(readLinkSecret('invitation', ID)).toBeNull();
   });
 
