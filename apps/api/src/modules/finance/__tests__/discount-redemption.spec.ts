@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
-import { createDiscountFixture, type OfferingFixture } from '../../catalog';
+import { createDiscountFixture, type OfferingFixture, type PricingPort } from '../../catalog';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
+import { CheckoutService } from '../services/checkout.service';
 import {
   adult,
   basketFor,
@@ -203,5 +204,119 @@ describe('discount redemptions follow the participant (R3-TIME-MONEY-01, SPK-PAY
     expect(retryQuote).toMatchObject({ discountMinor: 1_000, totalMinor: 9_000 });
     expect((await pay(guardian, retryQuote.id)).body.status).toBe('completed');
     await drain(t);
+  });
+  it('SPK-PAY-003: a checkout prepared before per-participant redemption aborts and gives the redemption back', async () => {
+    // Before R3-TIME-MONEY-01 checkout redeemed each discount once for the whole order (reference
+    // 'order', the order id, in the payer's name). A checkout prepared then can be aborted after
+    // the change (payer, staff, expiry timer, a failed outcome resolved later). The preparation
+    // below records exactly that legacy redemption through catalog's port.
+    const guardian = await adult(t);
+    const [first, second] = await offerings(2);
+    const code = 'LEGACYORDER';
+    const discountId = await createDiscountFixture(t, {
+      code,
+      amountKind: 'percentage',
+      amountValue: 1_000,
+      redemptionLimit: 1,
+      eligibilityRules: { offeringIds: [first!.offeringId, second!.offeringId] },
+    });
+    const legacy = await basketFor(t, guardian, [first!]);
+    const quote = await quoteFor(t, guardian, legacy.basketId, { discountCodes: [code] });
+    expect(quote).toMatchObject({ discountMinor: 1_000 });
+
+    const service = t.app.get(CheckoutService) as unknown as { pricing: PricingPort };
+    const real = service.pricing;
+    service.pricing = {
+      effectivePriceRule: (...args) => real.effectivePriceRule(...args),
+      evaluateDiscounts: (...args) => real.evaluateDiscounts(...args),
+      releaseDiscount: (...args) => real.releaseDiscount(...args),
+      // What the base branch recorded: one redemption per discount and order, for the payer (a
+      // second line of the same discount replays it).
+      redeemDiscount: async (trx, organizationId, input) => {
+        const line = await trx
+          .selectFrom('order_lines')
+          .innerJoin('orders', (join) =>
+            join
+              .onRef('orders.organization_id', '=', 'order_lines.organization_id')
+              .onRef('orders.id', '=', 'order_lines.order_id'),
+          )
+          .select(['orders.id as orderId', 'orders.payer_person_id as payerPersonId'])
+          .where('order_lines.organization_id', '=', organizationId)
+          .where('order_lines.id', '=', input.referenceId)
+          .executeTakeFirstOrThrow();
+        return real.redeemDiscount(trx, organizationId, {
+          ...input,
+          referenceType: 'order',
+          referenceId: line.orderId,
+          personId: line.payerPersonId,
+        });
+      },
+    };
+    let attempt: Awaited<ReturnType<typeof pay>>;
+    try {
+      attempt = await pay(guardian, quote.id, FakePaymentTokens.decline);
+    } finally {
+      service.pricing = real;
+    }
+    expect(attempt.body.status).toBe('awaiting_payment');
+    expect((await ledger(discountId)).map((e) => [e.kind, e.person_id, e.reference_type])).toEqual([
+      ['redeem', guardian.personId, 'order'],
+    ]);
+
+    // Without the fallback this abort answered 404 NOT_FOUND (no 'order_line' redemption) and
+    // rolled back, leaving the holds, the basket and the redemption in place.
+    const aborted = await post(
+      t,
+      `/v1/registration-checkouts/${attempt.body.id as string}/abort`,
+      guardian.header,
+      { reason: 'Card declined' },
+    );
+    expect(aborted.status, JSON.stringify(aborted.body)).toBe(201);
+    expect(aborted.body.status).toBe('aborted');
+    expect((await ledger(discountId)).map((e) => [e.kind, e.person_id, e.reference_type])).toEqual([
+      ['redeem', guardian.personId, 'order'],
+      ['release', guardian.personId, 'order'],
+    ]);
+
+    // The discount's one redemption is free again: the next checkout is quoted and charged with it.
+    const next = await basketFor(t, guardian, [second!]);
+    const nextQuote = await quoteFor(t, guardian, next.basketId, { discountCodes: [code] });
+    expect(nextQuote).toMatchObject({ discountMinor: 1_000, totalMinor: 9_000 });
+    const nextPaid = await pay(guardian, nextQuote.id);
+    expect(nextPaid.status, JSON.stringify(nextPaid.body)).toBe(201);
+    expect(nextPaid.body.status).toBe('completed');
+    await drain(t);
+  });
+
+  it('KNOWN GAP R3-TIME-MONEY-01b (deferred catalog change): with one redemption left, two discounted children are quoted the discount and refused at checkout', async () => {
+    // Today: catalog's evaluation checks the organization-wide limit once per discount, while
+    // checkout redeems once per discounted participant (a Proposed default pending POL-011 /
+    // DEC-007), so the automatic discount, which the payer cannot remove, is quoted, refused and
+    // quoted again. Target once catalog limits the discount to as many participants as
+    // redemptions are left (and checks minLines again on them): the quote discounts one child's
+    // line only (discountMinor 1000, totalMinor 19000), checkout answers 201 completed, and the
+    // ledger holds one redeem for that child; replace these assertions with that.
+    const guardian = await adult(t);
+    const [only] = await offerings(1);
+    const discountId = await createDiscountFixture(t, {
+      code: null,
+      amountKind: 'fixed',
+      amountValue: 1_000,
+      currency: 'USD',
+      redemptionLimit: 1,
+      eligibilityRules: { offeringIds: [only!.offeringId] },
+    });
+    const both = await basketFor(t, guardian, [only!, only!]);
+    const quote = await quoteFor(t, guardian, both.basketId);
+    expect(quote).toMatchObject({ discountMinor: 1_000, totalMinor: 19_000 });
+    const refused = await pay(guardian, quote.id);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: { code: 'DISCOUNT_REDEMPTION_LIMIT', redemptionLimit: 1 },
+    });
+    expect(await ledger(discountId)).toEqual([]);
+    const again = await quoteFor(t, guardian, both.basketId);
+    expect(again).toMatchObject({ discountMinor: 1_000 });
   });
 });

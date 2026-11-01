@@ -226,8 +226,15 @@ contribution's amount and status, never a player's payment or method.
   limit therefore counts the participant both when catalog evaluates the quote and when its
   database guard (0207/0208) counts the redemption: a guardian paying for two children uses each
   child's allowance once, and two guardians paying for the same child share that child's one
-  allowance (`__tests__/discount-redemption.spec.ts`). The organization-wide `redemption_limit`
-  consequently counts one redemption per participant.
+  allowance (`__tests__/discount-redemption.spec.ts`). **Proposed engineering default, pending
+  POL-011 / DEC-007:** every redemption also takes one unit of the discount's organization-wide
+  `redemption_limit` (catalog counts one per redeem), so that limit counts discounted
+  participants, not orders; catalog's quote evaluation does not count participants against it yet
+  (Known gaps, R3-TIME-MONEY-01b). A checkout prepared before this change recorded one redemption
+  per discount for the whole order (reference `order`, the order id, in the payer's name); its
+  abort, whenever it happens, releases that reference instead
+  (`LEGACY_ORDER_REDEMPTION_REFERENCE`; test "a checkout prepared before per-participant
+  redemption aborts and gives the redemption back").
 - **Payment uncertainty (SPK-PAY-007):** a timeout is `unknown` with a critical exception owned by
   the finance operator; retries and aborts are refused until a webhook, staff reconciliation or the
   worker sweep resolves it. A direct payment, a cash or external tender and a credit redemption
@@ -599,11 +606,17 @@ outcome recording and reconciliation are never gated.
 - Compensation does not yet release the order's discount redemptions (per-person discount limits),
   and an open future installment obligation partly paid before compensation is canceled for its
   full amount (the same as abort).
-- Catalog's quote evaluation checks a discount's organization-wide `redemption_limit` once per
-  discount, while checkout redeems once per participant (above): a basket with more discounted
-  participants than redemptions left is quoted with the discount and refused at checkout with
-  `DISCOUNT_REDEMPTION_LIMIT`. Closing it needs catalog's evaluator to count the participants
-  (recorded as a deferred catalog change, R3-TIME-MONEY-01).
+- **Known gap, merge-blocking deferral R3-TIME-MONEY-01b (catalog):** catalog's quote evaluation
+  checks a discount's organization-wide `redemption_limit` once per discount, while checkout
+  redeems once per discounted participant (above): a basket with more discounted participants than
+  redemptions left is quoted with the discount, refused at checkout with `RESOURCE_CONFLICT`
+  (`DISCOUNT_REDEMPTION_LIMIT`), and quoted with it again. For an automatic discount the payer
+  cannot remove it, so that basket cannot be checked out until the limit is raised or the discount
+  retired. The base behaviour (one redemption per order) did not have this gap. Closing it needs
+  catalog's evaluator to limit the discount to as many participants as redemptions are left and
+  to check `minLines` again on that reduced set; the test "KNOWN GAP R3-TIME-MONEY-01b" in
+  `__tests__/discount-redemption.spec.ts` records today's behaviour and is replaced by the target
+  when the catalog change lands.
 - `written_off` obligations, credit revocation and the accounting of credit expiry (breakage) have
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
 - Revenue recognition (deferred → earned) is not implemented (DEC-022); the accounting export
@@ -616,13 +629,22 @@ outcome recording and reconciliation are never gated.
   owned exception asks the finance operator to decide.
 - `FINANCIAL_CONDITIONS_IMPL` (competition match readiness, `ParticipationStandingService`) reports
   an open team obligation as `unknown`: whether a team balance blocks play is undecided (POL-017,
-  DEC-056), so it is never a pass or a block until the policy is approved. The finding names the
-  team entry only: `GET /v1/fixtures/{id}/readiness` is read by players and guardians of both
-  teams and competition passes the finding through unchanged, so it carries no count, amount or
-  due date (deadline `null`) for anyone, staff included; those stay on the team entry workspace for
-  the viewers `finance.read_obligation` admits (R3-TRACE-B-01, `__tests__/fixture-conditions.spec.ts`).
-  Showing the formatted details in readiness to those viewers is a competition change (recorded as
-  deferred).
+  DEC-056), so it is never a pass or a block until the policy is approved. **Verified:** the
+  finding carries no count, amount or due date (deadline `null`) and no obligation id, for any
+  viewer (R3-TRACE-B-01, `__tests__/fixture-conditions.spec.ts`); those stay on the team entry
+  workspace for the viewers `finance.read_obligation` admits. **Known gap, deferral
+  R3-TRACE-B-01b (competition):** the finding names the team entry (source `team_entry`, "This
+  team has an open balance"), which competition needs in order to scope it by viewer, but
+  competition's `ReadinessService` passes it through unchanged to every viewer of
+  `GET /v1/fixtures/{id}/readiness`. So the players and guardians of the opposing team, who may not
+  read that entry's obligation, still learn which entry has an open balance; and the viewers
+  `finance.read_obligation` admits (league manager, finance operator, the team's captain) see no
+  amount and no deadline, although SPK-READY-003 asks for the deadline when it applies. The
+  deferred change (proposed, not implemented): for each competing entry competition decides
+  `finance.read_obligation` for the viewer; an admitted viewer gets the entry-level finding with
+  the formatted amount and the next due date (facility time zone) as its deadline, and every other
+  viewer gets one fixture-level finding that names no entry and states no balance, shown whether
+  or not any entry has one. The tests "KNOWN GAP R3-TRACE-B-01b" record today's behaviour.
 - Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004, SPK-CAP-002) — **Verified**:
   `POST /v1/obligations` for a team entry records the obligation as the entry's
   `financialStatusRef` through competition's `TEAM_ENTRY_QUERY_PORT.recordFinancialStatusRef`, in

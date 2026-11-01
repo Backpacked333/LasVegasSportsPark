@@ -14,12 +14,38 @@ import { errors, type QuoteDiscountLine } from '@sportspark/contracts';
  * exactly what was redeemed. Its amount is the part of the discount allocated to that
  * participant's lines, so the redemptions of one discount add up to the quoted discount.
  *
+ * Every redemption also takes one unit of the discount's organization-wide `redemption_limit`
+ * (catalog counts one per redeem), so that limit counts discounted participants: a Proposed
+ * engineering default pending POL-011 / DEC-007. Catalog's quote evaluation does not yet count
+ * participants against the redemptions left (deferred catalog change R3-TIME-MONEY-01b).
+ *
  * Pure and deterministic: the same quote and lines always give the same redemptions in the same
  * order (quote discount order, then line sequence).
  */
 
 /** The reference type of a checkout's discount redemption (catalog's ledger is free text). */
 export const DISCOUNT_REDEMPTION_REFERENCE = 'order_line';
+
+/**
+ * The reference of a redemption recorded by a checkout prepared before R3-TIME-MONEY-01: one per
+ * applied discount for the whole order (reference id = order id, in the payer's name). Such a
+ * checkout can still be aborted after the change (by its payer, staff, the expiry timer or a
+ * failed outcome resolved days later), so its release names this reference.
+ */
+export const LEGACY_ORDER_REDEMPTION_REFERENCE = 'order';
+
+/** The redemptions of one discount, in the order `participantRedemptions` gives them. */
+export function redemptionsByDiscount(
+  redemptions: readonly ParticipantRedemption[],
+): Map<string, ParticipantRedemption[]> {
+  const grouped = new Map<string, ParticipantRedemption[]>();
+  for (const redemption of redemptions) {
+    const group = grouped.get(redemption.discountDefinitionId);
+    if (group) group.push(redemption);
+    else grouped.set(redemption.discountDefinitionId, [redemption]);
+  }
+  return grouped;
+}
 
 export interface DiscountRedemptionLine {
   orderLineId: string;

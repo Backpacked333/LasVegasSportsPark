@@ -22,12 +22,18 @@ interface ReadinessIssue {
 /**
  * R3-TRACE-B-01 (§4.14 object- and field-level authorization, §4.7 invariant 1, SPK-READY-001
  * "applicable financial conditions", SPK-PAY-004, SPK-CAP-002): `GET /v1/fixtures/{id}/readiness`
- * is read by players and guardians of both teams, and competition passes finance's condition
- * through as it is. A team balance's count, amounts and due date go only to viewers finance lets
- * read the team obligation (the team entry workspace, R2-JOURNEYS-05), so the readiness finding
- * names the team entry and the pending policy, never the balance.
+ * is read by players and guardians of both teams. A team balance's count, amounts and due date go
+ * only to viewers finance lets read the team obligation (the team entry workspace,
+ * R2-JOURNEYS-05), and finance's condition port does not know the viewer, so the finding carries
+ * none of them for anyone.
+ *
+ * The finding names the team entry, which competition needs to scope it by viewer, and today
+ * competition passes it through unchanged. The tests named "KNOWN GAP R3-TRACE-B-01b" record what
+ * that still discloses (which entry has a balance) and what it still withholds from admitted
+ * viewers (the deadline, SPK-READY-003). They are not the intended behaviour: they change when the
+ * deferred competition change lands, and are then replaced by its target, written in each test.
  */
-describe('fixture readiness never shows a team balance (R3-TRACE-B-01, SPK-READY-001)', () => {
+describe('fixture readiness never shows a team balance amount, count or due date (R3-TRACE-B-01, SPK-READY-001)', () => {
   let t: TestApp;
   let leagueManager: Actor;
   let homeCaptain: Actor;
@@ -127,11 +133,22 @@ describe('fixture readiness never shows a team balance (R3-TRACE-B-01, SPK-READY
   it('§4.14: an opposing player, an opposing guardian and the opposing captain see no amount, count or due date', async () => {
     for (const viewer of [homePlayer, homeGuardian, homeCaptain]) {
       const issue = await balanceIssue(viewer);
-      expect(issue).toMatchObject({
-        severity: 'unknown',
-        source: { type: 'team_entry', id: awayEntryId },
-      });
+      expect(issue.severity).toBe('unknown');
       expectNoBalanceFacts(issue);
+    }
+  });
+
+  it('KNOWN GAP R3-TRACE-B-01b (deferred competition change): opposing players and guardians still learn which entry has an open balance', async () => {
+    // Today: competition passes finance's entry-scoped finding to every readiness viewer, so the
+    // home team's player and guardian, who may not read the away entry's obligation
+    // (finance.read_obligation) nor open its workspace, see that the away entry has a balance.
+    // Target once competition scopes the finding by viewer: they get one fixture-level finding
+    // (source { type: 'fixture', id: fixtureId }) that names no entry and states no balance, the
+    // same whether or not any entry has one; replace these assertions with that.
+    for (const viewer of [homePlayer, homeGuardian]) {
+      const issue = await balanceIssue(viewer);
+      expect(issue.source).toEqual({ type: 'team_entry', id: awayEntryId });
+      expect(issue.message).toContain('open balance');
     }
   });
 
@@ -139,13 +156,27 @@ describe('fixture readiness never shows a team balance (R3-TRACE-B-01, SPK-READY
     expectNoBalanceFacts(await balanceIssue(awayPlayer));
   });
 
-  it('SPK-READY-001 / POL-017: the condition stays unknown for staff too, never a pass or a block, with the same wording', async () => {
+  it('SPK-READY-001 / POL-017: the condition stays unknown for staff too, never a pass or a block', async () => {
     const asStaff = await balanceIssue(leagueManager);
-    expect(asStaff).toMatchObject({ severity: 'unknown', responsibleRole: 'finance_operator' });
-    expectNoBalanceFacts(asStaff);
-    // The amount and due date stay where finance's read rule applies: the captain's workspace.
+    expect(asStaff).toMatchObject({
+      severity: 'unknown',
+      responsibleRole: 'finance_operator',
+      source: { type: 'team_entry', id: awayEntryId },
+    });
+    // The amount and due date are on the workspace, where finance's read rule applies.
     const workspace = await t.http.get(`/v1/team-entries/${awayEntryId}`).set(awayCaptain.header);
     expect(workspace.status).toBe(200);
     expect(JSON.stringify(workspace.body)).toContain('$600.00');
+  });
+
+  it('KNOWN GAP R3-TRACE-B-01b (deferred competition change): viewers finance.read_obligation admits get no amount and no deadline in readiness (SPK-READY-003)', async () => {
+    // Today: the league manager and the away captain may read the away obligation, but the
+    // readiness finding has no amount and a null deadline for them as for everyone.
+    // Target once competition adds the details for admitted viewers: the message carries the
+    // formatted amount ($600.00) and `deadline` is the next due date (2027-01-20T18:00:00.000Z);
+    // replace these assertions with that.
+    for (const viewer of [leagueManager, awayCaptain]) {
+      expectNoBalanceFacts(await balanceIssue(viewer));
+    }
   });
 });

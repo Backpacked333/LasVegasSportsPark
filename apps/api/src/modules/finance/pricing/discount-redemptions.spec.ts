@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { QuoteDiscountLine } from '@sportspark/contracts';
-import { participantRedemptions } from './discount-redemptions';
+import { participantRedemptions, redemptionsByDiscount } from './discount-redemptions';
 
 const SIBLING = '00000000-0000-7000-8000-0000000000d1';
 const EARLY = '00000000-0000-7000-8000-0000000000d2';
@@ -72,5 +72,16 @@ describe('discount redemptions per participant (R3-TIME-MONEY-01, SPK-PAY-003)',
         [{ orderLineId: 'l1', sequence: 1, participantPersonId: A, discounts: [] }],
       ),
     ).toThrow(/allocated to no line/);
+  });
+  it('groups the redemptions of each discount in the order they were given (the abort releases them per discount)', () => {
+    const redemptions = [
+      { discountDefinitionId: SIBLING, personId: A, orderLineId: 'l1', amountMinor: 500 },
+      { discountDefinitionId: EARLY, personId: A, orderLineId: 'l1', amountMinor: 100 },
+      { discountDefinitionId: SIBLING, personId: B, orderLineId: 'l2', amountMinor: 500 },
+    ];
+    const grouped = redemptionsByDiscount(redemptions);
+    expect([...grouped.keys()]).toEqual([SIBLING, EARLY]);
+    expect(grouped.get(SIBLING)?.map((r) => r.personId)).toEqual([A, B]);
+    expect(grouped.get(EARLY)?.map((r) => r.orderLineId)).toEqual(['l1']);
   });
 });

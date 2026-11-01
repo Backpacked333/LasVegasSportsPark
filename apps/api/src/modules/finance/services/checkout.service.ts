@@ -759,8 +759,14 @@ export class CheckoutService {
       }
     }
     // R3-TIME-MONEY-01 (SPK-PAY-003): each applied discount is redeemed once per participant whose
-    // lines it reduced, in that participant's name: the person catalog's evaluation and its
-    // per-person guard (0207/0208) count, so a quote never offers what checkout then refuses.
+    // lines it reduced, in that participant's name: the person catalog's per-person evaluation and
+    // its per-person guard (0207/0208) count, so a per-person limit is never offered and then
+    // refused. Each redemption also takes one unit of the discount's organization-wide
+    // `redemption_limit` (a Proposed engineering default pending POL-011 / DEC-007). Catalog's
+    // evaluation still checks that limit once per discount, not per participant (deferred catalog
+    // change R3-TIME-MONEY-01b): until it lands, a basket with more discounted participants than
+    // redemptions left is quoted with the discount and refused here with DISCOUNT_REDEMPTION_LIMIT
+    // (README "Known gaps"; `__tests__/discount-redemption.spec.ts`).
     const redemptions = participantRedemptions(
       quote.discounts as unknown as QuoteDiscountLine[],
       quoteLines.map((line) => ({

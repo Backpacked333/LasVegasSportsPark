@@ -47,7 +47,9 @@ import {
 import { LedgerService } from '../ledger/ledger.service';
 import {
   DISCOUNT_REDEMPTION_REFERENCE,
+  LEGACY_ORDER_REDEMPTION_REFERENCE,
   participantRedemptions,
+  redemptionsByDiscount,
 } from '../pricing/discount-redemptions';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
@@ -1111,15 +1113,37 @@ export class CheckoutFinalizer {
           []) as QuoteDiscountLine[],
       })),
     );
-    for (const redemption of discountRedemptions) {
-      await this.pricing.releaseDiscount(trx, organizationId, {
-        discountDefinitionId: redemption.discountDefinitionId,
-        referenceType: DISCOUNT_REDEMPTION_REFERENCE,
-        referenceId: redemption.orderLineId,
-        personId: redemption.personId,
-        actor,
-        correlationId,
-      });
+    for (const [discountDefinitionId, group] of redemptionsByDiscount(discountRedemptions)) {
+      for (const [index, redemption] of group.entries()) {
+        try {
+          await this.pricing.releaseDiscount(trx, organizationId, {
+            discountDefinitionId,
+            referenceType: DISCOUNT_REDEMPTION_REFERENCE,
+            referenceId: redemption.orderLineId,
+            personId: redemption.personId,
+            actor,
+            correlationId,
+          });
+        } catch (error) {
+          // A checkout prepared before R3-TIME-MONEY-01 redeemed this discount once for the whole
+          // order ('order', order id, in the payer's name), so catalog knows no redemption for the
+          // first participant's line (it answers NOT_FOUND after a plain read: the transaction is
+          // intact). That order redemption is released instead, giving back what it took; catalog
+          // releases it for the person it recorded. A missing reference after an earlier
+          // participant's release succeeded is not that case and still fails the abort.
+          if (index === 0 && DomainError.is(error) && error.code === 'NOT_FOUND') {
+            await this.pricing.releaseDiscount(trx, organizationId, {
+              discountDefinitionId,
+              referenceType: LEGACY_ORDER_REDEMPTION_REFERENCE,
+              referenceId: order.id,
+              actor,
+              correlationId,
+            });
+            break;
+          }
+          throw error;
+        }
+      }
     }
     await this.baskets.finishCheckout(
       trx,
