@@ -5,14 +5,15 @@
  * deciding with the shared predicates of `@sportspark/api-client` (`outcome.ts`) only:
  *
  * - `OutcomeUnknown` (`mayHaveTakenEffect`): no definite answer. A lost connection is one of them:
- *   command controls are disabled while the dashboard is offline and a command is never paused
- *   for later (`MUTATION_DEFAULTS`), so a command that fails this way was sent while the device
- *   looked connected; the connection may have dropped after the request left, and the client
- *   cannot tell whether the API committed it. So is a success status whose answer could not be
- *   read (RESPONSE_UNREADABLE). Never "nothing changed" and never
- *   "something went wrong": "Try again" resends the same request with the same idempotency key,
- *   which the API answers with the stored outcome or runs once. The API's own message is shown
- *   when it sent one.
+ *   a command is never paused for later (`MUTATION_DEFAULTS`), and the client cannot tell a
+ *   request that never left from a connection lost after the request left, so it cannot tell
+ *   whether the API committed it. Screens disable their command controls offline (`CommandButton`
+ *   or their own `online` check), so this is normally a connection that dropped while the request
+ *   was out. So is a success status whose answer could not be read (RESPONSE_UNREADABLE). Never
+ *   "nothing changed" and never "something went wrong": "Try again" resends the same request with
+ *   the same idempotency key, which the API answers with the stored outcome or runs once; offline
+ *   it is disabled and says that it needs a connection (`CommandButton`). The API's own message is
+ *   shown when it sent one.
  * - `RefusedBeforeRunningNotice` (`refusedBeforeRunning`): INTEGRATION_UNAVAILABLE from a guard
  *   that answers before the key is claimed (payments paused while the organization recovers from a
  *   restore, SPK-AT-028; the assistant turned off, SPK-AUTO-005). Nothing ran: the API's message
@@ -38,6 +39,7 @@ import {
 } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { Button } from './Button';
+import { CommandButton } from './CommandButton';
 import { StatusBadge } from './StatusBadge';
 
 function Reference({ error }: { error: ApiError }) {
@@ -76,7 +78,9 @@ export function OutcomeUnknown({ error, onRetry }: { error: ApiError; onRetry?: 
       {/* The API's safe message, when it sent one (§4.10). */}
       {error.kind === 'api' ? <p className="caption">The service said: {error.message}</p> : null}
       <Reference error={error} />
-      {recovery.retry && onRetry ? <Button onClick={onRetry}>Try again</Button> : null}
+      {recovery.retry && onRetry ? (
+        <CommandButton onClick={onRetry}>Try again</CommandButton>
+      ) : null}
     </section>
   );
 }
@@ -97,7 +101,9 @@ export function RefusedBeforeRunningNotice({
         {error.message} Nothing was changed: the service refused this request before running it.
       </p>
       <Reference error={error} />
-      {recovery.retry && onRetry ? <Button onClick={onRetry}>{recovery.label}</Button> : null}
+      {recovery.retry && onRetry ? (
+        <CommandButton onClick={onRetry}>{recovery.label}</CommandButton>
+      ) : null}
     </section>
   );
 }

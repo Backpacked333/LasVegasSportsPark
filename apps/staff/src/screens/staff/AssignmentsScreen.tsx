@@ -16,8 +16,9 @@
  * - Times are in the facility's zone (SPK-SCHED-008): the report's scope zone, and for each
  *   assignment the zone of its facility (`GET /v1/facilities/{id}`).
  * - The client never decides who may manage assignments: ACCESS_DENIED renders as not available.
- * - Offline the screen is read-only (inventory SCR-S-33, §4.15): "Propose" is disabled with "Needs
- *   a connection" and nothing is queued or sent later.
+ * - Offline the screen is read-only (inventory SCR-S-33, §4.15): "Propose" and a failure's "Try
+ *   again" are disabled with "Needs a connection" and nothing is queued or sent later. "Try again"
+ *   resends exactly the proposal that was sent (same body, so the same idempotency key, §4.9).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
@@ -461,7 +462,12 @@ function ProposeForm({ seed }: { seed: ProposalSeed }) {
         </div>
       </form>
       {command.error && Object.keys(apiErrors).length === 0 ? (
-        <CommandError error={command.error} onRetry={submit} />
+        <CommandError
+          error={command.error}
+          onRetry={() => {
+            if (online) void command.resend().catch(() => undefined);
+          }}
+        />
       ) : null}
       {outcome ? (
         <CommandSuccess label={ASSIGNMENT_STATUS[outcome.assignment.status].label}>

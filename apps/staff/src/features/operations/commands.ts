@@ -8,6 +8,9 @@
  * on the failure itself: a failure that is not the client's typed error (the request may still
  * have been sent) keeps the key, even though it is shown as UNEXPECTED_RESPONSE. After an answer
  * that may have taken effect the `invalidate` queries are read again, as after a success.
+ * `resend(key)` is that key's "Try again": exactly the request last sent under it (same body, so
+ * the same idempotency key), never one rebuilt from the records read again since, where a
+ * committed command already shows the next revision.
  */
 import {
   ApiError,
@@ -37,6 +40,7 @@ export function useKeyedCommands(options: { invalidate?: readonly (readonly unkn
   const api = useApi();
   const queryClient = useQueryClient();
   const trackers = useRef(new Map<string, CommandIntentTracker>());
+  const sent = useRef(new Map<string, { method: CommandMethod; path: string; request: unknown }>());
   const [outcomes, setOutcomes] = useState<Record<string, KeyedOutcome>>({});
   const invalidate = options.invalidate;
 
@@ -53,6 +57,7 @@ export function useKeyedCommands(options: { invalidate?: readonly (readonly unkn
         trackers.current.set(key, tracker);
       }
       const intent = tracker.current(request);
+      sent.current.set(key, { method, path, request });
       setOutcomes((prev) => ({ ...prev, [key]: { status: 'pending' } }));
       try {
         const send = api[method] as unknown as (
@@ -94,13 +99,30 @@ export function useKeyedCommands(options: { invalidate?: readonly (readonly unkn
     [api, queryClient, invalidate],
   );
 
+  const resend = useCallback(
+    (key: string): Promise<unknown> => {
+      const last = sent.current.get(key);
+      if (!last) return Promise.resolve(undefined);
+      const again = run as (
+        key: string,
+        method: CommandMethod,
+        path: string,
+        request: unknown,
+      ) => Promise<unknown>;
+      return again(key, last.method, last.path, last.request);
+    },
+    [run],
+  );
+
   const reset = useCallback((key?: string) => {
     if (key === undefined) {
       trackers.current.clear();
+      sent.current.clear();
       setOutcomes({});
       return;
     }
     trackers.current.get(key)?.reset();
+    sent.current.delete(key);
     setOutcomes((prev) => {
       const next = { ...prev };
       delete next[key];
@@ -111,10 +133,11 @@ export function useKeyedCommands(options: { invalidate?: readonly (readonly unkn
   return useMemo(
     () => ({
       run,
+      resend,
       reset,
       outcome: (key: string): KeyedOutcome => outcomes[key] ?? IDLE,
       anyPending: Object.values(outcomes).some((o) => o.status === 'pending'),
     }),
-    [run, reset, outcomes],
+    [run, resend, reset, outcomes],
   );
 }

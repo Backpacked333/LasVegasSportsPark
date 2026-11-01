@@ -15,7 +15,13 @@
  *   withdrawing the original (absent official). A slot left uncovered close to kickoff is
  *   escalated by the API and shown.
  * - Offline the screen is read-only (inventory SCR-S-33 "offline (read-only)", §4.15): every
- *   command control is disabled with "Needs a connection" and nothing is queued or sent later.
+ *   command control, a failure's "Try again" included, is disabled with "Needs a connection" and
+ *   nothing is queued or sent later.
+ * - "Try again" on a replacement resends exactly the request that was sent (same body, so the same
+ *   idempotency key, §4.9). The assignment is read again after an unknown outcome; when the
+ *   replacement committed and withdrew the original, a request rebuilt from it (the next revision,
+ *   the original no longer withdrawable, or another candidate chosen since) would be a new intent:
+ *   refused instead of answered with the stored outcome, or a second offer for the slot.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -427,7 +433,13 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
         )}
       </QueryBoundary>
       {command.error ? (
-        <CommandError error={command.error} onRetry={submit} subject="This assignment" />
+        <CommandError
+          error={command.error}
+          onRetry={() => {
+            if (online) void command.resend().catch(() => undefined);
+          }}
+          subject="This assignment"
+        />
       ) : null}
       {command.data ? (
         <CommandSuccess

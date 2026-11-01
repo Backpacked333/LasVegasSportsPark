@@ -169,14 +169,28 @@ describe('SCR-W-01 WorkspaceScreen', () => {
     expect(app.queryClient.getMutationCache().getAll()).toHaveLength(0);
   });
 
-  it('§4.9: an accept whose answer was lost reads as an unknown outcome, retried with the same key', async () => {
+  it('§4.9: an accept whose answer was lost reads as an unknown outcome; Try again resends the request that was sent, with the same key, after the re-read shows it accepted', async () => {
     const user = userEvent.setup();
     let calls = 0;
+    // The accept committed (revision 3 to 4), but its answer was lost: the list read again after
+    // the unknown outcome already shows the assignment accepted, with the next revision.
+    const ACCEPTED = {
+      status: 200,
+      body: {
+        ...LIST.body,
+        items: [
+          LIST.body.items[0],
+          assignment('a2', 'accepted', '2026-10-26T10:00:00.000Z', ['withdraw'], 4),
+        ],
+      },
+    };
     const app = createTestApp({
       routes: {
-        'GET /me/assignments': LIST,
+        'GET /me/assignments': () =>
+          calls === 0 ? fakeResponse(200, LIST.body) : fakeResponse(200, ACCEPTED.body),
         'POST /assignments/{id}/accept': () => {
           calls += 1;
+          // The second attempt carries the first one's key: the API answers the stored outcome.
           return calls === 1
             ? fakeResponse(503, apiErrorBody('INTERNAL_ERROR'))
             : fakeResponse(200, { ok: true });
@@ -191,12 +205,51 @@ describe('SCR-W-01 WorkspaceScreen', () => {
     expect(unknown).toHaveTextContent('Outcome not known yet');
     expect(unknown).toHaveTextContent('this may already have taken effect');
     expect(screen.queryByText('Something went wrong')).toBeNull();
+    // The re-read shows it accepted: "Accept" is gone, the outcome view stays until it is known.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Accept assignment: U12 match a2' })).toBeNull(),
+    );
     await user.click(within(unknown).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(calls).toBe(2));
-    const keys = app.fake.requests
-      .filter((r) => r.route === '/assignments/{id}/accept')
-      .map((r) => r.headers['idempotency-key']);
-    expect(new Set(keys).size).toBe(1);
+    const sent = app.fake.requests.filter((r) => r.route === '/assignments/{id}/accept');
+    // Exactly the request that was sent, never one rebuilt from the re-read (revision 4).
+    expect(sent.map((r) => r.body)).toEqual([{ expectedRevision: 3 }, { expectedRevision: 3 }]);
+    expect(new Set(sent.map((r) => r.headers['idempotency-key'])).size).toBe(1);
+    await waitFor(() => expect(screen.queryByTestId('state-outcome-unknown')).toBeNull());
+  });
+
+  it('SCR-W-01 offline after an unknown outcome: "Try again" is disabled with "Needs a connection" and nothing is sent (§4.15)', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me/assignments': LIST,
+        'POST /assignments/{id}/accept': () => {
+          calls += 1;
+          return fakeResponse(503, apiErrorBody('INTERNAL_ERROR'));
+        },
+      },
+    });
+    render(app.at('/workspace'));
+    await user.click(
+      await screen.findByRole('button', { name: 'Accept assignment: U12 match a2' }),
+    );
+    const unknown = await screen.findByTestId('state-outcome-unknown');
+    act(() => app.connectivity.set(false));
+    const retry = within(unknown).getByRole('button', { name: 'Try again' });
+    await waitFor(() => expect(retry).toBeDisabled());
+    expect(retry).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(retry);
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(retry).toBeEnabled());
+    // Nothing was sent offline, and nothing was held to be sent on reconnecting.
+    expect(calls).toBe(1);
+    expect(
+      app.queryClient
+        .getMutationCache()
+        .getAll()
+        .some((m) => m.state.isPaused),
+    ).toBe(false);
   });
 
   it('says so when there are no assignments, without showing other activities', async () => {

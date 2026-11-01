@@ -4,8 +4,11 @@
  * returns for the viewer (assigned activities, permitted participant information); offers awaiting
  * a response first. "Accept" appears only when the API lists `accept` in `availableActions` (the
  * client never decides authorization) and sends `expectedRevision` (§4.9). Offline the list is
- * read-only: "Accept" is disabled with "Needs a connection" and nothing is queued (§4.15), and a
- * failure without a definite answer reads as an unknown outcome (operations `CommandError`). Decline, withdrawal,
+ * read-only: "Accept" and "Try again" are disabled with "Needs a connection" and nothing is queued
+ * (§4.15). A failure without a definite answer reads as an unknown outcome (operations
+ * `CommandError`), and "Try again" resends exactly the accept that was sent (`resend`: same
+ * expected revision, so the same idempotency key), never one rebuilt from the list read again
+ * after it, where a committed accept already shows a new revision. Decline, withdrawal,
  * attendance, match reports, messages and fees (SCR-W-02 to SCR-W-09) open from each card
  * (AssignmentWorkspaceScreen). The offline queue status (SCR-W-10) shows above the list.
  *
@@ -71,7 +74,7 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
   const accept = useApiCommand('post', '/assignments/{id}/accept', {
     invalidate: [ASSIGNMENTS_KEY],
   });
-  // Offline the answer is never queued (§4.15): the control is disabled, and nothing is sent.
+  // Offline the answer is never queued (§4.15): the controls are disabled, and nothing is sent.
   const submit = () => {
     if (!online) return;
     void accept
@@ -80,6 +83,12 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
         body: { expectedRevision: item.assignment.revision },
       })
       .catch(() => undefined);
+  };
+  // "Try again": the accept that was sent, unchanged (same key, §4.9). After an unknown outcome the
+  // list is read again; if the accept committed, it already shows the next revision.
+  const retry = () => {
+    if (!online) return;
+    void accept.resend().catch(() => undefined);
   };
   // STALE_REVISION or INVALID_TRANSITION: reload the current assignment, then the user decides again.
   const reload = () => {
@@ -124,7 +133,7 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
       {accept.error ? (
         <CommandError
           error={accept.error}
-          onRetry={submit}
+          onRetry={retry}
           onReload={reload}
           subject="This assignment"
         />
