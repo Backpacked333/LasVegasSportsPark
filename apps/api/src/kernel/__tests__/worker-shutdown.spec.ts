@@ -11,6 +11,7 @@ import { EventHandlerRegistry } from '../outbox/event-handler.registry';
 import { Outbox } from '../outbox/outbox';
 import { OutboxDispatcher } from '../outbox/outbox-dispatcher';
 import { BackgroundWorkers } from '../workers/background-workers';
+import { stopWithinBudget } from '../workers/graceful-stop';
 import { DATABASE } from '../tokens';
 
 /** A promise the test resolves by hand, to hold a handler or a job pass in flight. */
@@ -178,6 +179,87 @@ describe('worker shutdown (R3-OPERATIONS-10)', () => {
     expect(
       (await t.app.get(PeriodicJobRunner).runOnce(['test.b_after'], { ignoreInterval: true }))[0],
     ).toMatchObject({ ran: true });
+  });
+
+  describe('R3-OPERATIONS-10: the whole stop, the database close included, is bounded by WORKER_SHUTDOWN_TIMEOUT_MS', () => {
+    const never = () => new Promise<never>(() => undefined);
+    const logger = () => ({ warn: vi.fn(), error: vi.fn() });
+    /** Runs a stop on fake timers; resolves with its outcome and the fake time it took. */
+    const stop = async (options: {
+      drain: () => Promise<unknown>;
+      close: () => Promise<void>;
+      timeoutMs: number;
+      log: ReturnType<typeof logger>;
+    }) => {
+      vi.useFakeTimers();
+      try {
+        const started = Date.now();
+        let finishedAt: number | null = null;
+        const outcome = stopWithinBudget({ ...options, logger: options.log }).then((value) => {
+          finishedAt = Date.now();
+          return value;
+        });
+        await vi.advanceTimersByTimeAsync(options.timeoutMs + 1);
+        const value = await outcome;
+        return { outcome: value, tookMs: (finishedAt ?? Date.now()) - started };
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+
+    it('R3-OPERATIONS-10: a drained worker closes the application and reports a clean stop', async () => {
+      const log = logger();
+      const close = vi.fn(async () => undefined);
+      const { outcome } = await stop({
+        drain: async () => undefined,
+        close,
+        timeoutMs: 20_000,
+        log,
+      });
+      expect(outcome).toEqual({ drained: true, close: 'closed' });
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it('R3-OPERATIONS-10: a database close that waits for a connection still checked out (pg Pool.end) does not keep the worker past the budget', async () => {
+      const log = logger();
+      const { outcome, tookMs } = await stop({
+        drain: async () => undefined,
+        close: never,
+        timeoutMs: 20_000,
+        log,
+      });
+      expect(outcome).toEqual({ drained: true, close: 'timed_out' });
+      expect(tookMs).toBeLessThanOrEqual(20_000);
+      expect(log.warn.mock.calls.some(([m]) => String(m).includes('closing the application'))).toBe(
+        true,
+      );
+    });
+
+    it('R3-OPERATIONS-10: work that outlives the budget is cut off, and the close gets only what is left of it', async () => {
+      const log = logger();
+      const close = vi.fn(never);
+      const { outcome, tookMs } = await stop({ drain: never, close, timeoutMs: 5_000, log });
+      expect(outcome).toEqual({ drained: false, close: 'timed_out' });
+      expect(close).toHaveBeenCalledTimes(1);
+      // The close is left no time: its 0 ms timer runs at the next millisecond.
+      expect(tookMs).toBeLessThanOrEqual(5_001);
+      expect(log.warn).toHaveBeenCalledTimes(2);
+    });
+
+    it('R3-OPERATIONS-10: a close that fails is reported as failed', async () => {
+      const log = logger();
+      const { outcome } = await stop({
+        drain: async () => undefined,
+        close: async () => {
+          throw new Error('pool already ended');
+        },
+        timeoutMs: 1_000,
+        log,
+      });
+      expect(outcome).toMatchObject({ drained: true, close: 'failed' });
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining('pool already ended'));
+    });
   });
 
   it('R3-OPERATIONS-10: closing the application closes the database the kernel opened', async () => {

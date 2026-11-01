@@ -151,11 +151,14 @@ export const ConfigSchema = z
      */
     OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS: z.coerce.number().int().min(1).default(3600),
     /**
-     * How long the worker waits on SIGTERM or SIGINT for the work in flight (the outbox and inbox
-     * event in hand, a background worker pass, a periodic job pass, an idempotency sweep) before it
-     * closes the application and the database and exits (R3-OPERATIONS-10; technical value: keep it
-     * under the host's termination grace period). Work still running then is retried once its
-     * lease lapses.
+     * The whole budget of a worker stop on SIGTERM or SIGINT (R3-OPERATIONS-10; technical value:
+     * keep it under the host's termination grace period). Within it the worker waits for the work
+     * in flight (the outbox and inbox event in hand, a periodic job pass, an idempotency sweep, and
+     * the pass of any background worker whose `stop()` waits for it), then closes the application
+     * and the database with what is left of it, and exits either way. The communications delivery
+     * and finance provider loops stop starting passes but do not wait for the pass in flight
+     * (**Proposed** for those modules). Work still running at the end is retried once its lease
+     * lapses; the database rolls back a transaction left open by the exit.
      */
     WORKER_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
   })
