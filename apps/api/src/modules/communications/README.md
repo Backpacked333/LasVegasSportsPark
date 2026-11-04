@@ -185,7 +185,15 @@ dispatch creates the attempts or suppresses the notice.
   (`obsolete`, `supersedes_notification_id`) and points dispatched ones at the newer notice
   (`superseded_by_notification_id`, shown in the inbox); their push/email/SMS attempts not yet
   handed to a provider are failed with `SUPERSEDED` in the same transaction (migration 1001), so
-  a stale "moved" never arrives after the cancellation. Delivered in-app items stay.
+  a stale "moved" never arrives after the cancellation. Delivered in-app items stay. **Only for
+  the people the newer notice reaches** (R4-COMMS-AUTOMATION-03): an older notice is obsolete as a
+  whole when the newer one addresses at least its parties (the same or more subject persons, team
+  entries, persons and staff roles) or reaches every one of its recipients (a composed notice's
+  audience is resolved now for that comparison). A narrower notice (one team of a fixture, the one
+  family support resends to) neither suppresses nor points at anything other people were told: of
+  a dispatched notice it fails only the unsent external attempts of the recipients it reaches
+  itself (audit `communications.notification_superseded_for_recipients`), and an unsent notice it
+  covers in part still goes out to everyone. **Verified**: `__tests__/supersede-coverage.spec.ts`.
 - **Preferences** (SPK-COMMS-007): operational and promotional choices are separate rows; defaults
   come from `COMMUNICATIONS_POLICY`; the operational in-app notice is locked on.
 - **Calendar feeds** (SPK-COMMS-008): 32 random bytes, hash stored; the ICS uses the scheduling
