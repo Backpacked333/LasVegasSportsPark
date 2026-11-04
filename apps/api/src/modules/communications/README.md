@@ -261,10 +261,16 @@ dispatch creates the attempts or suppresses the notice.
   supersedable/superseding kinds, feed window, iCalendar product id.
 - `CHANGE_NOTICE_CHECK_IMPL` (competition's `ChangeNoticeCheckPort`, `ChangeNoticeCheck`): fixture
   readiness "material change notifications" (SPK-READY-001) from this module's own evidence — the
-  schedule-change notice of the fixture's scheduling event that describes its current time, and its
-  delivery attempts: satisfied when every authorized recipient has a provider-accepted (or better)
-  attempt, unsatisfied when nobody could be told or all attempts of a recipient failed, otherwise
-  `unknown`. **Verified** (`apps/api/src/__tests__/cross-module-ports.spec.ts`).
+  schedule-change notices of the fixture's scheduling event that describe its current time (a
+  resend to one family is one of them, never a stand-in for the rest), and their delivery
+  attempts. A person counts as told when a push/email/SMS attempt was provider-accepted (or
+  better) or they read or acknowledged the in-app notice; the in-app copy dispatch delivers to
+  every inbox is not evidence (R4-COMMS-AUTOMATION-06, §4.5). Satisfied when every authorized
+  recipient was told; unsatisfied when nobody could be told, or every external attempt of each
+  recipient not told failed; otherwise `unknown` (external attempts queued or `unknown`, or only
+  an unread in-app notice; SPK-READY-002). **Verified** (`__tests__/change-notice-check.spec.ts`;
+  the assembled-application test `apps/api/src/__tests__/cross-module-ports.spec.ts` needs its
+  players given an email the provider accepts, deferred to its owner).
 - For other modules: `NotificationsService.compose / composeAndQueue / composeAndQueueIn(trx, …)`
   (the `ComposeInput` carries `sourceEventId` so a replayed handler never composes twice),
   `PreferencesService.enabledChannels`, `InboxService`, `CalendarFeedsService`,
