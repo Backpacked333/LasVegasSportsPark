@@ -5482,6 +5482,7 @@ export type paths = {
                     cursor?: string;
                     from?: string;
                     limit?: number;
+                    order?: "asc" | "desc";
                     personId?: string;
                     status?: components["schemas"]["AssignmentStatus"];
                     targetId?: string;
@@ -17544,6 +17545,7 @@ export type paths = {
                     currency?: string;
                     cursor?: string;
                     limit?: number;
+                    order?: "asc" | "desc";
                     personId?: string;
                     status?: components["schemas"]["FeeSubmissionStatus"];
                 };
@@ -49904,6 +49906,7 @@ export type components = {
         AppealStatus: "submitted" | "under_review" | "granted" | "denied" | "withdrawn";
         /** @enum {string} */
         AppealStatusSummary: "none" | "pending" | "granted" | "denied";
+        /** @description R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`). */
         AppendImportRowsRequest: {
             /** @default [] */
             csv?: components["schemas"]["CsvDocument"][];
@@ -52178,6 +52181,7 @@ export type components = {
         CreateHouseholdRequest: {
             name: string;
         };
+        /** @description R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`). */
         CreateImportBatchRequest: {
             checksum?: string;
             controlTotals: components["schemas"]["ControlTotals"];

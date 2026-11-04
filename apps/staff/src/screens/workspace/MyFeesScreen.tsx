@@ -15,10 +15,10 @@
  * completed assignments that started before the period (`GET /v1/assignments?personId=<self>
  * &status=completed&to=<period start>`, workforce.view_assignments by self authority, paged), joined
  * by id; the next page of assignments is read only while a listed fee's assignment is not loaded.
- * The fee list comes oldest first (the API orders it by submission and offers no other order), so
- * the records are shown in that order and the screen says so: the ones nearest the period, still
- * being approved or exported, follow with "Load more". A newest-first order or a "submitted
- * before" filter on `GET /v1/fee-submissions` is a workforce follow-up.
+ * Both lists are read newest first (`order=desc`): the fee records nearest the period, the ones
+ * still being approved or exported, come first and older ones follow with "Load more", and the
+ * first page of assignments holds the assignments of the first fee records, so the bulk read
+ * rarely needs a second page. The screen says the order.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useEffect, useMemo, useState } from 'react';
@@ -102,8 +102,8 @@ export function MyFeesScreen() {
 }
 
 /**
- * The viewer's fee records whose assignment is not listed above (it ended before the period), in
- * the API's order (oldest first, said on screen), each with its assignment from one bulk read;
+ * The viewer's fee records whose assignment is not listed above (it ended before the period),
+ * newest first (said on screen), each with its assignment from one bulk read, also newest first;
  * "Load more" while the API says more exist.
  */
 function EarlierFees({
@@ -123,13 +123,19 @@ function EarlierFees({
   const enabled = personId !== null && ready;
   const fees = useApiPages({
     path: '/fee-submissions',
-    request: { query: { personId: personId ?? '', limit: EARLIER_PAGE } },
+    request: { query: { personId: personId ?? '', limit: EARLIER_PAGE, order: 'desc' } },
     enabled,
   });
   const assignments = useApiPages({
     path: '/assignments',
     request: {
-      query: { personId: personId ?? '', status: 'completed', to: from, limit: EARLIER_PAGE },
+      query: {
+        personId: personId ?? '',
+        status: 'completed',
+        to: from,
+        limit: EARLIER_PAGE,
+        order: 'desc',
+      },
     },
     enabled,
   });
@@ -152,8 +158,8 @@ function EarlierFees({
       <h3 id="earlier-fees-title">Fee records before {since}</h3>
       {earlier.length > 0 ? (
         <p className="caption" data-testid="earlier-fees-order">
-          Oldest first, as the service lists them: more recent records, the ones nearest {since},
-          follow{fees.hasNextPage ? ' with “Load more”' : ''}.
+          Newest first: the records nearest {since} come first, older ones follow
+          {fees.hasNextPage ? ' with “Load more”' : ''}.
         </p>
       ) : null}
       <QueryBoundary

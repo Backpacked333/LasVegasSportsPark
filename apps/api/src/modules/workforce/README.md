@@ -151,6 +151,13 @@ Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.t
 | POST/GET | `/fee-export-batches`, GET `/{id}`                                          | finance operator, exporting only fees of their facilities; reading a batch needs the authority at every facility its lines belong to                                                                                                                                                                                                                                                                                                                                                       |
 | GET      | `/me/assignments`                                                           | the caller's own assignments (SPK-UX-007); `activity.facility` names the facility and its time zone (WRK-01)                                                                                                                                                                                                                                                                                                                                                                               |
 
+Both lists, `GET /assignments` and `GET /fee-submissions`, take `order=asc` (default: earliest
+scheduled start, or oldest submission, first) or `order=desc` (latest first), keyed on the time and
+the id; a cursor continues only the order it was issued for (`400 VALIDATION_FAILED`
+`cursor_order_mismatch` otherwise). The staff workspace's earlier fee records (SCR-W-08) read both
+newest first (**Verified**, `__tests__/fees-facility-scope.spec.ts` "SPK-STAFF-006 / SCR-W-08:
+order=desc lists a person’s fee records and assignments newest first ...").
+
 Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Multi-step commands create an
 operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary access grant),

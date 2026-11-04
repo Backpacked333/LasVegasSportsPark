@@ -76,7 +76,12 @@ import { QualificationsService } from './qualifications.service';
 import { TargetResolver, type FacilityFacts, type ResolvedTarget } from './target-resolver';
 import { TemporaryAccessService } from './temporary-access.service';
 
-const Cursor = z.object({ start: z.string(), id: z.string() });
+const Cursor = z.object({
+  start: z.string(),
+  id: z.string(),
+  /** The order the cursor continues (absent on cursors issued before `order` existed: ascending). */
+  order: z.enum(['asc', 'desc']).default('asc'),
+});
 
 /** The staff action that performs each machine event (§4.6, WRK-01 availableActions). */
 const EVENT_ACTIONS = {
@@ -544,12 +549,20 @@ export class AssignmentsService {
       protected: query.personId !== undefined,
     });
     const cursor = decodeCursor(query.cursor, Cursor);
+    const order = query.order;
+    if (cursor && cursor.order !== order) {
+      throw errors.validation('This cursor continues the other order; start the list again.', {
+        code: 'cursor_order_mismatch',
+        path: 'cursor',
+        cursorOrder: cursor.order,
+      });
+    }
     let q = this.db
       .selectFrom('assignments')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .orderBy('scheduled_start')
-      .orderBy('id')
+      .orderBy('scheduled_start', order)
+      .orderBy('id', order)
       .limit(query.limit + 1);
     if (query.targetType) q = q.where('target_type', '=', query.targetType);
     if (query.targetId) q = q.where('target_id', '=', query.targetId);
@@ -566,9 +579,9 @@ export class AssignmentsService {
         scope.length > 0 ? q.where('facility_id', 'in', [...scope]) : q.where(sql<boolean>`false`);
     }
     if (cursor) {
-      q = q.where(
-        sql<boolean>`(scheduled_start, id) > (${new Date(cursor.start)}::timestamptz, ${cursor.id}::uuid)`,
-      );
+      const after = sql<boolean>`(scheduled_start, id) > (${new Date(cursor.start)}::timestamptz, ${cursor.id}::uuid)`;
+      const before = sql<boolean>`(scheduled_start, id) < (${new Date(cursor.start)}::timestamptz, ${cursor.id}::uuid)`;
+      q = q.where(order === 'desc' ? before : after);
     }
     const rows = await q.execute();
     const now = this.clock.now();
@@ -586,7 +599,11 @@ export class AssignmentsService {
       items,
       nextCursor:
         rows.length > query.limit && last
-          ? encodeCursor({ start: new Date(last.scheduled_start).toISOString(), id: last.id })
+          ? encodeCursor({
+              start: new Date(last.scheduled_start).toISOString(),
+              id: last.id,
+              order,
+            })
           : null,
     };
   }

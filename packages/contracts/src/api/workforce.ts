@@ -358,6 +358,12 @@ export const ListAssignmentsQuery = PageRequestSchema.extend({
   status: AssignmentStatusSchema.optional(),
   from: Instant.optional(),
   to: Instant.optional(),
+  /**
+   * `asc` (default): earliest scheduled start first; `desc`: latest first (SCR-W-08 reads the
+   * assignments of a person's newest earlier fee records first). Ordered by scheduled start, then
+   * id; a cursor continues only the order it was issued for.
+   */
+  order: z.enum(['asc', 'desc']).default('asc'),
 });
 export type ListAssignmentsQuery = z.infer<typeof ListAssignmentsQuery>;
 
@@ -521,6 +527,12 @@ export const ListFeeSubmissionsQuery = PageRequestSchema.extend({
   status: FeeSubmissionStatusSchema.optional(),
   currency: CurrencyCode.optional(),
   personId: z.uuid().optional(),
+  /**
+   * `asc` (default): oldest submission first; `desc`: newest first, so a staff member's earlier
+   * fee records nearest a period come first (SCR-W-08). Ordered by submission time, then id; a
+   * cursor continues only the order it was issued for.
+   */
+  order: z.enum(['asc', 'desc']).default('asc'),
 });
 export type ListFeeSubmissionsQuery = z.infer<typeof ListFeeSubmissionsQuery>;
 

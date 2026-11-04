@@ -38006,7 +38006,8 @@
           "transformationVersion",
           "controlTotals"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`)."
       },
       "AppendImportRowsRequest": {
         "type": "object",
@@ -38046,7 +38047,8 @@
             "maxItems": 20
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`)."
       },
       "ValidateImportBatchRequest": {
         "type": "object",
@@ -100469,6 +100471,19 @@
             "in": "query"
           },
           {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            },
+            "required": false,
+            "name": "order",
+            "in": "query"
+          },
+          {
             "$ref": "#/components/parameters/ClientInfo"
           }
         ],
@@ -101500,6 +101515,19 @@
             },
             "required": false,
             "name": "personId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            },
+            "required": false,
+            "name": "order",
             "in": "query"
           },
           {

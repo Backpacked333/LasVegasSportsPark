@@ -455,6 +455,7 @@ describe('SCR-W-08 periods: no fee record drops off after the API default lookba
     ).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/fee-submissions')?.query).toMatchObject({
       personId: ME_PERSON_ID,
+      order: 'desc',
     });
   });
 
@@ -508,11 +509,12 @@ describe('SCR-W-08 periods: no fee record drops off after the API default lookba
       status: 'completed',
       to: FROM,
       limit: '200',
+      order: 'desc',
     });
     expect(app.fake.requests.some((r) => r.route === '/assignments/{id}')).toBe(false);
   });
 
-  it('R3-SCREEN-STATES-03 SCR-W-08: over several pages, the fee nearest the period follows with "Load more", said on screen, each with its assignment from bulk reads', async () => {
+  it('R3-SCREEN-STATES-03 SCR-W-08: earlier fees are read newest first, the one nearest the period on top, older ones with "Load more", said on screen, each with its assignment from bulk reads', async () => {
     const user = userEvent.setup();
     const OLDEST = '0192f1a0-0000-7000-8000-0000000005e1';
     const NEAREST = '0192f1a0-0000-7000-8000-0000000005e2';
@@ -528,22 +530,10 @@ describe('SCR-W-08 periods: no fee record drops off after the API default lookba
     });
     const app = createTestApp({
       routes: routes([], {
-        // The API lists fees oldest first; the one nearest the period is on the second page.
+        // Read with order=desc: the fee nearest the period first, the oldest on the second page.
         'GET /fee-submissions': (request) =>
           request.query.cursor === 'fees-2'
             ? fakeResponse(200, {
-                items: [
-                  feeSubmission({
-                    id: '0192f1a0-0000-7000-8000-0000000005e4',
-                    assignmentId: NEAREST,
-                    status: 'approved',
-                    approvedAmountMinor: 2500,
-                    submittedAt: '2026-04-25T20:00:00.000Z',
-                  }),
-                ],
-                nextCursor: null,
-              })
-            : fakeResponse(200, {
                 items: [
                   feeSubmission({
                     id: '0192f1a0-0000-7000-8000-0000000005e3',
@@ -555,38 +545,53 @@ describe('SCR-W-08 periods: no fee record drops off after the API default lookba
                     submittedAt: '2026-02-01T20:00:00.000Z',
                   }),
                 ],
-                nextCursor: 'fees-2',
-              }),
-        // The assignments, also oldest first and paged.
-        'GET /assignments': (request) =>
-          request.query.cursor === 'assignments-2'
-            ? fakeResponse(200, {
-                items: [staffItem(NEAREST, 'U14 Spring semi-final', '2026-04-24T18:00:00.000Z')],
                 nextCursor: null,
               })
             : fakeResponse(200, {
+                items: [
+                  feeSubmission({
+                    id: '0192f1a0-0000-7000-8000-0000000005e4',
+                    assignmentId: NEAREST,
+                    status: 'approved',
+                    approvedAmountMinor: 2500,
+                    submittedAt: '2026-04-25T20:00:00.000Z',
+                  }),
+                ],
+                nextCursor: 'fees-2',
+              }),
+        // The assignments, also newest first and paged.
+        'GET /assignments': (request) =>
+          request.query.cursor === 'assignments-2'
+            ? fakeResponse(200, {
                 items: [staffItem(OLDEST, 'U14 Winter cup', '2026-01-31T18:00:00.000Z')],
+                nextCursor: null,
+              })
+            : fakeResponse(200, {
+                items: [staffItem(NEAREST, 'U14 Spring semi-final', '2026-04-24T18:00:00.000Z')],
                 nextCursor: 'assignments-2',
               }),
       }),
     });
     render(app.at('/workspace/fees'));
     const list = await screen.findByRole('list', { name: 'Earlier fee records' });
-    expect(
-      await within(list).findByRole('listitem', { name: 'U14 Winter cup' }),
-    ).toBeInTheDocument();
+    const nearest = await within(list).findByRole('listitem', { name: 'U14 Spring semi-final' });
+    expect(within(nearest).getByText('Approved')).toBeInTheDocument();
     expect(screen.getByTestId('earlier-fees-order')).toHaveTextContent(
-      `Oldest first, as the service lists them: more recent records, the ones nearest ${formatHistoryStart(FROM)}, follow with “Load more”.`,
+      `Newest first: the records nearest ${formatHistoryStart(FROM)} come first, older ones follow with “Load more”.`,
     );
+    for (const route of ['/fee-submissions', '/assignments']) {
+      expect(app.fake.requests.find((r) => r.route === route)?.query.order).toBe('desc');
+    }
     // The first page's fee has its assignment: the next page of assignments is not read yet.
     expect(app.fake.requests.filter((r) => r.route === '/assignments')).toHaveLength(1);
     await user.click(screen.getByRole('button', { name: 'Load more fee records' }));
-    const nearest = await within(list).findByRole('listitem', { name: 'U14 Spring semi-final' });
-    expect(within(nearest).getByText('Approved')).toBeInTheDocument();
-    // Listed in the API's order, as the screen says: the record nearest the period comes last.
+    expect(
+      await within(list).findByRole('listitem', { name: 'U14 Winter cup' }),
+    ).toBeInTheDocument();
+    // Listed newest first, as the screen says: the record nearest the period stays on top.
     expect(Array.from(list.children).map((li) => li.getAttribute('aria-label'))).toEqual([
-      'U14 Winter cup',
       'U14 Spring semi-final',
+      'U14 Winter cup',
     ]);
     expect(screen.getByTestId('earlier-fees-order')).not.toHaveTextContent('Load more');
     // Its assignment came from the next page of the bulk read, never from one read per fee.
