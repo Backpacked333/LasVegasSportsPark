@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OperationalExceptions, Outbox, UnitOfWork } from '../../../kernel';
 import { staffPrincipal, type TestApp } from '../../../testing';
 import { POLICY_PORT, createPolicyVersionFixture, type PolicyPort } from '../../catalog';
+import { RestrictionsService, createActiveRestriction, seedAsset } from '../../facilities';
 import { EventsService, createScheduledEvent, seedResource } from '../../scheduling';
 import { WorkforceEvents, createAssignmentFixture } from '../../workforce';
 import {
@@ -60,7 +61,10 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
   });
 
   /** Approved booking terms with the given confirmation mode (POL-040 test values). */
-  async function terms(confirmationMode: 'instant' | 'request'): Promise<PolicyVersion> {
+  async function terms(
+    confirmationMode: 'instant' | 'request',
+    buffers: { setupMinutes?: number; cleanupMinutes?: number } = {},
+  ): Promise<PolicyVersion> {
     const id = await createPolicyVersionFixture(t, {
       kind: 'refund',
       content: {
@@ -68,6 +72,7 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
         installmentPolicyKey: null,
         accessConditions: 'Gate code at check-in',
         hostResponsibilities: null,
+        ...buffers,
       },
     });
     const version = await t.app.get<PolicyPort>(POLICY_PORT).getPolicyVersion(t.organizationId, id);
@@ -80,6 +85,8 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
       staffing?: Array<Record<string, unknown>>;
       price?: number;
       resources?: string[];
+      setupMinutes?: number;
+      cleanupMinutes?: number;
     } = {},
   ): Promise<OfferingSetup> {
     const definitionId = await definitionWithScope(t, 'rental_resource', {
@@ -92,7 +99,13 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
       basePriceMinor: options.price ?? 0,
       ageBand: { minAgeYears: 18 },
     });
-    useBookingTerms(setup.offeringId, await terms(options.mode ?? 'instant'));
+    useBookingTerms(
+      setup.offeringId,
+      await terms(options.mode ?? 'instant', {
+        setupMinutes: options.setupMinutes,
+        cleanupMinutes: options.cleanupMinutes,
+      }),
+    );
     return setup;
   }
 
@@ -981,6 +994,175 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
       status: 'declined',
       decisionReason: 'Field reserved for maintenance',
     });
+  });
+
+  it('DEC-029, POL-005 / SPK-SCHED-003 (R4-MODULE-BOUNDARIES-01): a request whose setup buffer is not a multiple of the availability step is accepted when the time is free, and still refused when its buffer meets another event', async () => {
+    for (const [index, setupMinutes] of [10, 20].entries()) {
+      const resourceId = fields[index]!;
+      const setup = await rental({
+        mode: 'request',
+        setupMinutes,
+        cleanupMinutes: 5,
+        resources: [resourceId],
+      });
+      const customer = await booker(setup);
+      const at = start(60 + index);
+      const end = new Date(at.getTime() + HOUR);
+      // The free-time listing shows the start as free on the default 15-minute step.
+      const availability = await t.http
+        .get(`/v1/offerings/${setup.offeringId}/booking-availability`)
+        .query({
+          from: new Date(at.getTime() - 2 * HOUR).toISOString(),
+          to: new Date(at.getTime() + 2 * HOUR).toISOString(),
+          durationMinutes: 60,
+        })
+        .set(customer.header);
+      expect(availability.status, JSON.stringify(availability.body)).toBe(200);
+      expect(
+        availability.body.resources[0].freeIntervals.map((f: { start: string }) =>
+          Date.parse(f.start),
+        ),
+      ).toContain(at.getTime());
+      const requested = await post(t, '/v1/bookings', customer.header, {
+        offeringId: setup.offeringId,
+        start: at.toISOString(),
+        end: end.toISOString(),
+        resourceIds: [resourceId],
+      });
+      expect(requested.status, JSON.stringify(requested.body)).toBe(201);
+      expect(requested.body).toMatchObject({ status: 'requested', outstanding: ['approval'] });
+      const pending = await t.db
+        .selectFrom('operational_exceptions')
+        .select('status')
+        .where('category', '=', 'enrollment.booking_request_pending')
+        .where('affected_id', '=', requested.body.id)
+        .execute();
+      expect(pending).toEqual([{ status: 'open' }]);
+      // The buffers still count: an event ending inside the setup buffer of the next day's
+      // occurrence (but before its start) makes that time unavailable.
+      const next = start(70 + index);
+      await createScheduledEvent(t.app.get(EventsService), {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        resourceIds: [resourceId],
+        start: new Date(next.getTime() - HOUR).toISOString(),
+        end: new Date(next.getTime() - (setupMinutes - 5) * 60_000).toISOString(),
+      });
+      const refused = await post(t, '/v1/bookings', customer.header, {
+        offeringId: setup.offeringId,
+        start: next.toISOString(),
+        end: new Date(next.getTime() + HOUR).toISOString(),
+        resourceIds: [resourceId],
+      });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+      expect(refused.body).toMatchObject({
+        code: 'RESOURCE_CONFLICT',
+        details: { conflicts: [{ occurrenceStart: next.toISOString(), resourceId }] },
+      });
+    }
+  });
+
+  it('SPK-FAC-003 / SPK-FAC-004 / SPK-COND-003 (R4-MODULE-BOUNDARIES-02): a restricted asset refuses only the parties that meet its restriction window, and an elapsed unreleased one every later party until it is released', async () => {
+    const store = (
+      await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Equipment store',
+      })
+    ).resourceId;
+    const assetId = await seedAsset(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceId: store,
+      kind: 'scoreboard',
+      name: 'Scoreboard B',
+    });
+    const definitionId = await definitionWithScope(t, 'party_package' as never, {
+      durationMinutes: 120,
+      guestLimit: 12,
+      resources: { resourceIds: [fields[2]], count: 1 },
+      staffing: [],
+      equipmentAssetIds: [assetId],
+    });
+    const setup = await offering(t, {
+      kind: 'party' as never,
+      entitlementDefinitionId: definitionId,
+      basePriceMinor: 0,
+      ageBand: { minAgeYears: 18 },
+    });
+    useBookingTerms(setup.offeringId, await terms('instant'));
+    const host = await booker(setup);
+    const party = (at: Date) =>
+      post(t, '/v1/bookings', host.header, {
+        offeringId: setup.offeringId,
+        start: at.toISOString(),
+        resourceIds: [fields[2]],
+        guestCount: 8,
+      });
+    const refusedFor = (res: { status: number; body: Record<string, unknown> }) => {
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body).toMatchObject({
+        code: 'RESOURCE_CONFLICT',
+        details: { code: 'EQUIPMENT_UNAVAILABLE', assetIds: [assetId] },
+      });
+    };
+    // Approved now for a window three months ahead: the asset reads `restricted` at once.
+    const restriction = await createActiveRestriction(t.app.get(RestrictionsService), {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceId: store,
+      assetId,
+      start: start(90, 15).toISOString(),
+      end: start(90, 23).toISOString(),
+      reason: 'Scoreboard repair',
+    });
+    expect(restriction.status).toBe('active');
+    const asset = await t.db
+      .selectFrom('assets')
+      .select('status')
+      .where('id', '=', assetId)
+      .executeTakeFirstOrThrow();
+    expect(asset.status).toBe('restricted');
+
+    // Before the window and after it, the party is booked with the scoreboard.
+    const before = await party(start(85, 18));
+    expect(before.status, JSON.stringify(before.body)).toBe(201);
+    expect(before.body).toMatchObject({ status: 'held', equipmentAssetIds: [assetId] });
+    const after = await party(start(95, 18));
+    expect(after.status, JSON.stringify(after.body)).toBe(201);
+    // A party that meets the window is refused, and writes nothing.
+    const counted = await counts();
+    refusedFor(await party(start(90, 21)));
+    expect(await counts()).toEqual(counted);
+
+    try {
+      // The window has passed without an authorized release: the scoreboard is not back in
+      // service, so a later party is refused until it is released (SPK-FAC-004).
+      t.clock.set(start(91, 12));
+      refusedFor(await party(start(110, 18)));
+    } finally {
+      t.clock.set(new Date(CLOCK_START));
+    }
+    await t.app
+      .get(RestrictionsService)
+      .release(systemPrincipal(t.organizationId, 'fixtures'), restriction.id, {
+        reason: 'Scoreboard repaired',
+      });
+    const released = await party(start(110, 18));
+    expect(released.status, JSON.stringify(released.body)).toBe(201);
+
+    // An asset put in `restricted` with no restriction (no window) stays unusable.
+    await t.db
+      .updateTable('assets')
+      .set({ status: 'restricted' })
+      .where('id', '=', assetId)
+      .execute();
+    refusedFor(await party(start(115, 18)));
+    await t.db
+      .updateTable('assets')
+      .set({ status: 'in_service' })
+      .where('id', '=', assetId)
+      .execute();
   });
 
   it('DEC-016: creating a rental while rentals is disabled answers CAPABILITY_DISABLED; cancellation still works', async () => {

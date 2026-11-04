@@ -44,7 +44,12 @@ import {
   type OfferingSnapshot,
   type PolicyPort,
 } from '../../catalog';
-import { ASSET_DIRECTORY_PORT, type AssetDirectoryPort } from '../../facilities';
+import {
+  ASSET_DIRECTORY_PORT,
+  OPERATING_STATUS_PORT,
+  type AssetDirectoryPort,
+  type OperatingStatusPort,
+} from '../../facilities';
 import type { PersonSummary } from '../../identity';
 import {
   AVAILABILITY_PORT,
@@ -122,6 +127,8 @@ interface BookingPlan {
 }
 
 const SOURCE_TYPE = 'enrollment.booking';
+/** The far end of the window asked for when every active restriction of a facility is needed. */
+const OPEN_END = '9999-12-31T00:00:00.000Z';
 
 function capabilityOf(kind: BookingKind): CapabilityId {
   return kind === 'rental' ? 'rentals' : 'parties';
@@ -170,6 +177,7 @@ export class BookingsService implements BookingQueryPort {
     @Inject(WORKFORCE_STAFFING_PORT) private readonly staffing: WorkforceStaffingPort,
     @Inject(ASSIGNMENT_COVERAGE_PORT) private readonly coverage: AssignmentCoveragePort,
     @Inject(ASSET_DIRECTORY_PORT) private readonly assets: AssetDirectoryPort,
+    @Inject(OPERATING_STATUS_PORT) private readonly operatingStatus: OperatingStatusPort,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
@@ -342,11 +350,13 @@ export class BookingsService implements BookingQueryPort {
       throw errors.validation('The recurrence has no occurrence.', { path: 'recurrence' });
     }
     if (equipmentAssetIds.length > 0) {
-      const described = await this.assets.describe(organizationId, equipmentAssetIds, trx);
-      const unusable = equipmentAssetIds.filter((id) => {
-        const asset = described.get(id);
-        return !asset || !asset.usable || asset.facilityId !== snapshot.offering.facilityId;
-      });
+      const unusable = await this.unusableEquipment(
+        trx,
+        organizationId,
+        snapshot.offering.facilityId,
+        equipmentAssetIds,
+        occurrences,
+      );
       if (unusable.length > 0) {
         throw errors.resourceConflict('Equipment this booking needs is not available.', {
           code: 'EQUIPMENT_UNAVAILABLE',
@@ -370,6 +380,73 @@ export class BookingsService implements BookingQueryPort {
     };
   }
 
+  /**
+   * The equipment the booking cannot use at its occurrences (SPK-COND-003, SPK-FAC-003,
+   * SPK-FAC-004; R4-MODULE-BOUNDARIES-02). ASSET_DIRECTORY_PORT answers for the clock instant:
+   * its `usable` (and the asset's `restricted` status) is set when a restriction is approved,
+   * whatever the restriction's window, so it cannot decide an occurrence weeks away. The asset's
+   * status rules out what is retired, out of service, unknown or at another facility; the
+   * restrictions themselves (OPERATING_STATUS_PORT, active restrictions of the facility naming the
+   * asset) decide the occurrences:
+   *
+   * - a restriction blocks every occurrence that overlaps its window;
+   * - one whose window has already ended without an authorized release keeps the asset out of
+   *   service (SPK-FAC-004), so it blocks every occurrence after its start;
+   * - an asset in `restricted` that no active restriction names was restricted without a window
+   *   and stays unusable until it is returned to service.
+   *
+   * A restriction whose window lies entirely before or after the occurrences no longer refuses the
+   * booking (a preventive schedule's future windows refused every date before).
+   */
+  private async unusableEquipment(
+    trx: Trx,
+    organizationId: string,
+    facilityId: string,
+    assetIds: string[],
+    occurrences: Array<{ start: Date; end: Date }>,
+  ): Promise<string[]> {
+    const described = await this.assets.describe(organizationId, assetIds, trx);
+    const unusable = new Set<string>();
+    const candidates = new Set<string>();
+    for (const id of assetIds) {
+      const asset = described.get(id);
+      if (
+        !asset ||
+        asset.facilityId !== facilityId ||
+        (asset.status !== 'in_service' && asset.status !== 'restricted')
+      ) {
+        unusable.add(id);
+      } else {
+        candidates.add(id);
+      }
+    }
+    if (candidates.size > 0) {
+      const now = this.clock.now().getTime();
+      const restrictions = (
+        await this.operatingStatus.activeRestrictions(this.system(organizationId), facilityId, {
+          start: new Date(0).toISOString(),
+          end: OPEN_END,
+        })
+      ).filter((r) => r.assetId !== null && candidates.has(r.assetId));
+      for (const id of candidates) {
+        const own = restrictions.filter((r) => r.assetId === id);
+        if (own.length === 0) {
+          if (described.get(id)!.status === 'restricted') unusable.add(id);
+          continue;
+        }
+        const blocks = own.some((r) => {
+          const from = Date.parse(r.interval.start);
+          const to = Date.parse(r.interval.end);
+          return occurrences.some(
+            (o) => from < o.end.getTime() && (to <= now || o.start.getTime() < to),
+          );
+        });
+        if (blocks) unusable.add(id);
+      }
+    }
+    return assetIds.filter((id) => unusable.has(id));
+  }
+
   private assertBookable(result: EligibilityResult, personId: string): void {
     if (!result.eligible) {
       throw errors.eligibility('The booker is not eligible for this offering.', {
@@ -391,24 +468,32 @@ export class BookingsService implements BookingQueryPort {
     return kind === 'rental' ? ('rental_request' as const) : ('party_request' as const);
   }
 
-  /** Read-only conflict detection for request mode: every resource free at every occurrence. */
+  /**
+   * Read-only conflict detection for request mode: every resource free at every occurrence.
+   *
+   * R4-MODULE-BOUNDARIES-01 (DEC-029/POL-005, SPK-SCHED-003): the port is asked about the
+   * occurrence itself. AVAILABILITY_PORT answers scheduled intervals (buffers excluded) and adds the
+   * setup and cleanup buffers outside the window it is given, the way `bookingAvailability` calls
+   * it; its candidate starts lie on the facility's step grid from the window start, so a window
+   * widened by the buffers missed the occurrence start whenever setup was not a multiple of the
+   * step. With the window equal to the occurrence the only candidate is the occurrence itself,
+   * whatever the step, and its elapsed length is the duration asked for.
+   */
   private async conflictsOf(
     organizationId: string,
     plan: BookingPlan,
   ): Promise<Array<{ occurrenceStart: string; resourceId: string }>> {
     const system = this.system(organizationId);
     const conflicts: Array<{ occurrenceStart: string; resourceId: string }> = [];
-    const setup = plan.content.setupMinutes ?? 0;
-    const cleanup = plan.content.cleanupMinutes ?? 0;
     for (const occurrence of plan.occurrences) {
+      const elapsedMinutes = Math.round(
+        (occurrence.end.getTime() - occurrence.start.getTime()) / 60_000,
+      );
       for (const resourceId of plan.resourceIds) {
         const free = await this.availability.findAvailableSlots(system, {
           resourceId,
-          interval: {
-            start: new Date(occurrence.start.getTime() - setup * 60_000).toISOString(),
-            end: new Date(occurrence.end.getTime() + cleanup * 60_000).toISOString(),
-          },
-          durationMinutes: plan.durationMinutes,
+          interval: { start: occurrence.start.toISOString(), end: occurrence.end.toISOString() },
+          durationMinutes: elapsedMinutes,
           setupMinutes: plan.content.setupMinutes,
           cleanupMinutes: plan.content.cleanupMinutes,
         });

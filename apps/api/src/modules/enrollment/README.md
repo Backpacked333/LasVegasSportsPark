@@ -24,7 +24,8 @@ family calendar's current grants), catalog (`OFFERING_LOOKUP_PORT`, `POLICY_PORT
 `SessionsService`), competition (`TEAM_ENTRY_QUERY_PORT`, `ELIGIBILITY_PORT`, `ROSTER_PORT`, and
 `RosterService.changeRoster` for placement roster additions), scheduling (`EVENT_SCHEDULING_PORT`,
 `AVAILABILITY_PORT`, `ResourcesService` names, local-time helpers), workforce
-(`WORKFORCE_STAFFING_PORT`, `ASSIGNMENT_COVERAGE_PORT`), facilities (`ASSET_DIRECTORY_PORT`),
+(`WORKFORCE_STAFFING_PORT`, `ASSIGNMENT_COVERAGE_PORT`), facilities (`ASSET_DIRECTORY_PORT`,
+`OPERATING_STATUS_PORT.activeRestrictions` for booking equipment),
 communications (`NotificationsService.composeAndQueueIn`, IF-22) and the kernel (capability
 switches, periodic jobs, module settings, facility directory, operational exceptions). It never
 writes another module's tables (§4.2).
@@ -607,11 +608,24 @@ mirrored by a database transition guard.
   **Verified** `memberships.spec.ts` "… R3-TIME-MONEY-05 …"), `GET /v1/me/memberships`.
 - **Rentals and parties (ENR-13, SPK-COND-003).** `POST /v1/bookings` validates the offering's
   approved booking terms (`BOOKING_TERMS_REQUIRED`), its resources (exact count from the allowed
-  set), guests (party) and equipment (`EQUIPMENT_UNAVAILABLE` through `ASSET_DIRECTORY_PORT`).
+  set), guests (party) and equipment (`EQUIPMENT_UNAVAILABLE`, decided for the booking's
+  occurrences, not the clock instant: `ASSET_DIRECTORY_PORT` rules out an unknown, other-facility,
+  retired or out-of-service asset, and the facility's active restrictions naming the asset
+  (`OPERATING_STATUS_PORT.activeRestrictions`) decide each occurrence. A restriction blocks the
+  occurrences that meet its window; one whose window ended without an authorized release keeps the
+  asset out of service and blocks every later occurrence until it is released (SPK-FAC-004); an
+  asset in `restricted` that no restriction names stays unusable. Approval re-checks the same.
+  R4-MODULE-BOUNDARIES-02, SPK-FAC-003, **Verified** `bookings.spec.ts` "SPK-FAC-003 / SPK-FAC-004
+  / SPK-COND-003 (R4-MODULE-BOUNDARIES-02): …"). Existing bookings that commit an asset whose
+  restriction is approved later are not flagged (restrictions close an area, SPK-FAC-003).
   Instant mode reserves the event or weekly series (every conflict first; a taken slot writes
   nothing), declares must-be-accepted staffing on every event, and opens the basket line with a
   server-owned hold on a one-place pool for the booking, all in one unit of work. Request mode
-  (DEC-029, POL-005) only checks availability and raises `enrollment.booking_request_pending`
+  (DEC-029, POL-005) only checks availability (each occurrence is asked of `AVAILABILITY_PORT` as
+  itself, with the terms' setup and cleanup minutes, and scheduling adds the buffers around it, so
+  a setup that is not a multiple of the facility's availability step no longer refuses a free time:
+  R4-MODULE-BOUNDARIES-01, **Verified** `bookings.spec.ts` "DEC-029, POL-005 / SPK-SCHED-003
+  (R4-MODULE-BOUNDARIES-01): …") and raises `enrollment.booking_request_pending`
   (owner `scheduler`); approval reserves, decline ends it. After payment the booking is
   `confirmed` only when every staff slot is covered, else `awaiting_staff` with
   `enrollment.booking_awaiting_staff` (owner `scheduler`); `workforce.assignment_changed`
