@@ -90,8 +90,14 @@ export interface NotificationRecipientsTable {
 export type DeliveryChannel = 'in_app' | 'push' | 'email' | 'sms';
 export type DeliveryStatus =
   'queued' | 'provider_accepted' | 'delivered' | 'failed' | 'unknown' | 'read' | 'acknowledged';
+/** Migration 1010 (R4-COMMS-AUTOMATION-05) added CHANNEL_DISABLED. */
 export type DeliveryFailureCode =
-  'RECIPIENT_REVOKED' | 'NO_ADDRESS' | 'PROVIDER_REJECTED' | 'PROVIDER_ERROR' | 'SUPERSEDED';
+  | 'RECIPIENT_REVOKED'
+  | 'NO_ADDRESS'
+  | 'PROVIDER_REJECTED'
+  | 'PROVIDER_ERROR'
+  | 'SUPERSEDED'
+  | 'CHANNEL_DISABLED';
 
 export interface DeliveryAttemptsTable {
   id: string;

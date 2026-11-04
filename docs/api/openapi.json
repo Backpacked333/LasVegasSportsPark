@@ -8450,7 +8450,8 @@
           "NO_ADDRESS",
           "PROVIDER_REJECTED",
           "PROVIDER_ERROR",
-          "SUPERSEDED"
+          "SUPERSEDED",
+          "CHANNEL_DISABLED"
         ]
       },
       "PracticalDetails": {

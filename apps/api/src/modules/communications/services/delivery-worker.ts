@@ -41,6 +41,7 @@ import {
 } from '../ports';
 import { AudienceResolver } from './audience-resolver';
 import { NotificationsService } from './notifications.service';
+import { PreferencesService } from './preferences.service';
 import { RecipientAddresses } from './recipient-addresses';
 
 export interface DeliverySummary {
@@ -116,6 +117,7 @@ export class DeliveryWorker {
     private readonly addresses: RecipientAddresses,
     private readonly notifications: NotificationsService,
     private readonly recovery: RecoveryMode,
+    private readonly preferences: PreferencesService,
   ) {}
 
   start(): void {
@@ -392,6 +394,22 @@ export class DeliveryWorker {
       );
       return { kind: 'skipped' };
     }
+    // SPK-COMMS-007 (R4-COMMS-AUTOMATION-05): the person's channel choice is read again right
+    // before the hand-off, so a channel switched off after dispatch (or a staff retry, or while
+    // the organization was paused in recovery) is never used; the attempt fails CHANNEL_DISABLED.
+    const enabled = await this.preferences.enabledChannels(
+      trx,
+      organizationId,
+      recipient.person_id,
+      notification.category,
+    );
+    if (!enabled.includes(channel)) {
+      await fail(
+        'CHANNEL_DISABLED',
+        `the recipient switched ${channel} off for ${notification.category} notices before hand-off`,
+      );
+      return { kind: 'skipped' };
+    }
     if (addresses.length === 0) {
       await fail(
         'NO_ADDRESS',
@@ -613,14 +631,16 @@ export class DeliveryWorker {
           payload: { ...payload, failureCode, error: input.error ?? failureCode },
         });
         // SPK-UX-006 "failed urgent communications": an essential notice that did not reach a
-        // person is an operational exception for the front desk; revocations and superseded
-        // (obsolete) notices are not failures, and neither is a push to a person who registered no
-        // device (COM-01: they have not installed or allowed the app; the in-app notice of an
-        // essential kind is delivered regardless, SPK-COMMS-007).
+        // person is an operational exception for the front desk; revocations, superseded
+        // (obsolete) notices and a channel the person switched off are not failures, and neither
+        // is a push to a person who registered no device (COM-01: they have not installed or
+        // allowed the app; the in-app notice of an essential kind is delivered regardless,
+        // SPK-COMMS-007).
         if (
           input.notification.category === 'operational' &&
           failureCode !== 'RECIPIENT_REVOKED' &&
           failureCode !== 'SUPERSEDED' &&
+          failureCode !== 'CHANNEL_DISABLED' &&
           !(current.channel === 'push' && failureCode === 'NO_ADDRESS')
         ) {
           await this.exceptions.raise(trx, {

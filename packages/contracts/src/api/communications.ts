@@ -66,8 +66,20 @@ export const DeliveryStatusSchema = z
   .enum(['queued', 'provider_accepted', 'delivered', 'failed', 'unknown', 'read', 'acknowledged'])
   .openapi('DeliveryStatus');
 export type DeliveryStatusValue = z.infer<typeof DeliveryStatusSchema>;
+/**
+ * Why an attempt failed. CHANNEL_DISABLED (R4-COMMS-AUTOMATION-05, SPK-COMMS-007): the person
+ * switched the channel off for the notice's category before the attempt was handed over, so it
+ * never was.
+ */
 export const DeliveryFailureCodeSchema = z
-  .enum(['RECIPIENT_REVOKED', 'NO_ADDRESS', 'PROVIDER_REJECTED', 'PROVIDER_ERROR', 'SUPERSEDED'])
+  .enum([
+    'RECIPIENT_REVOKED',
+    'NO_ADDRESS',
+    'PROVIDER_REJECTED',
+    'PROVIDER_ERROR',
+    'SUPERSEDED',
+    'CHANNEL_DISABLED',
+  ])
   .openapi('DeliveryFailureCode');
 export type DeliveryFailureCodeValue = z.infer<typeof DeliveryFailureCodeSchema>;
 export const AcknowledgmentViaSchema = DeliveryChannelSchema;

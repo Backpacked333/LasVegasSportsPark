@@ -53040,7 +53040,7 @@ export type components = {
         /** @enum {string} */
         DeliveryChannel: "in_app" | "push" | "email" | "sms";
         /** @enum {string} */
-        DeliveryFailureCode: "RECIPIENT_REVOKED" | "NO_ADDRESS" | "PROVIDER_REJECTED" | "PROVIDER_ERROR" | "SUPERSEDED";
+        DeliveryFailureCode: "RECIPIENT_REVOKED" | "NO_ADDRESS" | "PROVIDER_REJECTED" | "PROVIDER_ERROR" | "SUPERSEDED" | "CHANNEL_DISABLED";
         DeliveryReceipt: {
             /** Format: uuid */
             attemptId: string;
