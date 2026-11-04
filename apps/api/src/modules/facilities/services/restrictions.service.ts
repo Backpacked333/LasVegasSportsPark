@@ -1117,7 +1117,9 @@ export class RestrictionsService implements OperatingStatusPort {
    *   raised earlier is settled.
    *
    * One open exception per restriction (dedupe key `restriction:<id>:unreleased_at_end`, queue
-   * `facilities_operator`); the release settles it in its own unit of work. Returns the number of
+   * `facilities_operator`); an open one whose severity no longer holds (the inspection passed after
+   * the end, or the task went back to work) is settled and replaced, so it never misstates the
+   * cause. The release settles it in its own unit of work. Returns the number of
    * restrictions with an open exception after the run.
    */
   async raiseUnreleasedAtEndExceptions(
@@ -1160,11 +1162,25 @@ export class RestrictionsService implements OperatingStatusPort {
         );
         continue;
       }
+      const severity = outstanding ? 'high' : 'warning';
+      // The open exception describes the restriction as it was when raised: once the inspection
+      // passes after the end (high -> warning) or the task goes back to work (warning -> high), it
+      // is settled with that fact and replaced, so the item never misstates why the area is open.
+      await this.settleUnreleasedAtEnd(
+        trx,
+        row,
+        outstanding
+          ? 'The inspection the task requires is outstanding again; replaced by a high-severity item.'
+          : 'The inspection the task requires has passed; the restriction still awaits its authorized release.',
+        null,
+        row.status,
+        (exception) => exception.severity !== severity,
+      );
       await this.exceptions.raise(trx, {
         organizationId,
         facilityId: row.facility_id,
         category: RESTRICTION_UNRELEASED_AT_END,
-        severity: outstanding ? 'high' : 'warning',
+        severity,
         title: outstanding
           ? ended
             ? 'A restriction ended with its inspection outstanding; the area is open in scheduling'
@@ -1214,6 +1230,7 @@ export class RestrictionsService implements OperatingStatusPort {
    * Settles the restriction's open or acknowledged `facilities.restriction_unreleased_at_end`
    * exception with the fact that ends it (the release, a follow-on, a passed inspection), under the
    * system actor `SETTLE_UNRELEASED_AT_END_ACTOR` (the command's own audit names the person).
+   * `only` limits the settlement to the exceptions it selects (a severity that no longer holds).
    */
   private async settleUnreleasedAtEnd(
     trx: Trx,
@@ -1221,6 +1238,7 @@ export class RestrictionsService implements OperatingStatusPort {
     reason: string,
     correlationId: string | null,
     status: string = row.status,
+    only?: (exception: { severity: string }) => boolean,
   ): Promise<number> {
     const open = await this.exceptions.list(
       row.organization_id,
@@ -1232,16 +1250,17 @@ export class RestrictionsService implements OperatingStatusPort {
       },
       trx,
     );
-    if (open.items.length === 0) return 0;
+    const settled = only ? open.items.filter(only) : open.items;
+    if (settled.length === 0) return 0;
     const system = systemPrincipal(row.organization_id, SETTLE_UNRELEASED_AT_END_ACTOR);
-    for (const exception of open.items) {
+    for (const exception of settled) {
       await this.exceptions.transition(trx, system, exception.id, 'resolved', {
         reason,
         resolution: { restrictionId: row.id, restrictionStatus: status, taskId: row.task_id },
         correlationId: correlationId ?? undefined,
       });
     }
-    return open.items.length;
+    return settled.length;
   }
 
   /** The asset's own status follows its restrictions (in_service ⇄ restricted); other states are left alone. */

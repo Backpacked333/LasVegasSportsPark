@@ -201,7 +201,9 @@ inspection_required`, with `details.cause` (`not_inspected`, `inspection_failed`
   `facilities.restriction_unreleased_at_end` exception per restriction (dedupe key
   `restriction:<id>:unreleased_at_end`, affected `restriction`, deadline the interval end): `high`
   from `restrictionEndWarningHours` before the end while the task's inspection is outstanding (the
-  release gate would refuse), `warning` once the interval ended without a release. To keep the area
+  release gate would refuse), `warning` once the interval ended without a release; an open item
+  whose severity no longer holds (the inspection passed after the end, or the task went back to
+  work) is settled and replaced, so it always states the current cause. To keep the area
   closed, the operator applies a follow-on restriction for the same task starting at the end
   (migration `0906`), whose release the same inspection gates; an active follow-on of the same task
   and area covering the end, a passed inspection before the end, or the release itself settles the
@@ -212,7 +214,8 @@ inspection_required`, with `details.cause` (`not_inspected`, `inspection_failed`
   before its interval ends, and a follow-on restriction of the same task keeps the area closed past
   the end under the same inspection gate", "SPK-FAC-004: a passed inspection before the end settles
   the warning; an interval that then ends without a release is raised again until the release
-  settles it". The warning lead (24 h) is **Proposed** (`FACILITIES_POLICY`, DEC-001); open-ended
+  settles it", "SPK-FAC-004: an open item always states the current cause; it is replaced when the
+  inspection passes after the end or the task goes back to work". The warning lead (24 h) is **Proposed** (`FACILITIES_POLICY`, DEC-001); open-ended
   restrictions released only by the release (option a) would need open-ended scheduling closures and
   are not built.
 - **SPK-FAC-005.** `generate` materializes occurrences starting before `now + leadTimeDays` (or

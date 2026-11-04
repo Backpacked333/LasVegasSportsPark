@@ -297,4 +297,83 @@ describe('restrictions reaching the end of their interval unreleased (R4-OPS-MOD
     expect(released.status, JSON.stringify(released.body)).toBe(200);
     expect((await exceptionsOf(id)).map((e) => e.status)).toEqual(['resolved', 'resolved']);
   });
+
+  it('SPK-FAC-004: an open item always states the current cause; it is replaced when the inspection passes after the end or the task goes back to work', async () => {
+    t.clock.set(at('2026-11-20', '06:00'));
+    const taskId = await inspectedTask(pitch.southHalfId, 'Goal anchor sleeve cracked');
+    const created = await post('/v1/maintenance-restrictions', {
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      taskId,
+      kind: 'closed',
+      interval: { start: at('2026-11-20', '08:00'), end: at('2026-11-20', '18:00') },
+      reason: 'Goal anchor sleeve',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id: string = created.body.id;
+    const openOf = async () => (await exceptionsOf(id)).filter((e) => e.status === 'open');
+
+    // the interval ends with the inspection still outstanding: high
+    t.clock.set(at('2026-11-20', '19:00'));
+    await run();
+    expect(await openOf()).toEqual([
+      expect.objectContaining({
+        severity: 'high',
+        title:
+          'A restriction ended with its inspection outstanding; the area is open in scheduling',
+        details: expect.objectContaining({
+          ended: true,
+          inspectionOutstanding: expect.objectContaining({ cause: 'not_inspected' }),
+        }),
+      }),
+    ]);
+
+    // the inspection passes after the end: the high item no longer holds and is replaced
+    await resolveAndPass(taskId);
+    await run();
+    const afterPass = await exceptionsOf(id);
+    expect(afterPass.map((e) => [e.status, e.severity])).toEqual([
+      ['resolved', 'high'],
+      ['open', 'warning'],
+    ]);
+    expect(afterPass[1]).toMatchObject({
+      title: 'A restriction ended without an authorized release',
+      details: expect.objectContaining({ ended: true, inspectionOutstanding: null }),
+    });
+    // a replay keeps the one warning
+    await run();
+    expect((await openOf()).map((e) => e.severity)).toEqual(['warning']);
+
+    // rework is found before anyone releases the area: high again, with the new cause
+    const task = (await t.http.get(`/v1/maintenance-tasks/${taskId}`).set(auth)).body;
+    const reopened = await patch(`/v1/maintenance-tasks/${taskId}`, {
+      status: 'in_progress',
+      expectedRevision: task.revision,
+    });
+    expect(reopened.status, JSON.stringify(reopened.body)).toBe(200);
+    await run();
+    expect(await openOf()).toEqual([
+      expect.objectContaining({
+        severity: 'high',
+        details: expect.objectContaining({
+          inspectionOutstanding: expect.objectContaining({ cause: 'work_in_progress' }),
+        }),
+      }),
+    ]);
+
+    // resolved and inspected again, then released: the release settles the last item
+    await resolveAndPass(taskId);
+    const released = await post(
+      `/v1/maintenance-restrictions/${id}/release`,
+      { reason: 'reworked and inspected', expectedRevision: await restrictionRevision(id) },
+      managerAuth,
+    );
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect((await exceptionsOf(id)).map((e) => e.status)).toEqual([
+      'resolved',
+      'resolved',
+      'resolved',
+    ]);
+    expect(await openOf()).toEqual([]);
+  });
 });
