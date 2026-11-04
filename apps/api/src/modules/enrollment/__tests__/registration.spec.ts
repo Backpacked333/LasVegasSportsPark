@@ -217,13 +217,17 @@ describe('registration: applications, baskets, enrollments (SPK-REG-001..007/009
     const setup = await offering(t);
     const kid = await child(t, [parent]);
     const stranger = await adult(t);
+    // R4-PRIVACY-03 (§4.10): another household's child reads as an unknown person.
     const denied = await post(t, '/v1/applications', stranger.header, {
       offeringId: setup.offeringId,
       participantPersonId: kid,
       intent: 'youth',
     });
-    expect(denied.status).toBe(403);
-    expect(denied.body.code).toBe('PARTICIPANT_AUTHORITY_REQUIRED');
+    expect(denied.status).toBe(404);
+    expect(denied.body).toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'The requested person was not found.',
+    });
     const created = await post(t, '/v1/applications', parent.header, {
       offeringId: setup.offeringId,
       participantPersonId: kid,

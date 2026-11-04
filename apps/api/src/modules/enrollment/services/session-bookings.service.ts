@@ -57,6 +57,7 @@ import {
   toSessionBooking,
   viewerOf,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
 import { CapacityService, type HoldRow } from './capacity.service';
@@ -212,12 +213,14 @@ export class SessionBookingsService {
         input.participantPersonId,
       );
       const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
-      await this.authorization.require(principal, EnrollmentActions.bookSession, {
-        type: 'session_booking',
-        organizationId,
-        facilityId,
-        subjectPersonIds: [person.id],
-      });
+      // R4-PRIVACY-03 (§4.10): another household's participant reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.bookSession,
+        { type: 'session_booking', organizationId, facilityId, subjectPersonIds: [person.id] },
+        [person.id],
+      );
       const staff = await this.scope.actsAsStaff(
         principal,
         EnrollmentActions.bookSession,

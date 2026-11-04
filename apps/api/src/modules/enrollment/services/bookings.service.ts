@@ -82,6 +82,7 @@ import {
   organizationOf,
   registrantSnapshot,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { BookingMachine, type BookingEvent } from '../enrollment.state-machines';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
@@ -663,12 +664,19 @@ export class BookingsService implements BookingQueryPort {
       const bookerId = input.bookerPersonId ?? principal.personId;
       if (!bookerId) throw errors.validation('bookerPersonId is required.');
       const booker = await this.evaluator.participant(trx, organizationId, bookerId);
-      await this.authorization.require(principal, EnrollmentActions.requestBooking, {
-        type: 'booking',
-        organizationId,
-        facilityId: snapshot.offering.facilityId,
-        subjectPersonIds: [booker.id],
-      });
+      // R4-PRIVACY-03 (§4.10): another household's booker reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.requestBooking,
+        {
+          type: 'booking',
+          organizationId,
+          facilityId: snapshot.offering.facilityId,
+          subjectPersonIds: [booker.id],
+        },
+        [booker.id],
+      );
       // DEC-016, DEC-076, DEC-077: a new rental or party needs its switch.
       await this.capabilities.require(organizationId, capabilityOf(kind), trx);
       // R3-TRACE-A-02 (SPK-REG-009): staff-assisted only on a staff role at the facility; a staff

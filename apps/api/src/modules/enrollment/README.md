@@ -122,7 +122,16 @@ and own relationships do not reach it, a reader scoped to another facility inclu
 decided at the record's facility, as its GET decides it) and `ACCESS_DENIED` to whoever may read it
 (their own child's record, or a staff reader without the command's role). Adding a basket line needs `register` over both
 the basket's household adult and the participant, so authority over a shared child never opens
-another household's basket.
+another household's basket. A command that names a person by id (the participant of an
+application, waitlist entry, trial, session booking, placement request or basket line, a booking's
+`bookerPersonId`, a basket or accepted offer's `ownerPersonId`) answers an unknown id and another
+household's person alike, `NOT_FOUND` "The requested person was not found.", to anyone who may not
+read that person (`identity.read_person`); whoever may read them but lacks the command's authority
+(a guardian holding `view` but not `register`, a staff reader without the role) gets
+`PARTICIPANT_AUTHORITY_REQUIRED`, and an owner's kind (adult or child) is checked only after
+authority (`requireOverNamedPersons`, R4-PRIVACY-03, §4.10, **Verified** `participant-privacy.spec.ts`
+"§4.10 (R4-PRIVACY-03): …"). Requested teammates of a placement request are recorded by id
+without saying whether the id names a person (SPK-PLACE-005).
 
 ## Ports (`enrollment.ports.ts`, provided by `EnrollmentModule`)
 

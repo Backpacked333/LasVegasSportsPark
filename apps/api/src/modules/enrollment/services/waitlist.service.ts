@@ -62,6 +62,7 @@ import {
   viewerOf,
   withSavepoint,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
 import { ApplicationsService } from './applications.service';
@@ -365,12 +366,14 @@ export class WaitlistService implements WaitlistPort {
         input.participantPersonId,
       );
       const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
-      await this.authorization.require(principal, EnrollmentActions.joinWaitlist, {
-        type: 'waitlist_entry',
-        organizationId,
-        facilityId,
-        subjectPersonIds: [person.id],
-      });
+      // R4-PRIVACY-03 (§4.10): another household's participant reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.joinWaitlist,
+        { type: 'waitlist_entry', organizationId, facilityId, subjectPersonIds: [person.id] },
+        [person.id],
+      );
       // R3-TRACE-A-02 (SPK-REG-008, §2.1): the queue follows the configured priority policy; only
       // a role holding `enrollment.manage_waitlist` ("adjust priority") at the offering's facility
       // sets a priority, never a staff member who joins for their own child through `register`.
@@ -1429,16 +1432,24 @@ export class WaitlistService implements WaitlistPort {
             path: 'ownerPersonId',
           });
         const owner = await this.evaluator.participant(trx, organizationId, ownerPersonId);
-        if (owner.kind !== 'adult')
-          throw errors.validation('A basket belongs to an adult household member.');
         // §4.7 (1), §4.14: the same authority POST /baskets and its lines require, over the owner's
         // household and the participant; the offer stays `offered` when it is refused (rollback).
-        await this.authorization.require(principal, EnrollmentActions.manageBasket, {
-          type: 'basket',
-          organizationId,
-          facilityId: await this.scope.facilityOf(organizationId, entry.offering_id, trx),
-          subjectPersonIds: [...new Set([owner.id, person.id])],
-        });
+        // R4-PRIVACY-03 (§4.10): an owner of another household reads as an unknown person, and
+        // only an authorized caller learns whether the owner is an adult.
+        await requireOverNamedPersons(
+          this.authorization,
+          principal,
+          EnrollmentActions.manageBasket,
+          {
+            type: 'basket',
+            organizationId,
+            facilityId: await this.scope.facilityOf(organizationId, entry.offering_id, trx),
+            subjectPersonIds: [...new Set([owner.id, person.id])],
+          },
+          [owner.id],
+        );
+        if (owner.kind !== 'adult')
+          throw errors.validation('A basket belongs to an adult household member.');
         // The payer follows the basket owner (finance lets only the payer quote and pay): a
         // customer names only themselves or the owner; staff may name another payer.
         const payerPersonId = staffLike

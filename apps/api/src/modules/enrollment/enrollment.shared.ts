@@ -53,6 +53,7 @@ import {
   KeysetInstant,
   keysetInstant,
 } from '../../kernel';
+import { IdentityActions } from '../identity';
 
 /** Correlation id assigned by the kernel middleware, for audit and outbox records (§4.10). */
 export const CorrelationId = createParamDecorator(
@@ -97,6 +98,41 @@ export async function hiddenFrom(
     if ((await authorization.decide(principal, readAction, readTarget)).allowed) return false;
   }
   return true;
+}
+
+/**
+ * R4-PRIVACY-03 (§4.10 "errors must not reveal another household's protected record existence";
+ * CLAUDE.md: a customer-private record the caller may not see answers `protectedNotFound`): the
+ * authority check of a command that names persons by id (a participant, a booker, a basket
+ * owner). A person id that does not exist already answers `protectedNotFound('person')`
+ * (`RegistrationEvaluator.participant`); when `action` is denied, a caller who may not even read
+ * one of the named persons (`identity.read_person`: themselves, a relationship holding `view`,
+ * a staff reader) gets the same answer, so "exists in another household" and "does not exist" read
+ * alike. Whoever may read every named person gets the kernel's honest refusal
+ * (PARTICIPANT_AUTHORITY_REQUIRED for a guardian holding `view` but not `register`, ACCESS_DENIED
+ * for a staff role out of scope), as identity's relationship commands answer (SPK-AT-001 rows 7-8).
+ */
+export async function requireOverNamedPersons(
+  authorization: AuthorizationService,
+  principal: Principal,
+  action: ActionDefinition,
+  target: AuthorizationTargetInput,
+  namedPersonIds: ReadonlyArray<string>,
+): Promise<void> {
+  if ((await authorization.decide(principal, action, target)).allowed) return;
+  if (principal.kind !== 'anonymous') {
+    for (const personId of new Set(namedPersonIds)) {
+      const readable = await authorization.decide(principal, IdentityActions.readPerson, {
+        type: 'person',
+        id: personId,
+        organizationId: target.organizationId,
+        subjectPersonIds: [personId],
+        protected: true,
+      });
+      if (!readable.allowed) throw errors.protectedNotFound('person');
+    }
+  }
+  await authorization.require(principal, action, target);
 }
 
 /** The system principal enrollment uses for its own follow-up work (outbox handlers, timers). */
