@@ -58944,6 +58944,8 @@ export type components = {
             cards?: components["schemas"]["ResultCard"][];
             classification: components["schemas"]["ResultClassification"];
             /** Format: uuid */
+            correctsRevisionId?: string;
+            /** Format: uuid */
             disputeId?: string;
             expectedRevision?: number;
             /** Format: uuid */

@@ -14,6 +14,7 @@ import {
   adultCustomer,
   atKickoff,
   competitionTestApp,
+  correctionBase,
   key,
   staffMember,
   type Actor,
@@ -116,7 +117,10 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
 
   async function submit(fixtureId: string, body: object) {
     await atKickoff(t, fixtureId);
-    const res = await post(`/fixtures/${fixtureId}/results`, leagueManager, body);
+    const res = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      ...(await correctionBase(t, fixtureId)),
+      ...body,
+    });
     expect(res.status).toBe(201);
     return res.body as { id: string; revision: number };
   }
@@ -369,6 +373,7 @@ describe('result corrections, brackets and rule-set discipline (SPK-RESULT-004, 
     });
     // a closed task cannot be used again
     const reuse = await post(`/fixtures/${f1}/results`, leagueManager, {
+      ...(await correctionBase(t, f1)),
       classification: 'completed',
       homeScore: 0,
       awayScore: 4,

@@ -17845,6 +17845,10 @@
               "maxLength": 200
             },
             "maxItems": 20
+          },
+          "correctsRevisionId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [

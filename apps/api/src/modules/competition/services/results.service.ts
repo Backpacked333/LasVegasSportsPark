@@ -151,6 +151,46 @@ function sidesOf(
   return { winnerEntryId: null, loserEntryId: null };
 }
 
+/** STALE_REVISION: the official result a correction was based on is no longer the official one. */
+function staleCorrectionBase(
+  correctsRevisionId: string | null,
+  officialRevisionId: string | null,
+): DomainError {
+  return new DomainError(
+    'STALE_REVISION',
+    'The official result changed since this correction was drafted; reload it and correct the current result.',
+    { details: { code: 'CORRECTION_BASE_STALE', correctsRevisionId, officialRevisionId } },
+  );
+}
+
+/**
+ * R4-LIFECYCLES-REVISIONS-02 (§4.9 expected revision, §4.7 invariant 9, SPK-RESULT-004): a
+ * correction is bound to the official revision its author saw, never to whatever is official when
+ * it arrives, so a correction drafted from a stale view cannot undo a newer correction.
+ */
+function assertCorrectionBase(
+  official: { id: string; revision: number } | null,
+  input: { correctsRevisionId?: string; expectedRevision?: number },
+): void {
+  if (!official) {
+    // The caller corrects an official result that does not exist (any more).
+    if (input.correctsRevisionId) throw staleCorrectionBase(input.correctsRevisionId, null);
+    return;
+  }
+  if (!input.correctsRevisionId) {
+    throw errors.validation(
+      'A correction names the official result it corrects (correctsRevisionId).',
+      { code: 'correction_base_required', officialRevisionId: official.id },
+    );
+  }
+  if (input.correctsRevisionId !== official.id) {
+    throw staleCorrectionBase(input.correctsRevisionId, official.id);
+  }
+  if (input.expectedRevision !== undefined && input.expectedRevision !== official.revision) {
+    throw errors.staleRevision(input.expectedRevision, official.revision);
+  }
+}
+
 /**
  * Result revisions (§4.6 Result: draft → submitted → official → superseded; SPK-RESULT-001/002/004,
  * SPK-STAFF-005, §4.8 `POST /v1/fixtures/{id}/results`, `POST /v1/results/{id}/publish`).
@@ -219,6 +259,7 @@ export class ResultsService {
         );
       }
       const official = await this.officialOf(trx, organizationId, fixtureId);
+      assertCorrectionBase(official, input);
       if (official && !input.reason) {
         throw errors.validation('A correction of an official result requires a reason.', {
           officialRevisionId: official.id,
@@ -496,6 +537,11 @@ export class ResultsService {
       const official = await this.officialOf(trx, organizationId, revision.fixture_id, {
         forUpdate: true,
       });
+      // R4-LIFECYCLES-REVISIONS-02 (§4.9, SPK-RESULT-004): a revision supersedes only the official
+      // result it was submitted against; it never silently replaces a later one.
+      if ((revision.supersedes_revision_id ?? null) !== (official?.id ?? null)) {
+        throw staleCorrectionBase(revision.supersedes_revision_id, official?.id ?? null);
+      }
       if (!official && input.reviewExceptionId) {
         throw errors.validation('Only a correction of an official result is reviewed.', {
           reviewExceptionId: input.reviewExceptionId,
@@ -597,7 +643,7 @@ export class ResultsService {
           published_by: json(snapshotActor(principal)),
           published_by_person_id: principal.personId,
           published_at: now,
-          supersedes_revision_id: official?.id ?? revision.supersedes_revision_id,
+          supersedes_revision_id: official?.id ?? null,
           reason: revision.reason ?? input.reason ?? null,
           revision: revision.revision + 1,
         })
