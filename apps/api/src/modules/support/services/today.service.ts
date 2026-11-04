@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   errors,
+  type AssignmentRequirement,
   type Event,
   type Principal,
   type ResolutionHistoryEntry,
@@ -23,7 +24,12 @@ import {
 import { MatchActions, ReadinessService } from '../../competition';
 import { FacilitiesActions, RestrictionsService } from '../../facilities';
 import { EventsService, addDays, localDateOf, resolveLocal } from '../../scheduling';
-import { RequirementsService, WorkforceActions, uncoveredDedupeKey } from '../../workforce';
+import {
+  RequirementsService,
+  WorkforceActions,
+  coverageTargetKey,
+  uncoveredDedupeKey,
+} from '../../workforce';
 import { SupportActions } from '../support.actions';
 import { SUPPORT_POLICY, type SupportPolicy } from '../support.policy';
 import { isPermissionError, minutesBetween, organizationOf } from '../support.shared';
@@ -37,6 +43,13 @@ const SEVERITY_RANK: Record<TodayItem['severity'], number> = {
   warning: 2,
   info: 3,
 };
+
+/** The workforce target whose required roles an activity carries: its fixture, else the event. */
+function coverageTargetOf(event: Event): { targetType: 'fixture' | 'event'; targetId: string } {
+  return event.sourceType === 'fixture' && event.sourceId
+    ? { targetType: 'fixture', targetId: event.sourceId }
+    : { targetType: 'event', targetId: event.id };
+}
 
 interface FacilityDay {
   id: string;
@@ -303,8 +316,23 @@ export class TodayService {
         const status = await this.attempt(async () => {
           let count = 0;
           let readable = 0;
+          // R3-PERFORMANCE-01: one batched requirements-and-coverage read for the facility's live
+          // activities, instead of one read per activity.
+          const requirements = await this.requirements.listForTargets(
+            principal,
+            live.map(coverageTargetOf),
+          );
           for (const event of live) {
-            const produced = await this.coverageItems(principal, event, facility, coveredKeys, now);
+            const target = coverageTargetOf(event);
+            const produced = await this.coverageItems(
+              principal,
+              event,
+              target,
+              requirements.get(coverageTargetKey(target.targetType, target.targetId)) ?? [],
+              facility,
+              coveredKeys,
+              now,
+            );
             if (produced === 'not_permitted') continue;
             readable += 1;
             items.push(...produced);
@@ -594,21 +622,13 @@ export class TodayService {
   private async coverageItems(
     principal: Principal,
     event: Event,
+    target: { targetType: 'fixture' | 'event'; targetId: string },
+    requirements: AssignmentRequirement[] | 'not_permitted',
     facility: FacilityDay,
     coveredKeys: ReadonlySet<string>,
     now: Date,
   ): Promise<TodayItem[] | 'not_permitted'> {
-    const target =
-      event.sourceType === 'fixture' && event.sourceId
-        ? { targetType: 'fixture' as const, targetId: event.sourceId }
-        : { targetType: 'event' as const, targetId: event.id };
-    let requirements;
-    try {
-      requirements = await this.requirements.list(principal, target);
-    } catch (error) {
-      if (isPermissionError(error)) return 'not_permitted';
-      throw error;
-    }
+    if (requirements === 'not_permitted') return 'not_permitted';
     const out: TodayItem[] = [];
     const start = new Date(event.scheduledStart);
     for (const req of requirements) {

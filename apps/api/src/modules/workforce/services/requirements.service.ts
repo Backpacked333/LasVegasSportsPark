@@ -210,6 +210,44 @@ export class RequirementsService {
   }
 
   /**
+   * R3-PERFORMANCE-01 (SPK-UX-006, SPK-STAFF-002): {@link list} for many targets at once, for
+   * callers that read a whole day (support's Today feed). The requirements and their coverage are
+   * read in two queries for all targets, and the read is authorized once per facility (the same
+   * `workforce.view_assignments` decision `list` makes for each target, on its first requirement's
+   * facility, or the organization when it has none). Keyed by `coverageTargetKey(type, id)`; a
+   * target the caller may not read is `'not_permitted'` instead of an error, so one unreadable
+   * target never hides the others.
+   */
+  async listForTargets(
+    principal: Principal,
+    targets: readonly AssignmentTargetQuery[],
+  ): Promise<Map<string, AssignmentRequirement[] | 'not_permitted'>> {
+    const organizationId = organizationOf(principal);
+    const found = await this.coverage.coverageForTargets(this.db, organizationId, targets);
+    const decisions = new Map<string | null, boolean>();
+    const out = new Map<string, AssignmentRequirement[] | 'not_permitted'>();
+    for (const [key, { requirements, coverage }] of found) {
+      const facilityId = requirements[0]?.facility_id ?? null;
+      let allowed = decisions.get(facilityId);
+      if (allowed === undefined) {
+        allowed = (
+          await this.authorization.decide(principal, WorkforceActions.viewAssignments, {
+            type: 'assignment_requirement',
+            organizationId,
+            facilityId,
+          })
+        ).allowed;
+        decisions.set(facilityId, allowed);
+      }
+      out.set(
+        key,
+        allowed ? requirements.map((row) => this.toView(row, coverage)) : 'not_permitted',
+      );
+    }
+    return out;
+  }
+
+  /**
    * SPK-STAFF-001: accepted assignees who do not hold the requirement's qualifications are flagged
    * for an operator decision (never withdrawn automatically, POL-033 pending).
    */

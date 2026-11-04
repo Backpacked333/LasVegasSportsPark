@@ -61,6 +61,45 @@ export function notOfRetiredRequirement(alias: string) {
        and rr.retired_at is not null)`;
 }
 
+/** The key of one assignment target in {@link CoverageService.coverageForTargets} results. */
+export const coverageTargetKey = (targetType: string, targetId: string): string =>
+  `${targetType}:${targetId}`;
+
+/**
+ * Coverage per requirement from the target's live assignment rows (SPK-STAFF-002): only accepted
+ * (or completed) assignments cover a slot; offered and proposed ones are counted, never covering.
+ */
+function coverageOf(
+  requirements: readonly RequirementRow[],
+  rows: ReadonlyArray<{
+    person_id: string;
+    role: string;
+    slot: number;
+    status: AssignmentRow['status'];
+  }>,
+): RoleCoverage[] {
+  return requirements.map((req) => {
+    const own = rows.filter((r) => r.role === req.role && r.slot <= req.required_count);
+    const covering = own.filter((r) => COVERING_STATUSES.includes(r.status));
+    const covered = new Set(covering.map((r) => r.slot));
+    const uncoveredSlots: number[] = [];
+    for (let slot = 1; slot <= req.required_count; slot += 1) {
+      if (!covered.has(slot)) uncoveredSlots.push(slot);
+    }
+    return {
+      requirementId: req.id,
+      role: req.role,
+      kind: req.kind,
+      requiredCount: req.required_count,
+      mustBeAccepted: req.must_be_accepted,
+      acceptedPersonIds: covering.map((r) => r.person_id),
+      offered: own.filter((r) => r.status === 'offered').length,
+      proposed: own.filter((r) => r.status === 'proposed').length,
+      uncoveredSlots,
+    };
+  });
+}
+
 export const uncoveredDedupeKey = (
   targetType: string,
   targetId: string,
@@ -187,26 +226,77 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       .where('target_id', '=', targetId)
       .where('status', 'in', ['proposed', 'offered', 'accepted', 'completed'])
       .execute();
-    return requirements.map((req) => {
-      const own = rows.filter((r) => r.role === req.role && r.slot <= req.required_count);
-      const covering = own.filter((r) => COVERING_STATUSES.includes(r.status));
-      const covered = new Set(covering.map((r) => r.slot));
-      const uncoveredSlots: number[] = [];
-      for (let slot = 1; slot <= req.required_count; slot += 1) {
-        if (!covered.has(slot)) uncoveredSlots.push(slot);
-      }
-      return {
-        requirementId: req.id,
-        role: req.role,
-        kind: req.kind,
-        requiredCount: req.required_count,
-        mustBeAccepted: req.must_be_accepted,
-        acceptedPersonIds: covering.map((r) => r.person_id),
-        offered: own.filter((r) => r.status === 'offered').length,
-        proposed: own.filter((r) => r.status === 'proposed').length,
-        uncoveredSlots,
-      };
-    });
+    return coverageOf(requirements, rows);
+  }
+
+  /**
+   * R3-PERFORMANCE-01 (SPK-UX-006, SPK-STAFF-002): the requirements in force and their coverage for
+   * many targets in two queries (one for the requirements, one for the assignments), keyed by
+   * {@link coverageTargetKey}. Each target gets exactly what {@link requirements} and
+   * {@link coverage} give it one at a time; a target without requirements is answered with empty
+   * lists.
+   */
+  async coverageForTargets(
+    db: Db | Trx,
+    organizationId: string,
+    targets: ReadonlyArray<{ targetType: AssignmentTargetType; targetId: string }>,
+  ): Promise<Map<string, { requirements: RequirementRow[]; coverage: RoleCoverage[] }>> {
+    const out = new Map<string, { requirements: RequirementRow[]; coverage: RoleCoverage[] }>();
+    const idsByType = new Map<AssignmentTargetType, Set<string>>();
+    for (const t of targets) {
+      out.set(coverageTargetKey(t.targetType, t.targetId), { requirements: [], coverage: [] });
+      const ids = idsByType.get(t.targetType) ?? new Set<string>();
+      ids.add(t.targetId);
+      idsByType.set(t.targetType, ids);
+    }
+    if (idsByType.size === 0) return out;
+    const groups = [...idsByType].map(([type, ids]) => ({ type, ids: [...ids] }));
+    const requirements = await db
+      .selectFrom('assignment_requirements')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where((eb) =>
+        eb.or(
+          groups.map((g) => eb.and([eb('target_type', '=', g.type), eb('target_id', 'in', g.ids)])),
+        ),
+      )
+      .where('retired_at', 'is', null)
+      .orderBy('role')
+      .execute();
+    if (requirements.length === 0) return out;
+    const required = new Set(
+      requirements.map((r) => coverageTargetKey(r.target_type, r.target_id)),
+    );
+    const assignmentGroups = groups
+      .map((g) => ({
+        type: g.type,
+        ids: g.ids.filter((id) => required.has(coverageTargetKey(g.type, id))),
+      }))
+      .filter((g) => g.ids.length > 0);
+    const rows = await db
+      .selectFrom('assignments')
+      .select(['target_type', 'target_id', 'person_id', 'role', 'slot', 'status'])
+      .where('organization_id', '=', organizationId)
+      .where((eb) =>
+        eb.or(
+          assignmentGroups.map((g) =>
+            eb.and([eb('target_type', '=', g.type), eb('target_id', 'in', g.ids)]),
+          ),
+        ),
+      )
+      .where('status', 'in', ['proposed', 'offered', 'accepted', 'completed'])
+      .execute();
+    for (const [key, entry] of out) {
+      entry.requirements = requirements.filter(
+        (r) => coverageTargetKey(r.target_type, r.target_id) === key,
+      );
+      if (entry.requirements.length === 0) continue;
+      entry.coverage = coverageOf(
+        entry.requirements,
+        rows.filter((r) => coverageTargetKey(r.target_type, r.target_id) === key),
+      );
+    }
+    return out;
   }
 
   /**

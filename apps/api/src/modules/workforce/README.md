@@ -259,6 +259,12 @@ personId, kind, trx?)` for enrollment (WRK-03, IF-34). All of them skip retired 
 - Exported services: `AvailabilityService`, `QualificationsService` (`check`, `holdersOfAll`),
   `CoverageService`, `RequirementsService`, `AssignmentsService`, `ReplacementsService`,
   `FeesService`, `WorkspaceService`; policy `WORKFORCE_POLICY`.
+- `RequirementsService.listForTargets(principal, targets)` (R3-PERFORMANCE-01, SPK-UX-006): what
+  `list` gives each target (requirements in force with their coverage), for many targets in two
+  queries (`CoverageService.coverageForTargets`) and one `workforce.view_assignments` decision per
+  facility, keyed by `coverageTargetKey(type, id)`; a target the caller may not read is
+  `'not_permitted'`. Support's Today feed reads a facility day's coverage with one call
+  (**Verified**, `__tests__/coverage-for-targets.spec.ts`).
 - Fixtures for downstream tests: `testing/workforce-fixtures.ts` (`createQualificationFixture`,
   `createAvailabilityFixture`, `createRequirementFixture`, `createAssignmentFixture`), written
   directly so the constraints apply.
@@ -339,7 +345,7 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
   nothing. Retired requirements are skipped by `coverage`, `acceptedAssignees`,
   `isAcceptedOfficial`, `isAcceptedOnOffering`, readiness, the unqualified-assignee flagging,
   escalation, `GET /assignment-requirements` and so support's Today feed (which reads
-  `RequirementsService.list`). A PATCH of a retired requirement answers `INVALID_TRANSITION`;
+  `RequirementsService.listForTargets`). A PATCH of a retired requirement answers `INVALID_TRANSITION`;
   proposing, offering, accepting or replacing on one answers `RESOURCE_CONFLICT`
   (`requirement_retired`). Every assignment command takes the requirement's shared key lock and
   row share lock before the assignment's row lock, the order a retirement takes them in. Tests:

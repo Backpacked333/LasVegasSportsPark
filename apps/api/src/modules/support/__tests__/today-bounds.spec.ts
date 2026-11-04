@@ -4,7 +4,7 @@ import { OperationalExceptions } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { ReadinessService } from '../../competition';
 import { at, seedPitchWithHalves } from '../../scheduling';
-import { createRequirementFixture, uncoveredDedupeKey } from '../../workforce';
+import { createRequirementFixture, RequirementsService, uncoveredDedupeKey } from '../../workforce';
 import {
   competitionWorld,
   get,
@@ -282,6 +282,21 @@ describe('Today workspace bounds (R3-PERFORMANCE-01, SPK-UX-006)', () => {
     expect(byId(feed, `readiness-omitted:${t.facilityId}`)).toMatchObject({
       affected: { type: 'fixture', id: fixtures.later!.fixtureId },
     });
+  });
+
+  it('R3-PERFORMANCE-01 / SPK-STAFF-002: the coverage source reads each facility’s required roles in one batched read, not one per activity', async () => {
+    const requirements = t.app.get(RequirementsService);
+    const batched = vi.spyOn(requirements, 'listForTargets');
+    const single = vi.spyOn(requirements, 'list');
+    const feed = await feedOf();
+    expect(single).not.toHaveBeenCalled();
+    // One call per facility with live activities (the main facility's five, the annex's one).
+    expect(batched).toHaveBeenCalledTimes(2);
+    expect(batched.mock.calls.map(([, targets]) => targets.length).sort()).toEqual([1, 5]);
+    batched.mockRestore();
+    single.mockRestore();
+    expect(source(feed, 'workforce.coverage', t.facilityId)).toMatchObject({ status: 'ok' });
+    expect(source(feed, 'workforce.coverage', annex)).toMatchObject({ status: 'ok' });
   });
 
   it('R3-PERFORMANCE-01: within the bounds the feed is complete and names nothing as left out', async () => {

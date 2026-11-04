@@ -184,8 +184,8 @@ and `close` events of `POST /cases/{id}/transition` (there are no separate route
   (decided with their principal, each with its verb) and resolution history. "Today" is the
   facility-local day.
 - **Today is bounded per read (R3-PERFORMANCE-01, `today-bounds.spec.ts`):** at most
-  `todayExceptionLimit` exceptions are listed (one resolution-history read each), most severe and
-  soonest due first; the rest are counted on the `kernel.operational_exceptions` source
+  `todayExceptionLimit` exceptions are listed (their resolution histories in one
+  `OperationalExceptions.historyMany` read), most severe and soonest due first; the rest are counted on the `kernel.operational_exceptions` source
   (`truncated: true`, `omitted: n`) and summarised by one `exceptions-omitted` item (as severe as
   the most severe of them, by severity and queue, next action `GET /v1/exceptions`, where they all
   stay). Only a listed exception stands in for the coverage slot it owns. At most
@@ -195,6 +195,12 @@ and `close` events of `POST /cases/{id}/transition` (there are no separate route
   names them (their readiness is unknown there, never ready, SPK-READY-002) and points at the next
   one's `GET /v1/fixtures/{id}/readiness`. A facility schedule longer than `todayEventLimit` marks
   its schedule, readiness and coverage sources `truncated` with `omitted: null` (number unknown).
+  The coverage source reads the required roles and coverage of a facility's live activities in one
+  batched workforce read (`RequirementsService.listForTargets`: two queries and one authorization
+  decision per facility, an activity the viewer may not read is left out as before), never one
+  read per activity (`today-bounds.spec.ts` "R3-PERFORMANCE-01 / SPK-STAFF-002: the coverage
+  source reads each facility’s required roles in one batched read"; workforce
+  `coverage-for-targets.spec.ts`).
 - **Refunds during recovery (R3-OPERATIONS-02, §5.8, SPK-AT-028, `case-actions.spec.ts`,
   `recovery-contract.spec.ts`):** while the organization recovers from a restore,
   `POST /cases/{id}/request-refund` is `@RefusedDuringRecovery()` (503 INTEGRATION_UNAVAILABLE
@@ -279,12 +285,13 @@ DEC-015 (support coverage, service objectives) and the §6.6 support/operations 
   recorded with its request in one transaction, and communications exposes no lookup of a resend by
   correlation id.
 - **Today cost (R3-PERFORMANCE-01, pending in other modules):** the bounds above cap the work of
-  one read, but each readiness evaluation still costs competition's per-player eligibility reads
-  (hundreds of queries for two full rosters), each listed exception still costs one audit read
-  (the kernel offers no batched history), the exception read itself is unbounded in the kernel
-  (`OperationalExceptions.listOpen` has no limit), and coverage costs one workforce read per live
-  activity (up to `todayEventLimit`). The staff client does not yet show `truncated`/`omitted` on
-  its source list; the `*-omitted` items show in every client.
+  one read, and the exception histories and the coverage source are batched (above), but each
+  readiness evaluation still costs competition's per-player eligibility reads (a roster-level
+  evaluation needs a many-ids identity lookup and a batched eligibility engine, not built), and
+  the exception read itself is unbounded in the kernel (`OperationalExceptions.listOpen` has no
+  limit: the feed filters by queue visibility and ranks by service-level deadline in application
+  code, so a SQL limit would list different exceptions). The staff Today screen lists a source
+  with `truncated: true` under "Partly included", and the `*-omitted` items show in every client.
 - **Today workspace:** current and upcoming activities are counted, not listed; expected arrivals
   (entry) and resource-level field status are not part of the feed; incidents from competition
   discipline appear only when a module raises them as exceptions (no incident port exists).

@@ -10,6 +10,7 @@ export { AvailabilityService } from './services/availability.service';
 export { QualificationsService, type QualificationCheck } from './services/qualifications.service';
 export {
   CoverageService,
+  coverageTargetKey,
   uncoveredDedupeKey,
   type UncoveredNotice,
 } from './services/coverage.service';
