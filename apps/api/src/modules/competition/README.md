@@ -170,7 +170,7 @@ Part 2 (contracts in `packages/contracts/src/api/competition-matches.ts`):
 | POST/GET | `/seasons/{id}/bracket-nodes`, POST `/bracket-nodes/{id}/publish` | manage: league administration; read: staff see all nodes, customers published ones                                                                                                                                                                                                                                                                          |
 | POST     | `/divisions/{id}/fixture-specifications`                          | league administration (`competition.manage_fixture_specifications`); 400 for a specification error (dates outside the season, games per team ≠ (teams − 1) × frequency, a team preference without its approved entry or times, an unapproved convenience preference)                                                                                        |
 | GET      | `/fixture-specifications/{id}`, `/solver-runs/{id}`               | league administration                                                                                                                                                                                                                                                                                                                                       |
-| POST     | `/fixture-specifications/{id}/generate`                           | league administration (`competition.generate_fixtures`): records a solver run; unless `dryRun`, creates the fixtures (obligations, byes included) and opens the scheduled games as a scheduling draft (SPK-FIX-005); an `operation` tracks both steps                                                                                                       |
+| POST     | `/fixture-specifications/{id}/generate`                           | league administration (`competition.generate_fixtures`): records a solver run; unless `dryRun`, creates the fixtures (obligations, byes included) and opens the scheduled games as a scheduling draft (SPK-FIX-005); fixtures, run, draft and `operation` commit in one transaction                                                                         |
 | GET      | `/fixtures/{id}/readiness`                                        | whoever may read the fixture (`competition.read_readiness`)                                                                                                                                                                                                                                                                                                 |
 | POST/GET | `/fixtures/{id}/disputes`, `/disputes/{id}`                       | submit: the captain of a competing entry (team role) or league administration, inside the protest window; read: league administration, support, the submitting captain                                                                                                                                                                                      |
 | POST     | `/disputes/{id}/decide`                                           | league administration: review, decide (decision, publication consequence, reason) or withdraw (reason required, as on the submitter's `/withdraw`; §4.9)                                                                                                                                                                                                    |
@@ -358,9 +358,14 @@ identifiers only.
   constraint is kept on the run for explanation only: it creates no fixtures and opens no draft. A
   real (non-dry) run holds the division row while it checks for existing fixtures and creates its
   own, so two specifications of one division generated at once never create two fixture sets
-  (tested on PostgreSQL). The completeness validator reports missing, duplicate and excess games,
-  unscheduled games, opponent frequency, invalid byes and playoff requirements with remaining
-  obligations (SPK-FIX-002). SPK-AT-010 is verified with five teams in a double round robin: 20
+  (tested on PostgreSQL). The fixtures, the solver run, the scheduling draft of its placed games
+  (the scheduling command joins the transaction) and the operation's outcome commit together: an
+  interruption or failure before that commit leaves no fixture without its draft, no draft its run
+  does not name and no operation `running`, so a rerun is never refused for a half-finished run;
+  a failure after the solver ran is recorded afterwards on a `failed` operation
+  (R4-REPLAY-IDEMPOTENCY-01, §4.12; **Verified**, `__tests__/fixture-generation.spec.ts`). The
+  completeness validator reports missing, duplicate and excess games, unscheduled games, opponent
+  frequency, invalid byes and playoff requirements with remaining obligations (SPK-FIX-002). SPK-AT-010 is verified with five teams in a double round robin: 20
   games, 10 bye records (two per team, one per cycle), complete.
 - **Readiness** (`services/readiness.service.ts`, SPK-READY-001..004): derived on every read from
   scheduling (published event, resource status, active closures), part 1 (entry approval, effective

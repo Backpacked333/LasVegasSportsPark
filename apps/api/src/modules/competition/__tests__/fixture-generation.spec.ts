@@ -1,6 +1,6 @@
-import { newId } from '@sportspark/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { OutboxDispatcher } from '../../../kernel';
+import { errors, newId } from '@sportspark/contracts';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { OperationsService, OutboxDispatcher } from '../../../kernel';
 import { staffPrincipal, type TestApp } from '../../../testing';
 import {
   ScheduleDraftsService,
@@ -724,5 +724,172 @@ describe('fixture generation (SPK-FIX-001..005, SPK-AT-010, SPK-AT-011)', () => 
     const title = draft.changes[0]?.proposed?.title ?? '';
     expect(title.length).toBeLessThanOrEqual(200);
     expect(title).toMatch(/^[HA]+… v [HA]+…$/);
+  });
+  describe('R4-REPLAY-IDEMPOTENCY-01 (§4.12, §4.7 invariant 12, SPK-FIX-005): an interrupted generation leaves nothing half done', () => {
+    const generationOperations = async (specificationId: string) =>
+      (
+        await t.db
+          .selectFrom('operations')
+          .select(['id', 'status', 'input', 'error'])
+          .where('organization_id', '=', t.organizationId)
+          .where('kind', '=', 'competition.generate_fixtures')
+          .execute()
+      ).filter(
+        (op) =>
+          (op.input as { specificationId?: string } | null)?.specificationId === specificationId,
+      );
+
+    const interruptedSpecification = async (name: string) => {
+      const division = await divisionWithTeams(name, 4);
+      const spec = await post(
+        `/divisions/${division}/fixture-specifications`,
+        leagueManager,
+        specification({
+          name,
+          gamesPerTeam: 3,
+          opponentFrequency: 1,
+          blackouts: [],
+          fairnessPreferences: [],
+        }),
+      );
+      expect(spec.status).toBe(201);
+      return { division, specificationId: spec.body.id as string };
+    };
+
+    const leftovers = async (division: string, specificationId: string, draftName: string) => ({
+      fixtures: await t.db
+        .selectFrom('fixtures')
+        .select('id')
+        .where('division_id', '=', division)
+        .execute(),
+      runs: await t.db
+        .selectFrom('solver_runs')
+        .select('id')
+        .where('specification_id', '=', specificationId)
+        .execute(),
+      drafts: await t.db
+        .selectFrom('schedule_drafts')
+        .select('id')
+        .where('organization_id', '=', t.organizationId)
+        .where('name', '=', draftName)
+        .execute(),
+    });
+
+    it('a process stop before the scheduling draft commits leaves no fixture without a draft; the operation ends failed and a rerun opens the draft', async () => {
+      const { division, specificationId } = await interruptedSpecification('Division interrupted');
+      const drafts = t.app.get(ScheduleDraftsService);
+      const stop = vi
+        .spyOn(drafts, 'create')
+        .mockRejectedValueOnce(new Error('process stopped before the draft committed'));
+      const interrupted = await post(
+        `/fixture-specifications/${specificationId}/generate`,
+        leagueManager,
+        {
+          searchSettings: { maxCandidates: 2, timeLimitMs: 5000, seed: 1 },
+          draftName: 'Interrupted before draft',
+        },
+      );
+      stop.mockRestore();
+      expect(interrupted.status).toBe(500);
+      expect(await leftovers(division, specificationId, 'Interrupted before draft')).toEqual({
+        fixtures: [],
+        runs: [],
+        drafts: [],
+      });
+      const [failed, ...others] = await generationOperations(specificationId);
+      expect(others).toEqual([]);
+      expect(failed).toMatchObject({ status: 'failed', error: { code: 'INTERNAL_ERROR' } });
+      // The stored error names the operation that records the real outcome (§4.9).
+      expect(interrupted.body.details).toMatchObject({ operationId: failed?.id });
+
+      // Nothing of the interrupted run blocks the next one ("the division already has fixtures").
+      const rerun = await post(
+        `/fixture-specifications/${specificationId}/generate`,
+        leagueManager,
+        {
+          searchSettings: { maxCandidates: 2, timeLimitMs: 5000, seed: 1 },
+          draftName: 'Rerun after interruption',
+        },
+      );
+      expect(rerun.status).toBe(201);
+      expect(rerun.body.scheduleDraftId).toEqual(expect.any(String));
+      expect(rerun.body.fixtureIds).toHaveLength(6);
+      const after = await leftovers(division, specificationId, 'Rerun after interruption');
+      expect(after.fixtures).toHaveLength(6);
+      expect(after.runs.map((r) => r.id)).toEqual([rerun.body.id]);
+      expect(after.drafts.map((d) => d.id)).toEqual([rerun.body.scheduleDraftId]);
+      const statuses = (await generationOperations(specificationId)).map((op) => op.status).sort();
+      expect(statuses).toEqual(['failed', 'succeeded']);
+    });
+
+    it('a failure after the draft opened rolls the draft back with the fixtures, so no draft exists that its run does not name, and no operation stays running', async () => {
+      const { division, specificationId } =
+        await interruptedSpecification('Division settle failure');
+      const operations = t.app.get(OperationsService);
+      const fail = vi
+        .spyOn(operations, 'transition')
+        .mockRejectedValueOnce(new Error('connection lost while settling the operation'));
+      const interrupted = await post(
+        `/fixture-specifications/${specificationId}/generate`,
+        leagueManager,
+        {
+          searchSettings: { maxCandidates: 2, timeLimitMs: 5000, seed: 1 },
+          draftName: 'Interrupted after draft',
+        },
+      );
+      fail.mockRestore();
+      expect(interrupted.status).toBe(500);
+      expect(await leftovers(division, specificationId, 'Interrupted after draft')).toEqual({
+        fixtures: [],
+        runs: [],
+        drafts: [],
+      });
+      expect((await generationOperations(specificationId)).map((op) => op.status)).toEqual([
+        'failed',
+      ]);
+      // The specification is not held by an orphaned open draft (SPECIFICATION_IN_USE).
+      const edit = await t.http
+        .patch(`/v1/fixture-specifications/${specificationId}`)
+        .set(leagueManager.header)
+        .set('Idempotency-Key', key())
+        .send({ expectedRevision: 1, name: 'Division settle failure, renamed' });
+      expect(edit.status).toBe(200);
+      const rerun = await post(
+        `/fixture-specifications/${specificationId}/generate`,
+        leagueManager,
+        {
+          searchSettings: { maxCandidates: 2, timeLimitMs: 5000, seed: 1 },
+        },
+      );
+      expect(rerun.status).toBe(201);
+      expect(rerun.body.scheduleDraftId).toEqual(expect.any(String));
+    });
+
+    it('a refused draft step (no draft authority) rolls the run back and records the refusal on a failed operation', async () => {
+      const { division, specificationId } =
+        await interruptedSpecification('Division draft refused');
+      const drafts = t.app.get(ScheduleDraftsService);
+      const refuse = vi.spyOn(drafts, 'create').mockImplementationOnce(async () => {
+        throw errors.accessDenied();
+      });
+      const refused = await post(
+        `/fixture-specifications/${specificationId}/generate`,
+        leagueManager,
+        {
+          searchSettings: { maxCandidates: 2, timeLimitMs: 5000, seed: 1 },
+          draftName: 'Refused draft',
+        },
+      );
+      refuse.mockRestore();
+      expect(refused.status).toBe(403);
+      expect(await leftovers(division, specificationId, 'Refused draft')).toEqual({
+        fixtures: [],
+        runs: [],
+        drafts: [],
+      });
+      const [failed, ...others] = await generationOperations(specificationId);
+      expect(others).toEqual([]);
+      expect(failed).toMatchObject({ status: 'failed', error: { code: 'ACCESS_DENIED' } });
+    });
   });
 });
