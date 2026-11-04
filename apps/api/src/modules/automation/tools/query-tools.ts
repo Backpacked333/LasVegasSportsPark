@@ -3,6 +3,7 @@ import {
   PolicyKindSchema,
   z,
   type AssistantMissingEvidence,
+  type PersonDetail,
   type Principal,
 } from '@sportspark/contracts';
 import { PoliciesService, CatalogActions } from '../../catalog';
@@ -149,13 +150,19 @@ export class QueryTools {
     });
   }
 
-  /** A person record exactly as identity shows it to this principal (contacts included). */
+  /**
+   * A person as identity shows it to this principal, minimized for the provider (R4-PRIVACY-04,
+   * §4.14 "child information must be minimized", SPK-AT-026): who the person is (name, kind,
+   * status, merge), never the date of birth or a contact value. No SPK-AUTO-001 use needs them,
+   * and everything a tool returns is sent to the assistant provider (DEC-013).
+   */
   private person(): AnyQueryTool {
     return queryTool({
       kind: 'query',
       name: 'identity.person',
       actionId: IdentityActions.readPerson.id,
-      description: 'A person record with contact points (self, guardians holding view, staff)',
+      description:
+        'A person: name, kind and status (self, guardians holding view, staff); no date of birth or contact details',
       argumentsDoc: { personId: 'person id' },
       argsSchema: z.object({ personId: z.uuid() }).strict(),
       contextType: 'person',
@@ -163,7 +170,7 @@ export class QueryTools {
       run: async (principal, args): Promise<QueryResult> => {
         const person = await this.people.getPerson(principal, args.personId);
         return {
-          output: person,
+          output: assistantPersonView(person),
           evidence: [
             {
               recordType: 'person',
@@ -398,6 +405,28 @@ export class QueryTools {
       },
     });
   }
+}
+
+/**
+ * R4-PRIVACY-04: the only person fields the assistant provider receives. Date of birth and contact
+ * points (their values, kinds and verification) stay in identity.
+ */
+export function assistantPersonView(person: PersonDetail): {
+  id: string;
+  kind: PersonDetail['kind'];
+  givenName: string;
+  familyName: string;
+  status: PersonDetail['status'];
+  mergedIntoPersonId: string | null;
+} {
+  return {
+    id: person.id,
+    kind: person.kind,
+    givenName: person.givenName,
+    familyName: person.familyName,
+    status: person.status,
+    mergedIntoPersonId: person.mergedIntoPersonId,
+  };
 }
 
 /**

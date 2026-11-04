@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   ComposeNotificationBody,
   CreateScheduleDraftBody,
@@ -6,15 +6,28 @@ import {
   DraftChangeInputSchema,
   errors,
   z,
+  type Audience,
   type ComposeNotificationInput,
+  type NotificationCategoryValue,
+  type NotificationKindValue,
   type Principal,
 } from '@sportspark/contracts';
 import { sql, type SqlBool } from 'kysely';
-import { AuthorizationService, UnitOfWork } from '../../../kernel';
-import { CommunicationsActions, NotificationsService } from '../../communications';
+import {
+  AuthorizationService,
+  UnitOfWork,
+  listFacilityScope,
+  type ActionDefinition,
+} from '../../../kernel';
+import {
+  COMMUNICATIONS_POLICY,
+  CommunicationsActions,
+  NotificationsService,
+  type CommunicationsPolicy,
+} from '../../communications';
 import { FinanceActions, PaymentsService, RefundsService } from '../../finance';
-import { ScheduleDraftsService, SchedulingActions } from '../../scheduling';
-import { missingEvidence } from '../evidence';
+import { EventsService, ScheduleDraftsService, SchedulingActions } from '../../scheduling';
+import { missingEvidence, type EvidenceDraft } from '../evidence';
 import { ApplyFailure, commandTool, type AnyCommandTool, type ApplyContext } from './tool.types';
 
 function organizationOf(principal: Principal): string {
@@ -51,7 +64,49 @@ const PublishInput = z.object({
       changes: z.array(DraftChangeInputSchema),
     })
     .optional(),
+  /**
+   * R4-COMMS-AUTOMATION-01 (SPK-SCHED-005, §4.9): the revision of every event a repair changes, as
+   * the requester read it through scheduling when the repair was proposed. Recorded by the module,
+   * never taken from the provider.
+   */
+  baseRevisions: z.record(z.uuid(), z.number().int()).optional(),
 });
+type PublishInput = z.infer<typeof PublishInput>;
+
+/** The events a repair's changes name (each once, in order). */
+function repairTargets(changes: ReadonlyArray<{ targetEventId?: string | undefined }>): string[] {
+  return [
+    ...new Set(changes.map((c) => c.targetEventId).filter((id): id is string => Boolean(id))),
+  ];
+}
+
+/**
+ * R4-COMMS-AUTOMATION-01 (SPK-SCHED-005, §4.9 "a sensitive stale edit must fail"): a repair is a
+ * draft held for review, so it carries the revision of each event it changes from its proposal and
+ * is never published over a change made after that. The refusal is a failed apply (nothing ran;
+ * the claim is released).
+ */
+function repairTargetChanged(
+  eventId: string,
+  expected: number | null,
+  actual: number,
+): ApplyFailure {
+  return new ApplyFailure(
+    new DomainError(
+      'STALE_REVISION',
+      'An event this repair changes was changed after the repair was proposed; ask for a new repair instead of applying this one.',
+      {
+        details: {
+          code: 'REPAIR_TARGET_CHANGED',
+          eventId,
+          expectedRevision: expected,
+          currentRevision: actual,
+        },
+      },
+    ),
+    { outcome: 'failed' },
+  );
+}
 
 /** What a refused repair publication carries to the next apply: the draft it opened. */
 const RepairCarry = z.object({ repairDraftId: z.uuid(), lastSavedAt: z.string() });
@@ -88,7 +143,9 @@ export class CommandTools {
     private readonly authorization: AuthorizationService,
     private readonly uow: UnitOfWork,
     private readonly drafts: ScheduleDraftsService,
+    private readonly events: EventsService,
     private readonly notifications: NotificationsService,
+    @Inject(COMMUNICATIONS_POLICY) private readonly communicationsPolicy: CommunicationsPolicy,
     private readonly payments: PaymentsService,
     private readonly refunds: RefundsService,
   ) {}
@@ -196,6 +253,27 @@ export class CommandTools {
           organizationId,
           facilityId: repair.facilityId,
         });
+        // R4-COMMS-AUTOMATION-01 (SPK-SCHED-005): every event the repair changes is read through
+        // scheduling with the requester's principal, and its revision becomes the repair's base —
+        // what a draft opened now would capture — so a later change to it refuses the apply.
+        const baseRevisions: Record<string, number> = {};
+        const evidence: EvidenceDraft[] = [];
+        for (const eventId of repairTargets(repair.changes)) {
+          const event = await this.events.getEvent(principal, eventId);
+          if (event.facilityId !== repair.facilityId) {
+            throw errors.validation('A target event of the repair is not in its facility.', {
+              targetEventId: eventId,
+            });
+          }
+          baseRevisions[event.id] = event.revision;
+          evidence.push({
+            recordType: 'event',
+            recordId: event.id,
+            label: `${event.title} (${event.status}, revision ${event.revision})`,
+            asOf: event.updatedAt,
+            basis: 'record',
+          });
+        }
         return {
           kind: 'schedule_repair',
           title: `Schedule repair: ${repair.name}`.slice(0, 200),
@@ -203,13 +281,13 @@ export class CommandTools {
             rationale ??
             `Open draft “${repair.name}” with ${repair.changes.length} change(s) and publish it.`,
           facilityId: repair.facilityId,
-          payload: { repair },
+          payload: { repair, baseRevisions },
           command: {
             actionId: 'scheduling.publish_schedule',
-            input: { repair },
+            input: { repair, baseRevisions },
             target: { type: 'schedule_draft', id: null, facilityId: repair.facilityId },
           },
-          evidence: [],
+          evidence,
           missing: [
             missingEvidence(
               'schedule_draft_validation',
@@ -260,8 +338,11 @@ export class CommandTools {
                 { code: 'REPAIR_DRAFT_CHANGED', draftId: draft.id, draftStatus: draft.status },
               );
             }
+            this.assertDraftOnRepairBase(input, draft.changes, draft.id, carry);
             return await publish(draft.id, draft.revision);
           }
+          // Nothing is opened for a repair whose events moved on since it was proposed …
+          await this.assertRepairBase(reviewer, input);
           const body = CreateScheduleDraftBody.parse({
             facilityId: repair.facilityId,
             name: repair.name,
@@ -269,10 +350,28 @@ export class CommandTools {
             ...meta,
           });
           const draft = await this.drafts.create(reviewer, body, ctx.correlationId ?? undefined);
+          try {
+            // … and a draft that captured a later revision (a change between that read and the
+            // draft) is discarded, never published; scheduling then holds the base to publication.
+            this.assertDraftOnRepairBase(input, draft.changes, draft.id, null);
+          } catch (stale) {
+            await this.drafts
+              .discard(
+                reviewer,
+                draft.id,
+                {
+                  expectedRevision: draft.revision,
+                  reason: 'An event of this repair changed after the repair was proposed.',
+                },
+                ctx.correlationId ?? undefined,
+              )
+              .catch(() => undefined);
+            throw stale;
+          }
           carry = { repairDraftId: draft.id, lastSavedAt: draft.lastSavedAt };
           return await publish(draft.id, draft.revision);
         } catch (error) {
-          if (!carry) throw error;
+          if (!carry || error instanceof ApplyFailure) throw error;
           throw new ApplyFailure(error, {
             record: { type: 'schedule_draft', id: carry.repairDraftId },
             carried: carry,
@@ -280,6 +379,49 @@ export class CommandTools {
         }
       },
     });
+  }
+
+  /**
+   * R4-COMMS-AUTOMATION-01: each event the repair changes, read as the reviewer, is still at the
+   * revision the proposal recorded. A repair stored without them (proposed before they were
+   * recorded) cannot be checked and is refused the same way.
+   */
+  private async assertRepairBase(reviewer: Principal, input: PublishInput): Promise<void> {
+    for (const eventId of repairTargets(input.repair?.changes ?? [])) {
+      const expected = input.baseRevisions?.[eventId];
+      const event = await this.events.getEvent(reviewer, eventId);
+      if (expected === undefined || event.revision !== expected) {
+        throw repairTargetChanged(eventId, expected ?? null, event.revision);
+      }
+    }
+  }
+
+  /**
+   * The draft opened (or carried) for a repair captured exactly the proposal's base revisions. A
+   * refusal names the draft; a carried one stays carried, a just-opened one is not.
+   */
+  private assertDraftOnRepairBase(
+    input: PublishInput,
+    changes: ReadonlyArray<{ targetEventId: string | null; baseEventRevision: number | null }>,
+    draftId: string,
+    carried: RepairCarry | null,
+  ): void {
+    for (const change of changes) {
+      if (!change.targetEventId) continue;
+      const expected = input.baseRevisions?.[change.targetEventId];
+      if (expected === undefined || change.baseEventRevision !== expected) {
+        const failure = repairTargetChanged(
+          change.targetEventId,
+          expected ?? null,
+          change.baseEventRevision ?? 0,
+        );
+        throw new ApplyFailure(failure.error, {
+          ...failure.options,
+          record: { type: 'schedule_draft', id: draftId },
+          ...(carried ? { carried } : {}),
+        });
+      }
+    }
   }
 
   /** SPK-AUTO-001 "Draft communications" → SPK-AUTO-003 "Sending external communications". */
@@ -304,14 +446,26 @@ export class CommandTools {
         if (args.audience.facilityId && args.audience.facilityId !== args.facilityId) {
           await this.requireFacility(organizationId, args.audience.facilityId);
         }
-        const target = {
-          type: 'notification',
-          organizationId,
-          facilityId: args.facilityId ?? null,
-        };
-        // Sending is compose + send: the requester must hold both, as for a direct call.
-        await this.authorization.require(principal, CommunicationsActions.compose, target);
-        await this.authorization.require(principal, CommunicationsActions.send, target);
+        // R4-COMMS-AUTOMATION-10 (SPK-AUTO-004, SPK-COMMS-006, invariant 10): the rules of a
+        // direct compose and send, so a requester can never propose a notice they could not send.
+        if (args.protected && args.audience.personIds.length > 0) {
+          throw errors.validation(
+            'A protected notice must address people through subject persons, team entries or staff roles, whose authority is re-checked before dispatch; explicit person ids carry no authority.',
+            { code: 'PROTECTED_EXPLICIT_RECIPIENT', path: 'audience.personIds' },
+          );
+        }
+        // Sending is compose + send: the requester must hold both on the notice's facility and on
+        // its audience's facility, as for a direct call.
+        for (const action of [CommunicationsActions.compose, CommunicationsActions.send]) {
+          await this.requireAudience(
+            principal,
+            action,
+            organizationId,
+            args.facilityId ?? null,
+            args.audience,
+          );
+        }
+        this.requireCategory(args.kind, args.category);
         return {
           kind: 'communication_draft',
           title: `Send “${args.title}”`.slice(0, 200),
@@ -352,6 +506,62 @@ export class CommandTools {
         };
       },
     });
+  }
+
+  /**
+   * R4-COMMS-AUTOMATION-10: communications' audience rule (SPK-COMMS-006, §4.14) — the action on
+   * the notice's facility and on the audience's facility, and a facility-scoped composer never
+   * addresses a staff role across every facility.
+   */
+  private async requireAudience(
+    principal: Principal,
+    action: ActionDefinition,
+    organizationId: string,
+    facilityId: string | null,
+    audience: Audience,
+  ): Promise<void> {
+    for (const facility of new Set([facilityId, audience.facilityId])) {
+      await this.authorization.require(principal, action, {
+        type: 'notification',
+        organizationId,
+        facilityId: facility,
+      });
+    }
+    if (
+      listFacilityScope(principal, action) !== null &&
+      audience.staffRoles.length > 0 &&
+      audience.facilityId === null
+    ) {
+      throw errors.accessDenied(
+        'A facility-scoped composer addresses staff roles within one of their facilities.',
+        { action: action.id },
+      );
+    }
+  }
+
+  /** SPK-COMMS-007: the category follows the communication policy's binding for the kind. */
+  private requireCategory(
+    kind: NotificationKindValue,
+    requested: NotificationCategoryValue | undefined,
+  ): void {
+    const bound = this.communicationsPolicy.categoryByKind[kind] ?? 'choose';
+    if (bound === 'choose' && !requested) {
+      throw errors.validation('This kind of notice must name its category.', {
+        code: 'CATEGORY_REQUIRED',
+        path: 'category',
+        kind,
+        allowed: ['operational', 'promotional'],
+      });
+    }
+    if (bound !== 'choose' && requested && requested !== bound) {
+      throw errors.validation(`A ${kind.replace(/_/g, ' ')} notice is ${bound}.`, {
+        code: 'CATEGORY_MISMATCH',
+        path: 'category',
+        kind,
+        category: requested,
+        required: bound,
+      });
+    }
   }
 
   /** SPK-AUTO-001 "Explain financial exceptions" with a proposed refund → "Charging or refunding". */

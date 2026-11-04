@@ -34,7 +34,13 @@ export interface EngineInput {
 
 export interface ProposedCommand {
   proposal: CommandProposal;
+  /**
+   * R4-COMMS-AUTOMATION-09 (SPK-AUTO-002): what the command's own proposal read, then every other
+   * record the request read, named by type, id and freshness only.
+   */
   evidence: AssistantEvidence[];
+  /** Every gap of the request, the proposal's own first (SPK-AUTO-002). */
+  missing: AssistantMissingEvidence[];
   invocationId: string;
 }
 
@@ -48,6 +54,11 @@ export interface EngineResult {
   commands: ProposedCommand[];
   informational: Array<{ proposal: InformationalProposal; evidence: AssistantEvidence[] }>;
   executions: ToolExecution[];
+}
+
+/** One supporting record as read by one tool (the merge key of `mergeEvidence`). */
+function evidenceKey(item: AssistantEvidence): string {
+  return `${item.source}|${item.recordType}|${item.recordId}`;
 }
 
 /**
@@ -188,15 +199,30 @@ export class AssistantEngine {
     if (status === 'failed') {
       this.logger.warn(`assistant request failed: ${error?.code ?? 'unknown'}`);
     }
+    // R4-COMMS-AUTOMATION-09 (SPK-AUTO-002 "missing evidence must remain visible"): a command
+    // recommendation is reviewed by people who cannot open the request, so it carries the whole
+    // request's missing evidence and names every record the request read. Records other than the
+    // command's own are named without their label (§4.10, §4.14): a reviewer holds the command's
+    // action, not necessarily the reads, and opens a record through its owning module.
     const commands =
       status === 'answered'
         ? executions
             .filter((e) => e.outcome === 'succeeded' && e.proposal)
-            .map((e) => ({
-              proposal: e.proposal as CommandProposal,
-              evidence: e.evidence,
-              invocationId: e.invocationId,
-            }))
+            .map((e) => {
+              const proposal = e.proposal as CommandProposal;
+              const own = new Set(e.evidence.map(evidenceKey));
+              return {
+                proposal,
+                evidence: [
+                  ...e.evidence,
+                  ...evidence
+                    .filter((item) => !own.has(evidenceKey(item)))
+                    .map((item) => ({ ...item, label: null })),
+                ],
+                missing: mergeMissing([...proposal.missing, ...missing]),
+                invocationId: e.invocationId,
+              };
+            })
         : [];
     const informational = (answer?.recommendations ?? []).map((proposal) => ({
       proposal,

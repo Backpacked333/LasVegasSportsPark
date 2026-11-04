@@ -7,6 +7,7 @@ import {
   createTeamEntryFixture,
 } from '../../competition';
 import { createCapturedPaymentFixture, createObligationFixture } from '../../finance';
+import { createContactPointFixture, createPersonFixture } from '../../identity';
 import { seedPitchWithHalves, at, type PitchFixture } from '../../scheduling';
 import type { FakeAssistantProvider } from '../providers/fake-assistant.provider';
 import {
@@ -184,6 +185,118 @@ describe('assistant requests (SPK-AUTO-001, SPK-AUTO-002, SPK-AUTO-004)', () => 
       attachmentsTreatedAs: 'data',
       provider: 'fake-assistant',
     });
+  });
+
+  it('SPK-AUTO-002 (R4-COMMS-AUTOMATION-09): a drafted notice carries the request’s missing evidence and names the records the request read, so a reviewer who cannot open the request sees them', async () => {
+    const fixtureId = await fixture();
+    const { home_entry_id: homeEntryId } = await t.db
+      .selectFrom('fixtures')
+      .select('home_entry_id')
+      .where('id', '=', fixtureId)
+      .executeTakeFirstOrThrow();
+    await createObligationFixture(t, { debtorTeamEntryId: homeEntryId, amountMinor: 10_000 });
+    const coach = await staffMember(t, ['coach']);
+    fake.script('tell both teams the game is on', [
+      {
+        type: 'tool_calls',
+        calls: [
+          { tool: 'competition.fixture_readiness', arguments: { fixtureId } },
+          {
+            tool: 'communications.send',
+            arguments: {
+              kind: 'staff_broadcast',
+              category: 'operational',
+              audience: { personIds: [coach.personId] },
+              title: 'The game is on',
+              body: 'Both teams play as scheduled.',
+            },
+          },
+        ],
+      },
+      { type: 'answer', text: 'A notice is drafted for your review.' },
+    ]);
+    const res = await ask(t, leagueManager, { prompt: 'Tell both teams the game is on' });
+    const body = res.body;
+    const unknown = (body.missingEvidence as Array<{ recordType: string; reason: string }>).filter(
+      (m) => m.recordType === 'readiness_check' && m.reason === 'unknown_evidence',
+    );
+    expect(unknown.length).toBeGreaterThan(0);
+    const [rec] = body.recommendations;
+    expect(rec).toMatchObject({ kind: 'communication_draft' });
+
+    // A general manager reviews it without being able to open the request.
+    const generalManager = await staffMember(t, ['general_manager']);
+    expect((await get(t, `/v1/assistant/requests/${body.id}`, generalManager)).status).toBe(404);
+    const reviewed = await get(t, `/v1/recommendations/${rec.id}`, generalManager);
+    expect(reviewed.status).toBe(200);
+    // Every gap of the request stays visible on the recommendation …
+    expect(reviewed.body.missingEvidence).toEqual(expect.arrayContaining(body.missingEvidence));
+    expect(reviewed.body.missingEvidence).toHaveLength(body.missingEvidence.length);
+    // … and the fixture read is named with its freshness, without the requester's label.
+    expect(reviewed.body.evidence).toContainEqual(
+      expect.objectContaining({
+        recordType: 'fixture',
+        recordId: fixtureId,
+        source: 'competition.fixture_readiness',
+        label: null,
+        freshness: 'live',
+      }),
+    );
+  });
+
+  it('§4.14 (R4-PRIVACY-04): a person context reference sends the provider only who the person is — never a child’s date of birth or a contact value', async () => {
+    const childId = await createPersonFixture(t, {
+      kind: 'child',
+      givenName: 'Rho',
+      familyName: 'Minimus',
+      dateOfBirth: '2016-09-03',
+    });
+    await createContactPointFixture(t, { personId: childId, kind: 'phone', value: '+17025550142' });
+    await createContactPointFixture(t, {
+      personId: childId,
+      kind: 'email',
+      value: 'guardian.minimus@example.com',
+      isPrimary: false,
+    });
+    fake.script('this child', [
+      // The "model" repeats whatever it was given.
+      (input) => ({
+        type: 'answer',
+        text: `Seen: ${JSON.stringify(input.toolResults.map((r) => r.output))}`,
+      }),
+    ]);
+    const res = await ask(t, leagueManager, {
+      prompt: 'Why is this child not ready to play?',
+      context: [{ type: 'person', id: childId }],
+    });
+    const body = res.body;
+    expect(body.contextReferences).toEqual([
+      expect.objectContaining({ type: 'person', id: childId, resolved: true }),
+    ]);
+    const seen = fake.inputsFor(body.id);
+    expect(seen[0]?.toolResults[0]).toMatchObject({
+      tool: 'identity.person',
+      outcome: 'succeeded',
+      output: {
+        id: childId,
+        kind: 'child',
+        givenName: 'Rho',
+        familyName: 'Minimus',
+        status: 'active',
+        mergedIntoPersonId: null,
+      },
+    });
+    expect(Object.keys(seen[0]?.toolResults[0]?.output as object).sort()).toEqual(
+      ['familyName', 'givenName', 'id', 'kind', 'mergedIntoPersonId', 'status'].sort(),
+    );
+    const everything = JSON.stringify({ body, seen });
+    for (const secret of ['2016-09-03', '+17025550142', 'guardian.minimus@example.com']) {
+      expect(everything).not.toContain(secret);
+    }
+    // Identity itself still shows the full record to the same reader.
+    const direct = await get(t, `/v1/people/${childId}`, leagueManager);
+    expect(direct.status).toBe(200);
+    expect(direct.body.dateOfBirth).toBe('2016-09-03');
   });
 
   it('SPK-AUTO-002: a context reference is re-read with the requester’s principal and reports whether it changed after the client observed it', async () => {

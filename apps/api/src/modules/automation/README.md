@@ -15,8 +15,9 @@ provider-selection gate)
 `1400`, `1401` and `1480`)
 
 **Depends on:** identity (`PeopleService.getPerson`), scheduling (`ScheduleDraftsService.get`,
-`create`, `publish`), competition (`ReadinessService.evaluate`), catalog (`PoliciesService.list`),
-communications (`NotificationsService.composeAndQueue`), finance (`PaymentsService.get`,
+`create`, `publish`, `discard`; `EventsService.getEvent`), competition (`ReadinessService.evaluate`),
+catalog (`PoliciesService.list`), communications (`NotificationsService.composeAndQueue`,
+`COMMUNICATIONS_POLICY`), finance (`PaymentsService.get`,
 `RefundsService.request`), support (`TodayService.feed`, `TimelineService.timeline`), reporting
 (`ReportsService.evaluate`) and the kernel (`CapabilityService`, `INTEGRATION_REGISTRY`,
 `PeriodicJobRegistry`, `OperationalExceptions`, `OperationsService`, module settings). It never
@@ -65,6 +66,18 @@ in [Stage 3](#stage-3-aut-01-to-aut-03).
   normal command with **the reviewer's principal**; the owning module re-authorizes and re-validates
   at that moment. Roster, permission and discipline changes are not in the catalogue at all: the
   assistant can neither propose nor apply them (a call to them is logged `unsupported`).
+  A schedule repair reads every event it changes through scheduling when it is proposed and
+  records each one's revision (`payload.baseRevisions`, `command.input.baseRevisions`, one
+  evidence entry per event); applying it refuses with `409 STALE_REVISION` `REPAIR_TARGET_CHANGED`
+  (a failed apply, claim released) when an event moved on, and a draft that captured a later
+  revision is discarded, never published (SPK-SCHED-005, §4.9, R4-COMMS-AUTOMATION-01). A drafted
+  notice is proposed only under communications' own rules for a direct compose and send: the
+  action on the notice's facility and on its audience's facility, no staff role across every
+  facility for a facility-scoped composer, no explicit person ids on protected content, and the
+  policy's category for the kind (R4-COMMS-AUTOMATION-10); its reviewers are those who could send
+  it (the action on both facilities). A recommendation whose command this build no longer offers
+  is refused before anything is claimed (`409 INVALID_TRANSITION` `COMMAND_UNAVAILABLE`, nothing
+  written), so it stays reviewable and expires (R4-REPLAY-IDEMPOTENCY-03).
 - **Evidence and its freshness are part of every answer (SPK-AUTO-002).** Each supporting record is
   listed with the tool that read it, `observedAt` (when the assistant read it), `asOf` (its last
   change, or the instant a result was computed), `ageSeconds` and `freshness`. Missing evidence —
@@ -74,7 +87,10 @@ in [Stage 3](#stage-3-aut-01-to-aut-03).
   denial never reveals another household's record (§4.10). A recommendation keeps the evidence read
   when it was proposed; when it is read later its evidence is shown with its freshness at that
   read (`recent` within the evidence window, then `stale`; never `live` again) and its age to that
-  instant.
+  instant. A command recommendation is reviewed by people who cannot open the request, so it
+  carries the whole request's missing evidence and names every record the request read: its own
+  proposal's records with their labels, the others by type, id and freshness only (their labels
+  stay on the requester's request, §4.10; R4-COMMS-AUTOMATION-09).
 - **Provider output is data, not authority (SPK-AUTO-004).** A facility the provider names in a
   proposed command must be a facility of the requester's organization (otherwise `NOT_FOUND`,
   logged `denied`, no recommendation). If the outcome of a request cannot be recorded, the request
@@ -162,7 +178,7 @@ recommendation response lists its settlements (`apply.settlements`).
 | `catalog.policy_versions`       | `PoliciesService.list` (approved only)                        | relevant policies              |
 | `reporting.demand_report`       | `ReportsService.evaluate('demand')` (freshness from F1/F2/F3) | demand summary                 |
 | `finance.payment`               | `PaymentsService.get` (unknown outcome → missing)             | financial exceptions           |
-| `identity.person`               | `PeopleService.getPerson`                                     | (context)                      |
+| `identity.person`               | `PeopleService.getPerson`, minimized (name, kind, status)     | (context)                      |
 | `scheduling.schedule_draft`     | `ScheduleDraftsService.get` (unvalidated → missing)           | (context for repairs)          |
 | `support.customer_timeline`     | `TimelineService.timeline` (staff only)                       | (context)                      |
 | `scheduling.publish_schedule`   | command: publish a draft, or open a repair draft and publish  | schedule repairs               |
@@ -171,6 +187,18 @@ recommendation response lists its settlements (`apply.settlements`).
 
 Context references (`person`, `payment_attempt`, `fixture`, `schedule_draft`) are re-read first
 through the matching tool; evidence reports `changedSinceClientObservation`.
+
+**What the assistant provider receives (§4.14, R4-PRIVACY-04).** Every tool output goes to
+`AssistantProviderPort` (no provider is selected, DEC-013), together with the requester's prompt and
+attachments and the requester's kind and staff roles. Personal data in those outputs: a person's id,
+given and family name, kind (adult/child), status and merge target (`identity.person` never sends a
+date of birth or any contact point); a payment attempt as finance shows it to the requester (amount,
+status, payer person id, provider reference); a customer timeline as support minimizes it (a child by
+given name only, no date of birth or contacts); Today items, readiness, drafts, policies and report
+figures as their modules show them. The provider's answer is stored in
+`assistant_requests.response_text` and may repeat any of it; how long requests are kept is
+**Pending decision** DEC-060 (retention, §4.14), and which provider may receive these classes is
+**Pending decision** DEC-013.
 
 ## Behaviour — verified
 
@@ -207,6 +235,13 @@ through the matching tool; evidence reports `changedSinceClientObservation`.
   applied; expiry by the durable timer and at command time; an apply with an unknown outcome stays
   claimed (`recovery_required` operation, exception owned by the command's queue, retries refused,
   never expired).
+- **Stage 8 review fixes (`recommendations.spec.ts`, `assistant.spec.ts`):** R4-COMMS-AUTOMATION-01
+  ("SPK-SCHED-005 / §4.9 … an event changed after the proposal refuses the apply" and "… a repair
+  draft that captured a later revision than the proposal is discarded"); R4-REPLAY-IDEMPOTENCY-03
+  ("… a command the assistant no longer offers is refused before the apply is claimed");
+  R4-COMMS-AUTOMATION-10 ("… a drafted notice is proposed only when the requester could send it
+  directly"); R4-COMMS-AUTOMATION-09 ("… a drafted notice carries the request's missing evidence");
+  R4-PRIVACY-04 ("§4.14 … never a child's date of birth or a contact value").
 - **SPK-AUTO-005 (`disabled.spec.ts`):** disabled by default; every endpoint 503 without writing
   anything (no idempotency key claimed); support keeps working in the same application and in an
   application without this module; no other module imports it; the fake provider is refused in
@@ -275,6 +310,10 @@ modules).
   `503` like every automation endpoint; the `automation.apply_outcome_unknown` exception stays in its
   owner's Today queue (resolvable through the kernel's exception commands) and the claim stays held
   until the module is enabled again (**Proposed**).
+- **Notice rules repeated, not shared:** communications exports no check-only compose method, so
+  the notice proposal repeats its audience, protected-recipient and category rules
+  (`tools/command-tools.ts`); communications still re-checks everything when the reviewer applies.
+  **Proposed:** a communications `checkCompose` export that both use.
 - **Catalogue:** schedule repairs publish drafts (existing or opened from proposed changes) but the
   assistant does not compute repairs itself; renewal summaries, readiness across many fixtures and
   financial exceptions beyond a single payment need further tools. Roster, permission and discipline

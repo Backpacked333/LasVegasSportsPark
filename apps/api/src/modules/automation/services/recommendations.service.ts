@@ -37,6 +37,7 @@ import {
   actionRegistry,
   assertExpectedRevision,
   ensureUpdated,
+  listFacilityScope,
   snapshotActor,
   type Clock,
   type Trx,
@@ -112,6 +113,54 @@ function recordOf(value: unknown): { type: string; id: string } | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as { type?: unknown; id?: unknown };
   return typeof v.type === 'string' && typeof v.id === 'string' ? { type: v.type, id: v.id } : null;
+}
+
+/**
+ * The targets a reviewer must hold the command's action on to see and apply it (§4.10): its stored
+ * target, and for a drafted notice also its audience's facility (R4-COMMS-AUTOMATION-10), as
+ * communications authorizes a direct send on both.
+ */
+function reviewTargets(
+  organizationId: string,
+  command: RecommendationCommand,
+): Array<{ type: string; id: string | null; organizationId: string; facilityId: string | null }> {
+  const facilities = new Set([command.target.facilityId]);
+  const audienceFacility = noticeAudienceOf(command)?.facilityId;
+  if (typeof audienceFacility === 'string') facilities.add(audienceFacility);
+  return [...facilities].map((facilityId) => ({
+    type: command.target.type,
+    id: command.target.id,
+    organizationId,
+    facilityId,
+  }));
+}
+
+/** A drafted notice's stored audience, if the command is one. */
+function noticeAudienceOf(
+  command: RecommendationCommand,
+): { facilityId?: unknown; staffRoles?: unknown } | null {
+  if (command.actionId !== 'communications.send') return null;
+  const audience = (command.input as { audience?: unknown }).audience;
+  return audience && typeof audience === 'object'
+    ? (audience as { facilityId?: unknown; staffRoles?: unknown })
+    : null;
+}
+
+/** A drafted notice addressed to staff roles across every facility (SPK-COMMS-006, §4.14). */
+function addressesStaffEverywhere(command: RecommendationCommand): boolean {
+  const audience = noticeAudienceOf(command);
+  return (
+    audience !== null &&
+    Array.isArray(audience.staffRoles) &&
+    audience.staffRoles.length > 0 &&
+    (audience.facilityId ?? null) === null
+  );
+}
+
+/** Whether every role through which the principal holds the command's action is facility-scoped. */
+function facilityScoped(principal: Principal, command: RecommendationCommand): boolean {
+  const action = actionRegistry.get(command.actionId);
+  return action ? listFacilityScope(principal, action) !== null : true;
 }
 
 /** What the last failed apply reported for a retry to continue from (`ApplyFailure.carried`). */
@@ -522,6 +571,26 @@ export class RecommendationsService {
           { code: 'APPLY_IN_PROGRESS', operationId: row.apply_operation_id },
         );
       }
+      // R4-REPLAY-IDEMPOTENCY-03 (§4.7 invariant 5, §4.11): the command must still be one the
+      // assistant can run before anything is claimed. A recommendation whose command this build no
+      // longer offers is refused here, with nothing written: it stays reviewable and expires on
+      // its timer, instead of holding a claim that no outcome would ever release.
+      const tool = this.registry.command(command.actionId);
+      if (!tool) {
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          'The command of this recommendation is no longer available to the assistant; nothing was applied. Make the change through the owning module.',
+          {
+            details: {
+              machine: 'Recommendation',
+              from: row.status,
+              event: 'apply',
+              code: 'COMMAND_UNAVAILABLE',
+              commandActionId: command.actionId,
+            },
+          },
+        );
+      }
       const operationId = await this.operations.create(trx, {
         organizationId,
         kind: 'automation.apply_recommendation',
@@ -545,14 +614,18 @@ export class RecommendationsService {
       ensureUpdated(claimed ? 1 : 0, () =>
         errors.staleRevision(body.expectedRevision, row.revision + 1),
       );
-      return { expired: false as const, row: claimed as RecommendationRow, command, operationId };
+      return {
+        expired: false as const,
+        row: claimed as RecommendationRow,
+        command,
+        tool,
+        operationId,
+      };
     });
     if (claim.expired) throw errors.invalidTransition('Recommendation', 'expired', 'apply');
-    const { command, operationId } = claim;
+    const { command, tool, operationId } = claim;
 
     // 2. The owning module's command, outside any automation transaction (§4.11).
-    const tool = this.registry.command(command.actionId);
-    if (!tool) throw errors.internal(`no command tool for ${command.actionId}`);
     const ctx: ApplyContext = {
       correlationId,
       reason: body.reason ?? null,
@@ -1203,13 +1276,13 @@ export class RecommendationsService {
     if (asRequester.allowed) return 'requester';
     const command = commandOf(row);
     if (!command) return null;
-    const asReviewer = await this.authorization.decide(principal, command.actionId, {
-      type: command.target.type,
-      id: command.target.id,
-      organizationId: row.organization_id,
-      facilityId: command.target.facilityId,
-    });
-    return asReviewer.allowed ? 'reviewer' : null;
+    for (const target of reviewTargets(row.organization_id, command)) {
+      const asReviewer = await this.authorization.decide(principal, command.actionId, target);
+      if (!asReviewer.allowed) return null;
+    }
+    return addressesStaffEverywhere(command) && facilityScoped(principal, command)
+      ? null
+      : 'reviewer';
   }
 
   private async loadVisibleForUpdate(
@@ -1236,12 +1309,9 @@ export class RecommendationsService {
       });
     } else {
       const command = commandOf(row) as RecommendationCommand;
-      await this.authorization.require(principal, command.actionId, {
-        type: command.target.type,
-        id: command.target.id,
-        organizationId,
-        facilityId: command.target.facilityId,
-      });
+      for (const target of reviewTargets(organizationId, command)) {
+        await this.authorization.require(principal, command.actionId, target);
+      }
     }
     return row;
   }
