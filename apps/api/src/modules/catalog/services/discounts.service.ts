@@ -12,8 +12,10 @@ import {
   type DiscountEvaluation,
   type EvaluateDiscountsInput,
   type ListDiscountsQuery,
+  type OfferingKind,
   type Page,
   type Principal,
+  type PublicationState,
   type RetireDiscountInput,
   type UpdateDiscountInput,
 } from '@sportspark/contracts';
@@ -54,6 +56,18 @@ const Cursor = z.object({ name: z.string(), id: z.string() });
 
 /** CAT-04 (migration 0207): the database refuses a redemption beyond the per-person limit. */
 export const PER_PERSON_LIMIT_CONSTRAINT = 'discount_redemption_entries_per_person_limit';
+
+/** The offering facts a discount preview line is priced and authorized from. */
+interface LineOffering {
+  id: string;
+  kind: OfferingKind;
+  program_id: string;
+  publication_state: PublicationState;
+  facility_id: string;
+}
+
+const atIsStaffOnly = () =>
+  errors.accessDenied('Only staff may evaluate discounts at another instant.', { field: 'at' });
 
 /**
  * Discount definitions (SPK-PAY-003) and their redemption counters (§4.7 invariant 7). Evaluation
@@ -349,34 +363,95 @@ export class DiscountsService {
     return { items, nextCursor: last ? encodeCursor({ name: last.name, id: last.id }) : null };
   }
 
-  /** Explainable preview for staff (any reader) or a customer about their own basket. */
+  /**
+   * Explainable preview for staff (readers of the offerings' facilities) or a person about their
+   * own basket. Staff power is the kernel's decision, never `principal.kind` or role names
+   * (SPK-IAM-001/003, R4-AUTHZ-TARGETS-04): a staff principal whose roles do not hold the action
+   * keeps their own self authority, and a role scoped to some facilities unlocks unpublished
+   * offerings and another instant only at those facilities (§4.3, §4.14, §4.10).
+   */
   async evaluate(principal: Principal, body: EvaluateDiscountsInput): Promise<DiscountEvaluation> {
     const organizationId = organizationOf(principal);
-    await this.authorization.require(principal, CatalogActions.evaluateDiscounts, {
+    const action = CatalogActions.evaluateDiscounts;
+    // No subjects and no facility: decide() can only allow on the staff-role (or system) basis.
+    const staffAuthority = (
+      await this.authorization.decide(principal, action, {
+        type: 'discount_evaluation',
+        organizationId,
+      })
+    ).allowed;
+    await this.authorization.require(principal, action, {
       type: 'discount_evaluation',
       organizationId,
-      subjectPersonIds:
-        principal.kind === 'customer' && principal.personId ? [principal.personId] : undefined,
+      subjectPersonIds: !staffAuthority && principal.personId ? [principal.personId] : undefined,
     });
-    // SPK-PAY-001 "never accept a client-submitted price as authoritative": the preview prices each
-    // line from the offering and its price rule, as a quote would; the client's amount, kind and
-    // program are ignored. Only staff preview another instant (past or upcoming promotions).
-    const staff =
-      principal.kind === 'system' ||
-      (principal.kind === 'staff' &&
-        CatalogActions.evaluateDiscounts.staffRoles.some((r) => principal.staffRoles.includes(r)));
-    if (body.at && !staff) {
-      throw errors.accessDenied('Only staff may evaluate discounts at another instant.', {
-        field: 'at',
-      });
-    }
+    // §4.10: without staff authority another instant is refused before any offering is looked up,
+    // so the refusal says nothing about the offerings named.
+    if (body.at && !staffAuthority) throw atIsStaffOnly();
+    const { offerings, everyFacilityStaff } = await this.visibleOfferings(
+      principal,
+      organizationId,
+      body,
+      staffAuthority,
+    );
+    // Only staff preview another instant (past or upcoming promotions), and only when their role
+    // covers the facility of every line's offering. Decided before any price rule is read.
+    if (body.at && !everyFacilityStaff) throw atIsStaffOnly();
     const at = body.at ? new Date(body.at) : this.clock.now();
     return this.evaluateForOrganization(organizationId, {
       currency: body.currency,
       at,
-      lines: await this.serverPricedLines(organizationId, body, at, staff),
+      lines: await this.serverPricedLines(organizationId, body, at, offerings),
       codes: body.codes,
     });
+  }
+
+  /**
+   * The lines' offerings as the caller may see them (§4.10): an offering in any publication state
+   * when the kernel allows the action at that offering's facility, otherwise only a discoverable
+   * one; anything else does not exist for the caller (NOT_FOUND, as for an unknown id).
+   * `everyFacilityStaff` is whether staff authority covers the facility of every line's offering.
+   */
+  private async visibleOfferings(
+    principal: Principal,
+    organizationId: string,
+    body: EvaluateDiscountsInput,
+    staffAuthority: boolean,
+  ): Promise<{ offerings: Map<string, LineOffering>; everyFacilityStaff: boolean }> {
+    const offeringIds = [...new Set(body.lines.map((l) => l.offeringId))];
+    const rows = await executorFor(this.db)
+      .selectFrom('offerings')
+      .select(['id', 'kind', 'program_id', 'publication_state', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', offeringIds)
+      .execute();
+    const staffAt = new Map<string, boolean>();
+    if (staffAuthority) {
+      for (const facilityId of new Set(rows.map((o) => o.facility_id))) {
+        const decision = await this.authorization.decide(
+          principal,
+          CatalogActions.evaluateDiscounts,
+          { type: 'offering', organizationId, facilityId },
+        );
+        staffAt.set(facilityId, decision.allowed);
+      }
+    }
+    const byId = new Map(rows.map((o) => [o.id, o]));
+    const offerings = new Map<string, LineOffering>();
+    let everyFacilityStaff = true;
+    for (const offeringId of offeringIds) {
+      const offering = byId.get(offeringId);
+      const staff = offering ? (staffAt.get(offering.facility_id) ?? false) : false;
+      if (
+        !offering ||
+        (!staff && !PUBLIC_PUBLICATION_STATES.includes(offering.publication_state))
+      ) {
+        throw errors.protectedNotFound('offering');
+      }
+      if (!staff) everyFacilityStaff = false;
+      offerings.set(offeringId, offering);
+    }
+    return { offerings, everyFacilityStaff };
   }
 
   /** Lines priced by the server: offering kind and program, base price from the effective rule. */
@@ -384,35 +459,19 @@ export class DiscountsService {
     organizationId: string,
     body: EvaluateDiscountsInput,
     at: Date,
-    staff: boolean,
+    offerings: ReadonlyMap<string, LineOffering>,
   ): Promise<DiscountEvaluationLine[]> {
-    const db = executorFor(this.db);
-    const offeringIds = [...new Set(body.lines.map((l) => l.offeringId))];
-    const offerings = await db
-      .selectFrom('offerings')
-      .select(['id', 'kind', 'program_id', 'publication_state'])
-      .where('organization_id', '=', organizationId)
-      .where('id', 'in', offeringIds)
-      .execute();
-    const byId = new Map(offerings.map((o) => [o.id, o]));
-    const rules = await db
+    const rules = await executorFor(this.db)
       .selectFrom('price_rules')
       .select(['offering_id', 'base_price_minor', 'currency'])
       .where('organization_id', '=', organizationId)
-      .where('offering_id', 'in', offeringIds)
+      .where('offering_id', 'in', [...offerings.keys()])
       .where('effective_from', '<=', at)
       .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]))
       .execute();
     const ruleOf = new Map(rules.map((r) => [r.offering_id, r]));
     return body.lines.map((line) => {
-      const offering = byId.get(line.offeringId);
-      // §4.10: customers see only discoverable offerings; anything else does not exist for them
-      if (
-        !offering ||
-        (!staff && !PUBLIC_PUBLICATION_STATES.includes(offering.publication_state))
-      ) {
-        throw errors.protectedNotFound('offering');
-      }
+      const offering = offerings.get(line.offeringId)!;
       const rule = ruleOf.get(line.offeringId);
       if (rule && rule.currency !== body.currency) {
         throw errors.validation('The offering is priced in another currency.', {

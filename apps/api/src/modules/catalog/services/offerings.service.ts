@@ -41,6 +41,7 @@ import {
   CLOCK,
   DATABASE,
   FacilityDirectory,
+  listFacilityScope,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -969,7 +970,12 @@ export class OfferingsService implements OfferingLookupPort {
     };
   }
 
-  /** Staff listing of a program's offerings in every state. */
+  /**
+   * Staff listing of a program's offerings in every state, narrowed to the facilities the
+   * principal's catalog-reading roles cover (§4.3, §4.14 least privilege; R4-AUTHZ-TARGETS-03), as
+   * `GET /offerings/{id}` decides read_catalog at the offering's facility and `view=staff` lists
+   * only the managed facilities.
+   */
   async listForProgram(
     principal: Principal,
     programId: string,
@@ -980,6 +986,7 @@ export class OfferingsService implements OfferingLookupPort {
       type: 'offering',
       organizationId,
     });
+    const facilityScope = listFacilityScope(principal, CatalogActions.readCatalog);
     const program = await this.db
       .selectFrom('programs')
       .select('id')
@@ -996,6 +1003,12 @@ export class OfferingsService implements OfferingLookupPort {
       .orderBy('offerings.starts_on')
       .orderBy('offerings.id')
       .limit(query.limit + 1);
+    if (facilityScope !== null) {
+      q =
+        facilityScope.length > 0
+          ? q.where('offerings.facility_id', 'in', [...facilityScope])
+          : q.where(sql<boolean>`false`);
+    }
     if (query.publicationState)
       q = q.where('offerings.publication_state', '=', query.publicationState);
     if (cursor) {
