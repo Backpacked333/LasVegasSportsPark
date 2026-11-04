@@ -547,7 +547,11 @@ export const TodayItemGroupSchema = z
 
 export const TodayItemSchema = z
   .object({
-    /** Stable per issue: `exception:<id>`, `readiness:<fixtureId>`, `coverage:…`, `restriction:<id>`. */
+    /**
+     * Stable per issue: `exception:<id>`, `readiness:<fixtureId>`, `coverage:…`, `restriction:<id>`;
+     * `exceptions-omitted` and `readiness-omitted:<facilityId>` name what the feed's per-request
+     * bound left out (R3-PERFORMANCE-01).
+     */
     id: z.string(),
     source: z.enum(['exception', 'readiness', 'coverage', 'restriction']),
     group: TodayItemGroupSchema,
@@ -583,6 +587,15 @@ export const TodaySourceSchema = z
     /** `not_permitted`: the viewer may not read this source, so it contributes nothing. */
     status: z.enum(['ok', 'not_permitted', 'unavailable']),
     count: z.number().int(),
+    /**
+     * R3-PERFORMANCE-01 (SPK-UX-006, bounded read): true when the feed's per-request bound left
+     * records of this source out. The left-out records are then named by an `*-omitted` item
+     * (`exceptions-omitted`, `readiness-omitted:<facilityId>`) and remain in the owning module's
+     * own list (`GET /v1/exceptions`, `GET /v1/fixtures/{id}/readiness`).
+     */
+    truncated: z.boolean(),
+    /** How many records the bound left out: 0 when complete, null when the number is unknown. */
+    omitted: z.number().int().min(0).nullable(),
   })
   .openapi('TodaySource');
 export type TodaySource = z.infer<typeof TodaySourceSchema>;
@@ -718,6 +731,7 @@ function command(
   response: z.ZodType,
   status = 200,
   params: z.ZodObject<z.ZodRawShape> | undefined = path.includes('{id}') ? IdParams : undefined,
+  extraResponses: Record<number, ReturnType<typeof err>> = {},
 ) {
   openApiRegistry.registerPath({
     method,
@@ -735,6 +749,7 @@ function command(
       403: err('Access denied or participant authority required'),
       404: err('Not found or not visible'),
       409: err('Conflict (STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)'),
+      ...extraResponses,
     },
   });
 }
@@ -844,6 +859,13 @@ command(
   RequestRefundBody,
   CaseActionOutcomeSchema,
   201,
+  IdParams,
+  {
+    // R3-OPERATIONS-02 (§5.8, SPK-AT-028): @RefusedDuringRecovery(), like finance's refund route.
+    503: err(
+      'Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)',
+    ),
+  },
 );
 command(
   'post',

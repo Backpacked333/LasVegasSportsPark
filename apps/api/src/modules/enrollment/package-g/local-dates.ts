@@ -21,6 +21,16 @@ export function localMidnightAfter(date: string, timezone: string): Date {
   return localDayStart(addDays(date, 1), timezone);
 }
 
+/**
+ * The last instant a term includes (SPK-SCHED-008, R3-TIME-MONEY-05). A term's end is exclusive:
+ * an `offering_dates` term ends at the local midnight after its last day, so a date shown to a
+ * person is the day of the instant just before the end (as the customer app's `lastTermDay` shows
+ * it), never the day after the term.
+ */
+export function lastIncludedInstant(endsAt: Date): Date {
+  return new Date(endsAt.getTime() - 1);
+}
+
 export function addWholeDays(instant: Date, days: number): Date {
   return new Date(instant.getTime() + days * DAY_MS);
 }

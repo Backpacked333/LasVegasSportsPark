@@ -3,7 +3,9 @@
  * API sends them (apps/api/src/modules/scheduling and facilities services, kernel validation pipe):
  *
  * - VALIDATION_FAILED: an array of `{ path, message, code }` from request validation, or an object
- *   (`{ path }`, `{ obligations }` for unmet fixture obligations, `{ changeSequence }`).
+ *   (`{ path }`, `{ obligations }` for unmet fixture obligations, `{ changeSequence }`, and
+ *   `{ code: 'dst_resolution_required', nonexistentLocalDates, ambiguousLocalDates, options }`
+ *   from a series edit whose new local start time falls in a daylight-saving gap or overlap).
  * - RESOURCE_CONFLICT: `{ issues: ValidationIssue[], conflictingEventIds }` from publication.
  * - ACCESS_DENIED: `{ action }`, the permission the principal lacks (staff see which one, §4.10).
  * - ELIGIBILITY_FAILED: `{ code: 'inspection_required', latestInspection }` from release.
@@ -39,6 +41,46 @@ export function fieldIssues(error: ApiError | null): FieldIssue[] {
     return [{ path: record.path, message: error.message }];
   }
   return [];
+}
+
+export type NonexistentPolicy = 'shift_forward' | 'skip';
+export type AmbiguousPolicy = 'first' | 'second';
+
+/** What a series edit refused with `dst_resolution_required` needs the user to choose. */
+export interface DstResolutionRequired {
+  /** Local dates (YYYY-MM-DD) on which the new local start time does not exist (clocks go forward). */
+  nonexistentLocalDates: string[];
+  /** Local dates on which the new local start time happens twice (clocks go back). */
+  ambiguousLocalDates: string[];
+  nonexistentOptions: NonexistentPolicy[];
+  ambiguousOptions: AmbiguousPolicy[];
+}
+
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+
+/**
+ * SPK-SCHED-008 (R3-TRACE-A-08): a series edit, its preview included, whose new local start time
+ * does not exist or happens twice on some in-scope date is refused with VALIDATION_FAILED and
+ * `details.code: 'dst_resolution_required'`; the user chooses a policy per axis from
+ * `details.options` and the edit is sent again with `changes.nonexistentPolicy` /
+ * `changes.ambiguousPolicy`. Null for any other answer.
+ */
+export function dstResolutionRequired(error: ApiError | null): DstResolutionRequired | null {
+  if (!error || error.code !== 'VALIDATION_FAILED') return null;
+  const details = asRecord(error.details);
+  if (!details || details.code !== 'dst_resolution_required') return null;
+  const options = asRecord(details.options);
+  return {
+    nonexistentLocalDates: strings(details.nonexistentLocalDates),
+    ambiguousLocalDates: strings(details.ambiguousLocalDates),
+    nonexistentOptions: strings(options?.nonexistentPolicy).filter(
+      (o): o is NonexistentPolicy => o === 'shift_forward' || o === 'skip',
+    ),
+    ambiguousOptions: strings(options?.ambiguousPolicy).filter(
+      (o): o is AmbiguousPolicy => o === 'first' || o === 'second',
+    ),
+  };
 }
 
 /** The permission named by ACCESS_DENIED, e.g. `facilities.release_to_service`. */

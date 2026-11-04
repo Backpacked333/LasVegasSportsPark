@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { newId, type DomainEvent } from '@sportspark/contracts';
+import { newId, OutboxEventMachine, type DomainEvent } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { sql } from 'kysely';
 import type { Clock } from '../clock';
@@ -7,6 +7,13 @@ import type { AppConfig } from '../config';
 import { runWithTransaction } from '../database/transaction-context';
 import { OperationalExceptions } from '../exceptions/operational-exceptions.service';
 import { APP_CONFIG, CLOCK, DATABASE } from '../tokens';
+import {
+  escalateHandlerWait,
+  OUTBOX_DEAD_LETTER_CATEGORY,
+  OUTBOX_WAITING_CATEGORY,
+  resolveHandlerWait,
+  resolveReplayedDeadLetter,
+} from './dead-letters';
 import {
   EventHandlerRegistry,
   runAfterCommitHooks,
@@ -20,6 +27,17 @@ export interface DispatchSummary {
   dead: number;
   /** Claimed events whose lease lapsed and another worker took over; this run recorded nothing. */
   superseded: number;
+  /**
+   * Events left pending because the build that recorded them expected a handler this build does
+   * not register (R3-OPERATIONS-01): retried after OUTBOX_MISSING_HANDLER_RETRY_SECONDS, attempts
+   * not counted.
+   */
+  deferred: number;
+  /**
+   * Claimed events handed back unprocessed because the worker is stopping (R3-OPERATIONS-10):
+   * their lease is cleared, so another worker takes them at once instead of after the lease.
+   */
+  released: number;
 }
 
 export function retryDelayMs(attempt: number): number {
@@ -37,12 +55,31 @@ export function retryDelayMs(attempt: number): number {
  * skips it when another worker has taken it over, and every status write is fenced on the token,
  * so a slow run whose lease lapsed can never overwrite the outcome (dispatched, attempts, dead
  * letter) recorded by the worker that owns the event now.
+ *
+ * An event is dispatched only once every handler it expected (`expected_handlers`, recorded by the
+ * producing build, R3-OPERATIONS-01) has run here or is retired. When this build lacks one (an
+ * older build during a software rollback, a worker not yet upgraded in a rolling deploy), it runs
+ * the handlers it has, leaves the event pending without counting an attempt, names the missing
+ * handlers in `last_error` and tries again after OUTBOX_MISSING_HANDLER_RETRY_SECONDS, so a build
+ * that has them runs them (§4.7 invariant 12, §5.8); an event type no handler of this build knows
+ * is no longer settled as if it were a fact without consumers. The wait is bounded for its owner
+ * (§5.11, migration 0015): the row keeps `waiting_since`, and once it has waited
+ * OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS an operational exception
+ * (`reliability.outbox_waiting_for_handler`, system administration) names the missing handlers;
+ * the dispatch that finally settles the event resolves it. Handlers that already consumed the event
+ * are not run again on a later pass, so a waiting event records no further job attempts for them.
+ *
+ * Stopping (R3-OPERATIONS-10, recovery runbook §4 "stop workers cleanly"): `stop()` ends the poll
+ * loop, lets the event in hand finish (its handler transaction and status write), hands the rest
+ * of the claimed batch back (lease cleared) and claims nothing more; it resolves once that drain
+ * is over, so `worker.ts` awaits it (bounded by WORKER_SHUTDOWN_TIMEOUT_MS) before it exits.
  */
 @Injectable()
 export class OutboxDispatcher {
   private readonly logger = new Logger(OutboxDispatcher.name);
   private timer: NodeJS.Timeout | null = null;
-  private running = false;
+  private stopping = false;
+  private inFlight: Promise<void> | null = null;
 
   constructor(
     @Inject(DATABASE) private readonly db: Db,
@@ -54,49 +91,91 @@ export class OutboxDispatcher {
 
   start(): void {
     if (this.timer) return;
-    const tick = async () => {
-      if (this.running) return;
-      this.running = true;
-      try {
-        let summary = await this.runOnce();
-        while (summary.claimed > 0) summary = await this.runOnce();
-      } catch (error) {
-        this.logger.error(`dispatch loop failed: ${String(error)}`);
-      } finally {
-        this.running = false;
-      }
-    };
-    this.timer = setInterval(() => void tick(), this.config.OUTBOX_POLL_INTERVAL_MS);
-    void tick();
+    this.stopping = false;
+    this.timer = setInterval(() => this.tick(), this.config.OUTBOX_POLL_INTERVAL_MS);
+    this.tick();
   }
 
-  stop(): void {
+  /**
+   * Ends the poll loop and resolves once the batch in hand is drained (the event being handled
+   * finishes, the rest is handed back); nothing is claimed after it is called.
+   */
+  async stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.stopping = true;
+    await this.inFlight;
+  }
+
+  /** One poll: drain due events batch by batch, unless a drain is still running or stopping. */
+  private tick(): void {
+    if (this.inFlight || this.stopping) return;
+    this.inFlight = this.drain().finally(() => {
+      this.inFlight = null;
+    });
+  }
+
+  private async drain(): Promise<void> {
+    const shouldStop = () => this.stopping;
+    try {
+      let summary = await this.runBatch(this.config.OUTBOX_BATCH_SIZE, shouldStop);
+      while (summary.claimed > 0 && !this.stopping) {
+        summary = await this.runBatch(this.config.OUTBOX_BATCH_SIZE, shouldStop);
+      }
+    } catch (error) {
+      this.logger.error(`dispatch loop failed: ${String(error)}`);
+    }
   }
 
   /** Processes one batch; returns counts. Safe to call concurrently from several workers. */
-  async runOnce(batchSize: number = this.config.OUTBOX_BATCH_SIZE): Promise<DispatchSummary> {
+  runOnce(batchSize: number = this.config.OUTBOX_BATCH_SIZE): Promise<DispatchSummary> {
+    return this.runBatch(batchSize, () => false);
+  }
+
+  private async runBatch(batchSize: number, shouldStop: () => boolean): Promise<DispatchSummary> {
     const summary: DispatchSummary = {
       claimed: 0,
       dispatched: 0,
       retried: 0,
       dead: 0,
       superseded: 0,
+      deferred: 0,
+      released: 0,
     };
+    if (shouldStop()) return summary;
     // A token per claim, so overlapping runs (also in one process) are told apart.
     const lease = `${this.config.WORKER_ID}:${newId()}`;
     const events = await this.claim(batchSize, lease);
     summary.claimed = events.length;
-    for (const row of events) {
+    for (const [index, row] of events.entries()) {
+      if (shouldStop()) {
+        summary.released = await this.release(
+          events.slice(index).map((e) => e.id),
+          lease,
+        );
+        break;
+      }
       const outcome = (await this.renewLease(row.id, lease))
         ? await this.process(row, lease)
         : 'superseded';
       summary[outcome] += 1;
     }
     return summary;
+  }
+
+  /** Hands claimed, unprocessed events back (lease cleared) so another worker takes them now. */
+  private async release(ids: string[], lease: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const released = await this.db
+      .updateTable('outbox_events')
+      .set({ locked_by: null, locked_until: null })
+      .where('id', 'in', ids)
+      .where('status', '=', 'pending')
+      .where('locked_by', '=', lease)
+      .executeTakeFirst();
+    return Number(released.numUpdatedRows);
   }
 
   /** Extends this run's lease on one event; false when another worker owns the event now. */
@@ -134,7 +213,7 @@ export class OutboxDispatcher {
         where o.id = claimed.id
         returning o.id, o.organization_id, o.event_type, o.aggregate_type, o.aggregate_id, o.payload,
                   o.occurred_at, o.correlation_id, o.causation_id, o.operation_id, o.attempts, o.max_attempts,
-                  o.failure_owner
+                  o.failure_owner, o.expected_handlers, o.replayed_at, o.waiting_since
       `.execute(trx);
       return result.rows;
     });
@@ -143,7 +222,7 @@ export class OutboxDispatcher {
   private async process(
     row: ClaimedRow,
     lease: string,
-  ): Promise<'dispatched' | 'retried' | 'dead' | 'superseded'> {
+  ): Promise<'dispatched' | 'retried' | 'dead' | 'superseded' | 'deferred'> {
     const event: DomainEvent = {
       id: row.id,
       type: row.event_type,
@@ -158,9 +237,14 @@ export class OutboxDispatcher {
     };
     const attempt = row.attempts + 1;
     const handlers = this.registry.handlersFor(event.type);
+    const consumed = await this.consumedBy(event.id, handlers);
     const failures: string[] = [];
     const failing: RegisteredHandler[] = [];
     for (const handler of handlers) {
+      // Already ran for this event (a redelivery, a pass while it waits for a missing handler):
+      // nothing to do and nothing to record. The consumption insert in runHandler still guards a
+      // handler that another worker runs at the same moment.
+      if (consumed.has(handler.name)) continue;
       const error = await this.runHandler(event, handler, attempt);
       if (error) {
         failures.push(`${handler.name}: ${error}`);
@@ -169,21 +253,101 @@ export class OutboxDispatcher {
     }
 
     const now = this.clock.now();
+    const missing = this.registry.missingFor(event.type, row.expected_handlers);
+    if (failures.length === 0 && missing.length > 0) {
+      // R3-OPERATIONS-01: the handlers this build has ran (their consumptions keep them from running
+      // again); the event waits, uncounted, for a build that registers the missing ones.
+      const waitingSince = row.waiting_since ? new Date(row.waiting_since) : now;
+      const waiting = `waiting for handler(s) ${missing.join(', ')}: the build that recorded this event registers them and build ${this.config.APP_VERSION} (worker ${this.config.WORKER_ID}) does not`;
+      // §5.11: past the bounded wait the owner is told (once per wait, deduplicated).
+      const escalate =
+        now.getTime() - waitingSince.getTime() >=
+        this.config.OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS * 1000;
+      const defer = async (executor: Db) => {
+        const updated = await executor
+          .updateTable('outbox_events')
+          .set({
+            last_error: waiting.slice(0, 4000),
+            available_at: new Date(
+              now.getTime() + this.config.OUTBOX_MISSING_HANDLER_RETRY_SECONDS * 1000,
+            ),
+            waiting_since: waitingSince,
+            locked_by: null,
+            locked_until: null,
+          })
+          .where('id', '=', row.id)
+          .where('locked_by', '=', lease)
+          .executeTakeFirst();
+        return Number(updated.numUpdatedRows) > 0;
+      };
+      let outcome: 'superseded' | 'deferred' | 'escalated';
+      if (!escalate) {
+        outcome = (await defer(this.db)) ? 'deferred' : 'superseded';
+      } else {
+        outcome = await this.db.transaction().execute(async (trx) => {
+          if (!(await defer(trx))) return 'superseded' as const;
+          const raised = await escalateHandlerWait(trx, this.exceptions, {
+            organizationId: row.organization_id,
+            source: 'outbox',
+            eventId: row.id,
+            eventType: event.type,
+            affectedType: row.aggregate_type,
+            affectedId: row.aggregate_id,
+            missingHandlers: missing,
+            waitingSince,
+            appVersion: this.config.APP_VERSION,
+            workerId: this.config.WORKER_ID,
+          });
+          return raised ? ('escalated' as const) : ('deferred' as const);
+        });
+      }
+      if (outcome === 'superseded') return 'superseded';
+      if (outcome === 'escalated') {
+        this.logger.error(
+          `event ${row.id} (${event.type}) has waited since ${waitingSince.toISOString()} for handler(s) ${missing.join(', ')}, which build ${this.config.APP_VERSION} does not register; raised ${OUTBOX_WAITING_CATEGORY} for system administration`,
+        );
+      } else {
+        this.logger.warn(`event ${row.id} (${event.type}) left pending: ${waiting}`);
+      }
+      return 'deferred';
+    }
     if (failures.length === 0) {
-      const updated = await this.db
-        .updateTable('outbox_events')
-        .set({
-          status: 'dispatched',
-          dispatched_at: now,
-          attempts: attempt,
-          locked_by: null,
-          locked_until: null,
-          last_error: null,
-        })
-        .where('id', '=', row.id)
-        .where('locked_by', '=', lease)
-        .executeTakeFirst();
-      return Number(updated.numUpdatedRows) > 0 ? 'dispatched' : 'superseded';
+      const settle = async (executor: Db) => {
+        const updated = await executor
+          .updateTable('outbox_events')
+          .set({
+            status: OutboxEventMachine.next('pending', 'dispatch'),
+            dispatched_at: now,
+            attempts: attempt,
+            locked_by: null,
+            locked_until: null,
+            last_error: null,
+            waiting_since: null,
+          })
+          .where('id', '=', row.id)
+          .where('locked_by', '=', lease)
+          .executeTakeFirst();
+        return Number(updated.numUpdatedRows) > 0;
+      };
+      if (!row.replayed_at && !row.waiting_since) {
+        return (await settle(this.db)) ? 'dispatched' : 'superseded';
+      }
+      // R3-OPERATIONS-03: a replayed dead letter's follow-up happened now; its exception is
+      // resolved with the dispatch, never before. Likewise the exception of an event that waited
+      // for a missing handler (migration 0015).
+      const settled = await this.db.transaction().execute(async (trx) => {
+        if (!(await settle(trx))) return false;
+        const resolve = {
+          organizationId: row.organization_id,
+          source: 'outbox' as const,
+          eventId: row.id,
+          actorLabel: 'kernel.outbox_dispatcher',
+        };
+        if (row.replayed_at) await resolveReplayedDeadLetter(trx, this.exceptions, resolve);
+        if (row.waiting_since) await resolveHandlerWait(trx, this.exceptions, resolve);
+        return true;
+      });
+      return settled ? 'dispatched' : 'superseded';
     }
     const lastError = failures.join(' | ').slice(0, 4000);
     if (attempt >= row.max_attempts) {
@@ -197,7 +361,7 @@ export class OutboxDispatcher {
         const updated = await trx
           .updateTable('outbox_events')
           .set({
-            status: 'dead',
+            status: OutboxEventMachine.next('pending', 'dead_letter'),
             attempts: attempt,
             last_error: lastError,
             locked_by: null,
@@ -211,7 +375,7 @@ export class OutboxDispatcher {
         if (Number(updated.numUpdatedRows) === 0) return false;
         await this.exceptions.raise(trx, {
           organizationId: row.organization_id,
-          category: 'reliability.outbox_dead_letter',
+          category: OUTBOX_DEAD_LETTER_CATEGORY,
           severity: 'high',
           title: `Follow-up for ${event.type} could not be delivered after ${attempt} attempts`,
           affectedType: row.aggregate_type,
@@ -248,6 +412,22 @@ export class OutboxDispatcher {
       .where('locked_by', '=', lease)
       .executeTakeFirst();
     return Number(updated.numUpdatedRows) > 0 ? 'retried' : 'superseded';
+  }
+
+  /** The handlers of `handlers` that already consumed the event (event_consumptions). */
+  private async consumedBy(eventId: string, handlers: RegisteredHandler[]): Promise<Set<string>> {
+    if (handlers.length === 0) return new Set();
+    const rows = await this.db
+      .selectFrom('event_consumptions')
+      .select('handler')
+      .where('event_id', '=', eventId)
+      .where(
+        'handler',
+        'in',
+        handlers.map((h) => h.name),
+      )
+      .execute();
+    return new Set(rows.map((r) => r.handler));
   }
 
   private async runHandler(
@@ -327,4 +507,7 @@ interface ClaimedRow {
   attempts: number;
   max_attempts: number;
   failure_owner: string | null;
+  expected_handlers: string[] | null;
+  replayed_at: Date | string | null;
+  waiting_since: Date | string | null;
 }

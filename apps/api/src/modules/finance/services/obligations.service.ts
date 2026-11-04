@@ -26,6 +26,7 @@ import {
   type AuthorizationTargetInput,
   type Clock,
   type Trx,
+  RecoveryMode,
 } from '../../../kernel';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../../competition';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
@@ -45,6 +46,7 @@ import {
   toPaymentAttempt,
   toReceipt,
   type Reader,
+  refuseDuringRecovery,
 } from '../finance.shared';
 import { FinanceCustomerScope } from './customer-scope';
 import { MoneyFacts, type ObligationRow } from './money-facts.service';
@@ -72,6 +74,7 @@ export class ObligationsService {
     private readonly facts: MoneyFacts,
     private readonly payments: PaymentsService,
     private readonly scope: FinanceCustomerScope,
+    private readonly recovery: RecoveryMode,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -275,6 +278,9 @@ export class ObligationsService {
       organizationId,
     });
     return this.uow.run(async ({ trx }) => {
+      // §5.8 / SPK-AT-028: an in-process create (a migration import apply) is refused during
+      // recovery like the HTTP route, before anything is recorded (R3-DOCS-TRUTH-3-07).
+      await refuseDuringRecovery(this.recovery, organizationId, trx);
       let debtorPersonId: string | null = null;
       let debtorTeamEntryId: string | null = null;
       if (input.debtor.kind === 'person') {
@@ -612,6 +618,9 @@ export class ObligationsService {
           obligation.mode === 'team_with_contributions' ? obligation.debtor_team_entry_id : null,
         protected: true,
       });
+      // §5.8 / SPK-AT-028: no payment attempt, and no provider call, during recovery
+      // (R3-DOCS-TRUTH-3-07).
+      await refuseDuringRecovery(this.recovery, organizationId, trx);
       if (obligation.status !== 'open') {
         throw errors.invalidTransition('Obligation', obligation.status, 'pay');
       }

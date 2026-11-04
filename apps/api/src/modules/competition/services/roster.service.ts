@@ -3,7 +3,6 @@ import {
   decodeCursor,
   encodeCursor,
   errors,
-  hasStaffRole,
   newId,
   systemPrincipal,
   z,
@@ -72,6 +71,7 @@ import { CompetitionEvents } from '../competition.events';
 import { TEAM_INVITATION_DEFAULT_HOURS, TEAM_INVITATION_EXPIRY_JOB } from '../competition.policy';
 import {
   effectiveRoles,
+  entryFacilityId,
   loadEntryContext,
   openRosterRow,
   rolesByPerson,
@@ -85,10 +85,11 @@ import {
   hashToken,
   hoursFromNow,
   isEffectiveAt,
-  isStaffLike,
   iso,
   newToken,
   organizationOf,
+  readsRestrictedDetail,
+  staffAuthority,
   toJoinRequest,
   toTeamInvitation,
   toTeamRole,
@@ -137,10 +138,10 @@ export class RosterService implements RosterPort {
     correlationId: string | null,
   ): Promise<RosterResponse> {
     const organizationId = organizationOf(principal);
-    const staff = isStaffLike(principal);
-    const leagueStaff =
-      principal.kind === 'system' ||
-      hasStaffRole(principal, ...CompetitionActions.manageRoster.staffRoles);
+    // R3-TRACE-A-01 (SPK-CAP-004, §2.1): league staff are the holders of a staff role that manages
+    // rosters, never every staff kind. A captain who is also an official adds as a captain: guests
+    // and substitutes need league approval, the row's source is `captain`, and no past roster is
+    // rewritten.
     const now = this.clock.now();
     const dated = input.changes.map((change) => {
       const explicit = change.action === 'add' ? change.effectiveFrom : change.effectiveTo;
@@ -150,6 +151,13 @@ export class RosterService implements RosterPort {
     return this.uow.run(async ({ trx }) => {
       const context = await loadEntryContext(trx, organizationId, teamEntryId, { forUpdate: true });
       if (!context) throw errors.protectedNotFound('team_entry');
+      // in the facility of the entry's division (R3-TRACE-A-01, §4.3)
+      const leagueStaff = await staffAuthority(
+        this.authorization,
+        principal,
+        CompetitionActions.manageRoster,
+        { organizationId, facilityId: context.division?.facility_id },
+      );
       await this.authorization.require(principal, CompetitionActions.manageRoster, {
         type: 'team_entry',
         id: teamEntryId,
@@ -192,8 +200,8 @@ export class RosterService implements RosterPort {
             status: change.status,
             effectiveFrom: at,
             jerseyNumber: change.jerseyNumber ?? null,
-            source: staff ? 'staff' : 'captain',
-            actorIsStaff: staff,
+            source: leagueStaff ? 'staff' : 'captain',
+            actorIsStaff: leagueStaff,
             correlationId,
             correction,
           });
@@ -259,6 +267,14 @@ export class RosterService implements RosterPort {
     const viewer = await this.entries.viewerOf(principal, context, playing, roles, now);
     if (!viewer.canManage) throw errors.protectedNotFound('team_entry');
     const open = await openRosterRow(this.db, organizationId, teamEntryId, query.personId);
+    // R3-TRACE-A-01: the explanation is the one a roster change by this actor would get, and the
+    // restricted detail follows a staff role that reads discipline in the division's facility,
+    // never the principal's kind nor a role that only reads the entry (a coach, front desk).
+    const scope = { organizationId, facilityId: context.division?.facility_id };
+    const [rosterStaff, restrictedDetail] = await Promise.all([
+      staffAuthority(this.authorization, principal, CompetitionActions.manageRoster, scope),
+      readsRestrictedDetail(this.authorization, principal, scope),
+    ]);
     return this.eligibility.evaluateInContext(
       this.db,
       context,
@@ -266,10 +282,10 @@ export class RosterService implements RosterPort {
       query.at ? new Date(query.at) : now,
       {
         membershipStatus: query.status,
-        actorIsStaff: isStaffLike(principal),
+        actorIsStaff: rosterStaff,
         existingMembership: open !== null && statusAt(open) !== null,
         // SPK-CAP-002 / SPK-DISC-004: captains get codes, limits and dates, never restricted detail
-        restricted: !isStaffLike(principal),
+        restricted: !restrictedDetail,
       },
     );
   }
@@ -311,6 +327,16 @@ export class RosterService implements RosterPort {
           throw errors.notFound('person', input.recipientPersonId);
         }
         recipientPersonId = recipient.id;
+        // R3-TRACE-A-01: staff rules for a staff role that invites and restricted detail for one
+        // that reads discipline, in the division's facility; never for staff kind alone.
+        const scope = { organizationId, facilityId: context.division?.facility_id };
+        const inviterStaff = await staffAuthority(
+          this.authorization,
+          principal,
+          CompetitionActions.invitePlayer,
+          scope,
+        );
+        const restrictedDetail = await readsRestrictedDetail(this.authorization, principal, scope);
         const evaluation = await this.eligibility.evaluateInContext(
           trx,
           context,
@@ -318,8 +344,8 @@ export class RosterService implements RosterPort {
           now,
           {
             membershipStatus: 'active',
-            actorIsStaff: isStaffLike(principal),
-            restricted: !isStaffLike(principal),
+            actorIsStaff: inviterStaff,
+            restricted: !restrictedDetail,
           },
           trx,
         );
@@ -818,8 +844,10 @@ export class RosterService implements RosterPort {
     };
     const action = CompetitionActions.readTeamInvitation;
     if (
-      isStaffLike(principal) &&
-      (await this.authorization.decide(principal, action, base)).allowed
+      await staffAuthority(this.authorization, principal, action, {
+        organizationId: row.organization_id,
+        facilityId: await entryFacilityId(db, row.organization_id, row.team_entry_id),
+      })
     ) {
       return true;
     }
@@ -1025,11 +1053,16 @@ export class RosterService implements RosterPort {
       if (context.season.status === 'completed' || context.season.status === 'archived') {
         throw errors.invalidTransition('Season', context.season.status, 'handover_role');
       }
-      if (
-        !isStaffLike(principal) &&
-        input.role === 'captain' &&
-        input.fromPersonId !== principal.personId
-      ) {
+      // R3-TRACE-A-01: league staff by a staff role that hands roles over; a co-captain acting as
+      // captain never hands over the captaincy, whatever other staff role they hold.
+      const handoverScope = { organizationId, facilityId: context.division?.facility_id };
+      const handoverStaff = await staffAuthority(
+        this.authorization,
+        principal,
+        CompetitionActions.handoverTeamRole,
+        handoverScope,
+      );
+      if (!handoverStaff && input.role === 'captain' && input.fromPersonId !== principal.personId) {
         throw errors.accessDenied('Only the current captain hands over the captaincy.', {
           action: CompetitionActions.handoverTeamRole.id,
         });
@@ -1084,8 +1117,8 @@ export class RosterService implements RosterPort {
         {
           membershipStatus: 'active',
           existingMembership: true,
-          actorIsStaff: isStaffLike(principal),
-          restricted: !isStaffLike(principal),
+          actorIsStaff: handoverStaff,
+          restricted: !(await readsRestrictedDetail(this.authorization, principal, handoverScope)),
         },
         trx,
       );
@@ -1255,7 +1288,12 @@ export class RosterService implements RosterPort {
         {
           membershipStatus: 'active',
           actorIsStaff: false,
-          restricted: !isStaffLike(principal),
+          // R3-TRACE-A-01: a requester sees restricted detail only through a staff role that
+          // reads discipline in the division's facility.
+          restricted: !(await readsRestrictedDetail(this.authorization, principal, {
+            organizationId,
+            facilityId: context.division?.facility_id,
+          })),
         },
         trx,
       );
@@ -1370,7 +1408,13 @@ export class RosterService implements RosterPort {
           effectiveFrom: now,
           jerseyNumber: null,
           source: 'join_request',
-          actorIsStaff: isStaffLike(principal),
+          // R3-TRACE-A-01: staff by a staff role that decides join requests, not by kind.
+          actorIsStaff: await staffAuthority(
+            this.authorization,
+            principal,
+            CompetitionActions.decideJoinRequest,
+            { organizationId, facilityId: context.division?.facility_id },
+          ),
           correlationId,
         });
       }
@@ -1556,8 +1600,12 @@ export class RosterService implements RosterPort {
       {
         membershipStatus: input.status,
         actorIsStaff: input.actorIsStaff,
-        // the 422 details reach the caller: a captain approving or adding sees codes only
-        restricted: !input.actorIsStaff,
+        // the 422 details reach the caller: a captain approving or adding, or staff who do not
+        // read discipline, see codes, limits and dates only (R3-TRACE-A-01, SPK-DISC-004)
+        restricted: !(await readsRestrictedDetail(this.authorization, principal, {
+          organizationId,
+          facilityId: context.division?.facility_id,
+        })),
       },
       trx,
     );

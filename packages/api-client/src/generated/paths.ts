@@ -5482,6 +5482,7 @@ export type paths = {
                     cursor?: string;
                     from?: string;
                     limit?: number;
+                    order?: "asc" | "desc";
                     personId?: string;
                     status?: components["schemas"]["AssignmentStatus"];
                     targetId?: string;
@@ -9950,6 +9951,15 @@ export type paths = {
                 };
                 /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
                 426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -17535,6 +17545,7 @@ export type paths = {
                     currency?: string;
                     cursor?: string;
                     limit?: number;
+                    order?: "asc" | "desc";
                     personId?: string;
                     status?: components["schemas"]["FeeSubmissionStatus"];
                 };
@@ -30065,6 +30076,98 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/outbox-events/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replay an outbox event that was dead-lettered (reliability.outbox_dead_letter): it returns to the worker with its attempts reset, the handlers that already ran are skipped, and the dead-letter exception is resolved once it settles (core.replay_dead_letter; the queue that owns it, general manager or system administrator; audited) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ReplayDeadLetterRequest"];
+                };
+            };
+            responses: {
+                /** @description The event, back with the worker */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeadLetterReplay"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description No such event in the organization */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description INVALID_TRANSITION when the event is not dead-lettered */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/package-entitlements": {
         parameters: {
             query?: never;
@@ -31214,8 +31317,8 @@ export type paths = {
         options?: never;
         head?: never;
         /**
-         * Update a person with an expected revision
-         * @description Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).
+         * Update a person with an expected revision; answers the person only to a caller who may read it, otherwise the id and new revision
+         * @description Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).
          */
         patch: {
             parameters: {
@@ -31243,7 +31346,7 @@ export type paths = {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["PersonDetail"];
+                        "application/json": components["schemas"]["UpdatePersonResponse"];
                     };
                 };
                 /** @description Validation failed */
@@ -31620,8 +31723,8 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Make a contact point the primary one of its kind (one transaction)
-         * @description Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).
+         * Make a contact point the primary one of its kind (one transaction); the contact point is answered only to a caller who may read the person
+         * @description Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).
          */
         post: {
             parameters: {
@@ -31650,7 +31753,7 @@ export type paths = {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ContactPoint"];
+                        "application/json": components["schemas"]["MakePrimaryContactPointResponse"];
                     };
                 };
                 /** @description Validation failed */
@@ -36376,6 +36479,98 @@ export type paths = {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/provider-events/{id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replay a provider (inbox) event that was dead-lettered (reliability.inbox_dead_letter): it returns to the worker with its attempts reset, the handlers that already ran are skipped, and the dead-letter exception is resolved once it settles (core.replay_dead_letter; the queue that owns it, general manager or system administrator; audited) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ReplayDeadLetterRequest"];
+                };
+            };
+            responses: {
+                /** @description The event, back with the worker */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeadLetterReplay"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description No such event in the organization */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description INVALID_TRANSITION when the event is not dead-lettered */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -49711,6 +49906,7 @@ export type components = {
         AppealStatus: "submitted" | "under_review" | "granted" | "denied" | "withdrawn";
         /** @enum {string} */
         AppealStatusSummary: "none" | "pending" | "granted" | "denied";
+        /** @description R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`). */
         AppendImportRowsRequest: {
             /** @default [] */
             csv?: components["schemas"]["CsvDocument"][];
@@ -51137,6 +51333,18 @@ export type components = {
                 sourceId: string;
                 sourceType: string;
             }[];
+            /** @default null */
+            staff?: {
+                /** Format: uuid */
+                assignmentId: string;
+                /** Format: uuid */
+                eventId: string;
+                kind: string;
+                /** Format: uuid */
+                personId: string;
+                role: string;
+                status: string;
+            }[] | null;
             summary: {
                 customers: number;
                 equipment: number;
@@ -51147,6 +51355,8 @@ export type components = {
                 people: number;
                 programs: number;
                 rentals: number;
+                /** @default null */
+                staff?: number | null;
                 teams: number;
             };
         };
@@ -51329,6 +51539,16 @@ export type components = {
             value: string;
             /** Format: date-time */
             verifiedAt: string | null;
+        };
+        ContactPointChangeAcknowledgement: {
+            /** @enum {boolean} */
+            detailWithheld: true;
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ContactPointKind"];
+            /** Format: uuid */
+            personId: string;
+            personRevision: number;
         };
         /** @enum {string} */
         ContactPointKind: "email" | "phone";
@@ -51961,6 +52181,7 @@ export type components = {
         CreateHouseholdRequest: {
             name: string;
         };
+        /** @description R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`). */
         CreateImportBatchRequest: {
             checksum?: string;
             controlTotals: components["schemas"]["ControlTotals"];
@@ -52700,6 +52921,22 @@ export type components = {
                 /** @enum {string} */
                 status: "ok" | "not_permitted" | "unavailable";
             }[];
+        };
+        DeadLetterReplay: {
+            attempts: number;
+            /** Format: date-time */
+            availableAt: string;
+            /** Format: uuid */
+            exceptionId: string | null;
+            /** Format: uuid */
+            id: string;
+            replayCount: number;
+            /** Format: date-time */
+            replayedAt: string;
+            /** @enum {string} */
+            source: "outbox" | "inbox";
+            /** @enum {string} */
+            status: "pending" | "received";
         };
         DecideAppealRequest: {
             /** @enum {string} */
@@ -54486,6 +54723,7 @@ export type components = {
             pass: components["schemas"]["Pass"];
             reference: string;
         };
+        /** @description SPK-YOUTH-004: `session_canceled` and `absence` require `originatingSessionId`: a session of the originating enrollment's offering when `originatingEnrollmentId` is given, otherwise a session the participant took part in (a confirmed enrollment in its offering, or a session booking or trial for it); `policy_event` requires `originReference`; `manual` may name neither. */
         IssueMakeupRequest: {
             /** @default [] */
             eligibleOfferingIds?: string[];
@@ -54653,6 +54891,7 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
         };
+        MakePrimaryContactPointResponse: components["schemas"]["ContactPoint"] | components["schemas"]["ContactPointChangeAcknowledgement"];
         MakeupEntitlement: {
             /** Format: date-time */
             createdAt: string;
@@ -55877,6 +56116,13 @@ export type components = {
             /** Format: uuid */
             personId: string;
             relationships: components["schemas"]["Relationship"][];
+        };
+        PersonChangeAcknowledgement: {
+            /** @enum {boolean} */
+            detailWithheld: true;
+            /** Format: uuid */
+            id: string;
+            revision: number;
         };
         PersonDetail: components["schemas"]["Person"] & {
             contactPoints: components["schemas"]["ContactPoint"][];
@@ -57520,6 +57766,10 @@ export type components = {
             replacement: components["schemas"]["Assignment"];
             uncovered: components["schemas"]["UncoveredAssignmentNotice"] | null;
         };
+        ReplayDeadLetterRequest: {
+            policyReferences?: string[];
+            reason: string;
+        };
         ReportColumn: {
             key: string;
             label: string;
@@ -58328,10 +58578,14 @@ export type components = {
             reason?: string;
         };
         SeriesEditChanges: {
+            /** @enum {string} */
+            ambiguousPolicy?: "first" | "second";
             cancel?: boolean;
             cleanupMinutes?: number;
             durationMinutes?: number;
             localStartTime?: string;
+            /** @enum {string} */
+            nonexistentPolicy?: "shift_forward" | "skip";
             resourceIds?: string[];
             setupMinutes?: number;
             title?: string;
@@ -59110,9 +59364,11 @@ export type components = {
             count: number;
             /** Format: uuid */
             facilityId: string | null;
+            omitted: number | null;
             source: string;
             /** @enum {string} */
             status: "ok" | "not_permitted" | "unavailable";
+            truncated: boolean;
         };
         ToolInvocation: {
             actionId: string | null;
@@ -59512,6 +59768,7 @@ export type components = {
             /** @enum {string} */
             status?: "active" | "inactive";
         };
+        UpdatePersonResponse: components["schemas"]["PersonDetail"] | components["schemas"]["PersonChangeAcknowledgement"];
         UpdatePosProductRequest: {
             chargePolicyKeys?: string[];
             expectedRevision: number;

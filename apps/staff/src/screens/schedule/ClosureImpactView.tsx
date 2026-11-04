@@ -5,6 +5,10 @@
  * people and equipment committed to them, the owning records, and the customers, financial
  * obligations and unsent messages the closure touches.
  *
+ * Staff assigned (R3-TRACE-A-06): the live assignments on the affected events, from the workforce
+ * module. `staff` and `summary.staff` are null ("not identified") when no module identified them,
+ * which is never shown as zero.
+ *
  * Customers are listed by id in the impact; their names are read on request through
  * `GET /v1/person-names` (names only, §4.14), and a person the viewer may not view reads "Name not
  * available". Obligations are identified only: any financial adjustment is the policy-governed
@@ -47,6 +51,10 @@ export function ImpactSummary({ impact, caption }: { impact: ClosureImpact; capt
     ['Other events', String(s.other)],
     ['Teams', String(s.teams)],
     ['People committed (staff, officials, coaches, participants)', String(s.people)],
+    [
+      'Staff assigned',
+      s.staff === null || s.staff === undefined ? 'Not identified' : String(s.staff),
+    ],
     ['Equipment', String(s.equipment)],
     ['Owning records (fixtures, sessions, rentals)', String(impact.sourceRecords.length)],
     ['Customers', String(s.customers)],
@@ -169,12 +177,39 @@ function CustomerNames({ impact }: { impact: ClosureImpact }) {
   );
 }
 
-/** Customers, financial obligations and unsent messages (SPK-SCHED-009). */
+/** Staff assigned to the affected events (SPK-SCHED-009, R3-TRACE-A-06). */
+function StaffAssigned({ impact }: { impact: ClosureImpact }) {
+  const staff = impact.staff;
+  if (staff === null || staff === undefined) {
+    return <p>Staff assignments on the affected events are not identified.</p>;
+  }
+  if (staff.length === 0) return <p>No staff member is assigned to the affected events.</p>;
+  return (
+    <ul className="list" aria-label="Staff assigned to affected events">
+      {staff.map((a) => (
+        <li key={a.assignmentId}>
+          <div className="row-text">
+            <span className="row-title">
+              {words(a.kind)} · {words(a.role)}
+            </span>
+            <span className="caption">
+              {words(a.status)} · {eventTitles(impact, [a.eventId])}
+            </span>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Staff, customers, financial obligations and unsent messages (SPK-SCHED-009). */
 export function ImpactParties({ impact }: { impact: ClosureImpact }) {
   const [showNames, setShowNames] = useState(false);
   return (
     <section aria-labelledby="impact-parties-title">
       <h5 id="impact-parties-title">Customers, obligations and messages</h5>
+      <h6>Staff assigned</h6>
+      <StaffAssigned impact={impact} />
       <h6>Customers</h6>
       {impact.customers.length === 0 ? (
         <p>No customer takes part in the affected events.</p>

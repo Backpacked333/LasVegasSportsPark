@@ -156,6 +156,21 @@ export class RecoveryMode implements OnApplicationBootstrap {
       .orderBy('opened_at');
   }
 
+  /**
+   * The organizations recovering from a restore, for workers that pause per organization
+   * (R3-OPERATIONS-05: the delivery worker hands nothing to a provider for them).
+   */
+  async activeOrganizations(db: Db | Trx = this.db): Promise<string[]> {
+    const rows = await db
+      .selectFrom('operational_exceptions')
+      .select('organization_id')
+      .distinct()
+      .where('category', '=', RECOVERY_EXCEPTION_CATEGORY)
+      .where('status', 'in', ['open', 'acknowledged'])
+      .execute();
+    return rows.map((r) => r.organization_id);
+  }
+
   /** Whether the organization is recovering from a restore (financial commands paused). */
   async isActive(organizationId: string, db: Db | Trx = this.db): Promise<boolean> {
     return (await this.open(db, organizationId).executeTakeFirst()) !== undefined;

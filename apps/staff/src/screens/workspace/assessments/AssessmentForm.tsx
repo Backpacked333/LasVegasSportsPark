@@ -18,6 +18,9 @@
  *   (§4.7 invariant 9, SPK-YOUTH-005): its skill area and visibility are the corrected
  *   assessment's and cannot be changed, also when its draft is edited, and only templates of the
  *   corrected template's program are offered; otherwise the API answers CORRECTION_MISMATCH.
+ * - Offline (inventory SCR-W-07 "offline (draft kept)", §4.15): saving is disabled with "Needs a
+ *   connection" (`CommandButton`) and nothing is queued or sent later; what the coach entered stays
+ *   in the form until it can be saved.
  */
 import { useState } from 'react';
 import { useApiCommand } from '../../../api/useApiCommand';
@@ -29,7 +32,8 @@ import {
   fieldErrorsOf,
 } from '../../../features/operations/fields';
 import { ASSESSMENT_STATUS, ASSESSMENT_VISIBILITY } from '../../../features/operations/labels';
-import { Button } from '../../../ui/Button';
+import { useApp } from '../../../providers/AppProviders';
+import { CommandButton } from '../../../ui/CommandButton';
 import {
   DATE_ONLY,
   SKILL_KEY,
@@ -58,6 +62,7 @@ export function AssessmentForm({
   corrects?: Assessment;
   onDone: (saved: Assessment) => void;
 }) {
+  const { online } = useApp();
   const base = editing ?? corrects;
   // A correction (new, or its draft being edited) keeps the corrected observation's skill area
   // and visibility (CORRECTION_MISMATCH otherwise).
@@ -103,6 +108,8 @@ export function AssessmentForm({
       : templateChoice;
 
   const submit = () => {
+    // Offline nothing is saved or queued (§4.15): the control is disabled and the input is kept.
+    if (!online) return;
     const next: Record<string, string> = {};
     if (!editing && !UUID.test(templateId)) next.template = 'Choose an approved template.';
     if (!SKILL_KEY.test(skill)) next.skill = 'Choose the skill area.';
@@ -323,10 +330,15 @@ export function AssessmentForm({
         error={apiErrors.staffNote}
       />
       <div className="ops-actions">
-        <Button type="submit" busy={command.isProcessing}>
+        <CommandButton type="submit" busy={command.isProcessing}>
           {editing ? 'Save the draft' : 'Save as draft'}
-        </Button>
+        </CommandButton>
       </div>
+      {!online ? (
+        <p className="caption" role="status">
+          You are offline: saving the assessment needs a connection. What you entered stays here.
+        </p>
+      ) : null}
       {command.error && Object.keys(apiErrors).length === 0 ? (
         <CommandError error={command.error} onRetry={submit} subject="This assessment" />
       ) : null}

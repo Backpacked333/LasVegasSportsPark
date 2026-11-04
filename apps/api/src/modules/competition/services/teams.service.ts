@@ -13,7 +13,7 @@ import {
 } from '../../../kernel';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
-import { isStaffLike, organizationOf, toTeam } from '../competition.shared';
+import { organizationOf, staffAuthority, toTeam } from '../competition.shared';
 import { TeamMachine, eventTo } from '../competition.state-machines';
 import type { Reader } from '../competition.queries';
 
@@ -68,7 +68,12 @@ export class TeamsService {
       assertExpectedRevision(input.expectedRevision, current.revision);
       let status = current.status;
       if (input.status !== undefined && input.status !== current.status) {
-        if (input.status === 'archived' && !isStaffLike(principal)) {
+        if (
+          input.status === 'archived' &&
+          !(await staffAuthority(this.authorization, principal, CompetitionActions.manageTeam, {
+            organizationId,
+          }))
+        ) {
           throw errors.accessDenied('Only staff may archive a team.');
         }
         status = TeamMachine.next(
@@ -175,7 +180,13 @@ export class TeamsService {
     teamId: string,
     db: Reader,
   ): Promise<void> {
-    if (isStaffLike(principal)) {
+    // R3-TRACE-A-01: staff by a staff role that manages teams; any other staff role holder edits
+    // a team only as the captain of one of its live entries.
+    if (
+      await staffAuthority(this.authorization, principal, CompetitionActions.manageTeam, {
+        organizationId,
+      })
+    ) {
       await this.authorization.require(principal, CompetitionActions.manageTeam, {
         type: 'team',
         id: teamId,

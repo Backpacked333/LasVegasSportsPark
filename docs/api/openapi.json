@@ -1508,6 +1508,20 @@
             "minItems": 1,
             "maxItems": 20
           },
+          "nonexistentPolicy": {
+            "type": "string",
+            "enum": [
+              "shift_forward",
+              "skip"
+            ]
+          },
+          "ambiguousPolicy": {
+            "type": "string",
+            "enum": [
+              "first",
+              "second"
+            ]
+          },
           "cancel": {
             "type": "boolean"
           }
@@ -1865,6 +1879,47 @@
               ]
             }
           },
+          "staff": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "assignmentId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "personId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "eventId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "assignmentId",
+                "personId",
+                "eventId",
+                "kind",
+                "role",
+                "status"
+              ]
+            },
+            "default": null
+          },
           "summary": {
             "type": "object",
             "properties": {
@@ -1897,6 +1952,13 @@
               },
               "messages": {
                 "type": "integer"
+              },
+              "staff": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "default": null
               }
             },
             "required": [
@@ -10157,6 +10219,40 @@
           }
         ]
       },
+      "PersonChangeAcknowledgement": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "detailWithheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "detailWithheld"
+        ]
+      },
+      "UpdatePersonResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/PersonDetail"
+          },
+          {
+            "$ref": "#/components/schemas/PersonChangeAcknowledgement"
+          }
+        ]
+      },
       "Account": {
         "type": "object",
         "properties": {
@@ -12477,6 +12573,49 @@
         },
         "required": [
           "removedContactPointId"
+        ]
+      },
+      "ContactPointChangeAcknowledgement": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ContactPointKind"
+          },
+          "personRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "detailWithheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "personId",
+          "kind",
+          "personRevision",
+          "detailWithheld"
+        ]
+      },
+      "MakePrimaryContactPointResponse": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ContactPoint"
+          },
+          {
+            "$ref": "#/components/schemas/ContactPointChangeAcknowledgement"
+          }
         ]
       },
       "InvitationParty": {
@@ -21879,6 +22018,83 @@
           "nextCursor"
         ]
       },
+      "ReplayDeadLetterRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "DeadLetterReplay": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "outbox",
+              "inbox"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "received"
+            ]
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "availableAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "replayCount": {
+            "type": "integer"
+          },
+          "replayedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "exceptionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "status",
+          "attempts",
+          "availableAt",
+          "replayCount",
+          "replayedAt",
+          "exceptionId"
+        ]
+      },
       "ProviderGate": {
         "type": "string",
         "enum": [
@@ -26165,7 +26381,8 @@
           "originKind",
           "expiresAt",
           "reason"
-        ]
+        ],
+        "description": "SPK-YOUTH-004: `session_canceled` and `absence` require `originatingSessionId`: a session of the originating enrollment's offering when `originatingEnrollmentId` is given, otherwise a session the participant took part in (a confirmed enrollment in its offering, or a session booking or trial for it); `policy_event` requires `originReference`; `manual` may name neither."
       },
       "RedeemMakeupRequest": {
         "type": "object",
@@ -37789,7 +38006,8 @@
           "transformationVersion",
           "controlTotals"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`)."
       },
       "AppendImportRowsRequest": {
         "type": "object",
@@ -37829,7 +38047,8 @@
             "maxItems": 20
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "R3-SECURITY-02 (§4.8, §5.4): the server reads at most `HTTP_BODY_LIMIT_BYTES` (2 MiB by default) per request, less than the row and CSV maxima allow together; a larger body answers 400 `VALIDATION_FAILED` with `details.code = body_too_large` and `details.limitBytes`, and nothing is staged. Stage a large snapshot in chunks (`POST /import-batches/{id}/rows`)."
       },
       "ValidateImportBatchRequest": {
         "type": "object",
@@ -42306,13 +42525,25 @@
           },
           "count": {
             "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "omitted": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
           }
         },
         "required": [
           "source",
           "facilityId",
           "status",
-          "count"
+          "count",
+          "truncated",
+          "omitted"
         ]
       },
       "TodayFeed": {
@@ -57171,8 +57402,8 @@
         }
       },
       "patch": {
-        "summary": "Update a person with an expected revision",
-        "description": "Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).",
+        "summary": "Update a person with an expected revision; answers the person only to a caller who may read it, otherwise the id and new revision",
+        "description": "Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).",
         "tags": [
           "Identity"
         ],
@@ -57216,7 +57447,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PersonDetail"
+                  "$ref": "#/components/schemas/UpdatePersonResponse"
                 }
               }
             }
@@ -60753,8 +60984,8 @@
     },
     "/people/{id}/contact-points/{contactPointId}/make-primary": {
       "post": {
-        "summary": "Make a contact point the primary one of its kind (one transaction)",
-        "description": "Implements SPK-IAM-001, §4.9. Requires an Idempotency-Key header (§4.9).",
+        "summary": "Make a contact point the primary one of its kind (one transaction); the contact point is answered only to a caller who may read the person",
+        "description": "Implements SPK-IAM-001, SPK-IAM-003, §4.9. Requires an Idempotency-Key header (§4.9).",
         "tags": [
           "Identity"
         ],
@@ -60807,7 +61038,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ContactPoint"
+                  "$ref": "#/components/schemas/MakePrimaryContactPointResponse"
                 }
               }
             }
@@ -71150,6 +71381,214 @@
           },
           "403": {
             "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/outbox-events/{id}/replay": {
+      "post": {
+        "summary": "Replay an outbox event that was dead-lettered (reliability.outbox_dead_letter): it returns to the worker with its attempts reset, the handlers that already ran are skipped, and the dead-letter exception is resolved once it settles (core.replay_dead_letter; the queue that owns it, general manager or system administrator; audited)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayDeadLetterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The event, back with the worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeadLetterReplay"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "INVALID_TRANSITION when the event is not dead-lettered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/provider-events/{id}/replay": {
+      "post": {
+        "summary": "Replay a provider (inbox) event that was dead-lettered (reliability.inbox_dead_letter): it returns to the worker with its attempts reset, the handlers that already ran are skipped, and the dead-letter exception is resolved once it settles (core.replay_dead_letter; the queue that owns it, general manager or system administrator; audited)",
+        "tags": [
+          "Core"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayDeadLetterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The event, back with the worker",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeadLetterReplay"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "INVALID_TRANSITION when the event is not dead-lettered",
             "content": {
               "application/json": {
                 "schema": {
@@ -97765,6 +98204,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -100022,6 +100471,19 @@
             "in": "query"
           },
           {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            },
+            "required": false,
+            "name": "order",
+            "in": "query"
+          },
+          {
             "$ref": "#/components/parameters/ClientInfo"
           }
         ],
@@ -101053,6 +101515,19 @@
             },
             "required": false,
             "name": "personId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            },
+            "required": false,
+            "name": "order",
             "in": "query"
           },
           {

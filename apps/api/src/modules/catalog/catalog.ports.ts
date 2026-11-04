@@ -121,6 +121,16 @@ export interface PolicyPort {
     policyVersionId: string,
     trx?: Trx,
   ): Promise<boolean>;
+  /**
+   * R3-PERFORMANCE-01: the participants among `subjectPersonIds` with an active acknowledgment of
+   * the policy version, in one query (a roster's required-form check).
+   */
+  acknowledgedSubjects(
+    organizationId: string,
+    subjectPersonIds: readonly string[],
+    policyVersionId: string,
+    trx?: Trx,
+  ): Promise<Set<string>>;
 }
 
 export interface EvaluateDiscountsRequest {

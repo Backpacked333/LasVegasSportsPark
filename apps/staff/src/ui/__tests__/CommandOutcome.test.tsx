@@ -10,9 +10,9 @@
  * 2xx whose answer could not be read is an unknown outcome.
  */
 import { ApiError, networkError, timeoutError } from '@sportspark/api-client';
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ReactElement } from 'react';
+import { act, type ReactElement } from 'react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { CommandError as CompetitionCommandError } from '../../features/competition/CommandError';
@@ -21,7 +21,9 @@ import { CommandError as OperationsCommandError } from '../../features/operation
 import { CommandError as PosCommandError } from '../../features/pos-access-accounting/CommandError';
 import { CommandError as FinanceCommandError } from '../../features/registration-finance/CommandError';
 import { CommandError as ScheduleCommandError } from '../../features/schedule-facilities/CommandError';
+import { createTestApp } from '../../testing/test-app';
 import { CommandError as SharedCommandError } from '../CommandFeedback';
+import { StateView } from '../StateView';
 
 type View = (props: {
   error: ApiError;
@@ -44,7 +46,13 @@ function sent(error: ApiError, method = 'post'): ApiError {
   return error;
 }
 
-function api(code: string, status: number, nextAction: string, details?: unknown): ApiError {
+function api(
+  code: string,
+  status: number,
+  nextAction: string,
+  details?: unknown,
+  method = 'post',
+): ApiError {
   return sent(
     new ApiError({
       kind: 'api',
@@ -55,6 +63,7 @@ function api(code: string, status: number, nextAction: string, details?: unknown
       correlationId: 'corr-9',
       details,
     }),
+    method,
   );
 }
 
@@ -219,5 +228,65 @@ describe('staff command failure views (§4.9, SPK-PAY-007, SPK-UX-008)', () => {
       onRetry: () => undefined,
     });
     expect(screen.queryByTestId('state-outcome-unknown')).toBeNull();
+  });
+});
+
+describe('offline, "Try again" in the failure views needs a connection (§4.15, R3-SCREEN-STATES-01)', () => {
+  function offline(element: ReactElement) {
+    const app = createTestApp();
+    act(() => app.connectivity.set(false));
+    const Wrapper = app.wrapper;
+    render(
+      <Wrapper>
+        <MemoryRouter>{element}</MemoryRouter>
+      </Wrapper>,
+    );
+    return app;
+  }
+
+  it.each(VIEWS)(
+    '%s: an unknown outcome and a refusal before running offer "Try again" disabled with "Needs a connection", never a control that does nothing',
+    async (_name, View) => {
+      const user = userEvent.setup();
+      for (const [error, testId] of [
+        [sent(networkError(new TypeError('Failed to fetch'))), 'state-outcome-unknown'],
+        [
+          api('INTEGRATION_UNAVAILABLE', 503, 'retry_later', { reason: 'recovery_mode' }),
+          'state-refused-before-running',
+        ],
+      ] as const) {
+        const onRetry = vi.fn();
+        offline(<View error={error} onRetry={onRetry} />);
+        const view = screen.getByTestId(testId);
+        const retry = within(view).getByRole('button', { name: 'Try again' });
+        expect(retry).toBeDisabled();
+        expect(retry).toHaveAccessibleDescription('Needs a connection.');
+        await user.click(retry);
+        expect(onRetry).not.toHaveBeenCalled();
+        cleanup();
+      }
+    },
+  );
+
+  it('StateView: a command’s retryable failure needs a connection; a read’s retry stays a plain button', () => {
+    const onRetry = vi.fn();
+    offline(
+      <>
+        <StateView
+          variant="error"
+          error={api('RATE_LIMITED', 429, 'retry_later')}
+          onRetry={onRetry}
+        />
+        <StateView
+          variant="error"
+          error={api('RATE_LIMITED', 429, 'retry_later', undefined, 'get')}
+          onRetry={onRetry}
+        />
+      </>,
+    );
+    const [command, read] = screen.getAllByRole('button', { name: 'Try again' });
+    expect(command).toBeDisabled();
+    expect(command).toHaveAccessibleDescription('Needs a connection.');
+    expect(read).toBeEnabled();
   });
 });

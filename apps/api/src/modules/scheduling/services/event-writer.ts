@@ -105,13 +105,16 @@ export function sameResourceSet(a: readonly string[], b: readonly string[]): boo
  * authorize before using it. Exclusion violations (the database guarantee, §4.7 invariant 4) are
  * converted to RESOURCE_CONFLICT naming the conflicting event ids.
  */
-/** The longest event title, the same bound as `POST /v1/events` (CreateEventBody.title). */
+/**
+ * The longest event title, the same bound as the series and draft request bodies
+ * (`CreateEventSeriesBody.title`). There is no direct event-creation route (R3-DOCS-TRUTH-3-09).
+ */
 export const EVENT_TITLE_MAX = 200;
 
 /**
  * R2-TENANCY-INPUT-02 (SPK-COMMS-005, §4.10): an event title is 1 to 200 characters on every path
- * that creates an event, not only the HTTP route: the scheduling port (`createEvent`, used by
- * competition, catalog, enrollment), imports and series. An overlong title is refused where it is
+ * that creates an event: the scheduling port (`createEvent`, used by competition, catalog,
+ * enrollment), imports, series and schedule drafts. An overlong title is refused where it is
  * created (VALIDATION_FAILED naming `title`) rather than stored and failing the notices built from
  * it later.
  */

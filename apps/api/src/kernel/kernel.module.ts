@@ -31,7 +31,7 @@ import {
 import { CapabilityService } from './capabilities/capability.service';
 import { SystemClock } from './clock';
 import { loadConfig, type AppConfig } from './config';
-import { databaseProvider } from './database/database.provider';
+import { DatabaseLifecycle, databaseProvider } from './database/database.provider';
 import { UnitOfWork } from './database/unit-of-work';
 import {
   AdminController,
@@ -52,6 +52,8 @@ import { lazyPort } from './lazy-port';
 import { OperationsController } from './operations/operations.controller';
 import { OperationsService } from './operations/operations.service';
 import { EventHandlerRegistry } from './outbox/event-handler.registry';
+import { DeadLetters } from './outbox/dead-letters';
+import { DeadLettersController } from './outbox/dead-letters.controller';
 import { Outbox } from './outbox/outbox';
 import { OutboxHistory } from './outbox/outbox-history';
 import { OutboxDispatcher } from './outbox/outbox-dispatcher';
@@ -88,6 +90,7 @@ export const KERNEL_CONTROLLERS = [
   MePermissionsController,
   AdminController,
   AuditController,
+  DeadLettersController,
 ];
 
 export interface KernelModuleOptions {
@@ -129,6 +132,7 @@ export class KernelModule implements OnModuleInit {
     const providers: Provider[] = [
       { provide: APP_CONFIG, useValue: config },
       options.database ? { provide: DATABASE, useValue: options.database } : databaseProvider,
+      DatabaseLifecycle,
       { provide: CLOCK, useClass: SystemClock },
       {
         provide: IDENTITY_PROVIDER,
@@ -197,6 +201,7 @@ export class KernelModule implements OnModuleInit {
       PeriodicJobRunner,
       EventHandlerRegistry,
       Outbox,
+      DeadLetters,
       OperationalExceptions,
       OutboxDispatcher,
       Inbox,

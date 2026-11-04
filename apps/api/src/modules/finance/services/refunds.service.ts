@@ -23,6 +23,7 @@ import {
   snapshotActor,
   type Clock,
   type Trx,
+  RecoveryMode,
 } from '../../../kernel';
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
@@ -42,6 +43,7 @@ import {
   type Reader,
   type RefundRow,
   type RefundableRow,
+  refuseDuringRecovery,
 } from '../finance.shared';
 import { LedgerService } from '../ledger/ledger.service';
 import { FinanceCustomerScope } from './customer-scope';
@@ -97,6 +99,7 @@ export class RefundsService {
     private readonly policy: FinancePolicyResolver,
     @Inject(RECORD_AUTHORITY_PORT) private readonly recordAuthority: RecordAuthorityPort,
     private readonly scope: FinanceCustomerScope,
+    private readonly recovery: RecoveryMode,
   ) {}
 
   async load(
@@ -173,6 +176,9 @@ export class RefundsService {
         id: paymentAttemptId,
         organizationId,
       });
+      // §5.8 / SPK-AT-028: every caller (HTTP, support's case refund, an automation apply) is
+      // refused during recovery before anything is reserved (R3-OPERATIONS-02).
+      await refuseDuringRecovery(this.recovery, organizationId, trx);
       const payment = await trx
         .selectFrom('payment_attempts')
         .select(['id', 'status', 'payer_person_id', 'currency'])

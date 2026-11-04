@@ -13,6 +13,7 @@
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
+import { useFacilityDirectory } from '../../api/facility-directory';
 import { useApiQuery } from '../../api/useApiQuery';
 import { facilityLabel } from '../../layout/FacilitySwitcher';
 import { useApp, useNow } from '../../providers/AppProviders';
@@ -42,10 +43,8 @@ export const FACILITY_STATUS_BADGE: Record<FacilityStatus, { tone: StatusTone; l
   archived: { tone: 'neutral', label: 'Facility status: archived' },
 };
 
-/** The facility directory read every schedule and facilities screen shares (one cached read). */
-export function useFacilityDirectory(enabled = true) {
-  return useApiQuery({ path: '/facilities', enabled, staleTime: 5 * 60_000 });
-}
+/** The facility directory read every screen shares (one cached read, `api/facility-directory`). */
+export { useFacilityDirectory };
 
 function contextOf(
   summary: FacilitySummary | undefined,

@@ -8,6 +8,7 @@ import {
   type Trx,
 } from '../../../kernel';
 import { OFFERING_LOOKUP_PORT, type OfferingLookupPort } from '../../catalog';
+import { viewerOf, type RecordViewer } from '../enrollment.shared';
 
 /**
  * Facility boundaries of enrollment records (§4.3 facility boundaries, §4.14 least privilege and
@@ -83,6 +84,81 @@ export class EnrollmentFacilityScope {
       ...target,
       facilityId: facilityIds[0],
     });
+  }
+
+  /**
+   * R3-TRACE-A-02 (§2.1, §4.14, SPK-IAM-001/003, SPK-REG-008/009/010): whether `principal` holds
+   * `action` through a staff role that covers every one of `facilityIds` (organization-wide when
+   * none is given), or is the system. This is the kernel's own decision with no subject persons, so
+   * only the staff-role basis can allow it. Every staff-only branch of a command or read (setting
+   * a waitlist priority, skipping a required approval, recording attendance, naming another payer
+   * or basket owner, the staff-assisted record, staff lists, unredacted payer facts) follows this,
+   * never `principal.kind`: a staff member acting for their own family through self or guardian
+   * authority is a customer for that command, whatever roles they hold elsewhere.
+   */
+  async actsAsStaff(
+    principal: Principal,
+    action: ActionDefinition,
+    organizationId: string,
+    facilityIds?: string | ReadonlyArray<string | null | undefined> | null,
+  ): Promise<boolean> {
+    if (principal.kind === 'system') return principal.organizationId === organizationId;
+    if (principal.kind !== 'staff') return false;
+    const facilities = (
+      typeof facilityIds === 'string' ? [facilityIds] : (facilityIds ?? [])
+    ).filter((id): id is string => !!id);
+    for (const facilityId of facilities.length > 0 ? [...new Set(facilities)] : [undefined]) {
+      const decision = await this.authorization.decide(principal, action, {
+        type: action.id,
+        organizationId,
+        facilityId,
+      });
+      if (!decision.allowed) return false;
+    }
+    return true;
+  }
+
+  /** SPK-AT-004, R3-TRACE-A-02: the payer-privacy viewer of one record read through `action`. */
+  async viewer(
+    principal: Principal,
+    action: ActionDefinition,
+    organizationId: string,
+    facilityId: string | null | undefined,
+  ): Promise<RecordViewer> {
+    return viewerOf(
+      principal,
+      await this.actsAsStaff(principal, action, organizationId, facilityId),
+    );
+  }
+
+  /**
+   * SPK-AT-004, R3-TRACE-A-02: the payer-privacy viewer of each listed record, decided at its
+   * offering's facility (a list may span facilities the principal's roles cover differently).
+   */
+  async viewersByOffering(
+    principal: Principal,
+    action: ActionDefinition,
+    organizationId: string,
+    offeringIds: ReadonlyArray<string | null | undefined>,
+    trx?: Trx,
+  ): Promise<(offeringId: string | null | undefined) => RecordViewer> {
+    const ids = [...new Set(offeringIds.filter((id): id is string => !!id))];
+    const facilities =
+      ids.length > 0
+        ? await this.offerings.facilitiesOfOfferings(organizationId, ids, trx)
+        : new Map<string, string>();
+    const staffAt = new Map<string | undefined, boolean>();
+    for (const facilityId of new Set<string | undefined>([...facilities.values(), undefined])) {
+      staffAt.set(
+        facilityId,
+        await this.actsAsStaff(principal, action, organizationId, facilityId),
+      );
+    }
+    return (offeringId) =>
+      viewerOf(
+        principal,
+        staffAt.get(offeringId ? facilities.get(offeringId) : undefined) ?? false,
+      );
   }
 
   /**

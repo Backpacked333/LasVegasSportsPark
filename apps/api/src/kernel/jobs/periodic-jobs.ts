@@ -185,7 +185,8 @@ export class PeriodicJobRunner implements BackgroundWorker {
   readonly name = 'kernel.periodic_jobs';
   private readonly logger = new Logger(PeriodicJobRunner.name);
   private timer: NodeJS.Timeout | null = null;
-  private running = false;
+  private stopping = false;
+  private inFlight: Promise<void> | null = null;
 
   constructor(
     @Inject(DATABASE) private readonly db: Db,
@@ -198,32 +199,48 @@ export class PeriodicJobRunner implements BackgroundWorker {
 
   start(): void {
     if (this.timer) return;
-    const tick = async () => {
-      if (this.running) return;
-      this.running = true;
-      try {
-        await this.runOnce();
-      } catch (error) {
-        this.logger.error(`periodic jobs failed: ${String(error)}`);
-      } finally {
-        this.running = false;
-      }
-    };
-    this.timer = setInterval(() => void tick(), this.config.PERIODIC_JOBS_TICK_MS);
-    void tick();
+    this.stopping = false;
+    this.timer = setInterval(() => this.tick(), this.config.PERIODIC_JOBS_TICK_MS);
+    this.tick();
   }
 
-  stop(): void {
+  /**
+   * Ends the loop (R3-OPERATIONS-10): the pass in flight finishes and records its outcome (its
+   * lease released), no further pass or job starts, and the promise resolves once that is done.
+   */
+  async stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.stopping = true;
+    await this.inFlight;
+  }
+
+  private tick(): void {
+    if (this.inFlight || this.stopping) return;
+    this.inFlight = this.runJobs(undefined, {}, () => this.stopping)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        this.logger.error(`periodic jobs failed: ${String(error)}`);
+      })
+      .finally(() => {
+        this.inFlight = null;
+      });
   }
 
   /** Runs every due job (or the named ones) once; one failing job never stops the others. */
-  async runOnce(
+  runOnce(
     names?: readonly string[],
     options: RunOnceOptions = {},
+  ): Promise<PeriodicJobRunSummary[]> {
+    return this.runJobs(names, options, () => false);
+  }
+
+  private async runJobs(
+    names: readonly string[] | undefined,
+    options: RunOnceOptions,
+    shouldStop: () => boolean,
   ): Promise<PeriodicJobRunSummary[]> {
     const jobs = names
       ? names.map((name) => {
@@ -234,8 +251,10 @@ export class PeriodicJobRunner implements BackgroundWorker {
       : this.registry.list();
     const summaries: PeriodicJobRunSummary[] = [];
     for (const job of jobs) {
+      // Stopping: no further job is claimed.
+      if (shouldStop()) break;
       try {
-        summaries.push(await this.runJob(job, options));
+        summaries.push(await this.runJob(job, options, shouldStop));
       } catch (error) {
         // Bookkeeping failed (the database is unavailable): the next tick tries again.
         this.logger.error(`periodic job ${job.name} could not be run: ${String(error)}`);
@@ -255,7 +274,11 @@ export class PeriodicJobRunner implements BackgroundWorker {
     return summaries;
   }
 
-  private async runJob(job: PeriodicJob, options: RunOnceOptions): Promise<PeriodicJobRunSummary> {
+  private async runJob(
+    job: PeriodicJob,
+    options: RunOnceOptions,
+    shouldStop: () => boolean,
+  ): Promise<PeriodicJobRunSummary> {
     const token = `${this.config.WORKER_ID}:${newId()}`;
     const claimed = await this.claim(job, token, options);
     const summary: PeriodicJobRunSummary = {
@@ -289,6 +312,8 @@ export class PeriodicJobRunner implements BackgroundWorker {
         summary.remaining = result.remaining;
         if (result.remaining <= 0 || summary.passes >= this.config.PERIODIC_JOBS_MAX_PASSES) break;
         if (guard.outOfTime()) break;
+        // Stopping (R3-OPERATIONS-10): the remaining rows wait for the next run.
+        if (shouldStop()) break;
         if (!(await guard.lease.renew())) break;
       }
     } catch (error) {

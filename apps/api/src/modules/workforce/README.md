@@ -62,6 +62,12 @@ PGlite and PostgreSQL (`TEST_DATABASE_URL`). Statements below are **verified** u
   (`schedule_conflict`), evaluated against the new start (window, deadline, notice), never
   double-books. A canceled, postponed or unscheduled fixture, a canceled event and a canceled
   session also close the target's open `workforce.uncovered_assignment` exceptions (SPK-UX-006).
+- Scheduling closure impact contributor `workforce.staff_assignments` (`ClosureImpactContributors`,
+  registered in `onModuleInit`; SPK-SCHED-009, SPK-AT-009, R3-TRACE-A-06): a closure preview, and
+  the impact stored on a created or applied closure, names the live assignments (proposed, offered
+  or accepted) on the affected events by id, person, event, kind, role and status, read through
+  the preview's own executor. It always answers, `[]` when none, which is what marks staff as
+  identified (`__tests__/closure-impact-staff.spec.ts`).
 - Scheduling party commitment source `workforce.assignments` (`PartyCommitmentSources`,
   registered in `onModuleInit`): scheduling's conflict detection and its post-lock re-check see
   accepted and completed assignments, so scheduling refuses to commit a person an assignment holds
@@ -144,6 +150,13 @@ Invariants enforced by the database (tests in `__tests__/workforce-schema.spec.t
 | POST/GET | `/fee-submissions`, GET `/{id}`, POST `/{id}/approve`, `/adjust`, `/reject` | submit: the assignee of a completed assignment; read: finance operator, general manager, the assignee; decide: finance operator, general manager — never their own fee; staff act only on fees of their facilities' assignments (others NOT_FOUND, absent from lists)                                                                                                                                                                                                                      |
 | POST/GET | `/fee-export-batches`, GET `/{id}`                                          | finance operator, exporting only fees of their facilities; reading a batch needs the authority at every facility its lines belong to                                                                                                                                                                                                                                                                                                                                                       |
 | GET      | `/me/assignments`                                                           | the caller's own assignments (SPK-UX-007); `activity.facility` names the facility and its time zone (WRK-01)                                                                                                                                                                                                                                                                                                                                                                               |
+
+Both lists, `GET /assignments` and `GET /fee-submissions`, take `order=asc` (default: earliest
+scheduled start, or oldest submission, first) or `order=desc` (latest first), keyed on the time and
+the id; a cursor continues only the order it was issued for (`400 VALIDATION_FAILED`
+`cursor_order_mismatch` otherwise). The staff workspace's earlier fee records (SCR-W-08) read both
+newest first (**Verified**, `__tests__/fees-facility-scope.spec.ts` "SPK-STAFF-006 / SCR-W-08:
+order=desc lists a person’s fee records and assignments newest first ...").
 
 Every consequential POST/PATCH is `@Idempotent()` and zod-validated; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Multi-step commands create an
@@ -253,6 +266,12 @@ personId, kind, trx?)` for enrollment (WRK-03, IF-34). All of them skip retired 
 - Exported services: `AvailabilityService`, `QualificationsService` (`check`, `holdersOfAll`),
   `CoverageService`, `RequirementsService`, `AssignmentsService`, `ReplacementsService`,
   `FeesService`, `WorkspaceService`; policy `WORKFORCE_POLICY`.
+- `RequirementsService.listForTargets(principal, targets)` (R3-PERFORMANCE-01, SPK-UX-006): what
+  `list` gives each target (requirements in force with their coverage), for many targets in two
+  queries (`CoverageService.coverageForTargets`) and one `workforce.view_assignments` decision per
+  facility, keyed by `coverageTargetKey(type, id)`; a target the caller may not read is
+  `'not_permitted'`. Support's Today feed reads a facility day's coverage with one call
+  (**Verified**, `__tests__/coverage-for-targets.spec.ts`).
 - Fixtures for downstream tests: `testing/workforce-fixtures.ts` (`createQualificationFixture`,
   `createAvailabilityFixture`, `createRequirementFixture`, `createAssignmentFixture`), written
   directly so the constraints apply.
@@ -333,7 +352,7 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
   nothing. Retired requirements are skipped by `coverage`, `acceptedAssignees`,
   `isAcceptedOfficial`, `isAcceptedOnOffering`, readiness, the unqualified-assignee flagging,
   escalation, `GET /assignment-requirements` and so support's Today feed (which reads
-  `RequirementsService.list`). A PATCH of a retired requirement answers `INVALID_TRANSITION`;
+  `RequirementsService.listForTargets`). A PATCH of a retired requirement answers `INVALID_TRANSITION`;
   proposing, offering, accepting or replacing on one answers `RESOURCE_CONFLICT`
   (`requirement_retired`). Every assignment command takes the requirement's shared key lock and
   row share lock before the assignment's row lock, the order a retirement takes them in. Tests:

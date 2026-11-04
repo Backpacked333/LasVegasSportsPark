@@ -12,6 +12,7 @@ import {
   type Claim,
   type ContactPoint,
   type ContactPointRemoved,
+  type MakePrimaryContactPointResponse,
   type Me,
   type Page,
   type PersonAuthority,
@@ -19,6 +20,7 @@ import {
   type PersonName,
   type PersonSearchResult,
   type Principal,
+  type UpdatePersonResponse,
 } from '@sportspark/contracts';
 import {
   CurrentPrincipal,
@@ -139,7 +141,7 @@ export class PeopleController {
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
     @ZodBody(UpdatePersonBody) body: z.infer<typeof UpdatePersonBody>,
     @CorrelationId() correlationId: string | null,
-  ): Promise<PersonDetail> {
+  ): Promise<UpdatePersonResponse> {
     return this.people.updatePerson(principal, params.id, body, correlationId);
   }
 
@@ -164,7 +166,7 @@ export class PeopleController {
     @ZodParams(ContactPointParams) params: z.infer<typeof ContactPointParams>,
     @ZodBody(MakePrimaryContactPointBody) body: z.infer<typeof MakePrimaryContactPointBody>,
     @CorrelationId() correlationId: string | null,
-  ): Promise<ContactPoint> {
+  ): Promise<MakePrimaryContactPointResponse> {
     return this.people.makePrimaryContactPoint(
       principal,
       params.id,

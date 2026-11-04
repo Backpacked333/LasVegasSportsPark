@@ -56,10 +56,10 @@ import {
   cursorAt,
   decodeCreatedCursor,
   hiddenFrom,
-  isStaffLike,
   keysetPage,
   minutesFrom,
   organizationOf,
+  registrantSnapshot,
   toPlacementRequest,
   type Reader,
 } from '../enrollment.shared';
@@ -160,12 +160,19 @@ export class PlacementService {
         organizationId,
         input.participantPersonId,
       );
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.requestPlacement, {
         type: 'placement_request',
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [person.id],
       });
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.requestPlacement,
+        organizationId,
+        facilityId,
+      );
       if (input.applicationId) {
         const application = await trx
           .selectFrom('applications')
@@ -207,7 +214,7 @@ export class PlacementService {
             position_preferences: json(input.positionPreferences),
             requested_teammate_person_ids: json(input.requestedTeammatePersonIds),
             notes: input.notes ?? null,
-            requested_by: json(actorSnapshot(principal)),
+            requested_by: json(registrantSnapshot(principal, staff)),
             requested_by_person_id: principal.personId,
             proposed_team_entry_id: null,
             proposed_at: null,
@@ -243,7 +250,7 @@ export class PlacementService {
         targetId: id,
         afterRevision: 1,
         correlationId,
-        details: { seasonId: input.seasonId, assistedByStaff: isStaffLike(principal) },
+        details: { seasonId: input.seasonId, assistedByStaff: staff },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.placementRequested, {
         organizationId,
@@ -350,12 +357,13 @@ export class PlacementService {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('placement_request');
+    const facilityId = await this.scope.facilityOf(organizationId, row.offering_id);
     await this.authorization.require(principal, EnrollmentActions.managePlacement, {
       type: 'placement_request',
       id,
       organizationId,
-      facilityId: await this.scope.facilityOf(organizationId, row.offering_id),
-      protected: await this.hidden(principal, row),
+      facilityId,
+      protected: await this.hidden(principal, row, facilityId),
     });
     const now = this.clock.now();
     const teammates = new Set(row.requested_teammate_person_ids as string[]);
@@ -455,12 +463,13 @@ export class PlacementService {
       const now = this.clock.now();
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('placement_request');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.managePlacement, {
         type: 'placement_request',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
-        protected: await this.hidden(principal, row),
+        facilityId,
+        protected: await this.hidden(principal, row, facilityId),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       const status = PlacementMachine.next(row.status, 'propose');
@@ -520,12 +529,13 @@ export class PlacementService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('placement_request');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.managePlacement, {
         type: 'placement_request',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
-        protected: await this.hidden(principal, row),
+        facilityId,
+        protected: await this.hidden(principal, row, facilityId),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       const status = PlacementMachine.next(row.status, 'reject_proposal');
@@ -584,12 +594,13 @@ export class PlacementService {
       const now = this.clock.now();
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('placement_request');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.managePlacement, {
         type: 'placement_request',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
-        protected: await this.hidden(principal, row),
+        facilityId,
+        protected: await this.hidden(principal, row, facilityId),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       PlacementMachine.next(row.status, 'assign');
@@ -1020,12 +1031,13 @@ export class PlacementService {
     const prepared = await this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('placement_request');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
       await this.authorization.require(principal, EnrollmentActions.managePlacement, {
         type: 'placement_request',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
-        protected: await this.hidden(principal, row),
+        facilityId,
+        protected: await this.hidden(principal, row, facilityId),
       });
       assertExpectedRevision(input.expectedRevision, row.revision);
       PlacementMachine.next(row.status, 'release');
@@ -1139,14 +1151,27 @@ export class PlacementService {
     }
   }
 
-  /** §4.10: a customer who may not read the request learns nothing about it. */
-  private hidden(principal: Principal, row: PlacementRow): Promise<boolean> {
-    return hiddenFrom(this.authorization, principal, EnrollmentActions.readPlacement, {
-      type: 'placement_request',
-      id: row.id,
-      organizationId: row.organization_id,
-      subjectPersonIds: [row.participant_person_id],
-    });
+  /**
+   * §4.10: whoever may not read the request (another household, or staff outside its facility
+   * with no relationship to the participant) learns nothing about it.
+   */
+  private hidden(
+    principal: Principal,
+    row: PlacementRow,
+    facilityId: string | undefined,
+  ): Promise<boolean> {
+    return hiddenFrom(
+      this.authorization,
+      principal,
+      EnrollmentActions.readPlacement,
+      {
+        type: 'placement_request',
+        id: row.id,
+        organizationId: row.organization_id,
+        subjectPersonIds: [row.participant_person_id],
+      },
+      facilityId,
+    );
   }
 
   private async record(

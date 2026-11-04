@@ -48,6 +48,20 @@ export interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+/**
+ * Every command (TanStack mutation) runs when it is submitted, online or not, and is never retried
+ * by the data layer (§4.9: a retry is the user's, with the same idempotency key). TanStack's
+ * default network mode ('online') would pause a command submitted offline and send it by itself
+ * when the connection returns, possibly minutes later and after the user left the page: an
+ * unannounced offline queue the specification does not allow (§4.15 queues only arrivals and first
+ * attendance observations, through the offline queue; journeys.md section 3, "never pretend a
+ * queued action is committed"). Command controls are disabled offline (`ui/CommandButton`, or a
+ * screen's own `online` check), the failure views' "Try again" included; a command that is sent
+ * anyway (the connection dropped between the check and the send) fails at once and its failure
+ * view says what is known.
+ */
+export const MUTATION_DEFAULTS = { retry: false, networkMode: 'always' } as const;
+
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -56,7 +70,7 @@ export function createQueryClient(): QueryClient {
           error instanceof ApiError && error.retryable && failureCount < 2,
         staleTime: 30_000,
       },
-      mutations: { retry: false },
+      mutations: MUTATION_DEFAULTS,
     },
   });
 }
@@ -182,6 +196,15 @@ export function useApp(): AppContextValue {
 
 export function useApi(): ApiClient {
   return useApp().api;
+}
+
+/**
+ * Whether the dashboard is connected (SPK-UX-008 offline state). A view rendered on its own,
+ * outside `<AppProviders>` (a component test), has no connectivity source and no API client to
+ * send with, so it reads as connected; every screen of the dashboard is inside the providers.
+ */
+export function useOnline(): boolean {
+  return useContext(AppContext)?.online ?? true;
 }
 
 /** The injected clock, read on every render and re-read every `refreshMs`. */

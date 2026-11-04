@@ -541,13 +541,18 @@ export class UtilizationReport {
       );
       if (state !== null && isAttended(state)) observed.add(list[0]!.scheduling_event_id as string);
     }
+    // R3-REPORTING-07 (SPK-ENTRY-008): a check-in withdrawn by the as-of instant (a mistaken
+    // check-in, or one withdrawn when the activity was canceled) keeps its admission instant but is
+    // no evidence of use. One row per event, not per check-in.
     const checkins = await ctx.db
       .selectFrom('reporting_session_checkins_v')
       .select(['scheduling_event_id'])
+      .distinct()
       .where('organization_id', '=', ctx.organizationId)
       .where('scheduling_event_id', 'in', eventIds)
       .where('admitted_at', 'is not', null)
       .where('admitted_at', '<=', ctx.asOf)
+      .where((eb) => eb.or([eb('withdrawn_at', 'is', null), eb('withdrawn_at', '>', ctx.asOf)]))
       .execute();
     for (const c of checkins) if (c.scheduling_event_id) observed.add(c.scheduling_event_id);
     return observed;

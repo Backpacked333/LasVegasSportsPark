@@ -29,15 +29,16 @@ import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { ClaimMachine } from '../identity.machines';
 import {
-  claimIssuerAssignsStaffRoles,
+  claimIssuerCoversStaffLogin,
+  claimIssuerSnapshot,
   hashToken,
-  holdsStaffMembership,
   hoursFromNow,
   lockPersonsForShare,
   newToken,
   normalizeContactValue,
   personColumns,
   requireStaffLoginAuthority,
+  staffMembershipFacilityLists,
   toAccessGrant,
   toClaim,
   toRelationship,
@@ -120,7 +121,6 @@ export class ClaimsService {
           principal,
           organizationId,
           subjectPersonId,
-          this.clock.now(),
         );
       }
       const id = newId();
@@ -134,7 +134,8 @@ export class ClaimsService {
           subject_person_id: subjectPersonId,
           kind: input.kind,
           requested_permissions: [...new Set(input.requestedPermissions)],
-          issued_by: json(snapshotActor(principal)),
+          // R3-SECURITY-01: the issuer's staff-assignment scope is kept for the acceptance check.
+          issued_by: json(claimIssuerSnapshot(snapshotActor(principal), principal)),
           recipient_contact_kind: input.recipientContact?.kind ?? null,
           recipient_contact_value: input.recipientContact
             ? normalizeContactValue(input.recipientContact.kind, input.recipientContact.value)
@@ -227,17 +228,24 @@ export class ClaimsService {
             'This claim was issued to a contact point your account has not verified.',
           );
         }
-        // §4.14, SPK-AT-025: a staff membership may have been added after the claim was issued;
-        // the login of a staff person is handed over only on a claim issued with staff-role
-        // authority (the claimant learns only that the claim cannot be accepted).
-        if (
-          account.person_id !== claim.subject_person_id &&
-          !claimIssuerAssignsStaffRoles(claim.issued_by) &&
-          (await holdsStaffMembership(trx, organizationId, claim.subject_person_id, now))
-        ) {
-          throw errors.accessDenied(
-            'This claim cannot be accepted; ask an administrator to issue a new one.',
+        // §4.14, SPK-AT-025, §2.1: a staff membership may have been added after the claim was
+        // issued; the login of a staff person is handed over only on a claim issued with
+        // staff-role authority over every facility of their memberships (R3-SECURITY-01; the
+        // claimant learns only that the claim cannot be accepted).
+        if (account.person_id !== claim.subject_person_id) {
+          const memberships = await staffMembershipFacilityLists(
+            trx,
+            organizationId,
+            claim.subject_person_id,
           );
+          if (
+            memberships.length > 0 &&
+            !claimIssuerCoversStaffLogin(claim.issued_by, memberships)
+          ) {
+            throw errors.accessDenied(
+              'This claim cannot be accepted; ask an administrator to issue a new one.',
+            );
+          }
         }
         if (account.person_id === claim.subject_person_id) {
           personId = claim.subject_person_id;

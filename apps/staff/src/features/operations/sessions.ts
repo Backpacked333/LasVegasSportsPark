@@ -3,8 +3,8 @@
  * SCR-S-30 release from a session; SPK-SCHED-008).
  *
  * `GET /v1/sessions` (CAT-01) lists the sessions overlapping a window of at most 31 days with the
- * facility's IANA time zone, paged by the API's cursor. The window is the facility-local day from
- * the Today feed; without it, the 24 hours around now. The listing is a staff read: a refusal is
+ * facility's IANA time zone, paged by the API's cursor. The window is the facility-local day (the
+ * zone from the facility directory, the injected clock); without a zone, the 24 hours around now. The listing is a staff read: a refusal is
  * rendered by the caller as not available.
  */
 import type { Schema } from '@sportspark/api-client';
@@ -25,7 +25,7 @@ export function sessionTitle(s: FacilitySession): string {
   return s.title ? `${s.offeringName}: ${s.title}` : `${s.offeringName}, session ${s.sequence}`;
 }
 
-/** The facility-local day, or the 24 hours from two hours ago when the Today feed has no window. */
+/** The facility-local day, or the 24 hours from two hours ago when the zone is not known. */
 export function useDayWindow(window: { start: string; end: string } | null): {
   start: string;
   end: string;

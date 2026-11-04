@@ -121,6 +121,20 @@ export interface OutboxEventsTable {
   locked_until: NullableTimestamp;
   dispatched_at: NullableTimestamp;
   failure_owner: string | null;
+  /**
+   * The handlers the producing build registered for this event type when it was written
+   * (migration 0013, R3-OPERATIONS-01); null for rows written before. The event is settled only
+   * once each of them has run (or is retired) in the processing build.
+   */
+  expected_handlers: string[] | null;
+  /** How often the dead letter was replayed, and when last (migration 0014, R3-OPERATIONS-03). */
+  replay_count: Generated<number>;
+  replayed_at: NullableTimestamp;
+  /**
+   * When the event was first left waiting for a handler its producing build expected and the
+   * processing build lacks (migration 0015, §5.11); null while it is not waiting and once settled.
+   */
+  waiting_since: NullableTimestamp;
 }
 
 export type InboxStatus = 'received' | 'processed' | 'failed' | 'ignored' | 'dead';
@@ -143,6 +157,16 @@ export interface InboxEventsTable {
   failure_owner: string | null;
   locked_by: string | null;
   locked_until: NullableTimestamp;
+  /**
+   * The consumption names (`inbox:<provider>:<handler>`) the recording build registered for the
+   * provider (migration 0013, R3-OPERATIONS-01); null for rows recorded before.
+   */
+  expected_handlers: string[] | null;
+  /** How often the dead letter was replayed, and when last (migration 0014, R3-OPERATIONS-03). */
+  replay_count: Generated<number>;
+  replayed_at: NullableTimestamp;
+  /** When the event was first left waiting for a missing handler (migration 0015, §5.11). */
+  waiting_since: NullableTimestamp;
 }
 
 export interface EventConsumptionsTable {

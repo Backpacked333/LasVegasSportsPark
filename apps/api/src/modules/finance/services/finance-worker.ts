@@ -27,6 +27,8 @@ export class FinanceWorker {
   private readonly logger = new Logger(FinanceWorker.name);
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  /** The pass in flight, so `stop` can wait for it (R3-OPERATIONS-10). */
+  private inFlight: Promise<void> | null = null;
 
   constructor(
     @Inject(APP_CONFIG) private readonly config: AppConfig,
@@ -51,27 +53,33 @@ export class FinanceWorker {
 
   start(): void {
     if (this.timer) return;
-    const tick = async () => {
+    const tick = () => {
       if (this.running) return;
       this.running = true;
-      try {
-        await this.runOnce();
-      } catch (error) {
-        this.logger.error(`finance worker pass failed: ${String(error)}`);
-      } finally {
-        this.running = false;
-      }
+      this.inFlight = (async () => {
+        try {
+          await this.runOnce();
+        } catch (error) {
+          this.logger.error(`finance worker pass failed: ${String(error)}`);
+        } finally {
+          this.running = false;
+          this.inFlight = null;
+        }
+      })();
     };
-    this.timer = setInterval(
-      () => void tick(),
-      Math.max(this.config.OUTBOX_POLL_INTERVAL_MS, 1000) * 5,
-    );
+    this.timer = setInterval(tick, Math.max(this.config.OUTBOX_POLL_INTERVAL_MS, 1000) * 5);
   }
 
-  stop(): void {
+  /**
+   * R3-OPERATIONS-10 (§4.12, §5.8): starts no further pass and resolves once the pass in flight
+   * has recorded its outcomes, so a provider call is not cut off by the process exit. The kernel
+   * awaits it, bounded by WORKER_SHUTDOWN_TIMEOUT_MS.
+   */
+  stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    return this.inFlight ?? Promise.resolve();
   }
 }

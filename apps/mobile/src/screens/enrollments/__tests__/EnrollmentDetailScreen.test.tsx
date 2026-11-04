@@ -4,7 +4,7 @@
  * and the entry to the SCR-C-33 previews by record state.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import {
   IDS,
   accountRoutes,
@@ -104,6 +104,104 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
       await screen.findByLabelText('Payment received. We are completing your registration.'),
     ).toBeOnTheScreen();
     expect(screen.getByText(/do not pay\s+again/)).toBeOnTheScreen();
+  });
+
+  it('R3-SCREEN-STATES-04 §4.11: a checkout in recovery behind twenty newer checkouts is found, as on the list', async () => {
+    const BASKET = '0192f1a0-0000-7000-8000-00000000a501';
+    const checkout = (n: number, status: string, basketId: string) => ({
+      id: `0192f1a0-0000-7000-8000-0000000b${String(n).padStart(4, '0')}`,
+      basketId,
+      status,
+      enrollmentIds: [],
+    });
+    const all = [
+      ...Array.from({ length: 25 }, (_, n) =>
+        checkout(n, 'completed', `0192f1a0-0000-7000-8000-0000000c${String(n).padStart(4, '0')}`),
+      ),
+      checkout(999, 'recovery_required', BASKET),
+    ];
+    renderDetail(enrollment({ status: 'pending', pendingReason: 'payment', basketId: BASKET }), {
+      // Newest first with the API's `status` filter (money-reads.service myCheckouts).
+      'GET /me/registration-checkouts': (req) => {
+        const matching = req.query.status ? all.filter((c) => c.status === req.query.status) : all;
+        return fakeResponse(200, {
+          items: matching.slice(0, Number(req.query.limit ?? 50)),
+          nextCursor: null,
+        });
+      },
+    });
+    expect(
+      await screen.findByLabelText('Payment received. We are completing your registration.'),
+    ).toBeOnTheScreen();
+  });
+
+  it('R3-SCREEN-STATES-04 §4.11: when page 2 of the checkouts in recovery fails, the record never says the payment is not finished', async () => {
+    const BASKET = '0192f1a0-0000-7000-8000-00000000a501';
+    const checkout = (n: number, basketId: string) => ({
+      id: `0192f1a0-0000-7000-8000-0000000b${String(n).padStart(4, '0')}`,
+      basketId,
+      status: 'recovery_required',
+      enrollmentIds: [],
+    });
+    const recovering = [
+      ...Array.from({ length: 20 }, (_, n) =>
+        checkout(n, `0192f1a0-0000-7000-8000-0000000c${String(n).padStart(4, '0')}`),
+      ),
+      checkout(999, BASKET),
+    ];
+    let secondPageFails = true;
+    renderDetail(enrollment({ status: 'pending', pendingReason: 'payment', basketId: BASKET }), {
+      'GET /me/registration-checkouts': (req) => {
+        const start = req.query.cursor ? Number(req.query.cursor) : 0;
+        if (start > 0 && secondPageFails) {
+          return fakeResponse(
+            503,
+            apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+          );
+        }
+        const end = start + Number(req.query.limit ?? 50);
+        return fakeResponse(200, {
+          items: recovering.slice(start, end),
+          nextCursor: end < recovering.length ? String(end) : null,
+        });
+      },
+    });
+    const unknown = await screen.findByTestId('enrollment-recovery-unknown');
+    expect(
+      await within(unknown).findByText(/Error code: INTEGRATION_UNAVAILABLE/),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText('Registration pending: payment status not known yet'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/payment for this registration is not finished/)).toBeNull();
+    expect(screen.queryByText(/Open it from Discover/)).toBeNull();
+
+    secondPageFails = false;
+    fireEvent.press(within(unknown).getByRole('button', { name: 'Try again' }));
+    expect(
+      await screen.findByLabelText('Payment received. We are completing your registration.'),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/do not pay\s+again/)).toBeOnTheScreen();
+    expect(screen.queryByTestId('enrollment-recovery-unknown')).toBeNull();
+  });
+
+  it('R3-SCREEN-STATES-04 §4.11: a failed read of the last operation is shown on the record instead of "payment not finished"', async () => {
+    const OPERATION = '0192f1a0-0000-7000-8000-00000000a803';
+    renderDetail(
+      enrollment({ status: 'pending', pendingReason: 'payment', lastOperationId: OPERATION }),
+      {
+        'GET /me/registration-checkouts': { status: 200, body: { items: [], nextCursor: null } },
+        'GET /operations/{id}': () =>
+          fakeResponse(
+            500,
+            apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
+          ),
+      },
+    );
+    const unknown = await screen.findByTestId('enrollment-recovery-unknown');
+    expect(await within(unknown).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
+    expect(within(unknown).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    expect(screen.queryByText(/payment for this registration is not finished/)).toBeNull();
   });
 
   it('SPK-REG-010: a transferred enrollment links to the new one, and history is kept', async () => {

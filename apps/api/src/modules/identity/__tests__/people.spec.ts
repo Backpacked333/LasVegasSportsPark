@@ -6,6 +6,7 @@ import {
   authHeaderForAccount,
   authHeaderForPerson,
   createAccountFixture,
+  createContactPointFixture,
   createOrganizationPeople,
   createPersonFixture,
   createStaffMemberFixture,
@@ -144,6 +145,103 @@ describe('people endpoints (SPK-IAM-001, SPK-IAM-002, SPK-IAM-007, §4.9, §4.10
       .get(`/v1/people/${people.child.personId}`)
       .set(await authHeaderForPerson(t, people.adult.personId));
     expect(res.status).toBe(404);
+  });
+
+  it('SPK-IAM-003: register without view changes a child record but never reads it back (no implied view)', async () => {
+    const people = await createOrganizationPeople(t, { guardianPermissions: ['register'] });
+    const child = people.child.personId;
+    const header = await authHeaderForPerson(t, people.adult.personId);
+    await createContactPointFixture(t, {
+      personId: child,
+      kind: 'email',
+      value: `private-${newId()}@example.test`,
+      verified: true,
+    });
+    const other = await createContactPointFixture(t, {
+      personId: child,
+      kind: 'email',
+      value: `second-${newId()}@example.test`,
+      isPrimary: false,
+    });
+    // reading is refused as if the child did not exist
+    expect((await t.http.get(`/v1/people/${child}`).set(header)).status).toBe(404);
+
+    // the revision a stale command reports is enough to send a change, but the change answers with
+    // the id and the new revision only: never the date of birth, names or contact points
+    const stale = await t.http
+      .patch(`/v1/people/${child}`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: 999 });
+    expect(stale.status).toBe(409);
+    const revision = stale.body.details.currentRevision as number;
+    const blind = await t.http
+      .patch(`/v1/people/${child}`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: revision });
+    expect(blind.status, JSON.stringify(blind.body)).toBe(200);
+    expect(blind.body).toEqual({ id: child, revision: revision + 1, detailWithheld: true });
+    // register still changes the registration data (Proposed: register covers it)
+    const renamed = await t.http
+      .patch(`/v1/people/${child}`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ givenName: 'Renamed', dateOfBirth: '2017-01-02', expectedRevision: revision + 1 });
+    expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
+    expect(renamed.body).toEqual({ id: child, revision: revision + 2, detailWithheld: true });
+    const stored = await t.db
+      .selectFrom('persons')
+      .select(['given_name', 'revision'])
+      .where('id', '=', child)
+      .executeTakeFirstOrThrow();
+    expect(stored).toMatchObject({ given_name: 'Renamed', revision: revision + 2 });
+
+    // make-primary: the person's new revision, never the contact value or its verification
+    const primary = await t.http
+      .post(`/v1/people/${child}/contact-points/${other}/make-primary`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: revision + 2 });
+    expect(primary.status, JSON.stringify(primary.body)).toBe(200);
+    expect(primary.body).toEqual({
+      id: other,
+      personId: child,
+      kind: 'email',
+      personRevision: revision + 3,
+      detailWithheld: true,
+    });
+    const already = await t.http
+      .post(`/v1/people/${child}/contact-points/${other}/make-primary`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: revision + 3 });
+    expect(already.status).toBe(200);
+    expect(already.body).toEqual({
+      id: other,
+      personId: child,
+      kind: 'email',
+      personRevision: revision + 3,
+      detailWithheld: true,
+    });
+    expect(JSON.stringify([blind.body, renamed.body, primary.body])).not.toMatch(/example\.test/);
+
+    // a guardian holding view and register (and staff) still get the record back
+    const full = await createOrganizationPeople(t, { guardianPermissions: ['view', 'register'] });
+    const fullHeader = await authHeaderForPerson(t, full.adult.personId);
+    const shown = await t.http
+      .patch(`/v1/people/${full.child.personId}`)
+      .set(fullHeader)
+      .set('Idempotency-Key', key())
+      .send({ givenName: 'Shown', expectedRevision: 1 });
+    expect(shown.status).toBe(200);
+    expect(shown.body).toMatchObject({
+      id: full.child.personId,
+      givenName: 'Shown',
+      revision: 2,
+      contactPoints: [],
+    });
+    expect(shown.body.detailWithheld).toBeUndefined();
   });
 
   it('§4.9: PATCH /v1/people/{id} requires the current revision and bumps it', async () => {

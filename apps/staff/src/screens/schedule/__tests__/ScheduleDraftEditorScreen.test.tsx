@@ -545,6 +545,110 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
     ]);
   });
 
+  it('SPK-SCHED-008: a series move whose new time happens twice on a date names it, asks which one, and previews again with the choice', async () => {
+    const user = userEvent.setup();
+    // A Sunday series at 09:00 PDT; the next Sunday is 2026-11-01, when the clocks go back at 02:00.
+    const sunday = event({
+      id: 'e-s3',
+      title: 'Sunday futsal',
+      seriesId: 'series-1',
+      occurrenceIndex: 2,
+      scheduledStart: '2026-10-25T16:00:00.000Z',
+      scheduledEnd: '2026-10-25T17:00:00.000Z',
+    });
+    const details = (start: string, end: string) => ({
+      title: 'Sunday futsal',
+      kind: sunday.kind,
+      scheduledStart: start,
+      scheduledEnd: end,
+      timezone: sunday.timezone,
+      facilityId: sunday.facilityId,
+      resources: [{ id: PITCH, name: 'Pitch 1' }],
+      status: 'published' as const,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': page([sunday]),
+        'POST /event-series/{id}/edits': (request) => {
+          const changes = (request.body as { changes: Record<string, unknown> }).changes;
+          if (changes.ambiguousPolicy === undefined)
+            return fakeResponse(
+              400,
+              apiErrorBody('VALIDATION_FAILED', {
+                message:
+                  'The new local start time does not exist or occurs twice on some dates; choose how to resolve them.',
+                nextAction: 'correct_input',
+                details: {
+                  code: 'dst_resolution_required',
+                  nonexistentLocalDates: [],
+                  ambiguousLocalDates: ['2026-11-01'],
+                  options: { nonexistentPolicy: [], ambiguousPolicy: ['first', 'second'] },
+                },
+              }),
+            );
+          return fakeResponse(200, {
+            seriesId: 'series-1',
+            scope: 'this_and_future',
+            committed: false,
+            affected: [
+              {
+                eventId: 'e-s3',
+                occurrenceIndex: 2,
+                before: details('2026-10-25T16:00:00.000Z', '2026-10-25T17:00:00.000Z'),
+                after: details('2026-10-25T08:30:00.000Z', '2026-10-25T09:30:00.000Z'),
+                dstResolution: 'exact',
+              },
+              {
+                eventId: 'e-s4',
+                occurrenceIndex: 3,
+                before: details('2026-11-01T17:00:00.000Z', '2026-11-01T18:00:00.000Z'),
+                // the second 01:30, in PST
+                after: details('2026-11-01T09:30:00.000Z', '2026-11-01T10:30:00.000Z'),
+                dstResolution: 'second',
+              },
+            ],
+            unchangedEventIds: ['e-s1', 'e-s2'],
+          });
+        },
+      }),
+    });
+    render(app.at('/schedule/drafts/d1'));
+    await screen.findByTestId('draft-change-1');
+    await screen.findByRole('option', { name: /Sunday futsal/ });
+    await user.selectOptions(screen.getByLabelText('Event'), 'e-s3');
+    await user.click(screen.getByLabelText('Move to another time (and optionally space)'));
+    await user.click(screen.getByLabelText('This and future occurrences'));
+    setLocal('New start', '2026-10-25', '01:30');
+    setLocal('New end', '2026-10-25', '02:30');
+    await user.click(screen.getByRole('button', { name: 'Preview affected events' }));
+
+    const choice = await screen.findByTestId('series-dst-choice');
+    const overlap = within(choice).getByRole('group', { name: /01:30 happens twice on .*Nov 1/ });
+    expect(within(overlap).getAllByRole('radio')).toHaveLength(2);
+    // nothing is chosen for the user, and no generic failure is shown instead
+    const again = within(choice).getByRole('button', { name: 'Preview with these choices' });
+    expect(again).toBeDisabled();
+    expect(screen.queryByTestId('series-preview')).toBeNull();
+    await user.click(within(overlap).getByLabelText('The second 01:30, after the clocks go back'));
+    await waitFor(() => expect(again).toBeEnabled());
+    await user.click(again);
+
+    const preview = await screen.findByTestId('series-preview');
+    expect(
+      within(preview).getByText(
+        /Occurrence 4: .*becomes .*01:30.*PST.*\(the time happens twice that day; the second one, after the clocks go back\)/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('series-dst-choice')).toBeNull();
+    const edits = app.fake.requests.filter((r) => r.route === '/event-series/{id}/edits');
+    expect(edits.map((r) => (r.body as { changes: unknown }).changes)).toEqual([
+      { localStartTime: '01:30', durationMinutes: 60 },
+      { localStartTime: '01:30', durationMinutes: 60, ambiguousPolicy: 'second' },
+    ]);
+    // a changed request is a new intent with a new key (§4.9)
+    expect(edits[0]?.headers['idempotency-key']).not.toBe(edits[1]?.headers['idempotency-key']);
+  });
+
   it('a series preview the viewer may not run names the missing permission', async () => {
     const user = userEvent.setup();
     const series = event({
@@ -574,6 +678,36 @@ describe('SCR-S-04 ScheduleDraftEditorScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Preview affected events' }));
     expect(await screen.findByText('Not available to you')).toBeInTheDocument();
     expect(screen.getByText(/the permission scheduling\.manage_events/)).toBeInTheDocument();
+  });
+
+  it('SCR-S-04 offline: a series preview needs a connection and is never sent as an unknown outcome (§4.15)', async () => {
+    const user = userEvent.setup();
+    const series = event({
+      id: 'e-s3',
+      title: 'Thursday futsal',
+      seriesId: 'series-1',
+      occurrenceIndex: 2,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /events': page([series]),
+        'POST /event-series/{id}/edits': { status: 200, body: {} },
+      }),
+    });
+    render(app.at('/schedule/drafts/d1'));
+    await screen.findByRole('option', { name: /Thursday futsal/ });
+    await user.selectOptions(screen.getByLabelText('Event'), 'e-s3');
+    await user.click(screen.getByLabelText('Cancel it'));
+    await user.click(screen.getByLabelText('The entire series'));
+    act(() => app.connectivity.set(false));
+    const previewButton = screen.getByRole('button', { name: 'Preview affected events' });
+    await waitFor(() => expect(previewButton).toBeDisabled());
+    expect(previewButton).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(previewButton);
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(previewButton).toBeEnabled());
+    expect(app.fake.requests.some((r) => r.route === '/event-series/{id}/edits')).toBe(false);
+    expect(screen.queryByTestId('state-outcome-unknown')).toBeNull();
   });
 
   it('a published draft is read-only', async () => {

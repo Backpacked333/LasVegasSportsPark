@@ -45,12 +45,12 @@ import { EnrollmentActions } from '../enrollment.actions';
 import { EnrollmentEvents } from '../enrollment.events';
 import type { BasketPort } from '../enrollment.ports';
 import {
-  actorSnapshot,
+  assistedBy,
   awaitsApproval,
-  isStaffLike,
   minutesFrom,
   organizationOf,
   owesNothing,
+  registrantSnapshot,
   resolveCustomerPayer,
   toBasket,
   toBasketLine,
@@ -234,8 +234,14 @@ export class BasketsService implements BasketPort {
     correlationId: string | null,
   ): Promise<Basket> {
     const organizationId = organizationOf(principal);
-    const ownerPersonId =
-      input.ownerPersonId ?? (isStaffLike(principal) ? null : principal.personId);
+    // R3-TRACE-A-02 (SPK-REG-009): a basket is opened for another household only by a role holding
+    // manage_basket; a staff member opening their own basket is the household adult.
+    const staff = await this.scope.actsAsStaff(
+      principal,
+      EnrollmentActions.manageBasket,
+      organizationId,
+    );
+    const ownerPersonId = input.ownerPersonId ?? (staff ? null : principal.personId);
     if (!ownerPersonId)
       throw errors.validation('ownerPersonId is required when staff open a basket.');
     return this.uow.run(async ({ trx }) => {
@@ -249,7 +255,7 @@ export class BasketsService implements BasketPort {
       });
       // §4.7 (1), SPK-REG-009: a customer names only themselves or the owner as payer.
       const payerPersonId =
-        resolveCustomerPayer(principal, input.payerPersonId, [principal.personId, owner.id]) ??
+        resolveCustomerPayer(staff, input.payerPersonId, [principal.personId, owner.id]) ??
         owner.id;
       if (payerPersonId !== owner.id)
         await this.evaluator.participant(trx, organizationId, payerPersonId);
@@ -262,10 +268,10 @@ export class BasketsService implements BasketPort {
           organization_id: organizationId,
           owner_person_id: owner.id,
           payer_person_id: payerPersonId,
-          created_by: json(actorSnapshot(principal)),
+          created_by: json(registrantSnapshot(principal, staff)),
           created_by_person_id: principal.personId,
           // SPK-REG-009: the staff actor is recorded separately from owner, payer and signer.
-          assisted_by_person_id: isStaffLike(principal) ? principal.personId : null,
+          assisted_by_person_id: assistedBy(principal, staff),
           fulfillment_mode: input.fulfillmentMode,
           partial_accepted_at: input.fulfillmentMode === 'partial' ? now : null,
           status: 'open',
@@ -289,7 +295,7 @@ export class BasketsService implements BasketPort {
         correlationId,
         details: {
           fulfillmentMode: input.fulfillmentMode,
-          assistedByStaff: isStaffLike(principal),
+          assistedByStaff: staff,
         },
       });
       return this.view(trx, organizationId, (await this.load(trx, organizationId, id))!);
@@ -380,6 +386,14 @@ export class BasketsService implements BasketPort {
     const basketId = basket.id;
     await this.assertLinesCapable(trx, organizationId, [{ intent: input.intent }]);
     const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
+    // R3-TRACE-A-02: staff rules (reusing another adult's application, the assisted record) apply
+    // to a role holding manage_basket at the offering's facility only.
+    const staff = await this.scope.actsAsStaff(
+      principal,
+      EnrollmentActions.manageBasket,
+      organizationId,
+      snapshot.offering.facilityId,
+    );
     const evaluation = await this.evaluator.evaluate(trx, organizationId, {
       snapshot,
       person,
@@ -406,7 +420,7 @@ export class BasketsService implements BasketPort {
     );
     if (
       application &&
-      !isStaffLike(principal) &&
+      !staff &&
       application.submitted_by_person_id !== principal.personId &&
       application.submitted_by_person_id !== basket.owner_person_id &&
       application.payer_person_id !== basket.owner_person_id
@@ -434,6 +448,7 @@ export class BasketsService implements BasketPort {
         sessionId: session?.id ?? null,
         notes: null,
         actor: principal,
+        actingAsStaff: staff,
         correlationId,
       });
     }
@@ -906,6 +921,12 @@ export class BasketsService implements BasketPort {
       equivalenceKey: this.evaluator.equivalence(snapshot, person.id, line.session_id),
       payerPersonId: basket.payer_person_id,
       actor: principal,
+      actingAsStaff: await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.manageBasket,
+        organizationId,
+        snapshot.offering.facilityId,
+      ),
       sourceApplicationId: application?.id ?? null,
       basketId: basket.id,
       basketLineId: line.id,
@@ -1410,6 +1431,8 @@ export class BasketsService implements BasketPort {
       owner: PersonSummary;
       payerPersonId: string | null;
       actor: Principal;
+      /** R3-TRACE-A-02 (SPK-REG-009): the actor acts on a staff role (`actsAsStaff`). */
+      actingAsStaff: boolean;
       participant: PersonSummary;
       snapshot: OfferingSnapshot;
       intent: RegistrationIntent;
@@ -1464,9 +1487,9 @@ export class BasketsService implements BasketPort {
           organization_id: organizationId,
           owner_person_id: input.owner.id,
           payer_person_id: input.payerPersonId ?? input.owner.id,
-          created_by: json(actorSnapshot(input.actor)),
+          created_by: json(registrantSnapshot(input.actor, input.actingAsStaff)),
           created_by_person_id: input.actor.personId,
-          assisted_by_person_id: isStaffLike(input.actor) ? input.actor.personId : null,
+          assisted_by_person_id: assistedBy(input.actor, input.actingAsStaff),
           fulfillment_mode: 'all_or_nothing',
           partial_accepted_at: null,
           status: 'open',
@@ -1532,6 +1555,7 @@ export class BasketsService implements BasketPort {
     basket: BasketRow,
     lineId: string,
     actor: Principal,
+    actingAsStaff: boolean,
     existingHoldIds: readonly string[],
     expiresAt: Date,
     correlationId: string | null,
@@ -1563,6 +1587,7 @@ export class BasketsService implements BasketPort {
       equivalenceKey: line.equivalence_key,
       payerPersonId: basket.payer_person_id,
       actor,
+      actingAsStaff,
       sourceApplicationId: application?.id ?? null,
       basketId: basket.id,
       basketLineId: line.id,

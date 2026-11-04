@@ -6,7 +6,14 @@ import {
   type EligibilitySeverity,
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
-import { CLOCK, DATABASE, currentTransaction, type Clock, type Trx } from '../../../kernel';
+import {
+  CLOCK,
+  DATABASE,
+  FacilityDirectory,
+  currentTransaction,
+  type Clock,
+  type Trx,
+} from '../../../kernel';
 import { PeopleService, PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
 import {
   loadEntryContext,
@@ -27,6 +34,8 @@ import {
   isEffectiveAt,
   iso,
   referenceDateFor,
+  referenceDateUsesInstant,
+  referenceDateZoneNote,
 } from '../competition.shared';
 import {
   SUSPENSION_CHECK_PORT,
@@ -61,6 +70,7 @@ export class EligibilityService implements EligibilityPort {
     @Inject(SUSPENSION_CHECK_PORT) private readonly suspensions: SuspensionCheckPort,
     private readonly people: PeopleService,
     @Inject(PERSON_DIRECTORY_PORT) private readonly directory: PersonDirectoryPort,
+    private readonly facilities: FacilityDirectory,
   ) {}
 
   async evaluatePlayer(
@@ -170,15 +180,22 @@ export class EligibilityService implements EligibilityPort {
           requiredAction: 'Record the date of birth.',
         });
       } else {
-        const reference = referenceDateFor(rules.eligibilityReferenceDate, season, at);
+        const referenceRule = rules.eligibilityReferenceDate;
+        // R3-TIME-MONEY-03 (SPK-SCHED-008): an instant-based reference date is the local date at
+        // the facility, not the UTC date of the instant.
+        const zone = referenceDateUsesInstant(referenceRule)
+          ? await this.referenceZone(db, context, options)
+          : null;
+        const reference = referenceDateFor(referenceRule, season, at, zone);
+        const on = `${reference}${referenceDateZoneNote(referenceRule, zone)}`;
         const age = ageOn(person.date_of_birth, reference);
         if (band.minAge !== null && age < band.minAge) {
           add({
             code: 'below_division_age',
             severity: 'blocking',
             message: restricted
-              ? `Below the division minimum age of ${band.minAge} on ${reference}.`
-              : `Age ${age} on ${reference} is below the division minimum of ${band.minAge}.`,
+              ? `Below the division minimum age of ${band.minAge} on ${on}.`
+              : `Age ${age} on ${on} is below the division minimum of ${band.minAge}.`,
             source: { type: 'division', id: division.id },
             responsibleRole: 'league_manager',
             requiredAction: 'Place the player in a division whose age band applies.',
@@ -189,8 +206,8 @@ export class EligibilityService implements EligibilityPort {
             code: 'above_division_age',
             severity: 'blocking',
             message: restricted
-              ? `Above the division maximum age of ${band.maxAge} on ${reference}.`
-              : `Age ${age} on ${reference} is above the division maximum of ${band.maxAge}.`,
+              ? `Above the division maximum age of ${band.maxAge} on ${on}.`
+              : `Age ${age} on ${on} is above the division maximum of ${band.maxAge}.`,
             source: { type: 'division', id: division.id },
             responsibleRole: 'league_manager',
             requiredAction: 'Place the player in a division whose age band applies.',
@@ -384,6 +401,36 @@ export class EligibilityService implements EligibilityPort {
     }
 
     return this.result(context, personId, at, membershipStatus, reasons);
+  }
+
+  /**
+   * R3-TIME-MONEY-03 (SPK-SCHED-008): the IANA zone an instant-based reference date is read in.
+   * The caller's zone when given; otherwise, for a fixture, the venue's facility (copied from its
+   * scheduling event); otherwise the division's facility. Null only when none is known.
+   */
+  private async referenceZone(
+    db: Reader,
+    context: EntryContext,
+    options: EvaluatePlayerOptions,
+  ): Promise<string | null> {
+    if (options.timezone) return options.timezone;
+    const organizationId = context.entry.organization_id;
+    let facilityId: string | null = null;
+    if (options.fixtureId) {
+      const fixture = await db
+        .selectFrom('fixtures')
+        .select('venue_facility_id')
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', options.fixtureId)
+        .executeTakeFirst();
+      facilityId = fixture?.venue_facility_id ?? null;
+    }
+    facilityId ??= context.division?.facility_id ?? null;
+    if (!facilityId) return null;
+    const facility = (await this.facilities.describe(organizationId, [facilityId], db)).get(
+      facilityId,
+    );
+    return facility?.timezone ?? null;
   }
 
   private async fixtureConflicts(

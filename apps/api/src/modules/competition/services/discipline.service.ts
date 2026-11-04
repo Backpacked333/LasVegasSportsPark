@@ -64,7 +64,7 @@ import {
   SuspensionMachine,
 } from '../competition-matches.state-machines';
 import type { Reader } from '../competition.queries';
-import { isStaffLike, organizationOf } from '../competition.shared';
+import { organizationOf, staffAuthority } from '../competition.shared';
 import {
   CARD_REMOVED_OVERTURN_REASON,
   DISCIPLINE_MANAGER_ROLES,
@@ -1424,7 +1424,13 @@ export class DisciplineService implements SuspensionCheckPort {
 
   async listSuspensions(principal: Principal, query: ListSuspensionsQuery): Promise<Suspension[]> {
     const organizationId = organizationOf(principal);
-    if (isStaffLike(principal)) {
+    // R3-TRACE-A-01 (§3.1): the restricted list is for a staff role that reads discipline; a coach
+    // or official who is also a parent lists their child's suspensions as the parent.
+    if (
+      await staffAuthority(this.authorization, principal, MatchActions.readDiscipline, {
+        organizationId,
+      })
+    ) {
       await this.authorization.require(principal, MatchActions.readDiscipline, {
         type: 'suspension',
         organizationId,
@@ -1459,6 +1465,12 @@ export class DisciplineService implements SuspensionCheckPort {
     correlationId: string | null,
   ): Promise<Appeal> {
     const organizationId = organizationOf(principal);
+    const appealStaff = await staffAuthority(
+      this.authorization,
+      principal,
+      MatchActions.submitAppeal,
+      { organizationId },
+    );
     return this.uow.run(async ({ trx }) => {
       let subjectPersonId: string | null = input.subjectPersonId ?? null;
       if (input.decisionId) {
@@ -1495,7 +1507,9 @@ export class DisciplineService implements SuspensionCheckPort {
           .where('disputes.id', '=', input.disputeId)
           .executeTakeFirst();
         if (!dispute) throw errors.protectedNotFound('dispute');
-        if (!isStaffLike(principal)) {
+        // R3-TRACE-A-01: only a staff role that may appeal for others skips the submitter or
+        // competing-captain check; an official or coach appeals as themselves.
+        if (!appealStaff) {
           // A dispute outcome is appealed by its submitter or by a captain of a competing entry.
           const isSubmitter =
             principal.personId !== null && dispute.submitted_by_person_id === principal.personId;
@@ -1527,7 +1541,7 @@ export class DisciplineService implements SuspensionCheckPort {
         type: 'appeal',
         organizationId,
         subjectPersonIds: [subjectPersonId],
-        protected: !isStaffLike(principal),
+        protected: !appealStaff,
       });
       // Early feedback; the partial unique indexes remain the guarantee (one open appeal per target).
       const open = await trx
@@ -1820,13 +1834,12 @@ export class DisciplineService implements SuspensionCheckPort {
     subjectPersonId: string,
   ): Promise<void> {
     const organizationId = organizationOf(principal);
-    if (isStaffLike(principal)) {
-      await this.authorization.require(principal, MatchActions.readDiscipline, {
-        type,
-        id,
+    // R3-TRACE-A-01: league management by a staff role that reads discipline, not by staff kind.
+    if (
+      await staffAuthority(this.authorization, principal, MatchActions.readDiscipline, {
         organizationId,
-        protected: true,
-      });
+      })
+    ) {
       return;
     }
     await this.authorization.require(principal, MatchActions.readOwnDiscipline, {

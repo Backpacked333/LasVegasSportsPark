@@ -1,5 +1,7 @@
-import { newId, type Principal, type StaffRole } from '@sportspark/contracts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { errors, newId, type Principal, type StaffRole } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { customerPrincipal, staffPrincipal } from '../../testing/principals';
 import { createTestApp, type TestApp } from '../../testing/test-app';
 import { defineActions } from '../authorization/actions';
@@ -172,6 +174,96 @@ describe('authentication guard and operations endpoint', () => {
     const view = await t.http.get(`/v1/operations/${id}`).set(await t.authHeader(requester));
     expect(view.body).toMatchObject({ status: 'succeeded', result: { recovered: true } });
     expect(view.body.completedAt).not.toBeNull();
+  });
+
+  it('R3-SECURITY-05 / §4.10: a failed operation carrying an INTERNAL_ERROR reads back with the generic message and no details; the operator log keeps the original; other codes keep their text', async () => {
+    const uow = t.app.get(UnitOfWork);
+    const operations = t.app.get(OperationsService);
+    const requester = customerPrincipal(t.organizationId);
+    const create = () =>
+      uow.run((ctx) =>
+        operations.create(ctx.trx, {
+          organizationId: t.organizationId,
+          kind: 'test.op',
+          requestedBy: requester,
+          status: 'running',
+        }),
+      );
+    const internal = errors.internal(
+      'team entry 0198f6c2-0000-7000-8000-0000000000aa vanished (roster revision 7)',
+    );
+    const logged = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const failed = await create();
+    try {
+      await uow.run((ctx) =>
+        operations.transition(ctx.trx, failed, 'failed', {
+          error: {
+            code: internal.code,
+            message: internal.message,
+            details: { teamEntryId: '0198f6c2-0000-7000-8000-0000000000aa' },
+          },
+        }),
+      );
+      expect(
+        logged.mock.calls.some(([m]) => String(m).includes('vanished (roster revision 7)')),
+      ).toBe(true);
+    } finally {
+      logged.mockRestore();
+    }
+    const view = await t.http.get(`/v1/operations/${failed}`).set(await t.authHeader(requester));
+    expect(view.status).toBe(200);
+    expect(view.body.error).toEqual({
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred.',
+    });
+    expect(JSON.stringify(view.body)).not.toContain('0198f6c2-0000-7000-8000-0000000000aa');
+    const stored = await t.db
+      .selectFrom('operations')
+      .select('error')
+      .where('id', '=', failed)
+      .executeTakeFirstOrThrow();
+    expect(stored.error).toEqual({
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred.',
+    });
+
+    // A row written before the boundary sanitised (or by SQL) still reads generic.
+    const legacy = await create();
+    await t.db
+      .updateTable('operations')
+      .set({
+        status: 'failed',
+        error: json({ code: 'INTERNAL_ERROR', message: 'error: relation "x" does not exist' }),
+      })
+      .where('id', '=', legacy)
+      .execute();
+    const legacyView = await t.http
+      .get(`/v1/operations/${legacy}`)
+      .set(await t.authHeader(requester));
+    expect(legacyView.body.error).toEqual({
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred.',
+    });
+
+    // A client-facing failure keeps its code, message and details.
+    const capacity = await create();
+    await uow.run((ctx) =>
+      operations.transition(ctx.trx, capacity, 'failed', {
+        error: {
+          code: 'CAPACITY_UNAVAILABLE',
+          message: 'The session is full.',
+          details: { left: 0 },
+        },
+      }),
+    );
+    const capacityView = await t.http
+      .get(`/v1/operations/${capacity}`)
+      .set(await t.authHeader(requester));
+    expect(capacityView.body.error).toEqual({
+      code: 'CAPACITY_UNAVAILABLE',
+      message: 'The session is full.',
+      details: { left: 0 },
+    });
   });
 
   it('validates path parameters with the error contract', async () => {

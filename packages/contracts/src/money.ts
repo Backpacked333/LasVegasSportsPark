@@ -128,7 +128,31 @@ export function percentageBasisPoints(base: Money, basisPoints: number): Money {
   return money(rounded, base.currency);
 }
 
-export function formatMoney(a: Money, locale = 'en-US', minorDigits = 2): string {
-  const major = a.amountMinor / 10 ** minorDigits;
-  return new Intl.NumberFormat(locale, { style: 'currency', currency: a.currency }).format(major);
+/**
+ * Minor-unit digits of an ISO 4217 currency as the platform's Intl data knows it (USD 2, JPY 0,
+ * KWD 3), the exponent the clients use too (`packages/api-client/src/money.ts` `currencyDigits`).
+ */
+export function currencyMinorDigits(currency: string, locale = 'en-US'): number {
+  try {
+    const digits = new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency,
+    }).resolvedOptions().maximumFractionDigits;
+    return typeof digits === 'number' ? digits : 2;
+  } catch {
+    return 2;
+  }
+}
+
+/**
+ * Display text of an amount (SPK-PAY-001: integer minor units with an explicit currency).
+ * R3-TIME-MONEY-10: the exponent follows the currency (`currencyMinorDigits`), so server notices
+ * and the clients' screens show the same text for every currency the database accepts (1000 JPY
+ * minor units is ¥1,000, 1500 KWD minor units is KWD 1.500). `minorDigits` overrides the exponent
+ * only for a caller that stores amounts with a different one.
+ */
+export function formatMoney(a: Money, locale = 'en-US', minorDigits?: number): string {
+  const formatter = new Intl.NumberFormat(locale, { style: 'currency', currency: a.currency });
+  const digits = minorDigits ?? formatter.resolvedOptions().maximumFractionDigits ?? 2;
+  return formatter.format(a.amountMinor / 10 ** digits);
 }

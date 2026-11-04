@@ -25,6 +25,22 @@ export interface SupportPolicy {
   timelineSourceLimit: number;
   /** Upper bound of fixtures and events evaluated per facility for the Today workspace. */
   todayEventLimit: number;
+  /**
+   * R3-PERFORMANCE-01 (SPK-UX-006, §5.9): the most operational exceptions one Today read lists
+   * with their resolution history, most severe and soonest due first. The rest are counted on the
+   * source (`truncated`, `omitted`), summarised by one `exceptions-omitted` item, and stay in the
+   * paged `GET /v1/exceptions`. Proposed: 50 (one exceptions page); pending DEC-036 (performance
+   * targets).
+   */
+  todayExceptionLimit: number;
+  /**
+   * R3-PERFORMANCE-01 (SPK-UX-006, SPK-READY-001, §5.9): the most fixtures one Today read
+   * evaluates for readiness, across every facility in the read. Fixtures still to finish come
+   * first, soonest start first; then finished ones, latest first. The rest are counted on the
+   * source and named by a `readiness-omitted:<facilityId>` item (their readiness is not known
+   * there, never shown as ready, SPK-READY-002). Proposed: 10; pending DEC-036.
+   */
+  todayReadinessLimit: number;
   /** Priority given to a case opened by an escalated disputed-access review (SPK-IAM-005). */
   accessEscalationPriority: CasePriority;
   /**
@@ -51,6 +67,8 @@ export const DEFAULT_SUPPORT_POLICY: SupportPolicy = {
   showUnconfirmedReadiness: true,
   timelineSourceLimit: 200,
   todayEventLimit: 200,
+  todayExceptionLimit: 50,
+  todayReadinessLimit: 10,
   accessEscalationPriority: 'high',
   helperOutcomeGraceMinutes: 15,
   customerRequestQueues: {

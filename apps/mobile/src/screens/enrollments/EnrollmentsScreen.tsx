@@ -8,10 +8,14 @@
  *   current first, then history (transfers, cancellations, completed seasons). The offering's
  *   name and dates come from the enrollment itself (ENR-02), also for a closed or archived
  *   season. A pending enrollment names what it waits for ("Registration pending: awaiting
- *   approval", from `pendingReason`); one whose checkout is `recovery_required`
- *   (`GET /v1/me/registration-checkouts`) reads "Payment received. We are completing your
- *   registration."; a confirmed one awaiting placement reads "Confirmed in <offering>. Awaiting
- *   placement.", and a placed one "Confirmed: <team>" (`GET /v1/placement-requests/{id}`);
+ *   approval", from `pendingReason`); one whose checkout is `recovery_required` (every page of
+ *   `GET /v1/me/registration-checkouts?status=recovery_required`, or its last operation, the same
+ *   test as the record, `recovery.tsx`) reads "Payment received. We are completing your
+ *   registration."; while that is not known (a read loading or failed) one waiting for payment
+ *   reads "Registration pending: payment status not known yet", never "payment not finished", and
+ *   a failed read is shown with its code and "Try again"; a confirmed one awaiting placement reads
+ *   "Confirmed in <offering>. Awaiting placement.", and a placed one "Confirmed: <team>"
+ *   (`GET /v1/placement-requests/{id}`);
  * - applications (`GET /v1/me/applications`): "Awaiting approval", "Not approved: <reason>";
  * - trial participations (`GET /v1/me/trial-participations`), never shown as enrollments;
  * - session bookings (`GET /v1/session-bookings?participantPersonId=`): pickup, trial, makeup.
@@ -40,7 +44,7 @@ import { moneyRoutes } from '../../features/money/routes';
 import { bookingStatus, enrollmentStatus, type Enrollment } from '../../features/money/status';
 import { Caption, Section } from '../../features/money/ui';
 import { formatInstant } from '../../features/registration/format';
-import { useMyCheckouts } from '../../features/registration/in-progress';
+import { useRecoveryCheckouts } from '../../features/registration/in-progress';
 import { RequireSession } from '../../session/RequireSession';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
@@ -52,9 +56,16 @@ import {
   SESSION_BOOKING_KIND_LABELS,
   trialStatus,
 } from './participation';
+import {
+  pendingEnrollmentRecovery,
+  recoveryIndex,
+  recoveryReadFailed,
+  RecoveryReadState,
+  type OperationRead,
+  type RecoveryIndex,
+} from './recovery';
 
 type Offering = Schema<'Offering'>;
-type Checkout = Schema<'Checkout'>;
 
 const CURRENT: readonly Enrollment['status'][] = ['pending', 'confirmed'];
 export const ENROLLMENTS_PAGE_SIZE = 50;
@@ -81,15 +92,14 @@ export function offeringLabel(
   return record?.loading ? 'Loading activity…' : 'Activity no longer listed';
 }
 
-/** The enrollments whose checkout the API reports `recovery_required` (§4.11). */
-export function recoveryEnrollmentIds(checkouts: readonly Checkout[] | undefined): {
-  enrollmentIds: Set<string>;
-  basketIds: Set<string>;
+/** The recovery answer as `enrollmentStatus` takes it (list row and record alike). */
+export function recoveryContext(recovery: ReturnType<typeof pendingEnrollmentRecovery>): {
+  recoveryRequired: boolean;
+  recoveryUnknown: boolean;
 } {
-  const recovering = (checkouts ?? []).filter((c) => c.status === 'recovery_required');
   return {
-    enrollmentIds: new Set(recovering.flatMap((c) => c.enrollmentIds)),
-    basketIds: new Set(recovering.map((c) => c.basketId)),
+    recoveryRequired: recovery === 'recovery_required',
+    recoveryUnknown: recovery === 'unknown',
   };
 }
 
@@ -98,13 +108,15 @@ function EnrollmentRows({
   all,
   offerings,
   placements,
+  operations,
   recovery,
 }: {
   items: readonly Enrollment[];
   all: readonly Enrollment[];
   offerings: Records<'/offerings/{id}'>;
   placements: Records<'/placement-requests/{id}'>;
-  recovery: ReturnType<typeof recoveryEnrollmentIds>;
+  operations: Records<'/operations/{id}'>;
+  recovery: RecoveryIndex;
 }) {
   const router = useRouter();
   return (
@@ -128,10 +140,13 @@ function EnrollmentRows({
           placementUnknown:
             enrollment.placementRequestId !== null &&
             placements[enrollment.placementRequestId]?.data === undefined,
-          recoveryRequired:
-            enrollment.status === 'pending' &&
-            (recovery.enrollmentIds.has(enrollment.id) ||
-              (enrollment.basketId !== null && recovery.basketIds.has(enrollment.basketId))),
+          ...recoveryContext(
+            pendingEnrollmentRecovery(
+              enrollment,
+              recovery,
+              enrollment.lastOperationId ? operations[enrollment.lastOperationId] : undefined,
+            ),
+          ),
         });
         const dates = about ? formatDateRange(about.startsOn, about.endsOn) : undefined;
         return (
@@ -170,11 +185,45 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
       .map((e) => e.placementRequestId as string),
     enrollments.data !== undefined,
   );
-  const checkouts = useMyCheckouts(items.some((e) => e.status === 'pending'));
-  const recovery = recoveryEnrollmentIds(checkouts.data?.items);
+  // Recovery is read the way the record reads it (R3-SCREEN-STATES-04): every checkout in
+  // recovery, not the newest page of all checkouts, and each pending enrollment's last operation.
+  const pending = items.filter((e) => e.status === 'pending');
+  const checkouts = useRecoveryCheckouts(pending.length > 0);
+  const operations = useApiRecords(
+    '/operations/{id}',
+    pending.flatMap((e) => (e.lastOperationId ? [e.lastOperationId] : [])),
+    enrollments.data !== undefined,
+  );
+  const recovery = recoveryIndex(checkouts);
+  // Pending enrollments whose recovery is not known yet, and the operation reads behind them.
+  const unknown = pending.filter(
+    (e) =>
+      pendingEnrollmentRecovery(
+        e,
+        recovery,
+        e.lastOperationId ? operations[e.lastOperationId] : undefined,
+      ) === 'unknown',
+  );
+  const unknownOperations = unknown.flatMap((e): OperationRead[] => {
+    const read = e.lastOperationId ? operations[e.lastOperationId] : undefined;
+    return read ? [read] : [];
+  });
   const whose = person.self ? 'your' : `${person.displayName}’s`;
   return (
     <View>
+      {unknown.length > 0 && recoveryReadFailed(checkouts, unknownOperations) ? (
+        // A failed read is shown, not read as "payment not finished" (§4.11, SPK-UX-008).
+        <Section title="Payment status" testID="enrollments-recovery-unknown">
+          <Caption>
+            {`Whether the payment was received for ${
+              unknown.length === 1
+                ? 'a pending registration'
+                : `${unknown.length} pending registrations`
+            } could not be checked.`}
+          </Caption>
+          <RecoveryReadState checkouts={checkouts} operations={unknownOperations} />
+        </Section>
+      ) : null}
       <QueryBoundary
         query={enrollments}
         label={`${whose} enrollments`}
@@ -199,6 +248,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
                     all={list}
                     offerings={offerings}
                     placements={placements}
+                    operations={operations}
                     recovery={recovery}
                   />
                 </Section>
@@ -210,6 +260,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
                     all={list}
                     offerings={offerings}
                     placements={placements}
+                    operations={operations}
                     recovery={recovery}
                   />
                 </Section>

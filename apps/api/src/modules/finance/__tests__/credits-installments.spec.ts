@@ -1,6 +1,8 @@
 import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import { createCreditFixture, createObligationFixture } from '../testing/finance-fixtures';
@@ -821,5 +823,111 @@ describe('installments: no charge beside the checkout payment of the same debt (
       .where('affected_id', '=', first.id)
       .execute();
     expect(failures).toEqual([]);
+  });
+});
+
+/**
+ * R3-TIME-MONEY-08 (SPK-PAY-006 "plans record amounts", SPK-PAY-004 total, received, allocated and
+ * remaining shown consistently): with a credit applied to an installment plan, the plan total is
+ * what its installments add up to (the order total) and the credit is an allocation against
+ * installment 1, so a plan never shows a total below its own installments.
+ */
+describe('installments with a credit applied (R3-TIME-MONEY-08, SPK-PAY-006)', () => {
+  let t: TestApp;
+  let payer: Actor;
+
+  beforeAll(async () => {
+    t = await financeTestApp();
+    payer = await adult(t);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  async function refused(promise: Promise<unknown>): Promise<string> {
+    try {
+      await promise;
+    } catch (error) {
+      const c = databaseConstraintOf(error);
+      return c ? `${c.code}:${c.constraint ?? ''}` : String(error);
+    }
+    throw new Error('expected the database to refuse the statement');
+  }
+
+  it('SPK-PAY-006: the plan total equals the sum of its installments when a credit is applied', async () => {
+    const setup = await offering(t, { basePriceMinor: 30_000 });
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: payer.personId,
+      amountMinor: 6_000,
+    });
+    const { basketId } = await basketFor(t, payer, [setup]);
+    const quote = await quoteFor(t, payer, basketId, {
+      creditIds: [creditId],
+      paymentPlan: { kind: 'installments', count: 3 },
+    });
+    expect(quote).toMatchObject({ totalMinor: 30_000, dueNowMinor: 8_000 });
+    const res = await post(t, '/v1/registration-checkouts', payer.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      authorizeFutureInstallments: true,
+    });
+    expect(res.body).toMatchObject({ status: 'completed', payment: { amountMinor: 8_000 } });
+    const order = await t.http.get(`/v1/orders/${res.body.orderId as string}`).set(payer.header);
+    const planId = order.body.installmentPlanId as string;
+    const plan = await t.http.get(`/v1/installment-plans/${planId}`).set(payer.header);
+    expect(plan.status).toBe(200);
+    const amounts = (plan.body.installments as Array<{ amountMinor: number }>).map(
+      (i) => i.amountMinor,
+    );
+    expect(amounts).toEqual([14_000, 8_000, 8_000]);
+    expect(plan.body).toMatchObject({ totalMinor: 30_000, outstandingMinor: 16_000 });
+    expect(amounts.reduce((a, b) => a + b, 0)).toBe(plan.body.totalMinor);
+  });
+
+  it('§4.7: the database refuses a plan whose installments do not add up to its total', async () => {
+    const plan = await t.db
+      .selectFrom('installment_plans')
+      .select(['id', 'total_minor'])
+      .where('organization_id', '=', t.organizationId)
+      .executeTakeFirstOrThrow();
+    // The total stated as order total minus credits (the defect) is refused at commit.
+    expect(
+      await refused(
+        t.db
+          .updateTable('installment_plans')
+          .set({ total_minor: Number(plan.total_minor) - 6_000 })
+          .where('id', '=', plan.id)
+          .execute(),
+      ),
+    ).toBe('23514:installment_plans_total_matches_installments');
+    const second = await t.db
+      .selectFrom('installments')
+      .select(['id', 'amount_minor'])
+      .where('plan_id', '=', plan.id)
+      .where('sequence', '=', 2)
+      .executeTakeFirstOrThrow();
+    expect(
+      await refused(
+        t.db
+          .updateTable('installments')
+          .set({ amount_minor: Number(second.amount_minor) + 1 })
+          .where('id', '=', second.id)
+          .execute(),
+      ),
+    ).toBe('23514:installment_plans_total_matches_installments');
+    // Moving amount between installments keeps the total and is accepted.
+    await t.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('installments')
+        .set({ amount_minor: Number(second.amount_minor) + 1 })
+        .where('id', '=', second.id)
+        .execute();
+      await trx
+        .updateTable('installments')
+        .set({ amount_minor: sql`amount_minor - 1` })
+        .where('plan_id', '=', plan.id)
+        .where('sequence', '=', 3)
+        .execute();
+    });
   });
 });

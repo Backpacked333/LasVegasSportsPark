@@ -155,6 +155,14 @@ export const ResultDetailsSchema = z
   .openapi('ResultDetails');
 export type ResultDetails = z.infer<typeof ResultDetailsSchema>;
 
+/**
+ * A result revision. Staff holding `competition.read_results` receive every field. A roster player
+ * or a guardian with `view` reads official and superseded revisions only, in the customer view
+ * (R3-TRACE-B-03, SPK-DISC-001/004, SPK-CAP-002): `details.incidentIds` is empty,
+ * `details.notes`, `details.disputeId` and `returnReason` are null, and `submittedBy`/`publishedBy`
+ * carry the actor kind and a generic label with no account or person id. Scores, classification,
+ * cards, abandonment and the correction `reason` are the same in both views.
+ */
 export const ResultRevisionSchema = z
   .object({
     id: z.uuid(),

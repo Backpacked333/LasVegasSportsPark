@@ -137,6 +137,59 @@ describe('fee submissions follow the assignment’s facility scope (SPK-STAFF-00
     );
   });
 
+  it('SPK-STAFF-006 / SCR-W-08: order=desc lists a person’s fee records and assignments newest first with a descending cursor; asc stays the default', async () => {
+    const official = await staffMember(t, ['official']);
+    const oldest = await completedFee('2027-03-10', official);
+    const middle = await completedFee('2027-03-11', official);
+    const newest = await completedFee('2027-03-12', official);
+    const page = (query: string) =>
+      t.http.get(`/v1/fee-submissions?personId=${official.personId}&${query}`).set(official.header);
+    const ids = (res: { body: { items: Array<{ id: string }> } }) =>
+      res.body.items.map((f) => f.id);
+
+    const first = await page('order=desc&limit=2');
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(ids(first)).toEqual([newest.feeId, middle.feeId]);
+    expect(first.body.nextCursor).toEqual(expect.any(String));
+    const second = await page(
+      `order=desc&limit=2&cursor=${encodeURIComponent(first.body.nextCursor as string)}`,
+    );
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(ids(second)).toEqual([oldest.feeId]);
+    expect(second.body.nextCursor).toBeNull();
+
+    const ascending = await page('limit=2');
+    expect(ids(ascending)).toEqual([oldest.feeId, middle.feeId]);
+    // A cursor continues only the order it was issued for.
+    const mixed = await page(
+      `limit=2&cursor=${encodeURIComponent(first.body.nextCursor as string)}`,
+    );
+    expect(mixed.status).toBe(400);
+    expect(mixed.body.details).toMatchObject({ code: 'cursor_order_mismatch' });
+    const unknown = await page('order=newest');
+    expect(unknown.status).toBe(400);
+
+    // The assignments behind them, latest scheduled start first, in the same way.
+    const assignments = (query: string) =>
+      t.http
+        .get(`/v1/assignments?personId=${official.personId}&status=completed&${query}`)
+        .set(official.header);
+    const latest = await assignments('order=desc&limit=2');
+    expect(latest.status, JSON.stringify(latest.body)).toBe(200);
+    expect(ids(latest)).toEqual([newest.assignmentId, middle.assignmentId]);
+    const rest = await assignments(
+      `order=desc&limit=2&cursor=${encodeURIComponent(latest.body.nextCursor as string)}`,
+    );
+    expect(ids(rest)).toEqual([oldest.assignmentId]);
+    expect(rest.body.nextCursor).toBeNull();
+    expect(ids(await assignments('limit=2'))).toEqual([oldest.assignmentId, middle.assignmentId]);
+    const crossed = await assignments(
+      `limit=2&cursor=${encodeURIComponent(latest.body.nextCursor as string)}`,
+    );
+    expect(crossed.status).toBe(400);
+    expect(crossed.body.details).toMatchObject({ code: 'cursor_order_mismatch' });
+  });
+
   it('SPK-STAFF-006: a facility-scoped finance operator who is the assignee still reads their own fee elsewhere through self authority', async () => {
     const operator = await staffMember(t, ['finance_operator', 'official'], {
       facilityIds: [annex],

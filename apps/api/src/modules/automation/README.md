@@ -266,15 +266,15 @@ modules).
   `running`, no unknown outcome recorded) is not swept: it is neither `recovery_required` nor
   settleable until a sweeper moves it there (**Proposed** follow-up: the AUT-03 job pattern applied
   to `apply_started_at`). Retries answer `APPLY_IN_PROGRESS` meanwhile.
+- **Refund proposals during recovery (R3-OPERATIONS-02, §5.8, SPK-AT-028):** finance refuses a
+  refund in process while the organization recovers from a restore, before anything is reserved,
+  so applying an approved `finance.refund` proposal then answers 503 `INTEGRATION_UNAVAILABLE`
+  `recovery_mode` and is recorded as a failed apply (not an unknown outcome) that may be applied
+  again after `POST /v1/recovery/resume` (**Verified**, `__tests__/recovery-apply.spec.ts`).
 - **Settling needs the deployment flag:** while `AUTOMATION_ENABLED=false` the settle endpoint is
   `503` like every automation endpoint; the `automation.apply_outcome_unknown` exception stays in its
   owner's Today queue (resolvable through the kernel's exception commands) and the claim stays held
   until the module is enabled again (**Proposed**).
-- **Integration steps outside this module:** `docs/api/openapi.json` and `packages/api-client` are
-  regenerated at integration (the new route and `RecommendationApplySettlement` make the committed
-  document stale on this branch: `openapi-parity.spec.ts` "fresh emission"); the migration module's
-  route classification counts `@NoRecordAuthority` on `settle-apply` once MIG-00 is merged (on
-  stage3-core alone `modules/migration/__tests__/authority.spec.ts` lists it as unclassified).
 - **Catalogue:** schedule repairs publish drafts (existing or opened from proposed changes) but the
   assistant does not compute repairs itself; renewal summaries, readiness across many fixtures and
   financial exceptions beyond a single payment need further tools. Roster, permission and discipline

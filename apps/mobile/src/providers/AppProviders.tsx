@@ -26,6 +26,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Reachability } from '../connectivity/sources';
+import { linkSecretsFollowSession, linkSecretsSessionExpired } from '../links/link-secrets';
 import type { AppServices } from './services';
 
 export type SessionStatus = 'loading' | 'signed_out' | 'signed_in';
@@ -55,6 +56,15 @@ export interface ConnectivityState {
 const AppContext = createContext<AppContextValue | null>(null);
 const ConnectivityContext = createContext<ConnectivityState>({ reachable: null });
 
+/**
+ * R3-SCREEN-STATES-01 (§4.15, journeys.md section 3 "never pretend a queued action is committed"):
+ * a command is never retried by the data layer and never paused while the device is offline to be
+ * sent by itself on reconnection (TanStack's default `networkMode: 'online'` would do both). A
+ * command sent offline fails at once and its failure view says what is known; the failure views'
+ * retry controls are disabled while offline.
+ */
+export const MUTATION_DEFAULTS = { retry: false, networkMode: 'always' } as const;
+
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -66,7 +76,7 @@ export function createQueryClient(): QueryClient {
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
       },
-      mutations: { retry: false },
+      mutations: MUTATION_DEFAULTS,
     },
   });
 }
@@ -93,6 +103,8 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
       .load()
       .then((loaded) => {
         if (!active) return;
+        // A link opened while the stored session was loading belongs to whoever it is.
+        linkSecretsFollowSession(loaded);
         setSession({
           status: loaded ? 'signed_in' : 'signed_out',
           session: loaded,
@@ -100,7 +112,9 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
         });
       })
       .catch(() => {
-        if (active) setSession({ status: 'signed_out', session: null, expired: false });
+        if (!active) return;
+        linkSecretsFollowSession(null);
+        setSession({ status: 'signed_out', session: null, expired: false });
       });
     return () => {
       active = false;
@@ -122,7 +136,10 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
         now: services.now,
         onUpdateRequired: (error) => setUpdateRequired(error),
         onAuthenticationRequired: () => {
-          // Session expiry and recovery (§4.13): drop the secret, keep nothing cached for the user.
+          // Session expiry and recovery (§4.13): drop the secret and keep nothing cached for the
+          // user. Link secrets are no longer offered, but wait for the same account to sign in
+          // again (NA-04); another account never gets them (R3-SECURITY-07).
+          linkSecretsSessionExpired();
           void services.sessionStore.clear().finally(() => {
             client.clear();
             setSession({ status: 'signed_out', session: null, expired: true });
@@ -163,6 +180,8 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
   const signIn = useCallback(
     async (next: Session) => {
       await services.sessionStore.save(next);
+      // Another account's link secrets are dropped; one opened while signed out is now theirs.
+      linkSecretsFollowSession(next);
       client.clear();
       setSession({ status: 'signed_in', session: next, expired: false });
     },
@@ -170,6 +189,9 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
   );
 
   const signOut = useCallback(async () => {
+    // The next person on this device never sees this account's claim or invitation codes
+    // (R3-SECURITY-07): dropped first, whatever the store answers.
+    linkSecretsFollowSession(null);
     await services.sessionStore.clear();
     client.clear();
     setSession({ status: 'signed_out', session: null, expired: false });

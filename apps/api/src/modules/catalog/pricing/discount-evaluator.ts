@@ -263,10 +263,38 @@ export function evaluateDiscounts(input: DiscountEvaluationInput): DiscountEvalu
       );
       continue;
     }
-    const eligible = eligibleLines(d, input.lines, at, explanation);
+    let eligible = eligibleLines(d, input.lines, at, explanation);
     if (eligible.length === 0) {
       discounts.push(notApplied('not applied: no eligible lines'));
       continue;
+    }
+    if (d.redemptionLimit !== null) {
+      // R3-TIME-MONEY-01b (SPK-PAY-003, SPK-PAY-002): finance redeems an applied discount once per
+      // participant whose lines it reduces, and each redemption takes one unit of the
+      // organization-wide limit (a Proposed engineering default pending POL-011 / DEC-007). So the
+      // quote discounts only the first participants, in line order, that the redemptions left
+      // cover; a line without a participant counts as its own participant. Without this, a quote
+      // would offer a discount that checkout then refuses (DISCOUNT_REDEMPTION_LIMIT).
+      const left = d.redemptionLimit - d.redeemedCount;
+      const participantOf = (l: DiscountEvaluationLine): string =>
+        l.participantPersonId ?? `line:${l.lineId}`;
+      const participants = [...new Set(eligible.map(participantOf))];
+      if (participants.length > left) {
+        const covered = new Set(participants.slice(0, left));
+        eligible = eligible.filter((l) => covered.has(participantOf(l)));
+        explanation.push(
+          `limited to ${left} participant(s): ${left} of ${d.redemptionLimit} redemption(s) left`,
+        );
+        const minLines = d.eligibilityRules.minLines;
+        if (minLines !== undefined && eligible.length < minLines) {
+          discounts.push(
+            notApplied(
+              `not applied: needs at least ${minLines} eligible lines, found ${eligible.length} within the redemptions left`,
+            ),
+          );
+          continue;
+        }
+      }
     }
     const base = eligible.map((l) => ({
       lineId: l.lineId,

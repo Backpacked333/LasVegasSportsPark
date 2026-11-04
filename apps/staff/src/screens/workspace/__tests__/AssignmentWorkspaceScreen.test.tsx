@@ -5,7 +5,7 @@
  * revision; an overlap refusal with its code; readiness counts without player details; the
  * field-limited match sheet for an accepted official (CMP-06); times in the facility zone (WRK-01).
  */
-import { apiErrorBody, type FakeHandler } from '@sportspark/api-client/testing';
+import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -20,7 +20,8 @@ import {
   oneFacilityMe,
   workspaceItem,
 } from '../../../features/operations/testing';
-import { FACILITY_A, TEST_SESSION, createTestApp } from '../../../testing/test-app';
+import { FACILITY_A, TEST_NOW, TEST_SESSION, createTestApp } from '../../../testing/test-app';
+import { workspaceHistoryFrom } from '../MyAssignment';
 
 const OFFERED = workspaceItem(assignmentRecord({ status: 'offered', revision: 5 }), [
   'accept',
@@ -227,6 +228,11 @@ describe('SCR-W-02 / SCR-W-03 AssignmentWorkspaceScreen', () => {
     const app = createTestApp({ routes: routes({ 'GET /me/assignments': myAssignments([]) }) });
     render(app.at(PATH));
     expect(await screen.findByText(/This assignment is not available/)).toBeInTheDocument();
+    // Looked up over the workspace history too, and the text names the period it searched.
+    expect(screen.getByText(/not among your assignments since/)).toBeInTheDocument();
+    expect(
+      app.fake.requests.filter((r) => r.route === '/me/assignments').map((r) => r.query.from),
+    ).toContain(workspaceHistoryFrom(TEST_NOW));
   });
 
   it('SCR-W-10: shows queued observations on the workspace and links to their review', async () => {
@@ -344,5 +350,85 @@ describe('SCR-W-02 / SCR-W-03 AssignmentWorkspaceScreen', () => {
     expect(
       await within(heading.parentElement as HTMLElement).findByTestId('state-unavailable'),
     ).toBeInTheDocument();
+  });
+});
+
+describe('SCR-W-03 readiness: unknown or stale evidence is never shown as ready (SPK-READY-002)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  const READY = {
+    status: 200,
+    body: {
+      ...READINESS.body,
+      status: 'ready',
+      checks: [
+        { name: 'officials', status: 'ready', issueCount: 0 },
+        { name: 'rosters', status: 'ready', issueCount: 0 },
+      ],
+      issues: [],
+    },
+  };
+
+  const overall = () => screen.findByTestId('readiness-overall');
+
+  it('online and fresh, a ready evaluation reads Ready', async () => {
+    render(createTestApp({ routes: routes({ 'GET /fixtures/{id}/readiness': READY }) }).at(PATH));
+    expect(await overall()).toHaveTextContent('Readiness: Ready');
+    expect(screen.getByRole('button', { name: 'Re-evaluate' })).toBeEnabled();
+  });
+
+  it('offline, the cached ready evaluation reads as unknown and Re-evaluate is disabled', async () => {
+    const app = createTestApp({ routes: routes({ 'GET /fixtures/{id}/readiness': READY }) });
+    render(app.at(PATH));
+    expect(await overall()).toHaveTextContent('Readiness: Ready');
+    act(() => app.connectivity.set(false));
+    await waitFor(async () =>
+      expect(await overall()).toHaveTextContent('Readiness: Unknown or stale evidence'),
+    );
+    expect(screen.getByRole('note')).toHaveTextContent(/offline .* readiness cannot be confirmed/);
+    expect(screen.getByRole('button', { name: 'Re-evaluate' })).toBeDisabled();
+  });
+
+  it('after a failed refresh, the earlier ready evaluation reads as unknown', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      routes: routes({
+        'GET /fixtures/{id}/readiness': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(200, READY.body)
+            : fakeResponse(503, apiErrorBody('INTERNAL_ERROR'));
+        },
+      }),
+    });
+    render(app.at(PATH));
+    expect(await overall()).toHaveTextContent('Readiness: Ready');
+    await user.click(screen.getByRole('button', { name: 'Re-evaluate' }));
+    await waitFor(() => expect(calls).toBe(2));
+    await waitFor(async () =>
+      expect(await overall()).toHaveTextContent('Readiness: Unknown or stale evidence'),
+    );
+    expect(screen.getByRole('note')).toHaveTextContent(/could not be fetched/);
+  });
+
+  it('past the configured stale threshold, a ready evaluation reads as unknown; Re-evaluate asks again', async () => {
+    const user = userEvent.setup();
+    let calls = 0;
+    const app = createTestApp({
+      // evaluatedAt is 11:55, the clock reads 12:00: older than a 2-minute threshold.
+      config: { staleDataThresholdMs: 2 * 60_000 },
+      routes: routes({
+        'GET /fixtures/{id}/readiness': () => {
+          calls += 1;
+          return fakeResponse(200, READY.body);
+        },
+      }),
+    });
+    render(app.at(PATH));
+    expect(await overall()).toHaveTextContent('Readiness: Unknown or stale evidence');
+    expect(screen.getByRole('note')).toHaveTextContent(/older than the stale threshold/);
+    await user.click(screen.getByRole('button', { name: 'Re-evaluate' }));
+    await waitFor(() => expect(calls).toBe(2));
   });
 });

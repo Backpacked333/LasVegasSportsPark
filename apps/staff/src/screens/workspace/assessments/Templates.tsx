@@ -17,7 +17,9 @@ import { useApiCommand } from '../../../api/useApiCommand';
 import { CommandError, CommandSuccess } from '../../../features/operations/feedback';
 import { TextAreaField, TextField, fieldErrorsOf } from '../../../features/operations/fields';
 import { TEMPLATE_STATUS } from '../../../features/operations/labels';
+import { useApp } from '../../../providers/AppProviders';
 import { Button } from '../../../ui/Button';
+import { CommandButton } from '../../../ui/CommandButton';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { ProgramPicker } from './programs';
@@ -91,17 +93,21 @@ function TemplateRow({
 }) {
   const approve = useApiCommand('post', '/assessment-templates/{id}/approve');
   const retire = useApiCommand('post', '/assessment-templates/{id}/retire');
+  const { online } = useApp();
   const [retiring, setRetiring] = useState(false);
   const [reason, setReason] = useState('');
   const [missing, setMissing] = useState(false);
   const badge = TEMPLATE_STATUS[t.status];
   const label = `${t.name} (version ${t.version})`;
-  const doApprove = () =>
+  const doApprove = () => {
+    if (!online) return;
     void approve
       .submit({ path: { id: t.id }, body: { expectedRevision: t.revision } })
       .then(onChange)
       .catch(() => undefined);
+  };
   const doRetire = () => {
+    if (!online) return;
     if (!reason.trim()) {
       setMissing(true);
       return;
@@ -127,9 +133,13 @@ function TemplateRow({
       </div>
       <div className="ops-actions">
         {t.status === 'draft' && mayApprove ? (
-          <Button busy={approve.isProcessing} aria-label={`Approve ${label}`} onClick={doApprove}>
+          <CommandButton
+            busy={approve.isProcessing}
+            aria-label={`Approve ${label}`}
+            onClick={doApprove}
+          >
             Approve
-          </Button>
+          </CommandButton>
         ) : null}
         {t.status !== 'retired' && mayRetire ? (
           <Button
@@ -159,9 +169,9 @@ function TemplateRow({
             hint="Assessments already recorded on it keep it."
             error={missing ? 'A reason is required.' : undefined}
           />
-          <Button type="submit" busy={retire.isProcessing}>
+          <CommandButton type="submit" busy={retire.isProcessing}>
             Confirm retirement
-          </Button>
+          </CommandButton>
         </form>
       ) : null}
       {approve.error ? (
@@ -193,6 +203,7 @@ function TemplateForm({
   const [problems, setProblems] = useState<Record<string, string>>({});
   const command = useApiCommand('post', '/assessment-templates');
   const apiErrors = fieldErrorsOf(command.error);
+  const { online } = useApp();
   if (!open) {
     return (
       <div className="ops-actions">
@@ -207,6 +218,8 @@ function TemplateForm({
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
   const submit = () => {
+    // Offline nothing is saved or queued (§4.15): the control is disabled and the input is kept.
+    if (!online) return;
     const next: Record<string, string> = {};
     if (!program) next.program = 'Choose the program.';
     if (!name.trim()) next.name = 'Name the template.';
@@ -322,9 +335,9 @@ function TemplateForm({
         error={problems.levels ?? apiErrors.scale}
       />
       <div className="ops-actions">
-        <Button type="submit" busy={command.isProcessing}>
+        <CommandButton type="submit" busy={command.isProcessing}>
           Save the template as a draft
-        </Button>
+        </CommandButton>
         <Button variant="secondary" onClick={() => setOpen(false)}>
           Close
         </Button>

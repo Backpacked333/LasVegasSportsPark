@@ -9,8 +9,8 @@
  *   the form keeps what was typed;
  * - no definite answer (`mayHaveTakenEffect`: a timeout, a connection lost after sending, the same
  *   key still running, a 5xx): "Outcome not known yet: this may already have taken effect", never
- *   "nothing changed". These commands are not sent while offline, so a network failure happened
- *   after the request left; "Try again" resends the same intent with the same idempotency key, so
+ *   "nothing changed". These commands are not offered offline and never paused for later, so a
+ *   network failure may have happened after the request left; "Try again" resends the same intent with the same idempotency key, so
  *   the effect is never applied twice (SPK-PAY-007). The money forms stay locked meanwhile
  *   (`sameRequest.tsx`);
  * - IDEMPOTENCY_OUTCOME_UNAVAILABLE: "This may already have been done" with "Reload"; the key is

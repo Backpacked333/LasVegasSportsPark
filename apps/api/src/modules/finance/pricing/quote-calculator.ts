@@ -17,7 +17,8 @@ import {
  * evaluated (catalog's explainable evaluation: eligibility, stacking, caps, rounding, allocation
  * across lines). Approved taxes and fees apply per line to the net amount after discounts:
  *   - an exclusive charge is added on top (percentage rounded half up, DEC-007 engineering default);
- *   - an inclusive charge is already part of the base price and is shown for transparency only.
+ *   - an inclusive charge is already part of the base price and is shown for transparency only;
+ *     several inclusive rates are extracted together (R3-TIME-MONEY-09, inclusivePercentageParts).
  * Credits reduce what is payable in the order given; an installment plan splits the payable
  * amount with the largest-remainder rule so no minor unit is lost or invented.
  */
@@ -84,6 +85,39 @@ export function roundHalfUp(numerator: number, denominator: number): number {
   return Math.floor((2 * numerator + denominator) / (2 * denominator));
 }
 
+/**
+ * R3-TIME-MONEY-09 (SPK-PAY-002, SPK-PAY-001): the parts of `netMinor` that inclusive percentage
+ * charges account for, extracted together. A price that includes several rates is
+ * base * (10000 + sum of rates) / 10000, so the included total is
+ * net * sum / (10000 + sum) (rounded half up, as a single rate always was) and it is shared among
+ * the rates in proportion to their basis points by the largest-remainder rule (ties to the earlier
+ * line), so the parts add up to the included total exactly. Extracting each rate on its own
+ * (net * rate / (10000 + rate)) divides by too little and overstates every part (a price of
+ * 10800 that includes 5% and 3% contains 500 and 300, not 514 and 315). BigInt keeps the
+ * products exact for any amount.
+ */
+function inclusivePercentageParts(netMinor: number, basisPoints: readonly number[]): number[] {
+  const totalBasisPoints = basisPoints.reduce((sum, bp) => sum + bp, 0);
+  if (netMinor <= 0 || totalBasisPoints === 0) return basisPoints.map(() => 0);
+  const net = BigInt(netMinor);
+  const total = BigInt(totalBasisPoints);
+  const denominator = 10_000n + total;
+  const included = (2n * net * total + denominator) / (2n * denominator);
+  const parts = basisPoints.map((bp) => (included * BigInt(bp)) / total);
+  let left = included - parts.reduce((sum, part) => sum + part, 0n);
+  const order = basisPoints
+    .map((bp, index) => ({ index, remainder: (included * BigInt(bp)) % total }))
+    .sort((a, b) =>
+      a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1,
+    );
+  for (const { index } of order) {
+    if (left <= 0n) break;
+    parts[index] = (parts[index] ?? 0n) + 1n;
+    left -= 1n;
+  }
+  return parts.map((part) => Number(part));
+}
+
 export function applyCharges(
   netMinor: number,
   quantity: number,
@@ -93,11 +127,19 @@ export function applyCharges(
   let taxMinor = 0;
   let feeMinor = 0;
   let includedMinor = 0;
-  for (const line of chargeLines) {
+  const inclusiveRates = chargeLines.flatMap((line, index) =>
+    line.inclusive && line.basisPoints !== undefined ? [{ index, bp: line.basisPoints }] : [],
+  );
+  const inclusiveParts = new Map<number, number>();
+  inclusivePercentageParts(
+    netMinor,
+    inclusiveRates.map((r) => r.bp),
+  ).forEach((part, i) => inclusiveParts.set(inclusiveRates[i]?.index as number, part));
+  for (const [index, line] of chargeLines.entries()) {
     let amount: number;
     if (line.basisPoints !== undefined) {
       amount = line.inclusive
-        ? roundHalfUp(netMinor * line.basisPoints, 10_000 + line.basisPoints)
+        ? (inclusiveParts.get(index) ?? 0)
         : roundHalfUp(netMinor * line.basisPoints, 10_000);
     } else {
       amount = (line.amountMinor ?? 0) * quantity;

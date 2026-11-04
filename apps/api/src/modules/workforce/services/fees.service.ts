@@ -47,7 +47,12 @@ import {
   type FeeSubmissionRow,
 } from '../workforce.shared';
 
-const Cursor = z.object({ submittedAt: z.string(), id: z.string() });
+const Cursor = z.object({
+  submittedAt: z.string(),
+  id: z.string(),
+  /** The order the cursor continues (absent on cursors issued before `order` existed: ascending). */
+  order: z.enum(['asc', 'desc']).default('asc'),
+});
 
 /**
  * Approved hours and fees (SPK-STAFF-006): assignment, rate basis, submitted amount, approver,
@@ -225,12 +230,20 @@ export class FeesService {
       protected: query.personId !== undefined,
     });
     const cursor = decodeCursor(query.cursor, Cursor);
+    const order = query.order;
+    if (cursor && cursor.order !== order) {
+      throw errors.validation('This cursor continues the other order; start the list again.', {
+        code: 'cursor_order_mismatch',
+        path: 'cursor',
+        cursorOrder: cursor.order,
+      });
+    }
     let q = this.db
       .selectFrom('fee_submissions')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .orderBy('submitted_at')
-      .orderBy('id')
+      .orderBy('submitted_at', order)
+      .orderBy('id', order)
       .limit(query.limit + 1);
     if (query.status) q = q.where('status', '=', query.status);
     if (query.currency) q = q.where('currency', '=', query.currency);
@@ -241,9 +254,9 @@ export class FeesService {
     const scope = selfOnly ? null : listFacilityScope(principal, WorkforceActions.readFees);
     if (scope) q = q.where('assignment_id', 'in', this.assignmentsAt(organizationId, scope));
     if (cursor) {
-      q = q.where(
-        sql<boolean>`(submitted_at, id) > (${new Date(cursor.submittedAt)}::timestamptz, ${cursor.id}::uuid)`,
-      );
+      const after = sql<boolean>`(submitted_at, id) > (${new Date(cursor.submittedAt)}::timestamptz, ${cursor.id}::uuid)`;
+      const before = sql<boolean>`(submitted_at, id) < (${new Date(cursor.submittedAt)}::timestamptz, ${cursor.id}::uuid)`;
+      q = q.where(order === 'desc' ? before : after);
     }
     const rows = await q.execute();
     const page = rows.slice(0, query.limit);
@@ -257,7 +270,7 @@ export class FeesService {
       items: page.map((r) => toFeeSubmission(r, adjustments)),
       nextCursor:
         rows.length > query.limit && last
-          ? encodeCursor({ submittedAt: iso(last.submitted_at), id: last.id })
+          ? encodeCursor({ submittedAt: iso(last.submitted_at), id: last.id, order })
           : null,
     };
   }

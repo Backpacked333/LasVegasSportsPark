@@ -107,6 +107,60 @@ export const ConfigSchema = z
       .transform((value, ctx) => parseOrigins(value, ctx)),
     /** How long a browser may cache a CORS preflight answer (technical value). */
     CORS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(600),
+    /**
+     * The largest request body the API reads, in bytes (R3-SECURITY-02, §4.8, §4.15; technical
+     * value). Every route shares it. The default (2 MiB) holds a contract-maximum offline batch
+     * (`OfflineSyncBody`, 500 items with every bounded field at its maximum, even fully escaped),
+     * which is about 0.35 MB in plain ASCII. A larger body answers 400 VALIDATION_FAILED with
+     * `details.code = 'body_too_large'` and `details.limitBytes`, never a 5xx, so a client splits
+     * it instead of retrying it. Import staging (`POST /v1/import-batches`) advertises more than
+     * this in one request (17 CSV documents of 500,000 characters): stage large snapshots in
+     * chunks, as the migration README says, or raise this for the migration window.
+     */
+    HTTP_BODY_LIMIT_BYTES: z.coerce
+      .number()
+      .int()
+      .min(64 * 1024)
+      .max(64 * 1024 * 1024)
+      .default(2 * 1024 * 1024),
+    /**
+     * The deepest nesting of objects and arrays a JSON or form body may have (§4.10, §4.15;
+     * technical value). Every route shares it. Open fields (`z.record(z.string(), z.unknown())`:
+     * policy content, entitlement scope, details) pass validation as they are and are then
+     * serialized by recursive code (`JSON.stringify`, the drivers), which overflows the stack at a
+     * few thousand levels (about 10 KB of body); a deeper body answers 400 VALIDATION_FAILED with
+     * `details.code = 'body_too_deep'` and `details.limitDepth` before any route runs, never a 5xx
+     * a client would retry. No published contract nests near the default.
+     */
+    HTTP_BODY_MAX_DEPTH: z.coerce.number().int().min(16).max(1000).default(64),
+    /**
+     * How long an outbox or inbox event waits before it is tried again when the build that
+     * recorded it expected a handler this build does not register (R3-OPERATIONS-01, §4.7
+     * invariant 12: a software rollback or a rolling deploy). The event stays pending, its attempts
+     * are not counted, and a build that registers the handler runs it (technical value).
+     */
+    OUTBOX_MISSING_HANDLER_RETRY_SECONDS: z.coerce.number().int().min(1).default(300),
+    /**
+     * How long an outbox or inbox event may wait for a missing handler (see
+     * OUTBOX_MISSING_HANDLER_RETRY_SECONDS) before its owner is told (§5.11 "operational issues
+     * must have owners"; technical value, longer than a rolling deploy). From then on the worker
+     * keeps an operational exception open for it (`reliability.outbox_waiting_for_handler` or
+     * `reliability.inbox_waiting_for_handler`, system administration) naming the missing handlers,
+     * and resolves it once the event settles. The event itself keeps waiting: the wait ends when a
+     * build that registers the handlers, or declares them retired, processes it.
+     */
+    OUTBOX_MISSING_HANDLER_ESCALATE_AFTER_SECONDS: z.coerce.number().int().min(1).default(3600),
+    /**
+     * The whole budget of a worker stop on SIGTERM or SIGINT (R3-OPERATIONS-10; technical value:
+     * keep it under the host's termination grace period). Within it the worker waits for the work
+     * in flight (the outbox and inbox event in hand, a periodic job pass, an idempotency sweep, and
+     * the pass of any background worker whose `stop()` waits for it), then closes the application
+     * and the database with what is left of it, and exits either way. The communications delivery
+     * and finance provider loops stop starting passes but do not wait for the pass in flight
+     * (**Proposed** for those modules). Work still running at the end is retried once its lease
+     * lapses; the database rolls back a transaction left open by the exit.
+     */
+    WORKER_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {

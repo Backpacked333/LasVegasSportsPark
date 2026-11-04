@@ -49,6 +49,36 @@ function renderBasket(options: Parameters<typeof createRegistrationTestApp>[0] =
   return app;
 }
 
+/**
+ * `GET /me/registration-checkouts` as the API answers it (money-reads.service myCheckouts): newest
+ * first, the `status` filter, cursor pages of `limit`. Twenty-five newer checkouts of other
+ * baskets come before this basket's checkout in recovery (R3-SCREEN-STATES-04).
+ */
+function checkoutsBehindNewerOnes(options: { failRecoveryPage?: () => boolean } = {}): FakeHandler {
+  const other = (n: number) => `0192f1a0-0000-7000-8000-0000000c${String(n).padStart(4, '0')}`;
+  const all = [
+    ...Array.from({ length: 25 }, (_, n) =>
+      checkout({ id: other(n), basketId: other(500 + n), quoteId: other(900 + n) }),
+    ),
+    checkout({ status: 'recovery_required' }),
+  ];
+  return (req: FakeRequest) => {
+    if (req.query.status && options.failRecoveryPage?.()) {
+      return fakeResponse(
+        503,
+        apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' }),
+      );
+    }
+    const matching = req.query.status ? all.filter((c) => c.status === req.query.status) : all;
+    const start = req.query.cursor ? Number(req.query.cursor) : 0;
+    const end = start + Number(req.query.limit ?? 50);
+    return fakeResponse(200, {
+      items: matching.slice(start, end),
+      nextCursor: end < matching.length ? String(end) : null,
+    });
+  };
+}
+
 describe('SCR-C-11 BasketScreen', () => {
   beforeEach(() => mockRouter.push.mockClear());
 
@@ -271,6 +301,38 @@ describe('SCR-C-11 BasketScreen', () => {
     fireEvent.press(await screen.findByRole('button', { name: 'See your payment' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
     expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull();
+  });
+
+  it('R3-SCREEN-STATES-04 §4.11: a checking-out basket whose checkout in recovery is behind twenty newer checkouts still offers "See your payment"', async () => {
+    renderBasket({
+      routes: routes({
+        'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) },
+        'GET /me/registration-checkouts': checkoutsBehindNewerOnes(),
+      }),
+    });
+    fireEvent.press(await screen.findByRole('button', { name: 'See your payment' }));
+    expect(mockRouter.push).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`);
+  });
+
+  it('R3-SCREEN-STATES-04: when the checkouts in recovery cannot be read and the newest page does not list it, the basket shows the failure with "Try again"', async () => {
+    let fail = true;
+    renderBasket({
+      routes: routes({
+        'GET /baskets/{id}': { status: 200, body: basket({ status: 'checking_out' }) },
+        'GET /me/registration-checkouts': checkoutsBehindNewerOnes({
+          failRecoveryPage: () => fail,
+        }),
+      }),
+    });
+    expect(
+      await screen.findByText('The payment for this basket could not be looked up.'),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'See your payment' })).toBeNull();
+    fail = false;
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'See your payment' })).toBeOnTheScreen();
+    expect(screen.queryByText('The payment for this basket could not be looked up.')).toBeNull();
   });
 
   it('§4.10: a basket of another household reads not available', async () => {

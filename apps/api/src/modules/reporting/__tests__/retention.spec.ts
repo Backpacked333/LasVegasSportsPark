@@ -14,6 +14,8 @@ import {
   createFulfilledOrder,
   createRefundedOrderPayment,
   get,
+  HOUR,
+  post,
   reportingTestApp,
   staff,
   valueOf,
@@ -283,6 +285,116 @@ describe('retention by cohort (SPK-REPORT-005)', () => {
       returnRate: 0.5,
       newInComparison: 1,
     });
+  });
+
+  it('SPK-REPORT-005 / SPK-REPORT-007 / G3 (R3-REPORTING-08): an accepted team entry withdrawn later still qualifies for its season (MET-079) and is counted apart; a rerun at the as-of instant is unchanged', async () => {
+    const summer = await createSeasonFixture(t, {
+      name: 'Summer 2027',
+      startsOn: '2027-06-20',
+      endsOn: '2027-08-31',
+    });
+    const autumn = await createSeasonFixture(t, {
+      competitionId: summer.competitionId,
+      ruleSetId: summer.ruleSetId,
+      name: 'Autumn 2027',
+      startsOn: '2027-09-10',
+      endsOn: '2027-11-30',
+    });
+    const captain = await createPersonFixture(t, { kind: 'adult' });
+    const stays = await createTeamEntryFixture(t, {
+      seasonId: summer.seasonId,
+      captainPersonId: captain,
+    });
+    const leaves = await createTeamEntryFixture(t, {
+      seasonId: summer.seasonId,
+      captainPersonId: captain,
+    });
+    await createTeamEntryFixture(t, {
+      seasonId: autumn.seasonId,
+      captainPersonId: captain,
+      teamId: stays.teamId,
+    });
+    const renewal = await createTeamEntryFixture(t, {
+      seasonId: autumn.seasonId,
+      captainPersonId: captain,
+      teamId: leaves.teamId,
+    });
+    const params = {
+      cohort: 'adult_teams',
+      anchorSeasonId: summer.seasonId,
+      comparisonSeasonId: autumn.seasonId,
+    };
+    const created = await post(t, '/v1/reports/runs', leagueManager, {
+      report: 'retention',
+      parameters: params,
+      reason: 'Renewal review',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(created.body.result.rows[0]).toMatchObject({ cohortSize: 2, returned: 2 });
+
+    // Later the renewed entry is withdrawn (TeamEntryMachine approved → withdrawn): written as the
+    // competition module leaves it, keeping its approval instant (test helper only).
+    t.clock.advance(HOUR);
+    const withdrawal = await t.db
+      .updateTable('team_entries')
+      .set({
+        status: 'withdrawn',
+        withdrawn_at: t.clock.now(),
+        withdrawn_by: json({ kind: 'system', actorLabel: 'reporting-tests' }),
+        withdrawal_reason: 'Team folded',
+      })
+      .where('organization_id', '=', t.organizationId)
+      .where('id', '=', renewal.teamEntryId)
+      .executeTakeFirst();
+    expect(Number(withdrawal.numUpdatedRows)).toBe(1);
+
+    // Reproduced at its own as-of instant, the stored run is matched exactly.
+    const reproduced = await post(
+      t,
+      `/v1/reports/runs/${created.body.id}/reproduce`,
+      leagueManager,
+      {},
+    );
+    expect(reproduced.status, JSON.stringify(reproduced.body)).toBe(201);
+    expect(reproduced.body.matched).toBe(true);
+    expect(reproduced.body.reproducedRun.result.rows[0]).toMatchObject({
+      cohortSize: 2,
+      returned: 2,
+    });
+
+    // Evaluated now, the renewal was accepted and so still qualifies (MET-079 excludes only entries
+    // withdrawn before acceptance); the withdrawal is counted apart, never as a figure change.
+    const live = await report(params);
+    expect(live.status, JSON.stringify(live.body)).toBe(200);
+    expect(live.body.rows[0]).toMatchObject({ cohortSize: 2, returned: 2, returnRate: 1 });
+    type Value = { label: string; value: number | null; dimensions: Record<string, string> };
+    const withdrawnLater = (body: { values: Value[] }, season: string) =>
+      body.values.find(
+        (v) =>
+          v.label === 'Accepted entries withdrawn later (still qualify)' &&
+          v.dimensions.season === season,
+      )?.value;
+    expect(withdrawnLater(live.body, 'comparison')).toBe(1);
+    expect(withdrawnLater(live.body, 'anchor')).toBe(0);
+    expect(withdrawnLater(created.body.result, 'comparison')).toBe(0);
+    const disclosures = (live.body.disclosures as string[]).join(' ');
+    expect(disclosures).toContain('an accepted entry withdrawn later still qualifies');
+    expect(disclosures).not.toMatch(/pending K3/);
+    const definition = (
+      live.body.metrics as Array<{ metricKey: string; exclusions: string[] }>
+    ).find((m) => m.metricKey === 'MET-079')!;
+    expect(definition.exclusions.join(' ')).toContain('withdrawn before acceptance');
+
+    // An entry withdrawn before acceptance never qualifies.
+    const neverAccepted = await createTeamEntryFixture(t, {
+      seasonId: summer.seasonId,
+      captainPersonId: captain,
+      status: 'withdrawn',
+    });
+    const withUnaccepted = await report(params);
+    expect(withUnaccepted.status, JSON.stringify(withUnaccepted.body)).toBe(200);
+    expect(withUnaccepted.body.rows[0]).toMatchObject({ cohortSize: 2, returned: 2 });
+    expect(neverAccepted.teamId).toBeTruthy();
   });
 
   it('SPK-REPORT-005 (K3, G7): individual players return regardless of who paid; merged duplicates count once; guests never qualify', async () => {

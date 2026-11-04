@@ -38,7 +38,8 @@ import { useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
-import { forgetLinkSecret, readLinkSecret } from '../../links/link-secrets';
+import { forgetLinkSecret } from '../../links/link-secrets';
+import { useLinkSecret } from '../../links/useLinkSecret';
 import { isUuid } from '../../links/link-targets';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
@@ -179,10 +180,10 @@ export function InvitationRoute() {
   const params = useLocalSearchParams<{ id?: string; type?: string }>();
   const type: InvitationType = params.type === 'team' ? 'team' : 'family';
   const id = typeof params.id === 'string' ? params.id : '';
-  // Read once: the token is forgotten after a confirmed answer, the outcome stays on screen.
-  const [token] = useState(() =>
-    isUuid(id) ? readLinkSecret(type === 'team' ? 'team-invitation' : 'invitation', id) : null,
-  );
+  // Read once per account: the token is forgotten after a confirmed answer, the outcome stays on
+  // screen; another account signing in never gets this one's token (R3-SECURITY-07).
+  const held = useLinkSecret(type === 'team' ? 'team-invitation' : 'invitation', id);
+  const token = isUuid(id) ? held : null;
   return <InvitationScreen invitationId={id} type={type} token={token} />;
 }
 

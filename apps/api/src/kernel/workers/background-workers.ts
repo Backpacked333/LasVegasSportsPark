@@ -4,7 +4,12 @@ export interface BackgroundWorker {
   /** Stable name, for logs (`<module>.<worker>`). */
   name: string;
   start(): void;
-  stop(): void;
+  /**
+   * Ends the loop: no new pass starts. A worker that can finish its pass in flight returns a
+   * promise that resolves once it has (R3-OPERATIONS-10); `worker.ts` awaits it, bounded by
+   * WORKER_SHUTDOWN_TIMEOUT_MS, before it closes the database and exits.
+   */
+  stop(): void | Promise<void>;
 }
 
 /**
@@ -45,14 +50,24 @@ export class BackgroundWorkers {
     }
   }
 
-  stopAll(): void {
+  /**
+   * Stops every worker at once (each loop ends before this returns its promise) and resolves once
+   * every pass in flight has finished (R3-OPERATIONS-10). A worker whose stop fails is logged.
+   */
+  stopAll(): Promise<void> {
     this.started = false;
+    const stopping: Array<Promise<void>> = [];
     for (const worker of this.workers.values()) {
       try {
-        worker.stop();
+        stopping.push(
+          Promise.resolve(worker.stop()).catch((error: unknown) => {
+            this.logger.warn(`stopping ${worker.name} failed: ${String(error)}`);
+          }),
+        );
       } catch (error) {
         this.logger.warn(`stopping ${worker.name} failed: ${String(error)}`);
       }
     }
+    return Promise.all(stopping).then(() => undefined);
   }
 }

@@ -477,6 +477,25 @@ export class PoliciesService implements PolicyPort {
     return row !== undefined;
   }
 
+  async acknowledgedSubjects(
+    organizationId: string,
+    subjectPersonIds: readonly string[],
+    policyVersionId: string,
+    trx?: Trx,
+  ): Promise<Set<string>> {
+    if (subjectPersonIds.length === 0) return new Set();
+    const rows = await (trx ?? executorFor(this.db))
+      .selectFrom('acknowledgments')
+      .select('subject_person_id')
+      .distinct()
+      .where('organization_id', '=', organizationId)
+      .where('subject_person_id', 'in', [...subjectPersonIds])
+      .where('policy_version_id', '=', policyVersionId)
+      .where('status', '=', 'active')
+      .execute();
+    return new Set(rows.map((r) => r.subject_person_id));
+  }
+
   // -------------------------------------------------------------------------------------------
   // Shared with offerings: approval facts for any subject.
   // -------------------------------------------------------------------------------------------

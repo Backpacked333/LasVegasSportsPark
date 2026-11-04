@@ -134,6 +134,47 @@ describe('SCR-S-01 TodayScreen issues', () => {
     expect(within(notIncluded).getByText('readiness · North Park 2')).toBeInTheDocument();
   });
 
+  it('SCR-S-01 / R3-PERFORMANCE-01: lists sources the feed bound truncated as partly included', async () => {
+    const feed = todayFeed([]);
+    feed.body.sources = [
+      {
+        source: 'kernel.operational_exceptions',
+        facilityId: null,
+        status: 'ok',
+        count: 50,
+        truncated: true,
+        omitted: 7,
+      },
+      {
+        source: 'competition.readiness',
+        facilityId: FACILITY_A,
+        status: 'ok',
+        count: 10,
+        truncated: true,
+        omitted: null,
+      },
+      {
+        source: 'scheduling.schedule',
+        facilityId: FACILITY_A,
+        status: 'ok',
+        count: 3,
+        truncated: false,
+        omitted: 0,
+      },
+    ] as never;
+    const app = createTestApp({ routes: { 'GET /today': feed } });
+    render(app.at('/today'));
+    const partly = await screen.findByRole('region', { name: 'Issue sources partly included' });
+    expect(
+      within(partly).getByText('kernel.operational_exceptions · all facilities · 7 more not shown'),
+    ).toBeInTheDocument();
+    expect(
+      within(partly).getByText('competition.readiness · North Park 1 · more than shown'),
+    ).toBeInTheDocument();
+    expect(within(partly).queryByText(/scheduling.schedule/)).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Issue sources not included' })).toBeNull();
+  });
+
   it('pins money-moved-but-not-fulfilled financial issues first, with their owner', async () => {
     const recovery = exceptionItem({
       id: 'exception:0192f1a0-0000-7000-8000-0000000000e2',

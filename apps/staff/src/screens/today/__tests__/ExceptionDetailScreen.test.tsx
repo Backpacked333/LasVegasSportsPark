@@ -341,6 +341,150 @@ describe('SCR-S-02 ExceptionDetailScreen', () => {
     expect(app.fake.requests.some((r) => r.path.startsWith('/delivery-attempts'))).toBe(false);
   });
 
+  describe('R3-OPERATIONS-03: a dead letter is replayed, not marked resolved by hand', () => {
+    const OUTBOX_EVENT_ID = '0192f1a0-0000-7000-8000-0000000000d1';
+    const INBOX_EVENT_ID = '0192f1a0-0000-7000-8000-0000000000d2';
+    const outboxDeadLetter = {
+      category: 'reliability.outbox_dead_letter',
+      severity: 'high',
+      title:
+        'Follow-up for enrollment.enrollment_confirmed could not be delivered after 8 attempts',
+      affected: { type: 'enrollment', id: BOOKING_ID },
+      ownerQueue: 'program_manager',
+      details: { eventId: OUTBOX_EVENT_ID, eventType: 'enrollment.enrollment_confirmed' },
+    };
+    const replayed = (source: 'outbox' | 'inbox', id: string) => ({
+      status: 200,
+      body: {
+        id,
+        source,
+        status: 'pending',
+        attempts: 0,
+        availableAt: '2026-10-24T12:00:00.000Z',
+        replayCount: 1,
+        replayedAt: '2026-10-24T12:00:00.000Z',
+        exceptionId: EXCEPTION_ID,
+      },
+    });
+
+    it('§5.11: the queue owner replays an outbox dead letter with a reason; the exception waits for the replay to settle', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: {
+          ...routes(outboxDeadLetter),
+          'GET /me/permissions': mePermissions({
+            staffRoles: ['program_manager'],
+            actions: ['core.replay_own_dead_letter'],
+          }),
+          'POST /outbox-events/{id}/replay': replayed('outbox', OUTBOX_EVENT_ID),
+        },
+      });
+      render(app.at(PATH));
+      const panel = await screen.findByRole('region', { name: 'Replay the event' });
+      await user.click(within(panel).getByRole('button', { name: 'Replay' }));
+      expect(
+        within(panel).getByText(
+          'Say what fixed the cause; the reason is kept in the audit record.',
+        ),
+      ).toBeInTheDocument();
+      expect(app.fake.requests.some((r) => r.route === '/outbox-events/{id}/replay')).toBe(false);
+      await user.type(within(panel).getByLabelText(/Replay reason/), 'Template fixed in 1.4.2');
+      await user.click(within(panel).getByRole('button', { name: 'Replay' }));
+      expect(
+        await within(panel).findByText(
+          'Event sent back to the worker (replay 1). State: pending. The exception is resolved when it settles.',
+        ),
+      ).toBeInTheDocument();
+      const replay = app.fake.requests.find((r) => r.route === '/outbox-events/{id}/replay');
+      expect(replay?.params).toEqual({ id: OUTBOX_EVENT_ID });
+      expect(replay?.body).toEqual({ reason: 'Template fixed in 1.4.2' });
+      expect(replay?.headers['idempotency-key']).toMatch(/^key-/);
+    });
+
+    it('§5.11: an inbox dead letter replays its provider event, the affected record', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: {
+          ...routes({
+            category: 'reliability.inbox_dead_letter',
+            severity: 'high',
+            title: 'Provider event payments/charge.updated could not be processed',
+            affected: { type: 'inbox_event', id: INBOX_EVENT_ID },
+            ownerQueue: 'system_administrator',
+            details: { failures: ['finance.provider_event: boom'] },
+          }),
+          'GET /me/permissions': mePermissions({ actions: ['core.replay_dead_letter'] }),
+          'POST /provider-events/{id}/replay': replayed('inbox', INBOX_EVENT_ID),
+        },
+      });
+      render(app.at(PATH));
+      const panel = await screen.findByRole('region', { name: 'Replay the event' });
+      await user.type(within(panel).getByLabelText(/Replay reason/), 'Provider outage over');
+      await user.click(within(panel).getByRole('button', { name: 'Replay' }));
+      await within(panel).findByText(/Event sent back to the worker \(replay 1\)/);
+      const replay = app.fake.requests.find((r) => r.route === '/provider-events/{id}/replay');
+      expect(replay?.params).toEqual({ id: INBOX_EVENT_ID });
+      expect(replay?.body).toEqual({ reason: 'Provider outage over' });
+    });
+
+    it('offers no Replay to a role that owns another queue, nor on other exceptions', async () => {
+      const app = createTestApp({
+        routes: {
+          ...routes(outboxDeadLetter),
+          'GET /me/permissions': mePermissions({
+            staffRoles: ['front_desk'],
+            actions: ['core.replay_own_dead_letter'],
+          }),
+        },
+      });
+      render(app.at(PATH));
+      await screen.findByRole('heading', { name: outboxDeadLetter.title });
+      await screen.findByRole('region', { name: 'Workflow' });
+      expect(screen.queryByRole('region', { name: 'Replay the event' })).toBeNull();
+
+      const other = createTestApp({
+        routes: {
+          ...routes(),
+          'GET /me/permissions': mePermissions({ actions: ['core.replay_dead_letter'] }),
+        },
+      });
+      render(other.at(PATH));
+      await screen.findByRole('heading', { name: 'Payment outcome unknown for checkout' });
+      expect(screen.queryByRole('region', { name: 'Replay the event' })).toBeNull();
+    });
+
+    it('"Mark resolved" before the replay settles says to replay first, or close with a reason', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: {
+          ...routes(outboxDeadLetter),
+          'POST /exceptions/{id}/resolve': () =>
+            fakeResponse(
+              409,
+              apiErrorBody('INVALID_TRANSITION', {
+                nextAction: 'reload_and_retry',
+                details: {
+                  code: 'dead_letter_replay_required',
+                  source: 'outbox',
+                  eventId: OUTBOX_EVENT_ID,
+                  eventStatus: 'dead',
+                },
+              }),
+            ),
+        },
+      });
+      render(app.at(PATH));
+      await user.type(await screen.findByLabelText(/Resolution note/), 'Looked into it');
+      await user.click(screen.getByRole('button', { name: 'Mark resolved' }));
+      expect(
+        await screen.findByText(
+          /Replay the event once its cause is fixed .* or close the exception/,
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Error code: INVALID_TRANSITION/)).toBeNull();
+    });
+  });
+
   it('§4.14: offers the audit history only to roles that may read the audit log, and reads it only when asked', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

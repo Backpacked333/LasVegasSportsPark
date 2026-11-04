@@ -12,6 +12,7 @@ import {
 } from '@sportspark/contracts';
 import {
   isCheckViolation,
+  isForeignKeyViolation,
   json,
   pgConstraintName,
   type Db,
@@ -39,6 +40,7 @@ import {
   redactSessionBooking,
   toMakeupEntitlement,
   toSessionBooking,
+  viewerOf,
   type Reader,
 } from '../enrollment.shared';
 import { CatalogSessions } from './catalog-sessions';
@@ -110,15 +112,73 @@ export class MakeupsService {
     correlationId: string | null,
   ): Promise<MakeupEntitlement> {
     const organizationId = organizationOf(principal);
-    return this.uow.run(async ({ trx }) => {
-      const now = this.clock.now();
+    const requireIssuer = async (trx?: Trx) =>
       // §4.3: an entitlement is issued at every facility whose offerings it may be redeemed in.
-      await this.scope.requireAt(
+      this.scope.requireAt(
         principal,
         EnrollmentActions.issueMakeup,
         { type: 'makeup_entitlement', organizationId },
         await this.scope.facilitiesOf(organizationId, input.eligibleOfferingIds, trx),
       );
+    // R3-TRACE-B-02 (SPK-YOUTH-004): the entitlement references what it replaces. A missed or
+    // canceled session names that session, a policy event names its reference; only `manual`
+    // names neither (the database checks the same rule, 0520). With an originating enrollment the
+    // session is one of that enrollment's offering; without one it is a session the participant
+    // took part in (a confirmed enrollment in its offering, or a session booking or trial for it).
+    // Both are read before the transaction (catalog reads never run inside it), once the caller
+    // may issue at all.
+    if (
+      (input.originKind === 'session_canceled' || input.originKind === 'absence') &&
+      !input.originatingSessionId
+    ) {
+      throw errors.validation(`A ${input.originKind} makeup names its originating session.`, {
+        path: 'originatingSessionId',
+      });
+    }
+    if (input.originKind === 'policy_event' && !input.originReference) {
+      throw errors.validation('A policy_event makeup names the policy event it comes from.', {
+        path: 'originReference',
+      });
+    }
+    let originOfferingId: string | null = null;
+    if (input.originatingEnrollmentId && input.originatingSessionId) {
+      await requireIssuer();
+      const origin = await this.db
+        .selectFrom('enrollments')
+        .select(['offering_id'])
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', input.originatingEnrollmentId)
+        .executeTakeFirst();
+      if (origin) {
+        const sessions = await this.sessions.list(organizationId, origin.offering_id);
+        if (!sessions.some((s) => s.id === input.originatingSessionId)) {
+          throw errors.validation(
+            "The originating session is not a session of the originating enrollment's offering.",
+            { path: 'originatingSessionId' },
+          );
+        }
+        originOfferingId = origin.offering_id;
+      }
+    } else if (input.originatingSessionId) {
+      await requireIssuer();
+      const participant = await this.evaluator.participantOrNull(
+        undefined,
+        organizationId,
+        input.participantPersonId,
+      );
+      if (
+        participant &&
+        !(await this.tookPartIn(organizationId, participant.id, input.originatingSessionId))
+      ) {
+        throw errors.validation(
+          'The participant has no enrollment, session booking or trial in the originating session.',
+          { path: 'originatingSessionId' },
+        );
+      }
+    }
+    return this.uow.run(async ({ trx }) => {
+      const now = this.clock.now();
+      await requireIssuer(trx);
       const person = await this.evaluator.participant(
         trx,
         organizationId,
@@ -133,7 +193,7 @@ export class MakeupsService {
       if (input.originatingEnrollmentId) {
         const origin = await trx
           .selectFrom('enrollments')
-          .select(['participant_person_id'])
+          .select(['participant_person_id', 'offering_id'])
           .where('organization_id', '=', organizationId)
           .where('id', '=', input.originatingEnrollmentId)
           .executeTakeFirst();
@@ -142,6 +202,13 @@ export class MakeupsService {
             path: 'originatingEnrollmentId',
           });
         }
+        if (input.originatingSessionId && origin.offering_id !== originOfferingId) {
+          // The session was checked against this enrollment's offering before the transaction.
+          throw errors.validation(
+            "The originating session is not a session of the originating enrollment's offering.",
+            { path: 'originatingSessionId' },
+          );
+        }
       }
       for (const offeringId of input.eligibleOfferingIds) {
         if (!(await this.offerings.getOffering(organizationId, offeringId, now, trx))) {
@@ -149,27 +216,37 @@ export class MakeupsService {
         }
       }
       const id = newId();
-      await trx
-        .insertInto('makeup_entitlements')
-        .values({
-          id,
-          organization_id: organizationId,
-          participant_person_id: person.id,
-          originating_enrollment_id: input.originatingEnrollmentId ?? null,
-          originating_session_id: input.originatingSessionId ?? null,
-          origin_kind: input.originKind,
-          origin_reference: input.originReference ?? null,
-          eligible_offering_ids: json(input.eligibleOfferingIds),
-          eligible_program_ids: json(input.eligibleProgramIds),
-          issued_by: json(actorSnapshot(principal)),
-          issued_by_person_id: principal.personId,
-          reason: input.reason,
-          expires_at: expiresAt,
-          redemption_limit: input.redemptionLimit,
-          revoked_at: null,
-          revoked_reason: null,
-        })
-        .execute();
+      try {
+        await trx
+          .insertInto('makeup_entitlements')
+          .values({
+            id,
+            organization_id: organizationId,
+            participant_person_id: person.id,
+            originating_enrollment_id: input.originatingEnrollmentId ?? null,
+            originating_session_id: input.originatingSessionId ?? null,
+            origin_kind: input.originKind,
+            origin_reference: input.originReference ?? null,
+            eligible_offering_ids: json(input.eligibleOfferingIds),
+            eligible_program_ids: json(input.eligibleProgramIds),
+            issued_by: json(actorSnapshot(principal)),
+            issued_by_person_id: principal.personId,
+            reason: input.reason,
+            expires_at: expiresAt,
+            redemption_limit: input.redemptionLimit,
+            revoked_at: null,
+            revoked_reason: null,
+          })
+          .execute();
+      } catch (error) {
+        // An originating session that is not a session of this organization (composite FK).
+        if (isForeignKeyViolation(error)) {
+          throw errors.validation('The originating session does not exist.', {
+            path: 'originatingSessionId',
+          });
+        }
+        throw error;
+      }
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -210,6 +287,52 @@ export class MakeupsService {
       });
       return this.view(trx, organizationId, (await this.load(trx, organizationId, id))!);
     });
+  }
+
+  /**
+   * R3-TRACE-B-02 (SPK-YOUTH-004): whether the participant took part in the session a makeup
+   * replaces: a session booking (pickup, makeup, trial or membership seat) or a trial for it, in
+   * any status (a canceled session cancels its bookings), or an enrollment that was confirmed in
+   * the session's offering. Enrollment's own tables, then catalog's sessions of those offerings
+   * through its service; called outside the command transaction.
+   */
+  private async tookPartIn(
+    organizationId: string,
+    participantPersonId: string,
+    sessionId: string,
+  ): Promise<boolean> {
+    const booked = await this.db
+      .selectFrom('session_bookings')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', participantPersonId)
+      .where('session_id', '=', sessionId)
+      .limit(1)
+      .executeTakeFirst();
+    if (booked) return true;
+    const trial = await this.db
+      .selectFrom('trial_participations')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', participantPersonId)
+      .where('session_id', '=', sessionId)
+      .limit(1)
+      .executeTakeFirst();
+    if (trial) return true;
+    const enrolled = await this.db
+      .selectFrom('enrollments')
+      .select('offering_id')
+      .distinct()
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', participantPersonId)
+      .where('confirmed_at', 'is not', null)
+      .orderBy('offering_id')
+      .execute();
+    for (const { offering_id } of enrolled) {
+      const sessions = await this.sessions.list(organizationId, offering_id);
+      if (sessions.some((s) => s.id === sessionId)) return true;
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -292,14 +415,21 @@ export class MakeupsService {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('makeup_entitlement');
       // §4.3: the redemption books a seat at the replacement offering's facility.
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
       await this.authorization.require(principal, EnrollmentActions.redeemMakeup, {
         type: 'makeup_entitlement',
         id,
         organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
+        facilityId,
         subjectPersonIds: [row.participant_person_id],
         protected: true,
       });
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.redeemMakeup,
+        organizationId,
+        facilityId,
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'active' || new Date(row.expires_at).getTime() <= now.getTime()) {
         throw errors.resourceConflict(
@@ -354,6 +484,7 @@ export class MakeupsService {
         evaluation,
         payerPersonId: null,
         actor: principal,
+        actingAsStaff: staff,
         free: true,
         makeupEntitlementId: id,
         correlationId,
@@ -411,7 +542,7 @@ export class MakeupsService {
           redemptionLimit: row.redemption_limit,
         },
       });
-      return redactSessionBooking(principal, toSessionBooking(booking));
+      return redactSessionBooking(viewerOf(principal, staff), toSessionBooking(booking));
     });
   }
 
@@ -429,6 +560,11 @@ export class MakeupsService {
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('makeup_entitlement');
+      const facilityIds = await this.scope.facilitiesOf(
+        organizationId,
+        row.eligible_offering_ids as string[],
+        trx,
+      );
       await this.scope.requireAt(
         principal,
         EnrollmentActions.issueMakeup,
@@ -436,14 +572,20 @@ export class MakeupsService {
           type: 'makeup_entitlement',
           id,
           organizationId,
-          protected: await hiddenFrom(this.authorization, principal, EnrollmentActions.readMakeup, {
-            type: 'makeup_entitlement',
-            id,
-            organizationId,
-            subjectPersonIds: [row.participant_person_id],
-          }),
+          protected: await hiddenFrom(
+            this.authorization,
+            principal,
+            EnrollmentActions.readMakeup,
+            {
+              type: 'makeup_entitlement',
+              id,
+              organizationId,
+              subjectPersonIds: [row.participant_person_id],
+            },
+            facilityIds,
+          ),
         },
-        await this.scope.facilitiesOf(organizationId, row.eligible_offering_ids as string[], trx),
+        facilityIds,
       );
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (row.status !== 'active')

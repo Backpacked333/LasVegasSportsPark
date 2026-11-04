@@ -21,6 +21,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  FacilityDirectory,
   executorFor,
   type Clock,
 } from '../../../kernel';
@@ -36,12 +37,12 @@ import {
 } from '../competition-matches.ports';
 import { MatchActions } from '../competition-matches.actions';
 import { CompetitionActions } from '../competition.actions';
-import { loadRuleSetRow, loadSeasonRow } from '../competition.queries';
+import { fixtureFacilityIdOf, loadRuleSetRow, loadSeasonRow } from '../competition.queries';
 import {
   RESTRICTED_SOURCE_TYPES,
-  isStaffLike,
   iso,
   organizationOf,
+  readsRestrictedDetail,
   ruleSetContentOf,
 } from '../competition.shared';
 import {
@@ -55,7 +56,12 @@ import { DisputesService } from './disputes.service';
 import { EligibilityService } from './eligibility.service';
 import { FixturesService } from './fixtures.service';
 import { RosterService } from './roster.service';
-import { TeamEntriesService } from './team-entries.service';
+import {
+  READ_TEAM_OBLIGATION_ACTION,
+  TeamEntriesService,
+  localDateTime,
+  moneyText,
+} from './team-entries.service';
 
 /** Readiness checks registered by the workforce module carry this prefix (required officials). */
 export const WORKFORCE_CHECK_PREFIX = 'workforce.';
@@ -101,12 +107,25 @@ export class ReadinessService {
     @Inject(CHANGE_NOTICE_CHECK_PORT) private readonly notices: ChangeNoticeCheckPort,
     private readonly auditReader: AuditReader,
     private readonly authorization: AuthorizationService,
+    private readonly facilities: FacilityDirectory,
   ) {}
 
   async evaluate(principal: Principal, fixtureId: string): Promise<FixtureReadiness> {
     // Authorization: whoever may read the fixture may read its readiness (protected NOT_FOUND, §4.10).
     const detail = await this.fixtures.get(principal, fixtureId);
-    return this.assess(organizationOf(principal), detail, { restricted: !isStaffLike(principal) });
+    const organizationId = organizationOf(principal);
+    // R3-TRACE-A-01 (SPK-DISC-004): every reader of the fixture reads its readiness; restricted
+    // record ids (suspensions, disputes, incidents, audit records) reach only a staff role that
+    // reads discipline in the fixture's facility, never an official, coach or scheduler who reads
+    // readiness, nor a captain, player or guardian because they also hold some other staff role.
+    const restrictedDetail = await readsRestrictedDetail(this.authorization, principal, {
+      organizationId,
+      facilityId: await fixtureFacilityIdOf(this.db, organizationId, fixtureId),
+    });
+    return this.assess(organizationId, detail, {
+      restricted: !restrictedDetail,
+      viewer: principal,
+    });
   }
 
   /**
@@ -151,19 +170,23 @@ export class ReadinessService {
     const items: SeasonReadiness['items'] = [];
     for (const row of rows) {
       const detail = await this.fixtures.detail(db, principal, row);
-      items.push({ fixtureId: row.id, ...countsOf(await this.assess(organizationId, detail)) });
+      items.push({
+        fixtureId: row.id,
+        ...countsOf(await this.assess(organizationId, detail, { viewer: principal })),
+      });
     }
     return { seasonId, evaluatedAt, items };
   }
 
   /**
    * The assessment of one fixture whose read the caller has authorized. `restricted` hides
-   * restricted source record ids (customers).
+   * restricted source record ids (customers). `viewer` scopes the team-balance findings
+   * (R3-TRACE-B-01b, see `financeFindingsFor`); without it they pass through unchanged.
    */
   async assess(
     organizationId: string,
     detail: FixtureDetail,
-    options: { restricted?: boolean } = {},
+    options: { restricted?: boolean; viewer?: Principal } = {},
   ): Promise<FixtureReadiness> {
     const fixtureId = detail.id;
     const now = this.clock.now();
@@ -391,7 +414,13 @@ export class ReadinessService {
           side.entryId,
           member.personId,
           at,
-          { existingMembership: true, fixtureId, membershipStatus: member.status },
+          {
+            existingMembership: true,
+            fixtureId,
+            membershipStatus: member.status,
+            // R3-TIME-MONEY-03 (SPK-SCHED-008): a match-date age is the local date at the venue
+            timezone: event?.timezone ?? detail.venue?.timezone ?? null,
+          },
         );
         if (evaluation.eligible) eligible += 1;
         else if (evaluation.reasons.every((r) => r.severity !== 'blocking')) unknown += 1;
@@ -457,7 +486,12 @@ export class ReadinessService {
       this.addCondition(add, 'forms', finding);
     }
     check('finance');
-    for (const finding of await this.finance.fixtureConditions(organizationId, conditionContext)) {
+    for (const finding of await this.financeFindingsFor(
+      organizationId,
+      detail,
+      conditionContext,
+      options.viewer,
+    )) {
       this.addCondition(add, 'finance', finding);
     }
 
@@ -557,6 +591,108 @@ export class ReadinessService {
       issues: issues.map(({ check: _check, ...issue }) => issue),
       sides,
     };
+  }
+
+  /**
+   * R3-TRACE-B-01b (§4.14 field-level authorization, §4.7 invariant 1, SPK-READY-001/003,
+   * SPK-PAY-004, SPK-CAP-002): finance reports a team balance per team entry, and readiness is read
+   * by the players and guardians of both teams. A finding about an entry goes only to a viewer
+   * finance lets read that entry's obligation (`finance.read_obligation`: finance readers, the
+   * entry's captain or responsible payer), with the amounts and, as its deadline, the next due
+   * date (SPK-READY-003), shown in the division facility's time zone (SPK-SCHED-008). Every other
+   * viewer gets, instead of any entry-level finding, one fixture-level finding that names no entry
+   * and states no balance, whether or not an entry has one, so their readiness reads the same for
+   * a fixture with or without a balance. Whether a team balance affects play awaits POL-017
+   * (DEC-056), so both stay `unknown`, never a pass or a block.
+   */
+  private async financeFindingsFor(
+    organizationId: string,
+    detail: FixtureDetail,
+    context: Parameters<FinancialConditionsPort['fixtureConditions']>[1],
+    viewer: Principal | undefined,
+  ): Promise<ConditionFinding[]> {
+    const findings = await this.finance.fixtureConditions(organizationId, context);
+    if (!viewer || context.teamEntryIds.length === 0) return findings;
+    const admitted = new Map<string, boolean>();
+    for (const teamEntryId of new Set(context.teamEntryIds)) {
+      const decision = await this.authorization.decide(viewer, READ_TEAM_OBLIGATION_ACTION, {
+        type: 'obligation',
+        organizationId,
+        teamEntryId,
+        protected: true,
+      });
+      admitted.set(teamEntryId, decision.allowed);
+    }
+    const scoped: ConditionFinding[] = [];
+    let timezone: string | null | undefined;
+    for (const finding of findings) {
+      const teamEntryId = finding.source.type === 'team_entry' ? finding.source.id : null;
+      if (teamEntryId === null) {
+        scoped.push(finding);
+        continue;
+      }
+      if (!admitted.get(teamEntryId)) continue;
+      if (finding.status === 'satisfied' || !this.finance.entryFinancialStatus) {
+        scoped.push(finding);
+        continue;
+      }
+      const financial = await this.finance.entryFinancialStatus(organizationId, teamEntryId);
+      if (financial.status !== 'outstanding') {
+        scoped.push(finding);
+        continue;
+      }
+      if (timezone === undefined) timezone = await this.divisionTimezone(organizationId, detail);
+      const count = financial.openObligations;
+      const amounts = financial.outstanding
+        .map((o) => moneyText(o.amountMinor, o.currency))
+        .join(' and ');
+      const due = financial.nextDueAt
+        ? `; the next payment is due ${localDateTime(financial.nextDueAt, timezone)}`
+        : '';
+      scoped.push({
+        ...finding,
+        message: `${count} open team obligation${count === 1 ? '' : 's'} with ${amounts} outstanding${due}. Whether an open team balance affects play awaits the approved participation policy (POL-017).`,
+        deadline: financial.nextDueAt,
+      });
+    }
+    const someWithheld = [...admitted.values()].some((allowed) => !allowed);
+    const fixtureLevel = scoped.some(
+      (f) => f.source.type === 'fixture' && f.status !== 'satisfied',
+    );
+    if (someWithheld && !fixtureLevel) {
+      scoped.push({
+        status: 'unknown',
+        code: 'team_balance_policy_pending',
+        message:
+          "Whether team balances affect play awaits the approved participation policy (POL-017); each team's captain and the league see their own team's balance.",
+        source: { type: 'fixture', id: detail.id },
+        responsibleRole: 'finance_operator',
+        requiredAction:
+          'The finance operator records the approved participation policy for team balances.',
+        deadline: null,
+      });
+    }
+    return scoped;
+  }
+
+  /** The time zone of the fixture's division facility, or null when it has none (UTC shown). */
+  private async divisionTimezone(
+    organizationId: string,
+    detail: FixtureDetail,
+  ): Promise<string | null> {
+    if (!detail.divisionId) return null;
+    const division = await this.db
+      .selectFrom('divisions')
+      .select('facility_id')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', detail.divisionId)
+      .executeTakeFirst();
+    const facilityId = division?.facility_id ?? null;
+    if (!facilityId) return null;
+    const facility = (await this.facilities.describe(organizationId, [facilityId], this.db)).get(
+      facilityId,
+    );
+    return facility?.timezone ?? null;
   }
 
   private addCondition(

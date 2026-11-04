@@ -26,6 +26,7 @@ import {
   redactWaitlistEntry,
   toApplication,
   toTrialParticipation,
+  viewerOf,
 } from '../enrollment.shared';
 import { BasketsService } from './baskets.service';
 import { CustomerScope } from './customer-scope';
@@ -36,7 +37,10 @@ import { WaitlistService } from './waitlist.service';
  * SPK-UX-001): an interrupted registration is found again from the server, never from ids kept on
  * the device. Each list is a keyset page, newest first (created_at desc, id desc), over the people
  * the caller may read (CustomerScope), with the same payer redaction as the single reads
- * (SPK-AT-004). Baskets are the caller's own household baskets.
+ * (SPK-AT-004). These are family views whoever asks: the people listed come from the caller's own
+ * self and guardian authority, never a staff role, so a staff member reading their own family's
+ * lists is redacted as any family adult is (R3-TRACE-A-02). Baskets are the caller's own household
+ * baskets.
  */
 @Injectable()
 export class MyRegistrationsService {
@@ -102,7 +106,7 @@ export class MyRegistrationsService {
         names.set(row.offering_id, snapshot?.offering.name ?? null);
       }
       const entry = redactWaitlistEntry(
-        principal,
+        viewerOf(principal, false),
         await this.waitlist.view(this.db, organizationId, row),
         row.requested_by_person_id,
       );
@@ -137,7 +141,9 @@ export class MyRegistrationsService {
     if (cursor) q = q.where(beforeCursor('applications', cursor));
     const page = keysetPage(await q.execute(), query.limit);
     return {
-      items: page.rows.map((row) => redactApplication(principal, toApplication(row))),
+      items: page.rows.map((row) =>
+        redactApplication(viewerOf(principal, false), toApplication(row)),
+      ),
       nextCursor: page.nextCursor,
     };
   }
@@ -163,7 +169,9 @@ export class MyRegistrationsService {
     if (cursor) q = q.where(beforeCursor('trial_participations', cursor));
     const page = keysetPage(await q.execute(), query.limit);
     return {
-      items: page.rows.map((row) => redactTrialParticipation(principal, toTrialParticipation(row))),
+      items: page.rows.map((row) =>
+        redactTrialParticipation(viewerOf(principal, false), toTrialParticipation(row)),
+      ),
       nextCursor: page.nextCursor,
     };
   }

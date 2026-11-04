@@ -6,6 +6,7 @@
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { act } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   assignmentRecord,
@@ -184,6 +185,28 @@ describe('SCR-S-34 FeeApprovalsScreen', () => {
     const [first, second] = app.fake.requests.filter((r) => r.route === '/fee-export-batches');
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
     expect(first?.body).toEqual({ currency: 'USD' });
+  });
+
+  it('SCR-S-34 offline (cached with age): approve and export are disabled and nothing is sent after reconnecting (§4.15)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /fee-submissions/{id}/approve': { status: 200, body: feeSubmission() },
+        'POST /fee-export-batches': { status: 201, body: {} },
+      }),
+    });
+    render(app.at('/staff/fees'));
+    const approve = await screen.findByRole('button', {
+      name: 'Approve Jordan Lee: U12 Red v Blue: Referee',
+    });
+    act(() => app.connectivity.set(false));
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(approve).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(approve);
+    expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled();
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(approve).toBeEnabled());
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
   });
 
   it('is empty when nothing is submitted', async () => {

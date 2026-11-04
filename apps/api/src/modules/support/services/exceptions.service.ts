@@ -236,7 +236,8 @@ export class ExceptionsService {
 
   /**
    * Resolution history of the exceptions, oldest first, from the kernel's audited transitions
-   * (`OperationalExceptions.history`, K-10 / IF-29 through AuditReader).
+   * (`OperationalExceptions.historyMany`, K-10 / IF-29 through AuditReader): one audit read for all
+   * of them, never one per exception (R3-PERFORMANCE-01).
    */
   async history(
     db: Reader,
@@ -244,8 +245,11 @@ export class ExceptionsService {
     ids: readonly string[],
   ): Promise<Map<string, ResolutionHistoryEntry[]>> {
     const out = new Map<string, ResolutionHistoryEntry[]>();
-    for (const id of new Set(ids)) {
-      const records = await this.exceptions.history(organizationId, id, db);
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return out;
+    const byId = await this.exceptions.historyMany(organizationId, unique, db);
+    for (const id of unique) {
+      const records = byId.get(id) ?? [];
       out.set(
         id,
         [...records].reverse().map((r) => ({
@@ -259,9 +263,18 @@ export class ExceptionsService {
     return out;
   }
 
-  /** The viewer's view of one exception: service levels, permitted next actions, history. */
-  async view(row: ExceptionRow, ctx: ExceptionViewContext): Promise<OperationalException> {
-    const queue = this.queues.resolve(row.owner_queue, ctx.queues);
+  /**
+   * The exception's service levels: due at its own deadline, else at its queue's resolve-within
+   * level from opening; acknowledged by the queue's acknowledge-within level while open; overdue
+   * while live past either. The Today feed orders and bounds exceptions by them
+   * (R3-PERFORMANCE-01) without building each view.
+   */
+  serviceLevelsOf(
+    row: ExceptionRow,
+    queues: Map<string, ExceptionQueueRow>,
+    now: Date,
+  ): { deadline: Date | null; acknowledgeBy: Date | null; overdue: boolean } {
+    const queue = this.queues.resolve(row.owner_queue, queues);
     const openedAt = new Date(row.opened_at);
     const deadline = row.deadline_at
       ? new Date(row.deadline_at)
@@ -275,8 +288,16 @@ export class ExceptionsService {
     const live = row.status === 'open' || row.status === 'acknowledged';
     const overdue =
       live &&
-      ((deadline !== null && deadline.getTime() < ctx.now.getTime()) ||
-        (acknowledgeBy !== null && acknowledgeBy.getTime() < ctx.now.getTime()));
+      ((deadline !== null && deadline.getTime() < now.getTime()) ||
+        (acknowledgeBy !== null && acknowledgeBy.getTime() < now.getTime()));
+    return { deadline, acknowledgeBy, overdue };
+  }
+
+  /** The viewer's view of one exception: service levels, permitted next actions, history. */
+  async view(row: ExceptionRow, ctx: ExceptionViewContext): Promise<OperationalException> {
+    const openedAt = new Date(row.opened_at);
+    const { deadline, acknowledgeBy, overdue } = this.serviceLevelsOf(row, ctx.queues, ctx.now);
+    const live = row.status === 'open' || row.status === 'acknowledged';
     const nextActions = await this.nextActions.permitted(ctx.principal, [
       ...(live ? this.nextActions.domainCandidates(row) : []),
       ...this.nextActions.lifecycleCandidates(row, ctx.principal),

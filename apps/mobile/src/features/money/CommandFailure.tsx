@@ -29,6 +29,7 @@ import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text } from 'react-native';
 import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { LiveRegion, sentences } from '../../ui/announce';
+import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { QueryErrorView } from '../../ui/QueryBoundary';
@@ -57,6 +58,8 @@ export function CommandFailure({
   what,
   read = false,
 }: CommandFailureProps) {
+  // R3-SCREEN-STATES-01: "Check again" needs a connection; offline it neither queues nor fails.
+  const offline = useConnectivity().reachable === false;
   if (error.isNotFound || error.isPermissionRestriction) {
     return (
       <StateView
@@ -99,7 +102,10 @@ export function CommandFailure({
           {error.correlationId ? `. Reference: ${error.correlationId}` : ''}
         </Text>
         {recovery.retry && onRetry ? (
-          <Button label={nextAction} onPress={onRetry} />
+          <>
+            <Button label={nextAction} onPress={onRetry} disabled={offline} />
+            {offline ? <Text style={styles.caption}>Needs a connection.</Text> : null}
+          </>
         ) : (
           <Text style={styles.body}>{nextAction}</Text>
         )}

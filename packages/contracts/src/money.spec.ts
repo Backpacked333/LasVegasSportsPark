@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { add, allocate, money, percentageBasisPoints, subtract, sum } from './money';
+import {
+  add,
+  allocate,
+  currencyMinorDigits,
+  formatMoney,
+  money,
+  percentageBasisPoints,
+  subtract,
+  sum,
+} from './money';
 
 describe('money', () => {
   it('rejects non-integer minor units', () => {
@@ -37,5 +46,17 @@ describe('money', () => {
     expect(percentageBasisPoints(money(1005, 'USD'), 500)).toEqual(money(50, 'USD'));
     expect(percentageBasisPoints(money(1010, 'USD'), 500)).toEqual(money(51, 'USD'));
     expect(percentageBasisPoints(money(-1010, 'USD'), 500)).toEqual(money(-51, 'USD'));
+  });
+
+  it("R3-TIME-MONEY-10 / SPK-PAY-001: formatMoney uses the currency's own minor-unit exponent, as the clients do", () => {
+    expect(currencyMinorDigits('USD')).toBe(2);
+    expect(currencyMinorDigits('JPY')).toBe(0);
+    expect(currencyMinorDigits('KWD')).toBe(3);
+    expect(formatMoney(money(12550, 'USD'))).toBe('$125.50');
+    expect(formatMoney(money(-250, 'USD'))).toBe('-$2.50');
+    expect(formatMoney(money(1000, 'JPY'))).toBe('¥1,000');
+    expect(formatMoney(money(1500, 'KWD'))).toMatch(/^KWD\s1\.500$/u);
+    // An explicit exponent still overrides it.
+    expect(formatMoney(money(1000, 'JPY'), 'en-US', 2)).toBe('¥10');
   });
 });

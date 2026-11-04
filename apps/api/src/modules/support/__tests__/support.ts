@@ -29,6 +29,7 @@ import {
 } from '../../identity';
 import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
 import { SupportModule } from '../support.module';
+import { DEFAULT_SUPPORT_POLICY, SUPPORT_POLICY, type SupportPolicy } from '../support.policy';
 import { installCashTenderDouble, withStage3Doubles } from './stage3-doubles';
 
 /** Shared helpers for the support API tests (not a spec file). */
@@ -38,12 +39,22 @@ export const CLOCK_START = '2027-01-16T20:00:00Z';
 
 export const key = (): string => `k-${newId()}`;
 
-export async function supportTestApp(options: { clockStart?: string } = {}): Promise<TestApp> {
+export async function supportTestApp(
+  options: { clockStart?: string; policy?: Partial<SupportPolicy> } = {},
+): Promise<TestApp> {
+  const policy = options.policy;
   const t = await createTestApp({
     imports: [SupportModule],
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
-    configure: withStage3Doubles,
+    configure: (builder) => {
+      const configured = withStage3Doubles(builder);
+      return policy
+        ? configured
+            .overrideProvider(SUPPORT_POLICY)
+            .useValue({ ...DEFAULT_SUPPORT_POLICY, ...policy })
+        : configured;
+    },
   });
   installCashTenderDouble(t);
   return t;
@@ -253,6 +264,7 @@ export async function scheduleFixture(
   t: TestApp,
   world: CompetitionWorld,
   input: { date: string; from: string; to: string },
+  options: { facilityId?: string } = {},
 ): Promise<{ fixtureId: string; eventId: string; start: string; end: string }> {
   const homeCaptain = await adultCustomer(t);
   const awayCaptain = await adultCustomer(t);
@@ -277,7 +289,7 @@ export async function scheduleFixture(
     homeEntryId: home.teamEntryId,
     awayEntryId: away.teamEntryId,
     schedule: {
-      facilityId: t.facilityId,
+      facilityId: options.facilityId ?? t.facilityId,
       resourceIds: [world.pitch.pitchId],
       scheduledStart: start,
       scheduledEnd: end,

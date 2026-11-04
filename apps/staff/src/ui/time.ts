@@ -1,6 +1,6 @@
 /**
  * Times on staff screens (SPK-SCHED-008): facility-local when the facility's timezone is known
- * (from the Today feed), otherwise the device's zone, always with the zone named so a time is never
+ * (from the facility directory, `GET /v1/facilities`), otherwise the device's zone, always with the zone named so a time is never
  * mistaken for facility-local time.
  */
 

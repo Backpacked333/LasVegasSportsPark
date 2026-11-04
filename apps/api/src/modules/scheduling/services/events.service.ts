@@ -3,6 +3,8 @@ import {
   decodeCursor,
   encodeCursor,
   errors,
+  SCHEDULE_QUERY_MAX_SPAN_DAYS,
+  SCHEDULE_QUERY_MAX_SPAN_MS,
   z,
   type Event,
   type Interval,
@@ -46,6 +48,26 @@ import { organizationOf } from './organization';
 export { organizationOf } from './organization';
 
 const Cursor = z.object({ start: z.string(), id: z.string() });
+
+/**
+ * R3-PERFORMANCE-04 (§4.5 bounded queries): a reservation list or an availability search covers an
+ * ordered window of at most SCHEDULE_QUERY_MAX_SPAN_DAYS, on the HTTP routes (the query schemas
+ * refuse it first) and for in-process port callers alike, so one call cannot walk years of
+ * candidates on the event loop.
+ */
+function assertQueryWindow(interval: Interval): void {
+  const start = Date.parse(interval.start);
+  const end = Date.parse(interval.end);
+  if (!(start < end)) {
+    throw errors.validation('The window must start before it ends.', { path: 'end' });
+  }
+  if (end - start > SCHEDULE_QUERY_MAX_SPAN_MS) {
+    throw errors.validation(`The window is at most ${SCHEDULE_QUERY_MAX_SPAN_DAYS} days.`, {
+      path: 'end',
+      maxSpanDays: SCHEDULE_QUERY_MAX_SPAN_DAYS,
+    });
+  }
+}
 
 /**
  * Direct scheduling for owning records (fixtures, sessions, rentals …) and read access to the
@@ -389,6 +411,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
 
   async listReservations(principal: Principal, query: ReservationQuery): Promise<Reservation[]> {
     const organizationId = organizationOf(principal);
+    assertQueryWindow(query.interval);
     let facilityId = query.facilityId ?? null;
     if (query.resourceId) {
       const resource = await executorFor(this.db)
@@ -442,6 +465,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
     input: FindAvailableSlotsInput,
   ): Promise<Interval[]> {
     const organizationId = organizationOf(principal);
+    assertQueryWindow(input.interval);
     const resource = await executorFor(this.db)
       .selectFrom('resources')
       .selectAll()

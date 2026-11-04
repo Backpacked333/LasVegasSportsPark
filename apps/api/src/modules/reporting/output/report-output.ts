@@ -43,14 +43,25 @@ export function csvCell(value: ReportRow[string] | undefined): string {
 }
 
 /**
+ * One `#` preamble line as exactly one CSV cell (R3-REPORTING-09, §4.14). Preamble values carry
+ * staff-entered text (space names in disclosures, parameters as JSON): a comma would otherwise end
+ * the cell and let the rest start a new one a spreadsheet evaluates (`=...`). The whole line goes
+ * through `csvCell`, so it is quoted whenever it holds a comma, quote or line break, and it always
+ * starts with `#`, never with a formula prefix. Line breaks are folded into spaces first.
+ */
+export function csvPreambleLine(key: string, value: string): string {
+  return csvCell(`# ${key}: ${value}`.replaceAll(/\r\n|\r|\n/g, ' '));
+}
+
+/**
  * CSV export: a `#` preamble carrying the report, as-of instant, freshness, every metric
- * definition field (SPK-REPORT-001) and the disclosures, then the aggregate table, then the metric
- * values. Rows are aggregates; no person-level data is ever exported (§4.14, rule G9).
+ * definition field (SPK-REPORT-001) and the disclosures, each line one CSV cell, then the
+ * aggregate table, then the metric values. Rows are aggregates; no person-level data is ever
+ * exported (§4.14, rule G9).
  */
 export function renderCsv(result: ReportResponse): string {
   const lines: string[] = [];
-  const meta = (key: string, value: string) =>
-    lines.push(`# ${key}: ${value.replaceAll(/\r?\n/g, ' ')}`);
+  const meta = (key: string, value: string) => lines.push(csvPreambleLine(key, value));
   meta('report', `${result.report.key} (${result.report.title})`);
   meta('as of', result.asOf);
   meta('produced at', result.producedAt);

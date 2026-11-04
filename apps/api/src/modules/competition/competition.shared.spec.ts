@@ -2,7 +2,10 @@ import { z } from '@sportspark/contracts';
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_TITLE_MAX, fixtureTitle } from './competition.shared';
 
-/** The scheduling title bound (`POST /v1/events`, `CreateEventSeriesBody.title`). */
+/**
+ * The scheduling title bound (`CreateEventSeriesBody.title`, `EventWriter.insertEvent`
+ * `EVENT_TITLE_MAX`); no direct event-creation route exists (R3-DOCS-TRUTH-3-09).
+ */
 const SchedulingTitle = z.string().min(1).max(200);
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 

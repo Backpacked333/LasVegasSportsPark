@@ -3,7 +3,6 @@ import type {
   Enrollment,
   EnrollmentOffering,
   EnrollmentPendingReason,
-  Principal,
 } from '@sportspark/contracts';
 import { CLOCK, FacilityDirectory, type Clock, type Trx } from '../../../kernel';
 import {
@@ -17,6 +16,7 @@ import {
   toEnrollment,
   toPolicyReferences,
   type Reader,
+  type RecordViewer,
 } from '../enrollment.shared';
 import type { EnrollmentRow } from './enrollments.service';
 
@@ -184,11 +184,14 @@ export class EnrollmentViews {
     return out;
   }
 
-  /** The person-facing view of enrollment rows: redacted, with offering and pending reason. */
+  /**
+   * The person-facing view of enrollment rows: redacted for each row's viewer (SPK-AT-004,
+   * R3-TRACE-A-02: decided at the row's facility), with offering and pending reason.
+   */
   async views(
     db: Reader,
     organizationId: string,
-    principal: Principal,
+    viewerFor: (offeringId: string) => RecordViewer,
     rows: readonly EnrollmentRow[],
   ): Promise<Enrollment[]> {
     const trx = db as Trx;
@@ -199,7 +202,7 @@ export class EnrollmentViews {
     );
     const reasons = await this.pendingReasons(db, organizationId, rows);
     return rows.map((row) => ({
-      ...redactEnrollment(principal, toEnrollment(row)),
+      ...redactEnrollment(viewerFor(row.offering_id), toEnrollment(row)),
       offering: offerings.get(row.offering_id) ?? null,
       pendingReason: reasons.get(row.id) ?? null,
     }));
@@ -208,10 +211,10 @@ export class EnrollmentViews {
   async view(
     db: Reader,
     organizationId: string,
-    principal: Principal,
+    viewer: RecordViewer,
     row: EnrollmentRow,
   ): Promise<Enrollment> {
-    const [view] = await this.views(db, organizationId, principal, [row]);
+    const [view] = await this.views(db, organizationId, () => viewer, [row]);
     return view as Enrollment;
   }
 }

@@ -81,7 +81,6 @@ export class AccountsService {
           principal,
           organizationId,
           input.personId,
-          this.clock.now(),
         );
       }
       const id = newId();
@@ -175,7 +174,6 @@ export class AccountsService {
         principal,
         organizationId,
         current.person_id,
-        this.clock.now(),
       );
       assertExpectedRevision(input.expectedRevision, current.revision);
       // Recovery restores only the prior access: a disabled account (disabled by a merge, or by

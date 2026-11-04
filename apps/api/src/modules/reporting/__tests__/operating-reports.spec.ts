@@ -441,8 +441,49 @@ describe('operating reports (SPK-REPORT-002) and demand (SPK-REPORT-006)', () =>
     });
     expect(valueOf(res.body, 'MET-009', 'Facility arrivals (people)')).toBe(1);
     expect(valueOf(res.body, 'MET-009', 'Session check-ins admitted')).toBe(0);
+    // The fixture has not started and nobody has taken its attendance: no rate, never 0 (G13).
     const fixture = (res.body.rows as Row[]).find((r) => r.activityId === fixtureEventId)!;
-    expect(fixture).toMatchObject({ expected: 4, attended: 0, attendanceRate: 0 });
+    expect(fixture).toMatchObject({
+      expected: 4,
+      attended: 0,
+      attendanceCapture: 'not_started',
+      attendanceRate: null,
+    });
+  });
+
+  it('SPK-REPORT-002 / G13 (R3-REPORTING-06): the attendance rate counts only activities with attendance captured; one not yet started has no rate and leaves the denominator', async () => {
+    const res = await view('attendance', { ...facility(), from: DATE, to: DATE });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    // The session (4 expected, 1 expected attended) has observations; the fixture (4 expected)
+    // starts after the as-of instant with nothing captured. MET-008 is 1/4, not 1/8.
+    expect(valueOf(res.body, 'MET-008', 'Attendance rate')).toBe(0.25);
+    expect(valueOf(res.body, 'MET-008', 'Activities not yet started (no rate)')).toBe(1);
+    expect(
+      valueOf(res.body, 'MET-008', 'Expected participants of activities not yet started'),
+    ).toBe(4);
+    expect(
+      valueOf(res.body, 'MET-008', 'Started activities without attendance captured (no rate)'),
+    ).toBe(0);
+    const fixture = (res.body.rows as Row[]).find((r) => r.activityId === fixtureEventId)!;
+    expect(fixture.rateUnavailableReason).toBe('not yet started at the as-of instant');
+    const session = (res.body.rows as Row[]).find((r) => r.activityId === sessionId)!;
+    expect(session).toMatchObject({ attendanceCapture: 'captured', rateUnavailableReason: null });
+
+    // Once the fixture has started with still nothing captured, it is "not captured", not 0%.
+    const saved = t.clock.now();
+    try {
+      t.clock.set(new Date(Date.parse(at(DATE, '21:00'))));
+      const later = await view('attendance', { ...facility(), from: DATE, to: DATE });
+      expect(later.status, JSON.stringify(later.body)).toBe(200);
+      expect(valueOf(later.body, 'MET-008', 'Attendance rate')).toBe(0.25);
+      expect(
+        valueOf(later.body, 'MET-008', 'Started activities without attendance captured (no rate)'),
+      ).toBe(1);
+      const started = (later.body.rows as Row[]).find((r) => r.activityId === fixtureEventId)!;
+      expect(started).toMatchObject({ attendanceCapture: 'not_captured', attendanceRate: null });
+    } finally {
+      t.clock.set(saved);
+    }
   });
 
   it('SPK-REPORT-002 match readiness: every fixture in the window is evaluated live by the competition rules', async () => {

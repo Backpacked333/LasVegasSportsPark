@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   ComposeNotificationBody,
   CreateScheduleDraftBody,
+  DomainError,
   DraftChangeInputSchema,
   errors,
   z,
@@ -413,12 +414,27 @@ export class CommandTools {
         const input = RefundInput.parse(rawInput);
         // Finance authorizes `finance.refund` for the reviewer and enforces the refundable ceiling
         // (§4.7 invariant 6); automation adds no authority of its own.
-        const refund = await this.refunds.request(
-          reviewer,
-          input.paymentAttemptId,
-          { amountMinor: input.amountMinor, reason: ctx.reason ?? input.reason },
-          ctx.correlationId,
-        );
+        let refund: Awaited<ReturnType<RefundsService['request']>>;
+        try {
+          refund = await this.refunds.request(
+            reviewer,
+            input.paymentAttemptId,
+            { amountMinor: input.amountMinor, reason: ctx.reason ?? input.reason },
+            ctx.correlationId,
+          );
+        } catch (error) {
+          // R3-OPERATIONS-02 (§5.8, SPK-AT-028): during recovery finance refuses the refund
+          // before anything is reserved or sent, so the apply failed with a known outcome and may
+          // be retried after POST /v1/recovery/resume.
+          if (
+            DomainError.is(error) &&
+            error.code === 'INTEGRATION_UNAVAILABLE' &&
+            (error.details as { reason?: unknown } | undefined)?.reason === 'recovery_mode'
+          ) {
+            throw new ApplyFailure(error, { outcome: 'failed' });
+          }
+          throw error;
+        }
         // SPK-AUTO-003, §4.11: the recommendation is applied only when the money moved. A refund
         // the provider declined (its reservation released) is a failed apply that may be retried;
         // one whose outcome is not reported yet keeps the apply claimed until it is reconciled.

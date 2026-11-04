@@ -72,10 +72,10 @@ import {
   decodeCreatedCursor,
   enrollmentSystem,
   iso,
-  isStaffLike,
   keysetPage,
   minutesFrom,
   organizationOf,
+  registrantSnapshot,
   type Reader,
 } from '../enrollment.shared';
 import { BookingMachine, type BookingEvent } from '../enrollment.state-machines';
@@ -432,6 +432,8 @@ export class BookingsService implements BookingQueryPort {
     booker: PersonSummary,
     evaluation: Evaluation,
     actor: Principal,
+    /** R3-TRACE-A-02 (SPK-REG-009): the actor acts on a staff role (`actsAsStaff`). */
+    actingAsStaff: boolean,
     existingBasketId: string | null,
     correlationId: string | null,
   ) {
@@ -507,6 +509,7 @@ export class BookingsService implements BookingQueryPort {
       owner: booker,
       payerPersonId: booker.id,
       actor,
+      actingAsStaff,
       participant: booker,
       snapshot: plan.snapshot,
       intent: this.intentOf(plan.kind),
@@ -539,6 +542,7 @@ export class BookingsService implements BookingQueryPort {
       basket,
       lineId,
       actor,
+      actingAsStaff,
       holds.map((h) => h.id),
       expiresAt,
       correlationId,
@@ -582,6 +586,14 @@ export class BookingsService implements BookingQueryPort {
       });
       // DEC-016, DEC-076, DEC-077: a new rental or party needs its switch.
       await this.capabilities.require(organizationId, capabilityOf(kind), trx);
+      // R3-TRACE-A-02 (SPK-REG-009): staff-assisted only on a staff role at the facility; a staff
+      // member booking for themselves is recorded as the customer they act as.
+      const actingAsStaff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.requestBooking,
+        organizationId,
+        snapshot.offering.facilityId,
+      );
       const plan = await this.plan(trx, organizationId, snapshot, snapshot.bookingTerms, {
         start: new Date(input.start),
         end: input.end ? new Date(input.end) : null,
@@ -639,7 +651,7 @@ export class BookingsService implements BookingQueryPort {
         access_conditions: plan.content.accessConditions,
         host_responsibilities: plan.content.hostResponsibilities,
         staffing: json(plan.staffing as unknown as Array<Record<string, unknown>>),
-        requested_by: json(actorSnapshot(principal)),
+        requested_by: json(registrantSnapshot(principal, actingAsStaff)),
         requested_by_person_id: principal.personId,
       };
       if (plan.content.confirmationMode === 'request') {
@@ -674,6 +686,7 @@ export class BookingsService implements BookingQueryPort {
           booker,
           evaluation,
           principal,
+          actingAsStaff,
           existingBasketId,
           correlationId,
         );
@@ -766,6 +779,8 @@ export class BookingsService implements BookingQueryPort {
         booker,
         evaluation,
         principal,
+        // `enrollment.decide_booking` is staff-only: the approver acts on their role.
+        true,
         null,
         correlationId,
       );
@@ -1749,7 +1764,17 @@ export class BookingsService implements BookingQueryPort {
         facilityId: row.facility_id,
         protected: true,
       });
-      if (!isStaffLike(principal)) throw errors.protectedNotFound('booking');
+      // R3-TRACE-A-02: only a staff role at the booking's facility reads another person's booking.
+      if (
+        !(await this.scope.actsAsStaff(
+          principal,
+          EnrollmentActions.readBooking,
+          organizationId,
+          row.facility_id,
+        ))
+      ) {
+        throw errors.protectedNotFound('booking');
+      }
     }
     return this.view(this.db, organizationId, row);
   }
@@ -1762,7 +1787,10 @@ export class BookingsService implements BookingQueryPort {
 
   async list(principal: Principal, query: ListBookingsQuery): Promise<Page<Booking>> {
     const organizationId = organizationOf(principal);
-    if (!isStaffLike(principal)) throw errors.accessDenied('Booking lists are a staff view.');
+    // R3-TRACE-A-02: a staff view for a role holding read_booking, never a label on the principal.
+    if (!(await this.scope.actsAsStaff(principal, EnrollmentActions.readBooking, organizationId))) {
+      throw errors.accessDenied('Booking lists are a staff view.');
+    }
     await this.authorization.require(principal, EnrollmentActions.readBooking, {
       type: 'booking',
       organizationId,

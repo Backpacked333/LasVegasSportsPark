@@ -85,6 +85,47 @@ export class AuditReader {
       .execute();
     return rows.map(toAuditRecord);
   }
+
+  /**
+   * R3-PERFORMANCE-01 (§5.4): the audit history of many records of one type in one query
+   * (`target_id in (...)`, served by audit_records_target_idx), newest first per record and at most
+   * `limitPerTarget` (1 to 200, default 50) each. Every requested id is in the result, with [] when
+   * it has no record.
+   */
+  async forTargets(
+    organizationId: string,
+    targetType: string,
+    targetIds: readonly string[],
+    options: { limitPerTarget?: number } = {},
+    db?: Db | Trx,
+  ): Promise<Map<string, AuditRecord[]>> {
+    const ids = [...new Set(targetIds)];
+    const out = new Map<string, AuditRecord[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+    const limit = Math.min(Math.max(options.limitPerTarget ?? 50, 1), 200);
+    const executor = db ?? executorFor(this.db);
+    const ranked = executor
+      .selectFrom('audit_records')
+      .selectAll()
+      .select(
+        sql<number>`row_number() over (partition by target_id order by occurred_at desc, id desc)`.as(
+          'target_rank',
+        ),
+      )
+      .where('organization_id', '=', organizationId)
+      .where('target_type', '=', targetType)
+      .where('target_id', 'in', ids);
+    const rows = await executor
+      .selectFrom(ranked.as('ranked'))
+      .selectAll()
+      .where('target_rank', '<=', limit)
+      .orderBy('target_id')
+      .orderBy('occurred_at', 'desc')
+      .orderBy('id', 'desc')
+      .execute();
+    for (const row of rows) out.get(row.target_id)?.push(toAuditRecord(row));
+    return out;
+  }
 }
 
 /**

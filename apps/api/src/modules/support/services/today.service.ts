@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   errors,
+  type AssignmentRequirement,
   type Event,
   type Principal,
   type ResolutionHistoryEntry,
@@ -14,6 +15,7 @@ import {
   AuthorizationService,
   CLOCK,
   DATABASE,
+  ExceptionActions,
   FacilityDirectory,
   OperationalExceptions,
   type Clock,
@@ -22,7 +24,12 @@ import {
 import { MatchActions, ReadinessService } from '../../competition';
 import { FacilitiesActions, RestrictionsService } from '../../facilities';
 import { EventsService, addDays, localDateOf, resolveLocal } from '../../scheduling';
-import { RequirementsService, WorkforceActions, uncoveredDedupeKey } from '../../workforce';
+import {
+  RequirementsService,
+  WorkforceActions,
+  coverageTargetKey,
+  uncoveredDedupeKey,
+} from '../../workforce';
 import { SupportActions } from '../support.actions';
 import { SUPPORT_POLICY, type SupportPolicy } from '../support.policy';
 import { isPermissionError, minutesBetween, organizationOf } from '../support.shared';
@@ -37,6 +44,13 @@ const SEVERITY_RANK: Record<TodayItem['severity'], number> = {
   info: 3,
 };
 
+/** The workforce target whose required roles an activity carries: its fixture, else the event. */
+function coverageTargetOf(event: Event): { targetType: 'fixture' | 'event'; targetId: string } {
+  return event.sourceType === 'fixture' && event.sourceId
+    ? { targetType: 'fixture', targetId: event.sourceId }
+    : { targetType: 'event', targetId: event.id };
+}
+
 interface FacilityDay {
   id: string;
   name: string;
@@ -44,6 +58,26 @@ interface FacilityDay {
   localDate: string;
   start: Date;
   end: Date;
+}
+
+/** A source's own result: how many items it gave and whether the per-request bound cut it short. */
+interface SourceResult {
+  count: number;
+  truncated?: boolean;
+  /** How many records the bound left out; null when unknown. */
+  omitted?: number | null;
+}
+
+type SourceStatus = Pick<TodaySource, 'status' | 'count' | 'truncated' | 'omitted'>;
+
+/** One facility's activities of the day, as the schedule source read them. */
+interface FacilitySchedule {
+  facility: FacilityDay;
+  window: { start: string; end: string };
+  events: Event[];
+  /** The schedule held more activities than the per-facility bound. */
+  truncated: boolean;
+  status: SourceStatus;
 }
 
 /** SPK-UX-006 groups, derived from the owning module of an exception's category. */
@@ -107,7 +141,9 @@ export class TodayService {
     const items: TodayItem[] = [];
     const sources: TodaySource[] = [];
 
-    // 1. Operational exceptions (kernel), within facility and queue scope.
+    // 1. Operational exceptions (kernel), within facility and queue scope. R3-PERFORMANCE-01:
+    // at most `todayExceptionLimit` are listed (each with its resolution history), most severe and
+    // soonest due first; the rest are counted and summarised, and stay in GET /v1/exceptions.
     const coveredKeys = new Set<string>();
     {
       const status = await this.attempt(async () => {
@@ -121,13 +157,30 @@ export class TodayService {
             (r.facility_id === null || facilityIds.has(r.facility_id)) &&
             this.queues.visibleTo(principal, this.queues.resolve(r.owner_queue, configured)),
         );
+        const levels = new Map(
+          visible.map((r) => [r.id, this.exceptions.serviceLevelsOf(r, configured, now)]),
+        );
+        const dueAt = (r: ExceptionRow) =>
+          levels.get(r.id)?.deadline?.getTime() ?? Number.POSITIVE_INFINITY;
+        // The feed's own order (severity, deadline, id), so the listed ones are the ones it shows first.
+        const ranked = [...visible].sort(
+          (a, b) =>
+            SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+            dueAt(a) - dueAt(b) ||
+            `exception:${a.id}`.localeCompare(`exception:${b.id}`),
+        );
+        const listed = ranked.slice(0, Math.max(0, this.policy.todayExceptionLimit));
+        const left = ranked.slice(listed.length);
         const history = await this.exceptions.history(
           this.db,
           organizationId,
-          visible.map((r) => r.id),
+          listed.map((r) => r.id),
         );
-        for (const row of visible) {
-          if (row.dedupe_key) coveredKeys.add(row.dedupe_key);
+        const keys: string[] = [];
+        for (const row of listed) {
+          // Only a listed exception stands in for the derived slot it owns; the slot of one left
+          // out still shows as a coverage item.
+          if (row.dedupe_key) keys.push(row.dedupe_key);
           const view = await this.exceptions.view(row, {
             principal,
             queues: configured,
@@ -156,16 +209,23 @@ export class TodayService {
             details: { ...view.details, exceptionId: row.id, revision: row.revision },
           });
         }
-        return visible.length;
+        if (left.length > 0) {
+          items.push(await this.omittedExceptionsItem(principal, left, levels));
+        }
+        for (const k of keys) coveredKeys.add(k);
+        return { count: listed.length, truncated: left.length > 0, omitted: left.length };
       }, items);
       sources.push({ source: 'kernel.operational_exceptions', facilityId: null, ...status });
     }
 
-    const facilityViews: TodayFeed['facilities'] = [];
+    // Today's activities of every facility in scope, read first so that the readiness budget is
+    // spent on the fixtures that matter most across the whole read (R3-PERFORMANCE-01).
+    const days: FacilitySchedule[] = [];
     for (const facility of facilities) {
       const window = { start: facility.start.toISOString(), end: facility.end.toISOString() };
       let events: Event[] = [];
-      const scheduleStatus = await this.attempt(async () => {
+      let truncated = false;
+      const status = await this.attempt(async () => {
         const page = await this.events.listEvents(principal, {
           facilityId: facility.id,
           start: window.start,
@@ -173,8 +233,24 @@ export class TodayService {
           limit: this.policy.todayEventLimit,
         });
         events = page.items;
-        return events.length;
+        truncated = page.nextCursor !== null;
+        // Activities past the per-facility bound are not counted here: their number is unknown.
+        return { count: events.length, truncated, omitted: null };
       });
+      days.push({
+        facility,
+        window,
+        events,
+        truncated: status.status === 'ok' && truncated,
+        status,
+      });
+    }
+    const evaluated = this.readinessSelection(days, now);
+
+    const facilityViews: TodayFeed['facilities'] = [];
+    for (const day of days) {
+      const { facility, window, events } = day;
+      const scheduleStatus = day.status;
       sources.push({ source: 'scheduling.events', facilityId: facility.id, ...scheduleStatus });
       facilityViews.push({
         facilityId: facility.id,
@@ -191,7 +267,7 @@ export class TodayService {
       });
       const live = events.filter((e) => e.status !== 'canceled');
 
-      // 2. Fixture readiness blockers (competition).
+      // 2. Fixture readiness blockers (competition), for the fixtures the bound selected.
       if (scheduleStatus.status !== 'ok') {
         sources.push({
           source: 'competition.readiness',
@@ -202,8 +278,9 @@ export class TodayService {
         const status = await this.attempt(async () => {
           let count = 0;
           let readable = 0;
-          const fixtures = live.filter((e) => e.sourceType === 'fixture' && e.sourceId);
-          for (const event of fixtures) {
+          const fixtures = live.filter(isFixtureEvent);
+          const chosen = fixtures.filter((e) => evaluated.has(e.id));
+          for (const event of chosen) {
             const item = await this.readinessItem(principal, event, now);
             if (item === 'not_permitted') continue;
             readable += 1;
@@ -212,8 +289,22 @@ export class TodayService {
               count += 1;
             }
           }
-          if (fixtures.length > 0 && readable === 0) throw errors.accessDenied();
-          return count;
+          if (chosen.length > 0 && readable === 0) throw errors.accessDenied();
+          const left = fixtures.filter((e) => !evaluated.has(e.id)).sort(readinessOrder(now));
+          if (left.length > 0) {
+            const omitted = await this.omittedReadinessItem(principal, facility, left, {
+              evaluated: chosen.length,
+              now,
+            });
+            // Nobody may read this facility's readiness: the source is not permitted, not partial.
+            if (!omitted && readable === 0) throw errors.accessDenied();
+            if (omitted) items.push(omitted);
+          }
+          return {
+            count,
+            truncated: left.length > 0 || day.truncated,
+            omitted: day.truncated ? null : left.length,
+          };
         }, items);
         sources.push({ source: 'competition.readiness', facilityId: facility.id, ...status });
       }
@@ -225,15 +316,31 @@ export class TodayService {
         const status = await this.attempt(async () => {
           let count = 0;
           let readable = 0;
+          // R3-PERFORMANCE-01: one batched requirements-and-coverage read for the facility's live
+          // activities, instead of one read per activity.
+          const requirements = await this.requirements.listForTargets(
+            principal,
+            live.map(coverageTargetOf),
+          );
           for (const event of live) {
-            const produced = await this.coverageItems(principal, event, facility, coveredKeys, now);
+            const target = coverageTargetOf(event);
+            const produced = await this.coverageItems(
+              principal,
+              event,
+              target,
+              requirements.get(coverageTargetKey(target.targetType, target.targetId)) ?? [],
+              facility,
+              coveredKeys,
+              now,
+            );
             if (produced === 'not_permitted') continue;
             readable += 1;
             items.push(...produced);
             count += produced.length;
           }
           if (live.length > 0 && readable === 0) throw errors.accessDenied();
-          return count;
+          // Activities past the schedule bound were not checked; their number is unknown.
+          return { count, truncated: day.truncated, omitted: null };
         }, items);
         sources.push({ source: 'workforce.coverage', facilityId: facility.id, ...status });
       }
@@ -317,6 +424,132 @@ export class TodayService {
     return { generatedAt: now.toISOString(), facilities: facilityViews, items, sources };
   }
 
+  /**
+   * R3-PERFORMANCE-01: the fixture events whose readiness this read evaluates — at most
+   * `todayReadinessLimit` across every facility whose schedule was read, in `readinessOrder`.
+   * Each evaluation derives the fixture's readiness from its authoritative records (SPK-READY-004),
+   * so the bound is what keeps one read of Today bounded on a busy league night.
+   */
+  private readinessSelection(days: readonly FacilitySchedule[], now: Date): Set<string> {
+    const candidates = days
+      .filter((d) => d.status.status === 'ok')
+      .flatMap((d) => d.events.filter((e) => e.status !== 'canceled' && isFixtureEvent(e)));
+    candidates.sort(readinessOrder(now));
+    return new Set(
+      candidates.slice(0, Math.max(0, this.policy.todayReadinessLimit)).map((e) => e.id),
+    );
+  }
+
+  /**
+   * One item naming the exceptions the bound left out (R3-PERFORMANCE-01): how many, by severity
+   * and queue, as severe as the most severe of them, with the full list as the next action.
+   */
+  private async omittedExceptionsItem(
+    principal: Principal,
+    left: readonly ExceptionRow[],
+    levels: ReadonlyMap<string, { deadline: Date | null; overdue: boolean }>,
+  ): Promise<TodayItem> {
+    const lead = left[0] as ExceptionRow;
+    const deadlines = left
+      .map((r) => levels.get(r.id)?.deadline?.getTime())
+      .filter((d): d is number => d !== undefined);
+    const tally = (key: (r: ExceptionRow) => string) =>
+      left.reduce<Record<string, number>>((acc, r) => {
+        acc[key(r)] = (acc[key(r)] ?? 0) + 1;
+        return acc;
+      }, {});
+    return {
+      id: 'exceptions-omitted',
+      source: 'exception',
+      group: 'other',
+      category: 'support.today_exceptions_omitted',
+      title: `${left.length} more open exception(s) in your queues are not listed here`,
+      severity: lead.severity,
+      facilityId: null,
+      affected: null,
+      ownerQueue: lead.owner_queue,
+      status: 'unresolved',
+      openedAt: null,
+      ageMinutes: null,
+      deadlineAt: deadlines.length > 0 ? new Date(Math.min(...deadlines)).toISOString() : null,
+      overdue: left.some((r) => levels.get(r.id)?.overdue === true),
+      revision: null,
+      nextActions: await this.nextActions.permitted(principal, [
+        {
+          definition: ExceptionActions.read,
+          label: 'Open the full exception list',
+          method: 'GET',
+          href: '/v1/exceptions',
+          facilityId: null,
+        },
+      ]),
+      history: [],
+      details: {
+        omitted: left.length,
+        listed: this.policy.todayExceptionLimit,
+        bySeverity: tally((r) => r.severity),
+        byQueue: tally((r) => r.owner_queue),
+      },
+    };
+  }
+
+  /**
+   * One item per facility naming the fixtures whose readiness the bound did not evaluate
+   * (R3-PERFORMANCE-01). Their readiness is unknown here, never ready (SPK-READY-002): a warning
+   * that points at the next of them. Null when the viewer may not read readiness at this facility.
+   */
+  private async omittedReadinessItem(
+    principal: Principal,
+    facility: FacilityDay,
+    left: readonly Event[],
+    context: { evaluated: number; now: Date },
+  ): Promise<TodayItem | null> {
+    const next = left[0] as Event;
+    const fixtureId = next.sourceId as string;
+    const nextActions = await this.nextActions.permitted(principal, [
+      {
+        definition: MatchActions.readReadiness,
+        label: `Explain readiness: ${next.title}`,
+        method: 'GET',
+        href: `/v1/fixtures/${fixtureId}/readiness`,
+        facilityId: facility.id,
+      },
+    ]);
+    if (nextActions.length === 0) return null;
+    const upcoming = new Date(next.scheduledEnd).getTime() > context.now.getTime();
+    return {
+      id: `readiness-omitted:${facility.id}`,
+      source: 'readiness',
+      group: 'match_readiness',
+      category: 'competition.readiness_not_evaluated',
+      title: `${facility.name}: readiness of ${left.length} more fixture(s) today is not checked here`,
+      severity: 'warning',
+      facilityId: facility.id,
+      affected: { type: 'fixture', id: fixtureId },
+      ownerQueue: 'league_manager',
+      status: 'unresolved',
+      openedAt: null,
+      ageMinutes: null,
+      deadlineAt: upcoming ? new Date(next.scheduledStart).toISOString() : null,
+      overdue: false,
+      revision: null,
+      nextActions,
+      history: [],
+      details: {
+        omitted: left.length,
+        evaluated: context.evaluated,
+        limit: this.policy.todayReadinessLimit,
+        fixtures: left.map((e) => ({
+          fixtureId: e.sourceId,
+          eventId: e.id,
+          title: e.title,
+          scheduledStart: e.scheduledStart,
+          scheduledEnd: e.scheduledEnd,
+        })),
+      },
+    };
+  }
+
   /** One item per fixture with blocking issues (or unconfirmed evidence, as information). */
   private async readinessItem(
     principal: Principal,
@@ -389,21 +622,13 @@ export class TodayService {
   private async coverageItems(
     principal: Principal,
     event: Event,
+    target: { targetType: 'fixture' | 'event'; targetId: string },
+    requirements: AssignmentRequirement[] | 'not_permitted',
     facility: FacilityDay,
     coveredKeys: ReadonlySet<string>,
     now: Date,
   ): Promise<TodayItem[] | 'not_permitted'> {
-    const target =
-      event.sourceType === 'fixture' && event.sourceId
-        ? { targetType: 'fixture' as const, targetId: event.sourceId }
-        : { targetType: 'event' as const, targetId: event.id };
-    let requirements;
-    try {
-      requirements = await this.requirements.list(principal, target);
-    } catch (error) {
-      if (isPermissionError(error)) return 'not_permitted';
-      throw error;
-    }
+    if (requirements === 'not_permitted') return 'not_permitted';
     const out: TodayItem[] = [];
     const start = new Date(event.scheduledStart);
     for (const req of requirements) {
@@ -518,20 +743,50 @@ export class TodayService {
 
   /**
    * Runs one source. When it fails, the items it added are withdrawn, so a source is either
-   * complete or absent (with its status), never half shown.
+   * complete or absent (with its status), never half shown. A source the per-request bound cut
+   * short says so (`truncated`, `omitted`, R3-PERFORMANCE-01).
    */
   private async attempt(
-    fn: () => Promise<number>,
+    fn: () => Promise<number | SourceResult>,
     items?: TodayItem[],
-  ): Promise<{ status: TodaySource['status']; count: number }> {
+  ): Promise<SourceStatus> {
     const before = items?.length ?? 0;
     try {
-      return { status: 'ok', count: await fn() };
+      const result = await fn();
+      const {
+        count,
+        truncated = false,
+        omitted = 0,
+      } = typeof result === 'number' ? { count: result } : result;
+      return { status: 'ok', count, truncated, omitted: truncated ? omitted : 0 };
     } catch (error) {
       items?.splice(before);
-      if (isPermissionError(error)) return { status: 'not_permitted', count: 0 };
+      const failed = { count: 0, truncated: false, omitted: 0 };
+      if (isPermissionError(error)) return { status: 'not_permitted', ...failed };
       this.logger.warn(`today source unavailable: ${String(error)}`);
-      return { status: 'unavailable', count: 0 };
+      return { status: 'unavailable', ...failed };
     }
   }
+}
+
+/** A fixture's scheduling event (the readiness source evaluates the fixture it names). */
+function isFixtureEvent(event: Event): boolean {
+  return event.sourceType === 'fixture' && event.sourceId !== null;
+}
+
+/**
+ * R3-PERFORMANCE-01: which fixtures' readiness matters most now — those still to finish, soonest
+ * start first (in progress, then upcoming), then finished ones, latest first; ties by event id.
+ */
+function readinessOrder(now: Date): (a: Event, b: Event) => number {
+  const finished = (e: Event) => new Date(e.scheduledEnd).getTime() <= now.getTime();
+  return (a, b) => {
+    const fa = finished(a);
+    const fb = finished(b);
+    if (fa !== fb) return fa ? 1 : -1;
+    const sa = new Date(a.scheduledStart).getTime();
+    const sb = new Date(b.scheduledStart).getTime();
+    if (sa !== sb) return fa ? sb - sa : sa - sb;
+    return a.id.localeCompare(b.id);
+  };
 }

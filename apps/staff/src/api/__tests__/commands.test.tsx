@@ -6,8 +6,10 @@
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
 import { useKeyedCommands } from '../../features/operations/commands';
+import { AppProviders, MUTATION_DEFAULTS, createQueryClient } from '../../providers/AppProviders';
 import { createTestApp, staffMe } from '../../testing/test-app';
 import { useApiCommand } from '../useApiCommand';
 import { useApiQuery } from '../useApiQuery';
@@ -19,6 +21,52 @@ function keysOf(app: ReturnType<typeof createTestApp>, route: string) {
     .filter((r) => r.route === route)
     .map((r) => r.headers['idempotency-key']);
 }
+
+describe('commands offline (§4.15, R3-SCREEN-STATES-01)', () => {
+  it('the dashboard data layer never pauses a command offline to send it by itself on reconnect', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'POST /maintenance-restrictions/{id}/release': () => {
+          calls += 1;
+          // The device has no connection: the request cannot be completed.
+          throw new TypeError('Failed to fetch');
+        },
+      },
+    });
+    // The production client (createQueryClient), not the test defaults.
+    const client = createQueryClient();
+    expect(client.getDefaultOptions().mutations).toMatchObject(MUTATION_DEFAULTS);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AppProviders services={app.services} queryClient={client}>
+        {children}
+      </AppProviders>
+    );
+    const { result } = renderHook(
+      () => useApiCommand('post', '/maintenance-restrictions/{id}/release'),
+      { wrapper },
+    );
+    act(() => app.connectivity.set(false));
+    const request = { path: { id: ID }, body: { expectedRevision: 2, reason: 'Inspected' } };
+    await act(async () => {
+      await result.current.submit(request as never).catch(() => undefined);
+    });
+    // It settled at once as a failure the screen shows, instead of waiting paused.
+    await waitFor(() => expect(result.current.error?.isOffline).toBe(true));
+    expect(result.current.isProcessing).toBe(false);
+    expect(
+      client
+        .getMutationCache()
+        .getAll()
+        .some((m) => m.state.isPaused),
+    ).toBe(false);
+    act(() => app.connectivity.set(true));
+    await act(async () => {
+      await client.resumePausedMutations();
+    });
+    expect(calls).toBe(1);
+  });
+});
 
 describe('useApiCommand (§4.9)', () => {
   it('a 4xx refusal (ELIGIBILITY_FAILED), then the same release again, sends a new key', async () => {

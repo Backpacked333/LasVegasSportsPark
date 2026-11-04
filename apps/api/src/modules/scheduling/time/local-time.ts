@@ -161,6 +161,30 @@ export function resolveLocal(
   return { instant: new Date(wall - offsetBefore), resolution: 'shifted_forward' };
 }
 
+/**
+ * The facility-local date and wall-clock time a resolved start stands for (SPK-SCHED-008), the
+ * inverse of `resolveLocal`. A start recorded as `shifted_forward` was asked for inside a
+ * spring-forward gap and published after it (02:30 asked, 03:30 published): it is read back with
+ * the offset in force before the transition, the offset `resolveLocal` shifted it with, so it
+ * stands for 02:30, not 03:30. Every other start stands for its own wall-clock time.
+ */
+export function requestedLocalOf(
+  timezone: string,
+  instant: Date,
+  resolution: DstResolution,
+): { date: LocalDate; time: LocalTime } {
+  if (resolution !== 'shifted_forward') {
+    return { date: localDateOf(timezone, instant), time: localTimeOf(timezone, instant) };
+  }
+  const wall = new Date(
+    instant.getTime() + offsetMs(timezone, new Date(instant.getTime() - DAY_MS)),
+  );
+  return {
+    date: `${wall.getUTCFullYear().toString().padStart(4, '0')}-${pad2(wall.getUTCMonth() + 1)}-${pad2(wall.getUTCDate())}`,
+    time: `${pad2(wall.getUTCHours())}:${pad2(wall.getUTCMinutes())}`,
+  };
+}
+
 export function addDays(date: LocalDate, days: number): LocalDate {
   const [year, month, day] = date.split('-').map(Number) as [number, number, number];
   const d = new Date(Date.UTC(year, month - 1, day + days));

@@ -1,5 +1,5 @@
 import { MaintenanceTaskSchema, newId, type Principal } from '@sportspark/contracts';
-import { seedOrganization } from '@sportspark/db';
+import { json, seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
 import { createPersonFixture } from '../../identity';
@@ -246,6 +246,47 @@ describe('preventive maintenance schedules (SPK-FAC-005)', () => {
       .where('id', '=', generated.body.generated[0].taskId)
       .executeTakeFirstOrThrow();
     expect(task).toEqual({ status: 'assigned', assigned_owner_person_id: owner });
+  });
+
+  it('R3-TIME-MONEY-04 / SPK-FAC-005: a recurrence describing more occurrences than the bound is refused at creation; one stored before the bound is refused at generation, never truncated', async () => {
+    const body = {
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      name: 'Daily line check for three years',
+      recurrence: { frequency: 'daily', startDate: '2026-01-01', until: '2028-12-31' },
+      localStartTime: '05:30',
+      durationMinutes: 30,
+      taskTemplate: { issue: 'Check the lines', severity: 'low' },
+    };
+    const refused = await post('/v1/preventive-schedules', body);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+    expect(refused.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'SERIES_TOO_LONG', maxOccurrences: 366, path: 'recurrence' },
+    });
+    expect(
+      await t.db
+        .selectFrom('preventive_schedules')
+        .select('id')
+        .where('name', '=', body.name)
+        .execute(),
+    ).toEqual([]);
+    // a schedule stored with such a rule before the guard existed
+    const created = await post('/v1/preventive-schedules', {
+      ...body,
+      recurrence: { frequency: 'daily', startDate: '2026-01-01', count: 30 },
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    await t.db
+      .updateTable('preventive_schedules')
+      .set({ recurrence: json(body.recurrence) })
+      .where('id', '=', created.body.id as string)
+      .execute();
+    const generated = await post(`/v1/preventive-schedules/${created.body.id as string}/generate`, {
+      expectedRevision: created.body.revision,
+    });
+    expect(generated.status, JSON.stringify(generated.body)).toBe(400);
+    expect(generated.body.details).toMatchObject({ code: 'SERIES_TOO_LONG' });
   });
 
   it('a paused or ended schedule generates nothing; status and revision are guarded', async () => {

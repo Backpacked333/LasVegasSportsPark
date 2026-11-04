@@ -10,6 +10,7 @@ import type { ZodType } from 'zod';
 import type { Clock } from '../clock';
 import type { Trx } from '../database/unit-of-work';
 import { CLOCK } from '../tokens';
+import { EventHandlerRegistry } from './event-handler.registry';
 
 export interface EnqueueInput<TPayload> {
   organizationId: string;
@@ -28,10 +29,17 @@ export interface EnqueueInput<TPayload> {
   failureOwner?: string | null;
 }
 
-/** Transactional outbox writer (§4.12): events are stored in the same transaction as the business change. */
+/**
+ * Transactional outbox writer (§4.12): events are stored in the same transaction as the business
+ * change, each with the handlers this build registers for its type (R3-OPERATIONS-01), so the
+ * event is not settled by a build that lacks one of them.
+ */
 @Injectable()
 export class Outbox {
-  constructor(@Inject(CLOCK) private readonly clock: Clock) {}
+  constructor(
+    @Inject(CLOCK) private readonly clock: Clock,
+    private readonly registry: EventHandlerRegistry,
+  ) {}
 
   async enqueue<TDef extends EventDefinition<string, ZodType>>(
     trx: Trx,
@@ -85,6 +93,7 @@ export class Outbox {
         locked_until: null,
         dispatched_at: null,
         failure_owner: input.failureOwner ?? null,
+        expected_handlers: this.registry.expectedFor(type),
       })
       .execute();
     return event;

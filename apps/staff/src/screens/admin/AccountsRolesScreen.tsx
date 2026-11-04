@@ -57,7 +57,7 @@ import {
 } from '../../features/insight-admin/labels';
 import { AdminNav } from '../../features/insight-admin/nav';
 import { PersonIdField } from '../../features/insight-admin/PersonSearch';
-import { useApp } from '../../providers/AppProviders';
+import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -71,6 +71,50 @@ const MEMBERSHIPS_KEY = ['api', '/staff-memberships'] as const;
 const MEMBERSHIP_KEY = ['api', '/staff-memberships/{id}'] as const;
 const INVALIDATE = [ME_KEY, MEMBERSHIPS_KEY, MEMBERSHIP_KEY] as const;
 const MANAGE_ACTION = 'identity.manage_staff_membership';
+
+/**
+ * R3-SECURITY-01 (§2.1, §4.14): the facilities this administrator administers, from its own
+ * `system_administrator` memberships in force (`GET /v1/me`). `null` means the whole organization
+ * (one of them has no facility list, or none is listed). Not `principal.facilityIds`: that is the union over every
+ * role, so an organization-wide front desk who administers one facility would read as unscoped.
+ */
+export function adminScopeOf(
+  memberships: ReadonlyArray<{
+    roles: readonly string[];
+    facilityIds: readonly string[];
+    status: string;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+  }>,
+  now: Date,
+): string[] | null {
+  const inForce = memberships.filter(
+    (m) =>
+      m.status === 'active' &&
+      m.roles.includes('system_administrator') &&
+      new Date(m.effectiveFrom).getTime() <= now.getTime() &&
+      (m.effectiveTo === null || now.getTime() < new Date(m.effectiveTo).getTime()),
+  );
+  // No administrator membership in force is listed: nothing to narrow by; the API decides.
+  if (inForce.length === 0) return null;
+  if (inForce.some((m) => m.facilityIds.length === 0)) return null;
+  return [...new Set(inForce.flatMap((m) => m.facilityIds))].sort();
+}
+
+/** Whether this administrator's scope covers a membership's facilities (organization-wide needs null). */
+function scopeCovers(scope: string[] | null, facilityIds: readonly string[]): boolean {
+  return scope === null || (facilityIds.length > 0 && facilityIds.every((f) => scope.includes(f)));
+}
+
+function useAdminScope(): string[] | null {
+  const me = useApiQuery({ path: '/me' });
+  const now = useNow();
+  return me.data ? adminScopeOf(me.data.staffMemberships, now) : null;
+}
+
+const SCOPED_HINT = 'You assign roles only at the facilities you administer.';
+const ORGANIZATION_HINT = 'Leave every facility unticked for the whole organization.';
+const SCOPED_REQUIRED = 'Choose at least one facility you administer.';
 
 function useFacilityName() {
   const { choices } = useFacilityChoices();
@@ -215,6 +259,8 @@ function AssignRoles() {
   // A failed read of the facility choices is shown, and assigning waits for it: an empty scope
   // would silently mean the whole organization (SPK-UX-008).
   const { choices, error: choicesError, refetch: refetchChoices } = useFacilityChoices();
+  const scope = useAdminScope();
+  const options = choices.filter((c) => scope === null || scope.includes(c.id));
   const [draft, setDraft] = useState<AssignDraft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [checkedPerson, setCheckedPerson] = useState<string | null>(null);
@@ -230,6 +276,7 @@ function AssignRoles() {
     const personId = draft.personId.trim();
     if (!UUID_PATTERN.test(personId)) next.personId = 'Enter the person id.';
     if (draft.roles.length === 0) next.roles = 'Choose at least one role.';
+    if (scope !== null && draft.facilityIds.length === 0) next.facilityIds = SCOPED_REQUIRED;
     const from = draft.effectiveFrom ? localDateTimeToInstant(draft.effectiveFrom) : null;
     const to = draft.effectiveTo ? localDateTimeToInstant(draft.effectiveTo) : null;
     if (draft.effectiveFrom && !from) next.effectiveFrom = 'Enter a valid start.';
@@ -297,11 +344,11 @@ function AssignRoles() {
       />
       <CheckboxGroup
         legend="Facility scope"
-        options={choices.map((c) => ({ value: c.id, label: c.label }))}
+        options={options.map((c) => ({ value: c.id, label: c.label }))}
         selected={draft.facilityIds}
         onChange={(facilityIds) => set({ facilityIds })}
-        hint="Leave every facility unticked for the whole organization."
-        error={apiFields.facilityIds}
+        hint={scope === null ? ORGANIZATION_HINT : SCOPED_HINT}
+        error={errors.facilityIds ?? apiFields.facilityIds}
       />
       <TextField
         label="Effective from"
@@ -363,6 +410,8 @@ function ChangeMembership({
 }) {
   const { online } = useApp();
   const { choices } = useFacilityChoices();
+  const scope = useAdminScope();
+  const options = choices.filter((c) => scope === null || scope.includes(c.id));
   const [roles, setRoles] = useState<string[]>(membership.roles);
   const [facilityIds, setFacilityIds] = useState<string[]>(membership.facilityIds);
   const [until, setUntil] = useState('');
@@ -371,6 +420,7 @@ function ChangeMembership({
   const build = () => {
     const next: Record<string, string> = {};
     if (roles.length === 0) next.roles = 'Keep at least one role, or end the membership.';
+    if (scope !== null && facilityIds.length === 0) next.facilityIds = SCOPED_REQUIRED;
     const to = until ? localDateTimeToInstant(until) : null;
     if (until && !to) next.until = 'Enter a valid end.';
     setErrors(next);
@@ -412,10 +462,11 @@ function ChangeMembership({
       />
       <CheckboxGroup
         legend="Facility scope"
-        options={choices.map((c) => ({ value: c.id, label: c.label }))}
+        options={options.map((c) => ({ value: c.id, label: c.label }))}
         selected={facilityIds}
         onChange={setFacilityIds}
-        hint="Leave every facility unticked for the whole organization."
+        hint={scope === null ? ORGANIZATION_HINT : SCOPED_HINT}
+        error={errors.facilityIds}
       />
       <TextField
         label="New end"
@@ -516,6 +567,7 @@ function MembershipRow({
   onOutcome: (message: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const scope = useAdminScope();
   const [mode, setMode] = useState<'view' | 'change' | 'end'>('view');
   // After STALE_REVISION: the membership as it stands now (ID-05 single read), so the next attempt
   // carries the current revision. `reloaded` keeps that read; `reloadNote` is the note about it,
@@ -568,7 +620,14 @@ function MembershipRow({
           again.
         </p>
       ) : null}
-      {membership.status === 'active' && canManage ? (
+      {membership.status === 'active' &&
+      canManage &&
+      !scopeCovers(scope, membership.facilityIds) ? (
+        <p className="caption">
+          Only an administrator of every facility of this membership can change or end it.
+        </p>
+      ) : null}
+      {membership.status === 'active' && canManage && scopeCovers(scope, membership.facilityIds) ? (
         <div className="ia-row-actions">
           <Button
             variant="secondary"

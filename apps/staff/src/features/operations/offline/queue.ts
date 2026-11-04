@@ -16,7 +16,10 @@
  * - Conflicting and rejected items are kept for review with the API's reason (SPK-AT-018). A batch
  *   the API refuses outright (a definitive 4xx: nothing in it was recorded) moves all its items to
  *   review as `refused` with the API's code and message, where they can be queued again under a
- *   new batch or discarded; the run goes on with the other batches. Only an unknown outcome (no
+ *   new batch or discarded; the run goes on with the other batches. A batch refused only because
+ *   its body is larger than the service accepts (`VALIDATION_FAILED` `body_too_large`, R3-SECURITY-02)
+ *   is split in two under new client batch ids and both halves are sent in the same run; only a
+ *   single item too large on its own goes to review. Only an unknown outcome (no
  *   answer, a 5xx, the same key still running) stops the run and keeps the batch and its key. A
  *   batch that committed but whose answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) is sent once
  *   more under a new key with the same client batch id, which the API answers with the stored
@@ -81,6 +84,19 @@ export interface ReviewItem {
 
 /** The API's own limit on items per offline batch. */
 export const MAX_BATCH_ITEMS = 500;
+
+/**
+ * R3-SECURITY-02 (§4.8, §4.15): the serialized items of one batch stay under this many bytes, a
+ * margin below the server's default body limit (`HTTP_BODY_LIMIT_BYTES`, 2 MiB), so a batch of
+ * long notes is split by size before it is sent instead of being refused as `body_too_large`.
+ */
+export const MAX_BATCH_BYTES = 1_500_000;
+
+const encoder = new TextEncoder();
+/** The UTF-8 size of one item as it travels in the batch body. */
+function itemBytes(item: unknown): number {
+  return encoder.encode(JSON.stringify(item)).length + 1;
+}
 
 /** A batch the API answered, by its ids and counts only (no personal data). */
 export interface SyncedBatch {
@@ -242,7 +258,8 @@ export class OfflineQueueStore {
 
   /**
    * Groups this account's pending items into batches (one facility and snapshot each, at most
-   * MAX_BATCH_ITEMS, the API's limit), keeping the batch id of items already sent once. Every
+   * MAX_BATCH_ITEMS, the API's limit, and at most MAX_BATCH_BYTES of serialized items), keeping
+   * the batch id of items already sent once. Every
    * prepared batch is returned, a full one included (R2-CLIENTS-2-11).
    */
   prepareBatches(accountId: string): PendingBatch[] {
@@ -252,6 +269,8 @@ export class OfflineQueueStore {
       const sent = new Map<string, PendingBatch>();
       /** The batch new items of one facility and snapshot are still added to. */
       const open = new Map<string, PendingBatch>();
+      /** The serialized size of each open batch's items (R3-SECURITY-02). */
+      const openBytes = new Map<string, number>();
       const pending = current.pending.map((q) => {
         if (q.queuedBy !== accountId) return q;
         let batch: PendingBatch | undefined;
@@ -269,8 +288,13 @@ export class OfflineQueueStore {
           }
         } else {
           const key = `${q.facilityId}|${q.snapshot.reference}`;
+          const size = itemBytes(q.item);
           batch = open.get(key);
-          if (!batch || batch.items.length >= MAX_BATCH_ITEMS) {
+          if (
+            !batch ||
+            batch.items.length >= MAX_BATCH_ITEMS ||
+            (batch.items.length > 0 && (openBytes.get(key) ?? 0) + size > MAX_BATCH_BYTES)
+          ) {
             batch = {
               batchId: this.generateKey(),
               facilityId: q.facilityId,
@@ -278,8 +302,10 @@ export class OfflineQueueStore {
               items: [],
             };
             open.set(key, batch);
+            openBytes.set(key, 0);
             batches.push(batch);
           }
+          openBytes.set(key, (openBytes.get(key) ?? 0) + size);
         }
         const assigned = { ...q, batchId: batch.batchId };
         batch.items.push(assigned);
@@ -358,6 +384,32 @@ export class OfflineQueueStore {
   }
 
   /**
+   * R3-SECURITY-02: the API refused the batch because its body is larger than it accepts (checked
+   * before anything runs, so nothing in it was recorded and no answer is stored under its key).
+   * Its items are split into two batches under new client batch ids (so new keys), in queue order;
+   * null for a single item, which cannot be split and is refused like any other batch.
+   */
+  splitBatch(batch: PendingBatch): [PendingBatch, PendingBatch] | null {
+    if (batch.items.length < 2) return null;
+    const middle = Math.ceil(batch.items.length / 2);
+    const halves = [batch.items.slice(0, middle), batch.items.slice(middle)].map((items) => {
+      const batchId = this.generateKey();
+      return { ...batch, batchId, items: items.map((q) => ({ ...q, batchId })) };
+    }) as [PendingBatch, PendingBatch];
+    const assigned = new Map(
+      halves.flatMap((half) => half.items.map((q) => [q.item.clientObservationId, half.batchId])),
+    );
+    this.mutate((current) => ({
+      ...current,
+      pending: current.pending.map((q) => {
+        const batchId = assigned.get(q.item.clientObservationId);
+        return batchId !== undefined && q.batchId === batch.batchId ? { ...q, batchId } : q;
+      }),
+    }));
+    return halves;
+  }
+
+  /**
    * Puts a refused item back in the queue under a new batch (a new client batch id and key), for
    * example once the role is back. Its snapshot and observed times are sent unchanged, so an item
    * refused as `snapshot_in_future` is accepted only once the service's clock has passed the stored
@@ -408,6 +460,15 @@ function detailCodeOf(details: unknown): string | null {
   if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
   const code = (details as { code?: unknown }).code;
   return typeof code === 'string' ? code : null;
+}
+
+/** The API refused the batch only for its size (R3-SECURITY-02): split it and send the halves. */
+export function isBodyTooLarge(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.code === 'VALIDATION_FAILED' &&
+    detailCodeOf(error.details) === 'body_too_large'
+  );
 }
 
 /**
@@ -500,7 +561,8 @@ export const browserSyncLock: SyncLock = (task) => {
  * Runs one synchronisation of this account's pending items (SPK-AT-018 "synchronize once"): one
  * run at a time per device queue (and per browser profile where Web Locks exist); every batch
  * keeps its client batch id across retries. A batch the API refuses outright goes to review and
- * the run goes on (`isBatchRefusal`); any other failure stops the run and keeps the remaining
+ * the run goes on (`isBatchRefusal`), except one refused for its size, which is split and its
+ * halves sent next (`isBodyTooLarge`); any other failure stops the run and keeps the remaining
  * items queued.
  */
 export class OfflineSyncRunner {
@@ -555,7 +617,8 @@ export class OfflineSyncRunner {
     };
     let error: unknown = null;
     let answered = 0;
-    for (const batch of batches) {
+    for (let index = 0; index < batches.length; index += 1) {
+      const batch = batches[index]!;
       try {
         const result = await send(batch, this.store.getState().deviceId);
         this.store.applyResult(batch, result, now());
@@ -567,6 +630,12 @@ export class OfflineSyncRunner {
         summary.stale += result.counts.stale;
         summary.maxRosterAgeMinutes = result.maxRosterAgeMinutes;
       } catch (cause) {
+        const halves = isBodyTooLarge(cause) ? this.store.splitBatch(batch) : null;
+        if (halves) {
+          // Nothing of it was recorded: both halves are sent next, in this run.
+          batches.splice(index + 1, 0, ...halves);
+          continue;
+        }
         if (isBatchRefusal(cause)) {
           // Nothing of it was recorded: kept for review, and the other batches still go.
           this.store.refuseBatch(batch, cause, now());

@@ -410,6 +410,446 @@ describe('recurring series across daylight-saving changes and recurrence edits (
     });
   });
 
+  it('R3-TRACE-A-08 / SPK-SCHED-008: an edit whose new local time falls in an overlap or gap requires the scheduler to choose, and skip cancels instead of leaving the old start', async () => {
+    t.clock.set('2026-10-01T12:00:00Z');
+    // a pitch of its own: the earlier fall-back block holds Pitch 1 at 01:30 on 2026-11-01
+    const pitch2 = await seedPitchWithHalves(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      name: 'Pitch 2',
+    });
+    const rowsOf = (seriesId: string) =>
+      t.db
+        .selectFrom('events')
+        .select(['id', 'occurrence_index', 'scheduled_start', 'dst_resolution', 'status'])
+        .where('series_id', '=', seriesId)
+        .orderBy('occurrence_index')
+        .execute();
+    const starts = (rows: Awaited<ReturnType<typeof rowsOf>>) =>
+      rows.map((r) => new Date(r.scheduled_start).toISOString());
+
+    // 19:00 needs no policy, so creation stores the defaults nobody chose ('first')
+    const sundays = await series.createSeries(programManager, {
+      facilityId: facility,
+      kind: 'practice',
+      title: 'Sunday evening practice',
+      recurrence: {
+        frequency: 'weekly',
+        interval: 1,
+        byWeekday: [0],
+        startDate: '2026-10-25',
+        count: 3,
+      },
+      localStartTime: '19:00',
+      durationMinutes: 60,
+      resourceIds: [pitch2.northHalfId],
+    });
+    const original = await rowsOf(sundays.id);
+    const toEarlyMorning = {
+      scope: 'entire_series' as const,
+      changes: { localStartTime: '01:30' },
+      expectedRevision: sundays.revision,
+    };
+    // 01:30 occurs twice on 2026-11-01: refused for the preview and the commit, nothing changes
+    for (const preview of [true, false]) {
+      await expect(
+        series.editSeries(programManager, sundays.id, { ...toEarlyMorning, preview }),
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: {
+          code: 'dst_resolution_required',
+          nonexistentLocalDates: [],
+          ambiguousLocalDates: ['2026-11-01'],
+          options: { nonexistentPolicy: [], ambiguousPolicy: ['first', 'second'] },
+        },
+      });
+    }
+    expect(starts(await rowsOf(sundays.id))).toEqual(starts(original));
+    // the scheduler chooses over HTTP; the chosen policy becomes the series' own
+    const chosen = await t.http
+      .post(`/v1/event-series/${sundays.id}/edits`)
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({
+        ...toEarlyMorning,
+        preview: false,
+        changes: { localStartTime: '01:30', ambiguousPolicy: 'second' },
+      });
+    expect(chosen.status, JSON.stringify(chosen.body)).toBe(200);
+    expect(chosen.body.affected.map((a: { dstResolution: string }) => a.dstResolution)).toEqual([
+      'exact',
+      'second',
+      'exact',
+    ]);
+    const early = await rowsOf(sundays.id);
+    expect(starts(early)).toEqual([
+      '2026-10-25T08:30:00.000Z', // 01:30 PDT
+      '2026-11-01T09:30:00.000Z', // the second 01:30 (PST)
+      '2026-11-08T09:30:00.000Z', // 01:30 PST
+    ]);
+    expect(early.map((r) => r.dst_resolution)).toEqual(['exact', 'second', 'exact']);
+    expect(await series.getSeries(programManager, sundays.id)).toMatchObject({
+      localStartTime: '01:30',
+      ambiguousPolicy: 'second',
+    });
+    // one occurrence resolved the other way on request; a later edit that does not change its
+    // wall-clock time keeps it there instead of re-resolving it with the series policy
+    await series.editSeries(programManager, sundays.id, {
+      scope: 'one',
+      occurrenceIndex: 1,
+      preview: false,
+      changes: { ambiguousPolicy: 'first' },
+      expectedRevision: (await series.getSeries(programManager, sundays.id)).revision,
+    });
+    await series.editSeries(programManager, sundays.id, {
+      scope: 'entire_series',
+      preview: false,
+      changes: { title: 'Sunday early practice' },
+      expectedRevision: (await series.getSeries(programManager, sundays.id)).revision,
+    });
+    const kept = await rowsOf(sundays.id);
+    expect(starts(kept)[1]).toBe('2026-11-01T08:30:00.000Z');
+    expect(kept[1]?.dst_resolution).toBe('first');
+
+    // a series created with 'skip' (no gap at 19:00) moved to 02:30 across 2027-03-14
+    const skipping = await series.createSeries(programManager, {
+      facilityId: facility,
+      kind: 'maintenance',
+      title: 'Sunday turf care',
+      recurrence: {
+        frequency: 'weekly',
+        interval: 1,
+        byWeekday: [0],
+        startDate: '2027-03-07',
+        count: 3,
+      },
+      localStartTime: '19:00',
+      durationMinutes: 30,
+      resourceIds: [pitch2.southHalfId],
+      nonexistentPolicy: 'skip',
+    });
+    const toGap = {
+      scope: 'entire_series' as const,
+      preview: true,
+      changes: { localStartTime: '02:30' },
+      expectedRevision: skipping.revision,
+    };
+    // the stored policy is not applied silently either
+    await expect(series.editSeries(programManager, skipping.id, toGap)).rejects.toMatchObject({
+      details: {
+        code: 'dst_resolution_required',
+        nonexistentLocalDates: ['2027-03-14'],
+        ambiguousLocalDates: [],
+      },
+    });
+    const preview = await series.editSeries(programManager, skipping.id, {
+      ...toGap,
+      changes: { localStartTime: '02:30', nonexistentPolicy: 'skip' },
+    });
+    expect(preview.affected.map((a) => a.after?.scheduledStart ?? null)).toEqual([
+      '2027-03-07T10:30:00.000Z', // 02:30 PST
+      null, // 2027-03-14 has no 02:30: the occurrence is canceled
+      '2027-03-21T09:30:00.000Z', // 02:30 PDT
+    ]);
+    await series.editSeries(programManager, skipping.id, {
+      ...toGap,
+      preview: false,
+      changes: { localStartTime: '02:30', nonexistentPolicy: 'skip' },
+    });
+    const skipped = await rowsOf(skipping.id);
+    expect(skipped.map((r) => r.status)).toEqual(['published', 'canceled', 'published']);
+    // no occurrence keeps its old 19:00 start while the rest of the series moves
+    expect(
+      skipped
+        .filter((r) => r.status === 'published')
+        .map((r) => localTimeOf('America/Los_Angeles', new Date(r.scheduled_start))),
+    ).toEqual(['02:30', '02:30']);
+    const canceled = await events.getEvent(programManager, skipped[1]!.id);
+    expect(canceled.status).toBe('canceled');
+    expect(canceled.cancelReason).toBe(
+      'Skipped: the new local start time does not exist on this date',
+    );
+    expect(
+      await t.db
+        .selectFrom('reservation_units')
+        .select('id')
+        .where('event_id', '=', skipped[1]!.id)
+        .where('status', '=', 'active')
+        .execute(),
+    ).toEqual([]);
+    expect(await series.getSeries(programManager, skipping.id)).toMatchObject({
+      localStartTime: '02:30',
+      nonexistentPolicy: 'skip',
+    });
+
+    // a policy chosen for the series' own local time is a real choice: an edit that sends that
+    // time again needs no new one, and the shifted occurrence keeps its instant and resolution
+    const shifted = await series.createSeries(programManager, {
+      facilityId: facility,
+      kind: 'maintenance',
+      title: 'Sunday irrigation',
+      recurrence: {
+        frequency: 'weekly',
+        interval: 1,
+        byWeekday: [0],
+        startDate: '2027-03-07',
+        count: 2,
+      },
+      localStartTime: '02:30',
+      durationMinutes: 30,
+      resourceIds: [pitch2.northHalfId],
+      nonexistentPolicy: 'shift_forward',
+    });
+    await series.editSeries(programManager, shifted.id, {
+      scope: 'entire_series',
+      preview: false,
+      changes: { localStartTime: '02:30', durationMinutes: 45 },
+      expectedRevision: shifted.revision,
+    });
+    const irrigation = await rowsOf(shifted.id);
+    expect(starts(irrigation)).toEqual(['2027-03-07T10:30:00.000Z', '2027-03-14T10:30:00.000Z']);
+    expect(irrigation.map((r) => r.dst_resolution)).toEqual(['exact', 'shifted_forward']);
+  });
+
+  it('R3-TRACE-A-08 / SPK-SCHED-008: an edit re-resolves only the axis it names, records the resolution of a new local time, and applies a gap policy to shifted occurrences', async () => {
+    t.clock.set('2026-10-01T12:00:00Z');
+    const pitch3 = await seedPitchWithHalves(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      name: 'Pitch 3',
+    });
+    const rowsOf = (seriesId: string) =>
+      t.db
+        .selectFrom('events')
+        .select(['id', 'occurrence_index', 'scheduled_start', 'dst_resolution', 'status'])
+        .where('series_id', '=', seriesId)
+        .orderBy('occurrence_index')
+        .execute();
+    const shape = (rows: Awaited<ReturnType<typeof rowsOf>>) =>
+      rows.map((r) => [new Date(r.scheduled_start).toISOString(), r.dst_resolution, r.status]);
+    const changesOf = async (eventId: string) =>
+      (
+        await t.db
+          .selectFrom('outbox_events')
+          .select(['event_type', 'payload'])
+          .where('aggregate_id', '=', eventId)
+          .where('event_type', '=', 'scheduling.event_changed')
+          .execute()
+      ).map((o) => (o.payload as { change: string }).change);
+    const revisionOf = async (id: string) => (await series.getSeries(programManager, id)).revision;
+    const weekly = (startDate: string) => ({
+      frequency: 'weekly' as const,
+      interval: 1,
+      byWeekday: [0],
+      startDate,
+      count: 3,
+    });
+
+    // 1. An overlap-day occurrence resolved individually keeps that choice when a later edit names
+    // only the other axis (the series' stored ambiguous policy is not applied to it).
+    const overlap = await series.createSeries(programManager, {
+      facilityId: facility,
+      kind: 'practice',
+      title: 'A1',
+      recurrence: weekly('2026-10-25'),
+      localStartTime: '01:30',
+      durationMinutes: 30,
+      resourceIds: [pitch3.northHalfId],
+      ambiguousPolicy: 'second',
+    });
+    await series.editSeries(programManager, overlap.id, {
+      scope: 'one',
+      occurrenceIndex: 1,
+      preview: false,
+      changes: { ambiguousPolicy: 'first' },
+      expectedRevision: await revisionOf(overlap.id),
+    });
+    const resolvedFirst = await rowsOf(overlap.id);
+    expect(shape(resolvedFirst)[1]).toEqual(['2026-11-01T08:30:00.000Z', 'first', 'published']);
+    const noticesBefore = await changesOf(resolvedFirst[1]!.id);
+    const titleOnly = await series.editSeries(programManager, overlap.id, {
+      scope: 'entire_series',
+      preview: false,
+      changes: { title: 'A2', nonexistentPolicy: 'skip' },
+      expectedRevision: await revisionOf(overlap.id),
+    });
+    expect(titleOnly.affected.map((a) => a.dstResolution)).toEqual(['exact', 'first', 'exact']);
+    expect(shape(await rowsOf(overlap.id))).toEqual([
+      ['2026-10-25T08:30:00.000Z', 'exact', 'published'],
+      ['2026-11-01T08:30:00.000Z', 'first', 'published'],
+      ['2026-11-08T09:30:00.000Z', 'exact', 'published'],
+    ]);
+    // a title change, not a move
+    expect((await changesOf(resolvedFirst[1]!.id)).slice(noticesBefore.length)).toEqual([
+      'updated',
+    ]);
+    // naming the ambiguous axis for the entire series does apply to it
+    await series.editSeries(programManager, overlap.id, {
+      scope: 'entire_series',
+      preview: false,
+      changes: { ambiguousPolicy: 'second' },
+      expectedRevision: await revisionOf(overlap.id),
+    });
+    expect(shape(await rowsOf(overlap.id))[1]).toEqual([
+      '2026-11-01T09:30:00.000Z',
+      'second',
+      'published',
+    ]);
+
+    // 2. A new local start records its own resolution even where the instant stays the same:
+    // 02:30 (shifted to 03:30 on 2028-03-12) moved to 03:30 is exact there ...
+    const toLater = await series.createSeries(programManager, {
+      facilityId: facility,
+      kind: 'maintenance',
+      title: 'Sunday line marking',
+      recurrence: weekly('2028-03-05'),
+      localStartTime: '02:30',
+      durationMinutes: 30,
+      resourceIds: [pitch3.northHalfId],
+      nonexistentPolicy: 'shift_forward',
+    });
+    expect(shape(await rowsOf(toLater.id))[1]).toEqual([
+      '2028-03-12T10:30:00.000Z',
+      'shifted_forward',
+      'published',
+    ]);
+    const laterPreview = await series.editSeries(programManager, toLater.id, {
+      scope: 'entire_series',
+      preview: true,
+      changes: { localStartTime: '03:30' },
+      expectedRevision: toLater.revision,
+    });
+    expect(laterPreview.affected.map((a) => a.dstResolution)).toEqual(['exact', 'exact', 'exact']);
+    await series.editSeries(programManager, toLater.id, {
+      scope: 'entire_series',
+      preview: false,
+      changes: { localStartTime: '03:30' },
+      expectedRevision: toLater.revision,
+    });
+    expect(shape(await rowsOf(toLater.id))).toEqual([
+      ['2028-03-05T11:30:00.000Z', 'exact', 'published'], // 03:30 PST
+      ['2028-03-12T10:30:00.000Z', 'exact', 'published'], // 03:30 PDT, asked for, not shifted
+      ['2028-03-19T10:30:00.000Z', 'exact', 'published'],
+    ]);
+    // ... and 03:30 moved to 02:30 under shift_forward is shifted there, at the same instant
+    const toEarlier = await series.createSeries(programManager, {
+      facilityId: facility,
+      kind: 'maintenance',
+      title: 'Sunday goal check',
+      recurrence: weekly('2028-03-05'),
+      localStartTime: '03:30',
+      durationMinutes: 30,
+      resourceIds: [pitch3.southHalfId],
+    });
+    const earlierChange = {
+      scope: 'entire_series' as const,
+      changes: { localStartTime: '02:30', nonexistentPolicy: 'shift_forward' as const },
+      expectedRevision: toEarlier.revision,
+    };
+    const earlierPreview = await series.editSeries(programManager, toEarlier.id, {
+      ...earlierChange,
+      preview: true,
+    });
+    expect(earlierPreview.affected.map((a) => a.dstResolution)).toEqual([
+      'exact',
+      'shifted_forward',
+      'exact',
+    ]);
+    await series.editSeries(programManager, toEarlier.id, { ...earlierChange, preview: false });
+    expect(shape(await rowsOf(toEarlier.id))).toEqual([
+      ['2028-03-05T10:30:00.000Z', 'exact', 'published'], // 02:30 PST
+      ['2028-03-12T10:30:00.000Z', 'shifted_forward', 'published'], // 02:30 does not exist
+      ['2028-03-19T09:30:00.000Z', 'exact', 'published'], // 02:30 PDT
+    ]);
+
+    // 3. A gap policy named without a new time concerns the occurrences shifted out of the gap
+    // (they stand for 02:30, not 03:30): skip cancels the shifted occurrence, so the series' stored
+    // policy and its occurrences agree; shift_forward keeps it.
+    const gap = await series.createSeries(programManager, {
+      facilityId: facility,
+      kind: 'maintenance',
+      title: 'Sunday drainage check',
+      recurrence: weekly('2027-03-07'),
+      localStartTime: '02:30',
+      durationMinutes: 30,
+      resourceIds: [pitch3.northHalfId],
+      nonexistentPolicy: 'shift_forward',
+    });
+    const created = shape(await rowsOf(gap.id));
+    expect(created[1]).toEqual(['2027-03-14T10:30:00.000Z', 'shifted_forward', 'published']);
+    await series.editSeries(programManager, gap.id, {
+      scope: 'entire_series',
+      preview: false,
+      changes: { nonexistentPolicy: 'shift_forward' },
+      expectedRevision: await revisionOf(gap.id),
+    });
+    expect(shape(await rowsOf(gap.id))).toEqual(created);
+    const skipPreview = await series.editSeries(programManager, gap.id, {
+      scope: 'entire_series',
+      preview: true,
+      changes: { nonexistentPolicy: 'skip' },
+      expectedRevision: await revisionOf(gap.id),
+    });
+    expect(skipPreview.affected.map((a) => a.after?.scheduledStart ?? null)).toEqual([
+      '2027-03-07T10:30:00.000Z',
+      null,
+      '2027-03-21T09:30:00.000Z',
+    ]);
+    await series.editSeries(programManager, gap.id, {
+      scope: 'entire_series',
+      preview: false,
+      changes: { nonexistentPolicy: 'skip' },
+      expectedRevision: await revisionOf(gap.id),
+    });
+    const skippedRows = await rowsOf(gap.id);
+    expect(skippedRows.map((r) => r.status)).toEqual(['published', 'canceled', 'published']);
+    expect((await events.getEvent(programManager, skippedRows[1]!.id)).cancelReason).toBe(
+      'Skipped: the new local start time does not exist on this date',
+    );
+    expect(await series.getSeries(programManager, gap.id)).toMatchObject({
+      localStartTime: '02:30',
+      nonexistentPolicy: 'skip',
+    });
+  });
+
+  it('R3-TIME-MONEY-04 / SPK-SCHED-007: an HTTP series whose until date describes more than 366 occurrences is refused (SERIES_TOO_LONG), never truncated', async () => {
+    const before = await t.db.selectFrom('event_series').select('id').execute();
+    const res = await t.http
+      .post('/v1/event-series')
+      .set(auth)
+      .set('Idempotency-Key', key())
+      .send({
+        facilityId: facility,
+        kind: 'rental',
+        title: 'Nightly field reservation',
+        // 426 nightly dates; the 366-occurrence cap used to stop at 2027-11-01 without a signal
+        recurrence: {
+          frequency: 'daily',
+          interval: 1,
+          startDate: '2026-11-01',
+          until: '2027-12-31',
+        },
+        localStartTime: '21:00',
+        durationMinutes: 60,
+        resourceIds: [pitch.southHalfId],
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'SERIES_TOO_LONG', maxOccurrences: 366 },
+    });
+    expect(await t.db.selectFrom('event_series').select('id').execute()).toHaveLength(
+      before.length,
+    );
+    expect(
+      await t.db
+        .selectFrom('events')
+        .select('id')
+        .where('title', '=', 'Nightly field reservation')
+        .execute(),
+    ).toEqual([]);
+  });
+
   it('authorization: coaches cannot create series; other organizations see nothing', async () => {
     const coach = await t.authHeader(staffPrincipal(org, ['coach']));
     const denied = await t.http

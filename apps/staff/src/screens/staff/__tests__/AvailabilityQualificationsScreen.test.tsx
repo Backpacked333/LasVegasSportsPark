@@ -14,7 +14,7 @@ import {
   oneFacilityMe,
   personNames,
 } from '../../../features/operations/testing';
-import { FACILITY_A, createTestApp } from '../../../testing/test-app';
+import { FACILITY_A, createTestApp, facilityDirectoryOf } from '../../../testing/test-app';
 
 const COACH = '0192f1a0-0000-7000-8000-000000000002';
 
@@ -356,10 +356,25 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
     );
   });
 
-  it('SPK-SCHED-008: reads facility times in the zone from the facility directory when the Today feed is not readable', async () => {
+  it('SPK-SCHED-008: reads facility times in the zone from the facility directory, never from the Today feed', async () => {
     const app = createTestApp({
       routes: routes({
-        'GET /today': () => fakeResponse(403, apiErrorBody('ACCESS_DENIED')),
+        'GET /facilities': facilityDirectoryOf([FACILITY_A], { timezone: 'America/New_York' }),
+      }),
+    });
+    render(app.at('/staff/availability'));
+    const form = await screen.findByRole('form', { name: 'Add an availability window' });
+    expect(await within(form).findAllByText('Facility time, America/New_York.')).not.toHaveLength(
+      0,
+    );
+    // §4.5: the Today feed computes every operational source; zones are configuration.
+    expect(app.fake.requests.some((r) => r.route === '/today')).toBe(false);
+  });
+
+  it('SPK-SCHED-008: reads one facility the directory listing leaves out with GET /facilities/{id}', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /facilities': { status: 200, body: { items: [] } },
         'GET /facilities/{id}': {
           status: 200,
           body: {
@@ -367,7 +382,7 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
             slug: 'north-park',
             name: 'North Park',
             timezone: 'America/New_York',
-            status: 'active',
+            status: 'archived',
             address: null,
             inStaffScope: true,
           },
@@ -382,5 +397,6 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
     expect(app.fake.requests.find((r) => r.route === '/facilities/{id}')?.params).toEqual({
       id: FACILITY_A,
     });
+    expect(app.fake.requests.some((r) => r.route === '/today')).toBe(false);
   });
 });

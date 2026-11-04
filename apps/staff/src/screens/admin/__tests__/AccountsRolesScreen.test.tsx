@@ -26,7 +26,13 @@ import {
   staffMembershipView,
 } from '../../../features/insight-admin/__tests__/fixtures';
 import { formatInstant } from '../../../features/insight-admin/format';
-import { FACILITY_A, createTestApp, mePermissions, staffMe } from '../../../testing/test-app';
+import {
+  FACILITY_A,
+  FACILITY_B,
+  createTestApp,
+  mePermissions,
+  staffMe,
+} from '../../../testing/test-app';
 
 const MANAGER = mePermissions({
   staffRoles: ['system_administrator'],
@@ -58,6 +64,64 @@ async function listedMembership() {
   const list = await screen.findByRole('list', { name: 'Staff memberships' });
   return within(list).getAllByRole('listitem')[0] as HTMLElement;
 }
+
+describe('SCR-S-46 facility-scoped administration (R3-SECURITY-01, §2.1, §4.14)', () => {
+  /** An administrator of North Park 1 only (one system_administrator membership with [F1]). */
+  function scopedAdmin(routes: Record<string, FakeHandler> = {}) {
+    const me = staffMe([FACILITY_A]);
+    (me.body as { staffMemberships: unknown[] }).staffMemberships = [
+      staffMembership({ roles: ['system_administrator'], facilityIds: [FACILITY_A] }),
+    ];
+    return app({ 'GET /me': me, ...routes });
+  }
+
+  it('offers only the administered facilities, requires one and sends nothing without it', async () => {
+    const user = userEvent.setup();
+    const scoped = scopedAdmin();
+    render(scoped.at('/admin/accounts'));
+    const form = await screen.findByRole('form', { name: 'Assign staff roles' });
+    await within(form).findByText('You assign roles only at the facilities you administer.');
+    expect(
+      within(form).queryByText('Leave every facility unticked for the whole organization.'),
+    ).toBeNull();
+    await within(form).findByRole('checkbox', { name: 'North Park 1' });
+    expect(within(form).queryByRole('checkbox', { name: 'North Park 2' })).toBeNull();
+    await user.type(within(form).getByLabelText('Person id (required)'), PERSON_1);
+    await user.click(within(form).getByRole('checkbox', { name: 'Scheduler' }));
+    await user.click(within(form).getByRole('button', { name: 'Assign roles' }));
+    expect(
+      await within(form).findByText('Choose at least one facility you administer.'),
+    ).toBeInTheDocument();
+    expect(scoped.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  it('shows Change and End only on memberships within the administered facilities', async () => {
+    const scoped = scopedAdmin({
+      'GET /staff-memberships': page([
+        staffMembershipView({ id: 'm-f1', facilityIds: [FACILITY_A], personDisplayName: 'One' }),
+        staffMembershipView({ id: 'm-org', facilityIds: [], personDisplayName: 'Org' }),
+        staffMembershipView({ id: 'm-f2', facilityIds: [FACILITY_B], personDisplayName: 'Two' }),
+      ]),
+    });
+    render(scoped.at('/admin/accounts'));
+    const list = await screen.findByRole('list', { name: 'Staff memberships' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    const [f1, org, f2] = rows as [HTMLElement, HTMLElement, HTMLElement];
+    expect(
+      await within(f1).findByRole('button', { name: 'Change roles or scope' }),
+    ).toBeInTheDocument();
+    for (const row of [org, f2]) {
+      expect(within(row).queryByRole('button', { name: 'Change roles or scope' })).toBeNull();
+      expect(within(row).queryByRole('button', { name: 'End membership' })).toBeNull();
+      expect(
+        within(row).getByText(
+          'Only an administrator of every facility of this membership can change or end it.',
+        ),
+      ).toBeInTheDocument();
+    }
+  });
+});
 
 describe('SCR-S-46 AccountsRolesScreen', () => {
   it('shows your roles, facility scope and memberships from the API', async () => {

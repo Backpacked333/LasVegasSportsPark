@@ -28,7 +28,9 @@ export type ParticipationStanding =
  * - Fixture readiness "Applicable financial conditions" (SPK-READY-001), registered as
  *   competition's FINANCIAL_CONDITIONS_IMPL: no open obligation of a competing team entry is
  *   satisfied; an open one is reported `unknown`, never a block and never a pass, because whether
- *   an open team balance affects play is pending POL-017 / DEC-056.
+ *   an open team balance affects play is pending POL-017 / DEC-056. The finding names the entry
+ *   but never the balance's count, amounts or due date (R3-TRACE-B-01); which entry it names is
+ *   itself protected, and competition scopes it by viewer (R3-TRACE-B-01b).
  * - Team entry financial status (R2-JOURNEYS-05, SPK-COMP-004): none, clear or outstanding from
  *   the obligations that name the entry as debtor, shown on the team entry workspace.
  * - Arrival standing (SPK-ENTRY-004): delegated to FinancialStandingService, which finance
@@ -42,6 +44,23 @@ export class ParticipationStandingService implements FinancialConditionsPort {
     private readonly standing: FinancialStandingService,
   ) {}
 
+  /**
+   * R3-TRACE-B-01 (§4.14 object- and field-level authorization, §4.7 invariant 1, SPK-PAY-004,
+   * SPK-CAP-002): readiness is read by everyone who may read the fixture, players and guardians of
+   * BOTH teams included. A team balance's count, amounts and due date go only to viewers finance
+   * lets read the team obligation (`finance.read_obligation`; the team entry workspace,
+   * R2-JOURNEYS-05), and this port does not know the viewer, so the finding carries none of them:
+   * no count, no amount, no due date (its deadline is null) and no obligation id. Whether an open
+   * team balance affects play is pending (POL-017 / DEC-056), so it stays `unknown`, never a pass
+   * and never a block.
+   *
+   * The finding still names the team entry (one per competing entry with an open obligation, in
+   * the fixture's order), because competition needs it to scope the finding by viewer: that an
+   * entry has an open balance is itself protected from viewers `finance.read_obligation` does not
+   * admit for that entry. Competition's ReadinessService scopes it per entry and viewer
+   * (R3-TRACE-B-01b): an admitted viewer gets it with the formatted amount and the deadline
+   * (SPK-READY-003), every other viewer one fixture-level finding that names no entry.
+   */
   async fixtureConditions(
     organizationId: string,
     context: FixtureConditionContext,
@@ -50,49 +69,31 @@ export class ParticipationStandingService implements FinancialConditionsPort {
     if (context.teamEntryIds.length === 0) return [];
     const open = await (trx ?? executorFor(this.db))
       .selectFrom('obligations')
-      .select([
-        'id',
-        'debtor_team_entry_id',
-        'amount_minor',
-        'allocated_minor',
-        'currency',
-        'due_at',
-      ])
+      .select('debtor_team_entry_id')
+      .distinct()
       .where('organization_id', '=', organizationId)
       .where('debtor_kind', '=', 'team_entry')
       .where('debtor_team_entry_id', 'in', context.teamEntryIds)
       .where('status', '=', 'open')
-      .orderBy('due_at')
-      .orderBy('id')
       .execute();
-    const byEntry = new Map<string, typeof open>();
-    for (const row of open) {
-      const entry = row.debtor_team_entry_id as string;
-      byEntry.set(entry, [...(byEntry.get(entry) ?? []), row]);
-    }
-    const findings: ConditionFinding[] = [];
-    for (const [teamEntryId, rows] of byEntry) {
-      const totals = new Map<string, number>();
-      for (const row of rows) {
-        const remaining = Number(row.amount_minor) - Number(row.allocated_minor);
-        totals.set(row.currency, (totals.get(row.currency) ?? 0) + remaining);
-      }
-      const amounts = [...totals].map(([currency, minor]) => `${minor} ${currency} (minor units)`);
-      const first = rows[0];
-      findings.push({
-        // POL-017 / DEC-056 (pending): whether an open team balance affects play is undecided, so
-        // the condition is neither a pass nor a block.
-        status: 'unknown',
+    const withBalance = new Set(open.map((row) => row.debtor_team_entry_id as string));
+    // In the fixture's own order (home, then away), whatever order the database returns.
+    return context.teamEntryIds
+      .filter(
+        (teamEntryId, index, all) =>
+          withBalance.has(teamEntryId) && all.indexOf(teamEntryId) === index,
+      )
+      .map((teamEntryId) => ({
+        status: 'unknown' as const,
         code: 'team_balance_policy_pending',
-        message: `The team entry has ${rows.length} open obligation(s) totalling ${amounts.join(', ')}; whether an open team balance affects play awaits the approved participation policy (POL-017, DEC-056).`,
+        message:
+          'This team has an open balance. Whether an open team balance affects play awaits the approved participation policy (POL-017).',
         source: { type: 'team_entry', id: teamEntryId },
         responsibleRole: 'finance_operator',
         requiredAction:
-          'Settle the team obligations, or record the approved participation policy for team balances (POL-017).',
-        deadline: first ? new Date(first.due_at).toISOString() : null,
-      });
-    }
-    return findings;
+          'The team settles its balance, or the finance operator records the approved participation policy for team balances.',
+        deadline: null,
+      }));
   }
 
   /**

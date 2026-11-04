@@ -4,15 +4,78 @@
  * an update-required answer covers the app (SCR-C-39, SPK-AT-027, proposed DEC-092).
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
+import { onlineManager } from '@tanstack/react-query';
 import { act, renderHook, render, screen, waitFor } from '@testing-library/react-native';
+import type { ReactNode } from 'react';
 import { Text } from 'react-native';
 import { UpdateGate } from '../../navigation/UpdateGate';
+import { AppProviders, MUTATION_DEFAULTS, createQueryClient } from '../../providers/AppProviders';
 import { createTestApp } from '../../testing/test-app';
 import { InboxScreen } from '../../screens/inbox/InboxScreen';
 import { useApiCommand } from '../useApiCommand';
 import { useApiQuery } from '../useApiQuery';
 
 const ASSIGNMENT = '0192f1a0-0000-7000-8000-000000000301';
+
+describe('commands offline (§4.15, R3-SCREEN-STATES-01)', () => {
+  it('the app data layer never pauses a command offline to send it by itself on reconnect', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'POST /assignments/{id}/accept': () => {
+          calls += 1;
+          // The device has no connection: the request cannot be completed.
+          throw new TypeError('Network request failed');
+        },
+      },
+    });
+    // The production client (createQueryClient), not the test defaults.
+    const client = createQueryClient();
+    expect(client.getDefaultOptions().mutations).toMatchObject(MUTATION_DEFAULTS);
+    // Its command defaults are kept; only cache timers are turned off so Jest can exit.
+    const defaults = client.getDefaultOptions();
+    client.setDefaultOptions({
+      queries: { ...defaults.queries, gcTime: Infinity },
+      mutations: { ...defaults.mutations, gcTime: Infinity },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AppProviders services={app.services} queryClient={client}>
+        {children}
+      </AppProviders>
+    );
+    const { result, unmount } = renderHook(
+      () => useApiCommand('post', '/assignments/{id}/accept'),
+      { wrapper },
+    );
+    await act(async () => undefined); // let the providers finish loading the session
+    act(() => {
+      app.sources.setReachable(false);
+      onlineManager.setOnline(false);
+    });
+    const request = { path: { id: ASSIGNMENT }, body: { expectedRevision: 2 } };
+    await act(async () => {
+      await result.current.submit(request).catch(() => undefined);
+    });
+    // It settled at once as a failure the screen shows, instead of waiting paused.
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+    expect(result.current.isProcessing).toBe(false);
+    expect(
+      client
+        .getMutationCache()
+        .getAll()
+        .some((m) => m.state.isPaused),
+    ).toBe(false);
+    act(() => {
+      app.sources.setReachable(true);
+      onlineManager.setOnline(true);
+    });
+    await act(async () => {
+      await client.resumePausedMutations();
+    });
+    expect(calls).toBeLessThanOrEqual(1);
+    unmount();
+  });
+});
 
 describe('useApiCommand (§4.9)', () => {
   it('reuses the key when the same input is retried and starts a new intent when the input changes', async () => {

@@ -3,11 +3,13 @@
  * cover), SPK-STAFF-003 (overlap and turnaround refusals shown with the API's code), SPK-AT-012
  * (replacement after a decline; the uncovered slot is escalated), §4.9 expected revision and
  * STALE_REVISION reload, protected NOT_FOUND as not available; the person is chosen from the
- * staff directory (ID-05) and transitions are the API's `availableActions` (WRK-01).
+ * staff directory (ID-05) and transitions are the API's `availableActions` (WRK-01); offline the
+ * screens are read-only and nothing is queued (§4.15).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { act } from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   ASSIGNMENT_1,
@@ -421,7 +423,7 @@ describe('SCR-S-33 AssignmentsScreen', () => {
     const app = createTestApp({ routes: routes() });
     render(app.at('/staff'));
     const list = await screen.findByRole('list', { name: 'Assignments' });
-    // assignmentRecord starts 18:00Z at FACILITY_A (America/Los_Angeles in the Today feed).
+    // assignmentRecord starts 18:00Z at FACILITY_A (America/Los_Angeles in the facility directory).
     expect(await within(list).findByText(/11:00 (PDT|GMT-7) to 12:00/)).toBeInTheDocument();
   });
 
@@ -556,6 +558,230 @@ describe('SCR-S-33 AssignmentsScreen', () => {
       reason: 'Original declined on the day',
       expectedRevision: 4,
     });
+  });
+
+  it('SCR-S-33 offline (read-only): every command control is disabled and nothing is sent after reconnecting (§4.15)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /assignments/{id}': { status: 200, body: assignmentRecord() },
+        'GET /assignments': staffList([assignmentRecord()], ['offer', 'complete', 'withdraw']),
+        'GET /assignments/{id}/replacements': {
+          status: 200,
+          body: {
+            assignmentId: ASSIGNMENT_1,
+            targetType: 'fixture',
+            targetId: FIXTURE_1,
+            role: 'referee',
+            slot: 1,
+            scheduledStart: '2026-10-24T18:00:00.000Z',
+            scheduledEnd: '2026-10-24T19:00:00.000Z',
+            requiredQualifications: [],
+            evaluatedAt: '2026-10-24T12:00:00.000Z',
+            candidates: [
+              { personId: CANDIDATE, displayName: 'Casey Lee', eligible: true, reasons: [] },
+            ],
+          },
+        },
+        'POST /assignments/{id}/offer': { status: 200, body: {} },
+        'POST /assignments/{id}/complete': { status: 200, body: {} },
+        'POST /assignments/{id}/withdraw': { status: 200, body: {} },
+        'POST /assignments/{id}/replacements': { status: 201, body: {} },
+      }),
+    });
+    render(app.at(`/staff/assignments/${ASSIGNMENT_1}`));
+    await screen.findByRole('button', { name: 'Offer to the person' });
+    await user.click(screen.getByRole('radio', { name: /Casey Lee/ }));
+    await user.type(screen.getByLabelText('Reason for the replacement'), 'Absent');
+    await user.click(screen.getByRole('button', { name: 'Withdraw' }));
+    await user.type(screen.getByLabelText('Reason for withdrawing'), 'Fixture moved');
+    act(() => app.connectivity.set(false));
+    const commands = [
+      'Offer to the person',
+      'Mark completed',
+      'Confirm withdrawal',
+      'Offer the slot',
+    ];
+    for (const name of commands) {
+      const button = screen.getByRole('button', { name });
+      await waitFor(() => expect(button).toBeDisabled());
+      expect(button).toHaveAccessibleDescription('Needs a connection.');
+      await user.click(button);
+    }
+    // Enter in a reason field does not submit either.
+    await user.type(screen.getByLabelText('Reason for withdrawing'), '{Enter}');
+    act(() => app.connectivity.set(true));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Offer to the person' })).toBeEnabled(),
+    );
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+    expect(app.queryClient.getMutationCache().getAll()).toHaveLength(0);
+  });
+
+  it('SCR-S-33 offline: "Propose" is disabled and no assignment is created after reconnecting (§4.15)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'POST /assignments': { status: 201, body: {} } }),
+    });
+    render(app.at('/staff'));
+    await user.click(
+      await screen.findByRole('button', { name: 'Propose someone for U12 Red v Blue, Referee' }),
+    );
+    const picker = screen.getByLabelText('Person');
+    await waitFor(() =>
+      expect(
+        within(picker).getByRole('option', { name: 'Jordan Lee (official)' }),
+      ).toBeInTheDocument(),
+    );
+    await user.selectOptions(picker, OFFICIAL);
+    const propose = screen.getByRole('button', { name: 'Propose and offer' });
+    act(() => app.connectivity.set(false));
+    await waitFor(() => expect(propose).toBeDisabled());
+    expect(propose).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(propose);
+    await user.type(screen.getByLabelText('Role'), '{Enter}');
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(propose).toBeEnabled());
+    expect(app.fake.requests.some((r) => r.route === '/assignments' && r.method === 'POST')).toBe(
+      false,
+    );
+  });
+
+  it('§4.9 SCR-S-33: after an unknown replacement outcome, "Try again" is disabled offline and online resends the request that was sent with the same key', async () => {
+    const user = userEvent.setup();
+    let posts = 0;
+    const accepted = assignmentRecord({ status: 'accepted' });
+    // The replacement committed and withdrew the original (revision 4 to 5), but its answer was
+    // lost: the assignment read again after the unknown outcome shows it withdrawn.
+    const withdrawn = assignmentRecord({
+      status: 'withdrawn',
+      withdrawnAt: '2026-10-24T12:00:00.000Z',
+      withdrawnReason: 'Absent',
+      revision: 5,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /assignments/{id}': () => fakeResponse(200, posts === 0 ? accepted : withdrawn),
+        'GET /assignments': staffList([accepted], ['withdraw']),
+        'GET /assignments/{id}/replacements': {
+          status: 200,
+          body: {
+            assignmentId: ASSIGNMENT_1,
+            targetType: 'fixture',
+            targetId: FIXTURE_1,
+            role: 'referee',
+            slot: 1,
+            scheduledStart: '2026-10-24T18:00:00.000Z',
+            scheduledEnd: '2026-10-24T19:00:00.000Z',
+            requiredQualifications: [],
+            evaluatedAt: '2026-10-24T12:00:00.000Z',
+            candidates: [
+              { personId: CANDIDATE, displayName: 'Casey Lee', eligible: true, reasons: [] },
+            ],
+          },
+        },
+        'POST /assignments/{id}/replacements': () => {
+          posts += 1;
+          // The second attempt carries the first one's key: the API answers the stored outcome.
+          return posts === 1
+            ? fakeResponse(503, apiErrorBody('INTERNAL_ERROR'))
+            : fakeResponse(201, {
+                original: withdrawn,
+                replacement: assignmentRecord({
+                  id: REPLACEMENT,
+                  personId: CANDIDATE,
+                  status: 'offered',
+                  engagement: 'substitute',
+                  replacesAssignmentId: ASSIGNMENT_1,
+                }),
+                operationId: '0192f1a0-0000-7000-8000-0000000001d1',
+                uncovered: null,
+              });
+        },
+      }),
+    });
+    render(app.at(`/staff/assignments/${ASSIGNMENT_1}`));
+    await user.click(await screen.findByRole('radio', { name: /Casey Lee/ }));
+    await user.type(screen.getByLabelText('Reason for the replacement'), 'Absent');
+    await user.click(screen.getByRole('button', { name: 'Offer the slot' }));
+    const unknown = await screen.findByTestId('state-outcome-unknown');
+    // The re-read shows the original withdrawn: it can no longer be withdrawn from this form.
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText('Withdraw the original assignment (absent official)'),
+      ).toBeNull(),
+    );
+    act(() => app.connectivity.set(false));
+    const retry = within(unknown).getByRole('button', { name: 'Try again' });
+    await waitFor(() => expect(retry).toBeDisabled());
+    expect(retry).toHaveAccessibleDescription('Needs a connection.');
+    await user.click(retry);
+    expect(posts).toBe(1);
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(retry).toBeEnabled());
+    await user.click(retry);
+    expect(await screen.findByText('Replacement offered (not covering)')).toBeInTheDocument();
+    const sent = app.fake.requests.filter(
+      (r) => r.route === '/assignments/{id}/replacements' && r.method === 'POST',
+    );
+    const first = {
+      personId: CANDIDATE,
+      engagement: 'substitute',
+      offer: true,
+      withdrawOriginal: true,
+      reason: 'Absent',
+      expectedRevision: 4,
+    };
+    // Exactly the request that was sent, never one rebuilt from the re-read (revision 5, the
+    // original no longer withdrawable), which would be a new intent with a new key.
+    expect(sent.map((r) => r.body)).toEqual([first, first]);
+    expect(new Set(sent.map((r) => r.headers['idempotency-key'])).size).toBe(1);
+  });
+
+  it('§4.9 SCR-S-33: an unknown proposal outcome is retried with the same request and key; offline "Try again" needs a connection', async () => {
+    const user = userEvent.setup();
+    let posts = 0;
+    const app = createTestApp({
+      routes: routes({
+        'POST /assignments': () => {
+          posts += 1;
+          return posts === 1
+            ? fakeResponse(503, apiErrorBody('INTERNAL_ERROR'))
+            : fakeResponse(201, {
+                assignment: assignmentRecord({ status: 'offered' }),
+                operationId: null,
+                uncovered: null,
+              });
+        },
+      }),
+    });
+    render(app.at('/staff'));
+    await user.click(
+      await screen.findByRole('button', { name: 'Propose someone for U12 Red v Blue, Referee' }),
+    );
+    const picker = screen.getByLabelText('Person');
+    await waitFor(() =>
+      expect(
+        within(picker).getByRole('option', { name: 'Jordan Lee (official)' }),
+      ).toBeInTheDocument(),
+    );
+    await user.selectOptions(picker, OFFICIAL);
+    await user.click(screen.getByRole('button', { name: 'Propose and offer' }));
+    const unknown = await screen.findByTestId('state-outcome-unknown');
+    act(() => app.connectivity.set(false));
+    const retry = within(unknown).getByRole('button', { name: 'Try again' });
+    await waitFor(() => expect(retry).toBeDisabled());
+    expect(retry).toHaveAccessibleDescription('Needs a connection.');
+    act(() => app.connectivity.set(true));
+    await waitFor(() => expect(retry).toBeEnabled());
+    // A field changed after the unknown outcome does not change what "Try again" resends.
+    await user.click(screen.getByLabelText('Offer it to the person now'));
+    await user.click(retry);
+    await waitFor(() => expect(posts).toBe(2));
+    const sent = app.fake.requests.filter((r) => r.route === '/assignments' && r.method === 'POST');
+    expect(sent[1]?.body).toEqual(sent[0]?.body);
+    expect(sent[1]?.body).toMatchObject({ offer: true });
+    expect(new Set(sent.map((r) => r.headers['idempotency-key'])).size).toBe(1);
   });
 
   it('shows an assignment the viewer may not see as not available', async () => {

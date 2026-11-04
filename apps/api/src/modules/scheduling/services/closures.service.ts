@@ -43,21 +43,33 @@ import { organizationOf } from './organization';
 
 type ClosureRow = Selectable<ClosuresTable> & { start: string; end: string };
 
-/** A preview stored before customers, obligations and messages were identified (SPK-SCHED-009). */
+/**
+ * A preview stored before customers, obligations, messages and staff were identified
+ * (SPK-SCHED-009). Staff missing from a stored impact was never identified, so it reads as not
+ * identified (`null`), never as "no staff" (R3-TRACE-A-06).
+ */
 function withImpactDefaults(impact: ClosureImpact | null): ClosureImpact | null {
   if (!impact) return null;
+  const staff = impact.staff ?? null;
   return {
     ...impact,
     customers: impact.customers ?? [],
     obligations: impact.obligations ?? [],
     messages: impact.messages ?? [],
+    staff,
     summary: {
       ...impact.summary,
       customers: impact.summary.customers ?? 0,
       obligations: impact.summary.obligations ?? 0,
       messages: impact.summary.messages ?? 0,
+      staff: staff === null ? null : (impact.summary.staff ?? distinctStaff(staff)),
     },
   };
+}
+
+/** Distinct staff members across live assignments (`summary.staff`). */
+function distinctStaff(staff: NonNullable<ClosureImpact['staff']>): number {
+  return new Set(staff.map((a) => a.personId)).size;
 }
 
 /** The Today exception `applyClosure` opens for events it leaves for resolution (scheduler queue). */
@@ -809,8 +821,8 @@ export class ClosuresService implements ClosurePort {
     summary.teams = teams.size;
     summary.people = people.size;
     summary.equipment = equipment.size;
-    // SPK-SCHED-009, SPK-AT-009: customers, financial obligations and messages come from the
-    // modules that own them; committed persons are customers of the event too.
+    // SPK-SCHED-009, SPK-AT-009: customers, staff assignments, financial obligations and messages
+    // come from the modules that own them; committed persons are customers of the event too.
     const contributed = await this.impactContributors.collect(
       db,
       organizationId,
@@ -859,11 +871,14 @@ export class ClosuresService implements ClosurePort {
       customers: customerList,
       obligations: contributed.obligations,
       messages: contributed.messages,
+      staff: contributed.staff,
       summary: {
         ...summary,
         customers: customerList.length,
         obligations: contributed.obligations.length,
         messages: contributed.messages.length,
+        // not identified stays null: no module owning staff assignments answered (R3-TRACE-A-06)
+        staff: contributed.staff === null ? null : distinctStaff(contributed.staff),
       },
     };
   }
