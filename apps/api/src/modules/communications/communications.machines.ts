@@ -47,7 +47,8 @@ export const RecipientMachine = defineStateMachine<RecipientState, RecipientEven
  * Delivery attempt (SPK-COMMS-004): queued, provider accepted, delivered where confirmed, failed,
  * unknown, read, acknowledged. `deliver` is applied only by the platform for the in-app channel or by
  * a provider receipt: a push is never marked delivered on acceptance alone. `unknown` is resolved
- * only by a later receipt, never by the worker guessing.
+ * only by a later receipt or by staff recording what they established, with evidence (§4.11,
+ * §5.11, `DeliveryReconciliationService`), never by the worker guessing.
  */
 export type DeliveryState = DeliveryStatusValue;
 export type DeliveryEvent = 'accept' | 'deliver' | 'fail' | 'lose_track' | 'read' | 'acknowledge';

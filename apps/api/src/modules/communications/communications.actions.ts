@@ -31,6 +31,19 @@ const RETRY_ROLES: readonly StaffRole[] = [
 ];
 
 /**
+ * Staff who may record the outcome of a delivery whose hand-off ended `unknown` (§4.11, §5.11,
+ * R4-COMMS-AUTOMATION-07): the front desk, which owns the messaging adapters' reconciliation in
+ * the integration register and receives the `communications.delivery_unknown` exception, and the
+ * roles that may retry. Proposed roles (permission matrix).
+ */
+const RECONCILE_ROLES: readonly StaffRole[] = [
+  'front_desk',
+  'general_manager',
+  'system_administrator',
+  'support_operator',
+];
+
+/**
  * Communications actions (specification §3.18). Customer-facing actions are self-only: a person
  * reads their own inbox, chooses their own channels and manages their own calendar feeds. Including
  * another person in a calendar feed requires `view` over that person (SPK-IAM-003, SPK-COMMS-008).
@@ -100,6 +113,13 @@ export const CommunicationsActions = defineActions({
     description: 'Retry one failed push, email or SMS delivery as a new attempt',
     staffRoles: RETRY_ROLES,
     requirements: ['SPK-COMMS-004', 'SPK-COMMS-003', 'SPK-UX-006'],
+  },
+  reconcileDelivery: {
+    id: 'communications.reconcile_delivery',
+    description:
+      'Record the outcome established for a push, email or SMS delivery whose outcome is unknown',
+    staffRoles: RECONCILE_ROLES,
+    requirements: ['SPK-COMMS-004', '§4.11', '§5.11', 'SPK-UX-006'],
   },
   includeInCalendarFeed: {
     id: 'communications.include_in_calendar_feed',

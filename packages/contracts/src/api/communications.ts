@@ -388,6 +388,23 @@ export const RetryDeliveryBody = withRequestMeta({})
   .openapi('RetryDeliveryRequest');
 export type RetryDeliveryInput = z.infer<typeof RetryDeliveryBody>;
 
+/**
+ * §4.11 "unknown kept explicit until reconciled", §5.11 "supported resolution actions"
+ * (R4-COMMS-AUTOMATION-07): record what staff established about a push, email or SMS hand-off whose
+ * outcome is `unknown` — the provider accepted it, it was delivered, or it never reached the person
+ * (`failed`, which a retry may then repeat) — with the evidence they checked. Only an `unknown`
+ * attempt is reconciled; a later provider receipt cannot overwrite the recorded outcome.
+ */
+export const ReconcileDeliveryOutcomeSchema = z
+  .enum(['provider_accepted', 'delivered', 'failed'])
+  .openapi('ReconcileDeliveryOutcome');
+export const ReconcileDeliveryBody = withRequestMeta({
+  outcome: ReconcileDeliveryOutcomeSchema,
+  /** What was checked (the provider's console, the person themself): kept in the audit record. */
+  evidence: Note,
+}).openapi('ReconcileDeliveryRequest');
+export type ReconcileDeliveryInput = z.infer<typeof ReconcileDeliveryBody>;
+
 // ---------------------------------------------------------------------------------------------
 // Inbox (in-app notices = delivery attempts on the in_app channel; SPK-UX-003)
 // ---------------------------------------------------------------------------------------------
@@ -722,6 +739,18 @@ register({
   params: IdParams,
   body: RetryDeliveryBody,
   response: DeliveryAttemptSchema,
+  idempotent: true,
+});
+register({
+  method: 'post',
+  path: '/delivery-attempts/{id}/reconcile',
+  summary:
+    'Record the outcome staff established for a push, email or SMS delivery whose outcome is unknown (accepted, delivered, or failed and then retryable)',
+  requirements: 'SPK-COMMS-004, §4.11, §5.11, SPK-UX-006',
+  params: IdParams,
+  body: ReconcileDeliveryBody,
+  response: DeliveryAttemptSchema,
+  status: 200,
   idempotent: true,
 });
 register({
