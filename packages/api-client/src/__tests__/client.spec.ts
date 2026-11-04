@@ -56,6 +56,22 @@ describe('createApiClient (§4.8 to §4.10, §4.13)', () => {
     expect(fetch.requests[0]?.headers.accept).toBe('application/json');
   });
 
+  it('R3-SECURITY-04 / §4.10: every read and command asks the platform not to store the answer (cache: no-store)', async () => {
+    const caches: Array<RequestCache | undefined> = [];
+    const { api } = setup((_request, init) => {
+      caches.push(init.cache);
+      return jsonResponse(200, { status: 'ok' });
+    });
+    await api.get('/health');
+    await api.get('/me/assignments', { query: { status: 'offered' } });
+    await api.post('/assignments/{id}/accept', {
+      path: { id: ASSIGNMENT_ID },
+      body: { expectedRevision: 3 },
+      intent: api.newIntent(),
+    });
+    expect(caches).toEqual(['no-store', 'no-store', 'no-store']);
+  });
+
   it('substitutes and encodes path parameters, serializes the query and joins the base URL', async () => {
     const { api, fetch } = setup(() => jsonResponse(200, { evaluatedAt: 'x', items: [] }));
     await api.get('/me/assignments', { query: { status: 'offered', from: undefined } });

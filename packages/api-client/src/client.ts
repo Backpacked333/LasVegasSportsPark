@@ -242,6 +242,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         headers,
         body,
         signal: controller.signal,
+        // R3-SECURITY-04 (§4.10, §4.14): never kept in the platform's HTTP cache, on top of the
+        // server's `Cache-Control: no-store`, so a child's record or a receipt read under one
+        // session is never served again from a cache after sign-out or on a shared workstation.
+        cache: 'no-store',
       });
       text = await readText(response, controller.signal);
     } catch (cause) {
