@@ -10,6 +10,7 @@ import {
   createRelationshipFixture,
   createStaffMemberFixture,
 } from '../../identity';
+import { hashPassReference, newPassReference } from '../entry.shared';
 import {
   createAttendanceObservationFixture,
   createPassFixture,
@@ -1087,5 +1088,176 @@ describe('entry schema invariants (migration 0800)', () => {
       }),
       FOREIGN_KEY,
     );
+  });
+  it('R4-DB-INVARIANTS-08 / §4.3 (0809): every staff actor of an entry record is a person of its own organization, or none', async () => {
+    const other = await seedOrganization(t.db);
+    const foreignStaff = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: other.organizationId,
+    });
+    const staff = (await createStaffMemberFixture(t, { roles: ['front_desk'] })).personId;
+    const visitor = await createPersonFixture(t, { kind: 'adult' });
+    const departingVisit = await createVisitFixture(t, {
+      personId: visitor,
+      visitorCategory: 'spectator',
+    });
+    const rows: Array<{
+      table:
+        | 'passes'
+        | 'visits'
+        | 'session_checkins'
+        | 'attendance_observations'
+        | 'departures'
+        | 'release_records'
+        | 'offline_sync_batches'
+        | 'occupancy_snapshots';
+      row: (actor: string | null) => Record<string, unknown>;
+    }> = [
+      {
+        table: 'passes',
+        row: (actor) => ({
+          id: newId(),
+          organization_id: t.organizationId,
+          holder_kind: 'person',
+          holder_person_id: adult,
+          holder_household_id: null,
+          reference_hash: hashPassReference(newPassReference()),
+          issued_at: t.clock.now(),
+          issued_by: json(ACTOR),
+          issued_by_person_id: actor,
+          revoked_at: null,
+          revoked_by: null,
+          revoked_reason: null,
+        }),
+      },
+      {
+        table: 'visits',
+        row: (actor) => ({
+          id: newId(),
+          organization_id: t.organizationId,
+          facility_id: t.facilityId,
+          person_id: null,
+          visitor_description: 'Spectator',
+          party_size: 1,
+          visitor_category: 'spectator',
+          arrived_at: t.clock.now(),
+          pass_id: null,
+          source: 'desk',
+          device_id: null,
+          client_observation_id: null,
+          sync_batch_id: null,
+          access_event_ref: null,
+          departed_at: null,
+          voided_at: null,
+          void_reason: null,
+          recorded_by: json(ACTOR),
+          recorded_by_person_id: actor,
+          received_at: t.clock.now(),
+        }),
+      },
+      {
+        table: 'session_checkins',
+        row: (actor) =>
+          checkinRow({
+            status: 'withdrawn',
+            withdrawn_at: t.clock.now(),
+            withdrawn_reason: 'test',
+            recorded_by_person_id: actor,
+          }),
+      },
+      {
+        table: 'attendance_observations',
+        row: (actor) => observationRow({ recorded_by_person_id: actor }),
+      },
+      {
+        table: 'departures',
+        row: (actor) => ({
+          id: newId(),
+          organization_id: t.organizationId,
+          facility_id: t.facilityId,
+          visit_id: departingVisit,
+          person_id: visitor,
+          departed_at: t.clock.now(),
+          release_record_id: null,
+          source: 'desk',
+          device_id: null,
+          client_observation_id: null,
+          sync_batch_id: null,
+          recorded_by: json(ACTOR),
+          recorded_by_person_id: actor,
+          received_at: t.clock.now(),
+        }),
+      },
+      {
+        table: 'release_records',
+        row: (actor) => releaseRow({ staff_person_id: actor }),
+      },
+      {
+        table: 'offline_sync_batches',
+        row: (actor) => ({
+          id: newId(),
+          organization_id: t.organizationId,
+          facility_id: t.facilityId,
+          device_id: 'tablet-actor',
+          client_batch_id: newId(),
+          snapshot_reference: 'roster-actor',
+          snapshot_taken_at: t.clock.now(),
+          received_at: t.clock.now(),
+          snapshot_age_seconds: 0,
+          max_roster_age_minutes: 120,
+          item_count: 1,
+          accepted_count: 0,
+          conflict_count: 0,
+          duplicate_count: 0,
+          rejected_count: 1,
+          stale_count: 0,
+          stale: false,
+          results: json([]),
+          exception_ids: [],
+          operation_id: null,
+          submitted_by: json(ACTOR),
+          submitted_by_person_id: actor,
+        }),
+      },
+      {
+        table: 'occupancy_snapshots',
+        row: (actor) => ({
+          id: newId(),
+          organization_id: t.organizationId,
+          facility_id: t.facilityId,
+          taken_at: t.clock.now(),
+          window_start: new Date(at(TODAY, '00:00')),
+          window_end: new Date(at('2027-01-17', '00:00')),
+          arrivals: 0,
+          departures: 0,
+          recorded_on_site: 0,
+          open_from_earlier_days: 0,
+          reconciled: false,
+          counted_on_site: null,
+          verified_occupancy: null,
+          discrepancy: null,
+          reconciliation_note: null,
+          taken_by: json(ACTOR),
+          taken_by_person_id: actor,
+        }),
+      },
+    ];
+    for (const { table, row } of rows) {
+      // A person who does not exist, and a person of another organization, are refused.
+      for (const actor of [newId(), foreignStaff]) {
+        await expectPgError(
+          t.db
+            .insertInto(table)
+            .values(row(actor) as never)
+            .execute(),
+          FOREIGN_KEY,
+        );
+      }
+      // A staff person of the record's organization is accepted (a system actor stores none).
+      await t.db
+        .insertInto(table)
+        .values(row(staff) as never)
+        .execute();
+    }
   });
 });
