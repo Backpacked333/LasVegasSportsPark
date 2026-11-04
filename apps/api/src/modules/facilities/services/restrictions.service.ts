@@ -3,6 +3,7 @@ import {
   DomainError,
   errors,
   newId,
+  systemPrincipal,
   type CreateRestrictionBody,
   type FacilityOperatingStatus,
   type ListRestrictionsQuery,
@@ -11,7 +12,7 @@ import {
   type ResourceOperatingStatus,
   type Restriction,
 } from '@sportspark/contracts';
-import { isUniqueViolation, json, tstzrange, type Db } from '@sportspark/db';
+import { isExclusionViolation, isUniqueViolation, json, tstzrange, type Db } from '@sportspark/db';
 import { sql } from 'kysely';
 import {
   assertExpectedRevision,
@@ -43,6 +44,34 @@ import { FACILITIES_POLICY, type FacilitiesPolicy } from '../facilities.policy';
 import { AssetMachine, RestrictionMachine } from '../facilities.state-machines';
 import type { OperatingStatusPort } from '../ports';
 import { FacilitiesReader, iso, organizationOf, type RestrictionRow } from './facilities-reader';
+
+/** R4-OPS-MODULES-02 (SPK-FAC-004): one open exception per active restriction reaching its end unreleased. */
+export const RESTRICTION_UNRELEASED_AT_END = 'facilities.restriction_unreleased_at_end';
+/** The actor label of the settlement that resolves that exception once a fact ends it. */
+const SETTLE_UNRELEASED_AT_END_ACTOR = 'facilities.restriction_unreleased_at_end_settled';
+
+/** Why the inspection gate refuses a release (SPK-FAC-004, R4-OPS-MODULES-03). */
+export type InspectionGateCause =
+  'not_inspected' | 'inspection_failed' | 'work_in_progress' | 'inspection_predates_current_work';
+
+const INSPECTION_REQUIRED_MESSAGES: Record<InspectionGateCause, string> = {
+  not_inspected: 'A passed inspection is required before this area returns to service.',
+  inspection_failed:
+    'The latest inspection failed; a passed inspection is required before this area returns to service.',
+  work_in_progress:
+    'The maintenance task is back at work; resolve it and pass an inspection before this area returns to service.',
+  inspection_predates_current_work:
+    "The latest passed inspection predates the restriction or the task's latest resolution; a new passed inspection is required before this area returns to service.",
+};
+
+interface OutstandingInspection {
+  cause: InspectionGateCause;
+  taskId: string;
+  taskStatus: string;
+  /** The pass must be inspected at or after this instant (the approval or the latest resolution). */
+  inspectionRequiredAfter: string | null;
+  latestInspection: { id: string; outcome: string; inspectedAt: string } | null;
+}
 
 export interface ApproveRestrictionInput {
   resolutionMode?: 'cancel_affected' | 'leave_for_resolution';
@@ -189,9 +218,22 @@ export class RestrictionsService implements OperatingStatusPort {
           .execute();
         row = await this.reader.loadRestriction(trx, organizationId, id);
       } catch (error) {
+        // R4-OPS-MODULES-02 (migration 0906): the unreleased restrictions of a task never overlap,
+        // so a follow-on restriction starts where the open one ends (exclusion constraint
+        // restrictions_open_task_no_overlap); a preventive occurrence has one restriction (unique).
+        if (isExclusionViolation(error)) {
+          throw errors.resourceConflict(
+            'The maintenance task already carries an unreleased operating restriction for part of this interval; a follow-on restriction starts where the open one ends.',
+            {
+              code: 'TASK_RESTRICTION_OVERLAP',
+              taskId: input.taskId,
+              preventiveScheduleId: input.preventiveScheduleId,
+            },
+          );
+        }
         if (isUniqueViolation(error)) {
           throw errors.resourceConflict(
-            'The maintenance task already carries an unreleased operating restriction.',
+            'The preventive occurrence already carries its operating restriction.',
             { taskId: input.taskId, preventiveScheduleId: input.preventiveScheduleId },
           );
         }
@@ -475,8 +517,11 @@ export class RestrictionsService implements OperatingStatusPort {
 
   /**
    * Authorized release (SPK-FAC-004): facilities operator or general manager. When the task
-   * requires an inspection, the latest inspection must have passed; closing the task alone never
-   * reopens the space. Lifts the closure through the scheduling authority, then records the release.
+   * requires an inspection, the latest inspection must be a pass recorded at or after the
+   * restriction's approval and the task's latest resolution, with the task not back at work
+   * (R4-OPS-MODULES-03, `outstandingInspection`); closing the task alone never reopens the space.
+   * Lifts the closure through the scheduling authority, then records the release and settles the
+   * restriction's unreleased-at-end exception (R4-OPS-MODULES-02).
    */
   async release(
     principal: Principal,
@@ -594,6 +639,14 @@ export class RestrictionsService implements OperatingStatusPort {
           operationId,
           details: { schedulingClosureId: closureId },
         });
+        // R4-OPS-MODULES-02: the authorized release ends the restriction's unreleased-at-end item.
+        await this.settleUnreleasedAtEnd(
+          trx,
+          current,
+          'The restriction was released to service.',
+          input.correlationId ?? null,
+          next,
+        );
         await this.outbox.enqueue(trx, RestrictionReleased, {
           organizationId,
           aggregateType: 'restriction',
@@ -985,28 +1038,210 @@ export class RestrictionsService implements OperatingStatusPort {
     return this.resources.getResource(principal, resourceId);
   }
 
-  /** SPK-FAC-004: when the task requires an inspection, the latest inspection must have passed. */
+  /**
+   * SPK-FAC-004: when the task requires an inspection, the release needs a passed inspection that
+   * speaks for the work as it now stands; otherwise ELIGIBILITY_FAILED `inspection_required`, with
+   * the cause and the instant the pass must not predate.
+   */
   private async assertInspectionPassed(
     trx: Trx,
     organizationId: string,
     restriction: RestrictionRow,
   ): Promise<void> {
-    if (!restriction.task_id) return;
+    const outstanding = await this.outstandingInspection(trx, organizationId, restriction);
+    if (!outstanding) return;
+    throw errors.eligibility(INSPECTION_REQUIRED_MESSAGES[outstanding.cause], {
+      code: 'inspection_required',
+      ...outstanding,
+    });
+  }
+
+  /**
+   * The inspection gate of a restriction (SPK-FAC-004, SPK-FAC-002 "resolution and inspection"),
+   * or null when it is satisfied or the restriction's task requires none. R4-OPS-MODULES-03: the
+   * latest inspection must be a pass recorded at or after both the restriction's approval and the
+   * task's latest resolution, and the task must not be back at work (`in_progress`). A pass from
+   * before the task was reopened for rework, or the pass that released an earlier restriction of
+   * the task, therefore never releases the area: `in_progress` is left only by resolving or closing
+   * the task, which stamps a new resolution instant the old pass predates. An open or assigned task
+   * may be released on a pass after the approval (the inspection found the area fit, no work was
+   * needed).
+   */
+  private async outstandingInspection(
+    trx: Trx,
+    organizationId: string,
+    restriction: RestrictionRow,
+  ): Promise<OutstandingInspection | null> {
+    if (!restriction.task_id) return null;
     const task = await this.reader.loadTask(trx, organizationId, restriction.task_id);
-    if (!task?.requires_inspection) return;
+    if (!task?.requires_inspection) return null;
     const latest = await this.reader.latestInspection(trx, organizationId, task.id);
-    if (latest?.outcome === 'passed') return;
-    throw errors.eligibility(
-      'A passed inspection is required before this area returns to service.',
-      {
-        code: 'inspection_required',
-        taskId: task.id,
-        taskStatus: task.status,
-        latestInspection: latest
-          ? { id: latest.id, outcome: latest.outcome, inspectedAt: iso(latest.inspected_at) }
-          : null,
-      },
+    const notBefore = Math.max(
+      restriction.approved_at ? new Date(restriction.approved_at).getTime() : 0,
+      task.resolved_at ? new Date(task.resolved_at).getTime() : 0,
     );
+    let cause: InspectionGateCause | null = null;
+    if (task.status === 'in_progress') cause = 'work_in_progress';
+    else if (!latest) cause = 'not_inspected';
+    else if (latest.outcome !== 'passed') cause = 'inspection_failed';
+    else if (new Date(latest.inspected_at).getTime() < notBefore) {
+      cause = 'inspection_predates_current_work';
+    }
+    if (!cause) return null;
+    return {
+      cause,
+      taskId: task.id,
+      taskStatus: task.status,
+      inspectionRequiredAfter: notBefore > 0 ? new Date(notBefore).toISOString() : null,
+      latestInspection: latest
+        ? { id: latest.id, outcome: latest.outcome, inspectedAt: iso(latest.inspected_at) }
+        : null,
+    };
+  }
+
+  /**
+   * R4-OPS-MODULES-02 (SPK-FAC-004, SPK-AT-021): the periodic sweep behind
+   * `facilities.raise_unreleased_restriction_exceptions`. A restriction is approved for a bounded
+   * interval and its scheduling closure ends with it, so an active restriction that nobody releases
+   * stops blocking the area at its end while it still reads `active`. Every active restriction whose
+   * end is within `restrictionEndWarningHours` of `now` (or past) is reviewed under its row lock
+   * (FOR UPDATE SKIP LOCKED: a restriction a release holds is left to that release):
+   *
+   * - continued by a follow-on restriction (active, same area and same task, covering its end):
+   *   nothing is due now; an exception raised earlier is settled;
+   * - the task's inspection is outstanding (the release gate would refuse): a `high` exception
+   *   before the end, so the area is inspected and released or kept closed by a follow-on;
+   * - the interval has ended without a release: a `warning` exception, since only the authorized
+   *   release returns the space to service on record;
+   * - otherwise (the inspection passed and the end is still ahead): nothing is due; an exception
+   *   raised earlier is settled.
+   *
+   * One open exception per restriction (dedupe key `restriction:<id>:unreleased_at_end`, queue
+   * `facilities_operator`); the release settles it in its own unit of work. Returns the number of
+   * restrictions with an open exception after the run.
+   */
+  async raiseUnreleasedAtEndExceptions(
+    trx: Trx,
+    organizationId: string,
+    now: Date,
+  ): Promise<number> {
+    const horizon = new Date(now.getTime() + this.policy.restrictionEndWarningHours * 3_600_000);
+    const rows = await this.reader
+      .restrictionQuery(trx)
+      .where('organization_id', '=', organizationId)
+      .where('status', '=', 'active')
+      .where(sql<boolean>`upper(during) <= ${horizon.toISOString()}::timestamptz`)
+      .orderBy(sql`upper(during)`)
+      .orderBy('id')
+      .forUpdate()
+      .skipLocked()
+      .execute();
+    let raised = 0;
+    for (const row of rows) {
+      const end = new Date(row.end);
+      const ended = end.getTime() <= now.getTime();
+      const followOn = await this.followOnRestrictionId(trx, row);
+      if (followOn) {
+        await this.settleUnreleasedAtEnd(
+          trx,
+          row,
+          `The area stays closed past the end under follow-on restriction ${followOn}.`,
+          null,
+        );
+        continue;
+      }
+      const outstanding = await this.outstandingInspection(trx, organizationId, row);
+      if (!outstanding && !ended) {
+        await this.settleUnreleasedAtEnd(
+          trx,
+          row,
+          'The inspection the task requires has passed; the area can be released.',
+          null,
+        );
+        continue;
+      }
+      await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: row.facility_id,
+        category: RESTRICTION_UNRELEASED_AT_END,
+        severity: outstanding ? 'high' : 'warning',
+        title: outstanding
+          ? ended
+            ? 'A restriction ended with its inspection outstanding; the area is open in scheduling'
+            : 'A restriction ends with its inspection outstanding: inspect and release, or continue it'
+          : 'A restriction ended without an authorized release',
+        affectedType: 'restriction',
+        affectedId: row.id,
+        ownerQueue: 'facilities_operator',
+        deadlineAt: end,
+        dedupeKey: `restriction:${row.id}:unreleased_at_end`,
+        details: {
+          restrictionId: row.id,
+          taskId: row.task_id,
+          resourceId: row.resource_id,
+          assetId: row.asset_id,
+          interval: { start: iso(row.start), end: iso(row.end) },
+          ended,
+          inspectionOutstanding: outstanding,
+        },
+      });
+      raised += 1;
+    }
+    return raised;
+  }
+
+  /**
+   * A follow-on restriction keeps the area closed past this one's end: active (its closure is
+   * applied; an approved one whose activation did not complete closes nothing yet), on the same
+   * resource, covering the end instant, and of the same task when this one has a task, so the same
+   * inspection still decides the release.
+   */
+  private async followOnRestrictionId(trx: Trx, row: RestrictionRow): Promise<string | null> {
+    let q = trx
+      .selectFrom('restrictions')
+      .select('id')
+      .where('organization_id', '=', row.organization_id)
+      .where('id', '<>', row.id)
+      .where('resource_id', '=', row.resource_id)
+      .where('status', '=', 'active')
+      .where(sql<boolean>`during @> ${iso(row.end)}::timestamptz`);
+    if (row.task_id) q = q.where('task_id', '=', row.task_id);
+    const found = await q.orderBy('id').executeTakeFirst();
+    return found?.id ?? null;
+  }
+
+  /**
+   * Settles the restriction's open or acknowledged `facilities.restriction_unreleased_at_end`
+   * exception with the fact that ends it (the release, a follow-on, a passed inspection), under the
+   * system actor `SETTLE_UNRELEASED_AT_END_ACTOR` (the command's own audit names the person).
+   */
+  private async settleUnreleasedAtEnd(
+    trx: Trx,
+    row: RestrictionRow,
+    reason: string,
+    correlationId: string | null,
+    status: string = row.status,
+  ): Promise<number> {
+    const open = await this.exceptions.list(
+      row.organization_id,
+      {
+        statuses: ['open', 'acknowledged'],
+        category: RESTRICTION_UNRELEASED_AT_END,
+        affectedType: 'restriction',
+        affectedId: row.id,
+      },
+      trx,
+    );
+    if (open.items.length === 0) return 0;
+    const system = systemPrincipal(row.organization_id, SETTLE_UNRELEASED_AT_END_ACTOR);
+    for (const exception of open.items) {
+      await this.exceptions.transition(trx, system, exception.id, 'resolved', {
+        reason,
+        resolution: { restrictionId: row.id, restrictionStatus: status, taskId: row.task_id },
+        correlationId: correlationId ?? undefined,
+      });
+    }
+    return open.items.length;
   }
 
   /** The asset's own status follows its restrictions (in_service ⇄ restricted); other states are left alone. */

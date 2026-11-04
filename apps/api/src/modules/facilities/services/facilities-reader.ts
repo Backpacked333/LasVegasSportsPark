@@ -48,6 +48,8 @@ export const isoOrNull = (value: Date | string | null): string | null =>
   value === null ? null : iso(value);
 
 const OPEN_RESTRICTION_STATUSES = ['proposed', 'approved', 'active'] as const;
+/** Approved and active restrictions affect availability (SPK-FAC-003); a proposed one does not. */
+const EFFECTIVE_RESTRICTION_STATUSES = ['approved', 'active'] as const;
 const OPEN_TASK_STATUSES = ['open', 'assigned', 'in_progress'] as const;
 
 /** Loaders and view mappers shared by the facilities services. Callers authorize before using them. */
@@ -165,22 +167,39 @@ export class FacilitiesReader {
     return rows.map((r) => r.id);
   }
 
-  /** Does the asset still have an unreleased restriction (other than the one being released)? */
+  /**
+   * Does an approved or active restriction other than the one being released still name the asset?
+   * R4-OPS-MODULES-05: a merely proposed restriction holds nothing (its activation restricts the
+   * asset), so it no longer keeps a released asset `restricted`.
+   */
   async hasOtherOpenRestrictions(
     db: DbHandle,
     organizationId: string,
     assetId: string,
     exceptRestrictionId: string,
   ): Promise<boolean> {
-    const row = await db
+    const ids = await this.effectiveAssetRestrictionIds(db, organizationId, assetId);
+    return ids.some((id) => id !== exceptRestrictionId);
+  }
+
+  /**
+   * The approved or active (effective, unreleased) restrictions naming the asset (SPK-FAC-004,
+   * R4-OPS-MODULES-05): while any exists, the asset returns to service only through their release.
+   */
+  async effectiveAssetRestrictionIds(
+    db: DbHandle,
+    organizationId: string,
+    assetId: string,
+  ): Promise<string[]> {
+    const rows = await db
       .selectFrom('restrictions')
       .select('id')
       .where('organization_id', '=', organizationId)
       .where('asset_id', '=', assetId)
-      .where('id', '<>', exceptRestrictionId)
-      .where('status', 'in', [...OPEN_RESTRICTION_STATUSES])
-      .executeTakeFirst();
-    return row !== undefined;
+      .where('status', 'in', [...EFFECTIVE_RESTRICTION_STATUSES])
+      .orderBy('id')
+      .execute();
+    return rows.map((r) => r.id);
   }
 
   async hasOpenTasks(db: DbHandle, organizationId: string, assetId: string): Promise<boolean> {

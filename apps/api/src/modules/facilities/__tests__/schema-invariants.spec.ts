@@ -1,6 +1,7 @@
 import { newId, systemPrincipal } from '@sportspark/contracts';
 import {
   isCheckViolation,
+  isExclusionViolation,
   isForeignKeyViolation,
   isUniqueViolation,
   json,
@@ -25,7 +26,7 @@ import { seedAsset } from '../testing/facilities-fixtures';
  * Integrity invariants proven at the database (CLAUDE.md "Integrity that matters is enforced in
  * the database"): rows are inserted through Kysely, bypassing the services.
  */
-describe('facilities schema invariants (migrations 0900-0905)', () => {
+describe('facilities schema invariants (migrations 0900-0906)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -437,10 +438,25 @@ describe('facilities schema invariants (migrations 0900-0905)', () => {
     });
   });
 
-  it('SPK-FAC-002: a task carries at most one unreleased operating restriction', async () => {
+  it('SPK-FAC-002 / SPK-FAC-004: a task carries at most one unreleased operating restriction at any instant; a follow-on may continue it (R4-OPS-MODULES-02, migration 0906)', async () => {
     const taskId = await insertTask();
     await insertRestriction({ task_id: taskId });
-    await expect(insertRestriction({ task_id: taskId })).rejects.toSatisfy(isUniqueViolation);
+    // the same interval, or any overlap with it, is refused by the exclusion constraint
+    await expect(insertRestriction({ task_id: taskId })).rejects.toSatisfy(isExclusionViolation);
+    await expect(
+      insertRestriction({
+        task_id: taskId,
+        during: tstzrange(at('2026-11-15', '19:00'), at('2026-11-16', '08:00')),
+      }),
+    ).rejects.toSatisfy(isExclusionViolation);
+    // a follow-on restriction of the same task starting where the open one ends is accepted
+    await insertRestriction({
+      task_id: taskId,
+      during: tstzrange(at('2026-11-15', '20:00'), at('2026-11-17', '08:00')),
+    });
+    // another task, or no task, may restrict the same area and interval
+    await insertRestriction({ task_id: await insertTask() });
+    await insertRestriction({});
     // a released one does not count
     const closureId = await appliedClosure();
     const released = await insertTask();
@@ -553,9 +569,9 @@ describe('facilities schema invariants (migrations 0900-0905)', () => {
       withdrawn_by: json({ kind: 'staff' }),
       withdrawal_reason: 'not needed',
     });
-    // a withdrawn restriction no longer occupies the task's one open restriction
+    // a withdrawn restriction no longer occupies the task's open restriction for its interval
     const open = await insertRestriction({ task_id: taskId });
-    await expect(insertRestriction({ task_id: taskId })).rejects.toSatisfy(isUniqueViolation);
+    await expect(insertRestriction({ task_id: taskId })).rejects.toSatisfy(isExclusionViolation);
     await expect(
       db
         .updateTable('restrictions')
