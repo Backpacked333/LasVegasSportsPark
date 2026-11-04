@@ -18,9 +18,12 @@ describe('audit_records indexes for correlation and operation lookups (R3-PERFOR
   });
 
   it('§5.10: audit_records has partial indexes on (organization_id, correlation_id) and (organization_id, operation_id)', async () => {
+    // This test database's own schema: under TEST_DATABASE_URL every test file migrates its own
+    // schema in one PostgreSQL database, so pg_indexes also lists the other files' copies.
     const rows = await sql<{ indexname: string; indexdef: string }>`
       select indexname, indexdef from pg_indexes
-      where tablename = 'audit_records'
+      where schemaname = current_schema()
+        and tablename = 'audit_records'
         and indexname in ('audit_records_correlation_idx', 'audit_records_operation_idx')
       order by indexname
     `.execute(t.db);
