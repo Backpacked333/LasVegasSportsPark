@@ -208,7 +208,9 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
   players of committed teams, effective at the event start, are the preview's customers.
 - `FIXTURE_PORT` → `findFixture`, `listSeasonFixtures`, `fixturesOfEntry`, `recordOutcome`
   (results in part 2 move a fixture to played/forfeit/abandoned inside the caller's transaction).
-- `ELIGIBILITY_PORT` → `evaluatePlayer(organizationId, teamEntryId, personId, at, options)`:
+- `ELIGIBILITY_PORT` → `evaluatePlayer(organizationId, teamEntryId, personId, at, options)`
+  (within the module, `EligibilityService.evaluateRoster` answers the same for a whole roster,
+  R4-CARRY-01):
   explainable reasons (code, severity blocking/warning/info/unknown, source record, responsible
   role, required action — SPK-READY-003). Unknown evidence is never a pass (SPK-READY-002).
   A suspension reason never embeds the suspension's basis text; with `options.restricted` (every
@@ -220,6 +222,9 @@ state and never relink a canceled event (§4.12, §4.6; **Verified**,
   own `DisciplineService` (part 2); an implementation registered elsewhere under
   `SUSPENSION_CHECK_IMPL` takes precedence (none is registered today). Resolved by the small
   resolver in `competition.module.ts`, not through `lazyPort`, so the normal case logs no warning.
+  The optional `activeSuspensionsOfMany(organizationId, subjects, at, scope)` answers many people
+  in one query (each subject with the ids identity resolves for it); an implementation without it
+  is asked person by person (R4-CARRY-01).
 - `READINESS_CHECK_REGISTRY` → `registerCheck(name, fn)` / `checks()`: other modules register
   fixture readiness checks (today only workforce, with `workforce.required_officials`; finance and
   facilities register none); `ReadinessService` runs them on every read. A
@@ -281,7 +286,15 @@ identifiers only.
   identity date of birth (§4.5), roster limits (regular places; guests have their own concurrent
   limit), substitutes/guests allowed, required league approval, multi-team restrictions
   (entries per season, same division, cross division), suspensions through the port
-  (SPK-AT-013) and, for a fixture, the opposing roster and overlapping scheduled fixtures.
+  (SPK-AT-013) and, for a fixture, the opposing roster and overlapping scheduled fixtures. Every
+  read happens first (`loadFacts`) and the rules are then applied to those facts alone
+  (`decide`), for one player or a whole roster: `evaluateRoster` reads the entry context once and
+  the open roster rows, season memberships, suspensions and fixture conflicts of all its players
+  in a fixed number of queries, and decides exactly as `evaluatePlayer` (R4-CARRY-01, §4.12;
+  **Verified**, `__tests__/eligibility-roster.spec.ts`: every rule compared player by player, and
+  the competition reads of a 3- and a 12-player roster are the same number). Identity's reads
+  (`personIdsResolvingTo`, `loadPerson`) are still made per player: identity offers no many-ids
+  form yet (**Pending**, deferred to identity).
 - Rosters (SPK-COMP-005, `services/roster.service.ts`): an addition or removal takes effect now or
   at a later instant. A change dated before now rewrites the roster of matches already played, so
   a captain cannot make one (`VALIDATION_FAILED`, `retroactive_roster_change`); league staff can,
@@ -365,8 +378,9 @@ identifiers only.
   a failure after the solver ran is recorded afterwards on a `failed` operation
   (R4-REPLAY-IDEMPOTENCY-01, §4.12; **Verified**, `__tests__/fixture-generation.spec.ts`). The
   completeness validator reports missing, duplicate and excess games, unscheduled games, opponent
-  frequency, invalid byes and playoff requirements with remaining obligations (SPK-FIX-002). SPK-AT-010 is verified with five teams in a double round robin: 20
-  games, 10 bye records (two per team, one per cycle), complete.
+  frequency, invalid byes and playoff requirements with remaining obligations (SPK-FIX-002).
+  SPK-AT-010 is verified with five teams in a double round robin: 20 games, 10 bye records (two
+  per team, one per cycle), complete.
 - **Readiness** (`services/readiness.service.ts`, SPK-READY-001..004): derived on every read from
   scheduling (published event, resource status, active closures), part 1 (entry approval, effective
   rosters, eligibility with suspensions), the registered checks (officials), the forms, finance and
@@ -378,7 +392,8 @@ identifiers only.
   when the event's instants differ from the fixture's copy (the `scheduling.event_changed`
   follow-up has not run yet), readiness raises `schedule_out_of_sync` (unknown) and evaluates
   rosters, eligibility, deadlines and change notices at the event's time (SPK-READY-002/004,
-  `readiness.spec.ts`).
+  `readiness.spec.ts`). Each side's roster is evaluated in one `evaluateRoster` call, never player
+  by player (R4-CARRY-01).
 - **Discipline** (SPK-DISC-001..005): incidents and narratives are readable by league management
   only (never in result views, events or audit details); a suspension restricts eligibility only
   once approved and only within its scope; the rule set's card rules propose suspensions (red card:
