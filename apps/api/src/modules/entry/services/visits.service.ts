@@ -16,7 +16,14 @@ import {
   type VisitorCategory,
   type VoidVisitBody,
 } from '@sportspark/contracts';
-import { isUniqueViolation, json, type Db, type DepartureSource } from '@sportspark/db';
+import {
+  isCheckViolation,
+  isUniqueViolation,
+  json,
+  pgConstraintName,
+  type Db,
+  type DepartureSource,
+} from '@sportspark/db';
 import { sql } from 'kysely';
 import {
   assertExpectedRevision,
@@ -24,6 +31,7 @@ import {
   AuthorizationService,
   CLOCK,
   ensureUpdated,
+  OperationalExceptions,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -47,6 +55,9 @@ import { ActivityResolver } from './activity-resolver';
 import { lockEntrySubjects, presenceLockKey } from './subject-locks';
 
 const VisitCursor = z.object({ arrivedAt: z.iso.datetime(), id: z.uuid() });
+
+/** A supervised child's arrival was voided: the pickup queue confirms the child was not on site. */
+export const SUPERVISED_VISIT_VOIDED = 'entry.supervised_visit_voided';
 
 export interface NewVisit {
   facilityId: string;
@@ -92,6 +103,7 @@ export class VisitsService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly exceptions: OperationalExceptions,
     private readonly resolver: ActivityResolver,
   ) {}
 
@@ -171,6 +183,19 @@ export class VisitsService {
     });
   }
 
+  /**
+   * POST /v1/visits/{id}/void: the arrival was recorded by mistake (SPK-ENTRY-001). R4-OPS-MODULES-04:
+   *   - serialized with every other write about the person's presence (departures, releases,
+   *     check-ins linking the visit, offline synchronization) by the presence lock;
+   *   - refused (RESOURCE_CONFLICT `live_checkins`) while a held or admitted session check-in
+   *     names the visit: the check-in says the person is in a session through this arrival, so it
+   *     is withdrawn first with its own reason (the database refuses the same, 0808);
+   *   - a visit that would leave only through a supervised release (`releaseRequired`, SPK-ENTRY-007)
+   *     is voided only by staff who may record that release (entry.record_release at the facility),
+   *     and the void raises `entry.supervised_visit_voided` for the pickup queue to confirm the
+   *     child was not on site — a supervised child's presence never ends silently without a
+   *     release (§4.7 invariant 12). The queue owner is a proposal pending DEC-015.
+   */
   async void(
     principal: Principal,
     id: string,
@@ -179,16 +204,41 @@ export class VisitsService {
   ): Promise<Visit> {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
-      const visit = await this.load(trx, organizationId, id);
-      if (!visit) throw errors.notFound('visit', id);
-      await this.authorization.require(principal, EntryActions.voidVisit, {
+      const found = await this.load(trx, organizationId, id);
+      if (!found) throw errors.notFound('visit', id);
+      const target = {
         type: 'visit',
         id,
         organizationId,
-        facilityId: visit.facility_id,
-      });
+        facilityId: found.facility_id,
+      };
+      await this.authorization.require(principal, EntryActions.voidVisit, target);
+      if (found.person_id) {
+        await lockEntrySubjects(trx, [presenceLockKey(organizationId, found.person_id)]);
+      }
+      const visit = (await this.load(trx, organizationId, id)) ?? found;
       assertExpectedRevision(body.expectedRevision, visit.revision);
       const status = VisitMachine.next(visit.status, 'void');
+      const live = await trx
+        .selectFrom('session_checkins')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('visit_id', '=', id)
+        .where('status', 'in', ['held', 'admitted'])
+        .orderBy('id')
+        .execute();
+      if (live.length > 0) {
+        throw errors.resourceConflict(
+          'This arrival has live session check-ins; withdraw them before voiding the visit.',
+          { code: 'live_checkins', visitId: id, checkinIds: live.map((c) => c.id) },
+        );
+      }
+      const facility = await this.resolver.facility(organizationId, visit.facility_id, trx);
+      const policy = policyForFacility(this.policy, facility.settings);
+      const supervised = await this.releaseRequired(trx, organizationId, visit, policy);
+      if (supervised) {
+        await this.authorization.require(principal, EntryActions.recordRelease, target);
+      }
       const now = this.clock.now();
       const result = await trx
         .updateTable('visits')
@@ -196,10 +246,42 @@ export class VisitsService {
         .where('organization_id', '=', organizationId)
         .where('id', '=', id)
         .where('revision', '=', visit.revision)
-        .executeTakeFirst();
+        .executeTakeFirst()
+        .catch((error: unknown) => {
+          if (isCheckViolation(error) && pgConstraintName(error) === 'visits_void_live_checkins') {
+            throw errors.resourceConflict(
+              'This arrival has live session check-ins; withdraw them before voiding the visit.',
+              { code: 'live_checkins', visitId: id },
+            );
+          }
+          throw error;
+        });
       ensureUpdated(result.numUpdatedRows, () =>
         errors.staleRevision(body.expectedRevision, visit.revision + 1),
       );
+      let exceptionId: string | null = null;
+      if (supervised) {
+        const raised = await this.exceptions.raise(trx, {
+          organizationId,
+          facilityId: visit.facility_id,
+          category: SUPERVISED_VISIT_VOIDED,
+          severity: 'warning',
+          title: 'The arrival of a child in a supervised activity was voided without a release',
+          affectedType: 'visit',
+          affectedId: id,
+          ownerQueue: policy.pickupEscalationQueue,
+          dedupeKey: `${SUPERVISED_VISIT_VOIDED}:${id}`,
+          details: {
+            visitId: id,
+            facilityId: visit.facility_id,
+            personId: visit.person_id,
+            visitorCategory: visit.visitor_category,
+            voidReason: body.reason,
+            nextAction: 'confirm_the_child_was_not_on_site',
+          },
+        });
+        exceptionId = raised.id;
+      }
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -210,6 +292,7 @@ export class VisitsService {
         afterRevision: visit.revision + 1,
         reason: body.reason,
         correlationId,
+        ...(exceptionId ? { details: { supervisedChild: true, exceptionId } } : {}),
       });
       await this.outbox.enqueue(trx, EntryEvents.visitClosed, {
         organizationId,

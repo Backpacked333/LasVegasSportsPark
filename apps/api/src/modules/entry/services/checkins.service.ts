@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   errors,
   newId,
   systemPrincipal,
@@ -22,13 +23,17 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
+import { SessionsService } from '../../catalog';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
+import { EventsService, localDateOf } from '../../scheduling';
 import { EntryActions } from '../entry.actions';
 import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
 import {
+  activityDateOf,
   activityDetailOf,
   audienceOf,
+  beforeActivityDay,
   organizationOf,
   toCheckin,
   type CheckinAudience,
@@ -38,7 +43,7 @@ import { SessionCheckinMachine } from '../entry.state-machines';
 import { ActivityResolver, refOf, type ResolvedActivity } from './activity-resolver';
 import { ArrivalChecks, hasBlocking, type ParticipationBasis } from './arrival-checks';
 import { StaffScope, type ActivityAuthority } from './staff-scope';
-import { lockActivity } from './subject-locks';
+import { lockActivity, lockEntrySubjects, presenceLockKey } from './subject-locks';
 import { VisitsService } from './visits.service';
 
 /**
@@ -52,6 +57,17 @@ function audienceOfAuthority(authority: ActivityAuthority): CheckinAudience {
 
 /** The withdrawal reason of a check-in whose activity its owning module canceled (ENT-03). */
 export const ACTIVITY_CANCELED = 'activity_canceled';
+/** The withdrawal reason of a check-in whose activity moved to another day or facility (R4-OPS-MODULES-07). */
+export const ACTIVITY_MOVED = 'activity_moved';
+
+/** An activity's current times as its owning module holds them now (read in the caller's transaction). */
+interface CurrentActivityTimes {
+  start: Date;
+  end: Date;
+  /** The event's facility; null for a session (its offering's facility does not move). */
+  facilityId: string | null;
+  canceled: boolean;
+}
 
 function basisColumns(basis: ParticipationBasis | null) {
   return {
@@ -83,6 +99,8 @@ export class CheckinsService {
     private readonly checks: ArrivalChecks,
     private readonly scope: StaffScope,
     private readonly visits: VisitsService,
+    private readonly sessions: SessionsService,
+    private readonly events: EventsService,
   ) {}
 
   async create(
@@ -100,6 +118,10 @@ export class CheckinsService {
     );
     return this.uow.run(async ({ trx }) => {
       const current = await this.lockForAdmission(trx, organizationId, activity);
+      this.requireActivityDay(current);
+      // R4-OPS-MODULES-04: the visit this check-in links is read under the person's presence
+      // lock, so a concurrent void (or departure) of that visit and this check-in serialize.
+      await lockEntrySubjects(trx, [presenceLockKey(organizationId, body.personId)]);
       const person = await this.people.findPerson(organizationId, body.personId, trx);
       if (!person || person.status !== 'active') throw errors.notFound('person', body.personId);
       const visit = body.visitId
@@ -155,8 +177,8 @@ export class CheckinsService {
           offering_id: activity.offeringId,
           offering_session_id: activity.detail.type === 'session' ? activity.detail.id : null,
           scheduling_event_id: activity.schedulingEventId,
-          activity_start: activity.start,
-          activity_end: activity.end,
+          activity_start: current.start,
+          activity_end: current.end,
           ...basisColumns(evaluation.basis),
           status,
           issues: json(evaluation.issues),
@@ -201,8 +223,13 @@ export class CheckinsService {
     );
     return this.uow.run(async ({ trx }) => {
       const checked = await this.lockForAdmission(trx, organizationId, activity);
-      const current = await this.load(trx, organizationId, id);
-      if (!current) throw errors.notFound('session_checkin', id);
+      this.requireActivityDay(checked);
+      const stored = await this.load(trx, organizationId, id);
+      if (!stored) throw errors.notFound('session_checkin', id);
+      // R4-OPS-MODULES-04: a re-check may link the person's open visit; read it under the
+      // presence lock (serialized with a void or departure of that visit).
+      await lockEntrySubjects(trx, [presenceLockKey(organizationId, stored.person_id)]);
+      const current = (await this.load(trx, organizationId, id)) ?? stored;
       assertExpectedRevision(body.expectedRevision, current.revision);
       // Only a held check-in is re-evaluated (admitted → admit is not a transition).
       SessionCheckinMachine.next(current.status, 'reevaluate');
@@ -389,6 +416,150 @@ export class CheckinsService {
   }
 
   /**
+   * R4-OPS-MODULES-07 (SPK-ENTRY-001, SPK-ENTRY-003, §4.12): the owning module moved an activity
+   * (catalog.session_retimed; scheduling.event_changed other than a cancellation). A check-in
+   * keeps a copy of its activity's times, so every live (held or admitted) check-in whose copy no
+   * longer matches the activity as it is now — read in the handler's transaction, never from the
+   * payload — follows it:
+   *   - moved within the same facility-local day: the stored times are updated (the admission
+   *     still stands for that day's activity);
+   *   - moved to another day or (an event) another facility: withdrawn through
+   *     SessionCheckinMachine with the reason `activity_moved`, so the person can be checked in on
+   *     the new day and today's visit no longer counts a session that is not today.
+   * Audited as the system and announced (entry.session_checkin_changed). Replay-safe: a check-in
+   * already at the current times, or no longer live, is left alone. A canceled activity is left to
+   * the cancellation follow-up. Serialized with in-flight check-ins on the activity's exclusive
+   * lock (R2-RACES-06), like a cancellation.
+   */
+  async followActivityTimes(
+    trx: Trx,
+    organizationId: string,
+    activityType: 'session' | 'event',
+    activityId: string,
+    schedulingEventId: string | null,
+    source: string,
+    correlationId: string | null,
+  ): Promise<{ moved: number; withdrawn: number }> {
+    await lockActivity(trx, organizationId, activityType, activityId, 'exclusive');
+    const live = await trx
+      .selectFrom('session_checkins')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('activity_type', '=', activityType)
+      .where('activity_id', '=', activityId)
+      .where('status', 'in', ['held', 'admitted'])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+    const outcome = { moved: 0, withdrawn: 0 };
+    if (live.length === 0) return outcome;
+    const current = await this.currentTimes(
+      trx,
+      organizationId,
+      activityType,
+      activityId,
+      schedulingEventId ?? live[0]!.scheduling_event_id,
+    );
+    if (!current || current.canceled) return outcome;
+    const system = systemPrincipal(organizationId, source);
+    const timezones = new Map<string, string>();
+    for (const row of live) {
+      const facilityId = current.facilityId ?? row.facility_id;
+      const sameTimes =
+        new Date(row.activity_start).getTime() === current.start.getTime() &&
+        new Date(row.activity_end).getTime() === current.end.getTime();
+      if (sameTimes && facilityId === row.facility_id) continue;
+      let timezone = timezones.get(row.facility_id);
+      if (!timezone) {
+        timezone = (await this.resolver.facility(organizationId, row.facility_id, trx)).timezone;
+        timezones.set(row.facility_id, timezone);
+      }
+      const sameDay =
+        facilityId === row.facility_id &&
+        localDateOf(timezone, new Date(row.activity_start)) ===
+          localDateOf(timezone, current.start);
+      const previousStatus = row.status === 'withdrawn' ? null : row.status;
+      const result = await trx
+        .updateTable('session_checkins')
+        .set(
+          sameDay
+            ? { activity_start: current.start, activity_end: current.end }
+            : {
+                status: SessionCheckinMachine.next(row.status, 'withdraw'),
+                withdrawn_at: this.clock.now(),
+                withdrawn_reason: ACTIVITY_MOVED,
+              },
+        )
+        .set({ revision: row.revision + 1 })
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', row.id)
+        .where('revision', '=', row.revision)
+        .executeTakeFirst();
+      // The row is locked, so its revision cannot have moved; a miss retries the delivery.
+      if (Number(result.numUpdatedRows) !== 1) {
+        throw new Error(`session check-in ${row.id} changed while it was locked`);
+      }
+      const updated = await this.load(trx, organizationId, row.id);
+      if (!updated) continue;
+      await this.afterChange(
+        trx,
+        system,
+        organizationId,
+        updated,
+        previousStatus,
+        correlationId,
+        sameDay ? 'activity_retimed' : ACTIVITY_MOVED,
+      );
+      if (sameDay) outcome.moved += 1;
+      else outcome.withdrawn += 1;
+    }
+    return outcome;
+  }
+
+  /**
+   * The activity's current times from its owning module, read through the given transaction
+   * (§4.2: catalog's SessionsService and scheduling's EventsService, never their tables), or null
+   * when it cannot be read there (a session not linked to a scheduling event keeps its times).
+   */
+  private async currentTimes(
+    trx: Trx,
+    organizationId: string,
+    activityType: 'session' | 'event',
+    activityId: string,
+    schedulingEventId: string | null,
+  ): Promise<CurrentActivityTimes | null> {
+    if (activityType === 'session') {
+      if (!schedulingEventId) return null;
+      const session = (
+        await this.sessions.sessionsOfSchedulingEvents(trx, organizationId, [schedulingEventId])
+      ).find((s) => s.id === activityId);
+      if (!session) return null;
+      return {
+        start: new Date(session.scheduledStart),
+        end: new Date(session.scheduledEnd),
+        facilityId: null,
+        canceled: session.status === 'canceled',
+      };
+    }
+    try {
+      // EventsService reads through the active transaction (executorFor).
+      const event = await this.events.getEvent(
+        systemPrincipal(organizationId, 'entry.activities'),
+        activityId,
+      );
+      return {
+        start: new Date(event.scheduledStart),
+        end: new Date(event.scheduledEnd),
+        facilityId: event.facilityId,
+        canceled: event.status === 'canceled',
+      };
+    } catch (error) {
+      if (DomainError.is(error) && error.code === 'NOT_FOUND') return null;
+      throw error;
+    }
+  }
+
+  /**
    * Protected read (§4.14 object- and field-level authorization, SPK-UX-007): desk and support
    * staff of the facility, the coach or official assigned to the check-in's activity, or a holder
    * of `view` over the person; otherwise NOT_FOUND. A customer reads the check-in without the
@@ -477,9 +648,21 @@ export class CheckinsService {
   private async lockForAdmission(
     trx: Trx,
     organizationId: string,
-    activity: ResolvedActivity,
+    resolved: ResolvedActivity,
   ): Promise<ResolvedActivity> {
-    await lockActivity(trx, organizationId, activity.detail.type, activity.detail.id, 'shared');
+    await lockActivity(trx, organizationId, resolved.detail.type, resolved.detail.id, 'shared');
+    // R4-OPS-MODULES-07: the times as the owning module holds them now. A move whose follow-up
+    // (`followActivityTimes`, exclusive lock) already ran is only known here; one that runs
+    // later waits for this transaction and moves or withdraws what it wrote.
+    const fresh = await this.currentTimes(
+      trx,
+      organizationId,
+      resolved.detail.type,
+      resolved.detail.id,
+      resolved.schedulingEventId,
+    );
+    const activity: ResolvedActivity =
+      fresh && !fresh.canceled ? { ...resolved, start: fresh.start, end: fresh.end } : resolved;
     if (activity.canceled) return activity;
     const recorded = await trx
       .selectFrom('activity_cancellations')
@@ -489,6 +672,25 @@ export class CheckinsService {
       .where('activity_id', '=', activity.detail.id)
       .executeTakeFirst();
     return recorded ? { ...activity, canceled: true } : activity;
+  }
+
+  /**
+   * R4-OPS-MODULES-06 (SPK-ENTRY-001, SPK-ENTRY-004): a check-in is made on the activity's own
+   * facility-local day (from its midnight; an activity that has ended stays a warning). One made
+   * ahead would hold the person's one live check-in for that activity until the real day and make
+   * today's visit leave through a release. Refused before anything is written.
+   */
+  private requireActivityDay(activity: ResolvedActivity): void {
+    if (beforeActivityDay(activity, this.clock.now())) {
+      throw errors.resourceConflict(
+        'Check-in opens on the day of the activity at its facility; check the person in then.',
+        {
+          code: 'activity_not_today',
+          activityDate: activityDateOf(activity),
+          activityStart: activity.start.toISOString(),
+        },
+      );
+    }
   }
 
   private async live(

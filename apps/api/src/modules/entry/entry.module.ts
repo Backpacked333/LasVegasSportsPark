@@ -250,11 +250,26 @@ export class EntryModule implements OnModuleInit {
         runWithTransaction(ctx.trx, () => this.followUps.sessionCanceled(ctx.trx, event)),
       { failureOwner: 'front_desk' },
     );
+    // R4-OPS-MODULES-07: a moved session's live check-ins follow its current times.
+    this.registry.on<EventPayload<typeof CatalogEvents.sessionRetimed>>(
+      CatalogEvents.sessionRetimed.type,
+      'entry.follow_session_retimed',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.followUps.sessionRetimed(ctx.trx, event)),
+      { failureOwner: 'front_desk' },
+    );
     this.registry.on<EventPayload<typeof EventChanged>>(
       EventChanged.type,
       'entry.withdraw_on_event_canceled',
       (event, ctx) =>
         runWithTransaction(ctx.trx, () => this.followUps.eventChanged(ctx.trx, event)),
+      { failureOwner: 'front_desk' },
+    );
+    // R4-OPS-MODULES-07: a moved event's live check-ins follow its current times.
+    this.registry.on<EventPayload<typeof EventChanged>>(
+      EventChanged.type,
+      'entry.follow_event_changed',
+      (event, ctx) => runWithTransaction(ctx.trx, () => this.followUps.eventMoved(ctx.trx, event)),
       { failureOwner: 'front_desk' },
     );
     // ENT-04 (SPK-IAM-007): a merge that leaves two active passes is raised to the front desk.

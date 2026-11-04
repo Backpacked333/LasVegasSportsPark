@@ -449,4 +449,42 @@ describe('concurrent offline synchronization and admission (§4.15, SPK-AT-018, 
       .execute();
     expect(rows).toEqual([{ status: 'held' }]);
   });
+  it('R4-OPS-MODULES-04 / SPK-ENTRY-001: a void racing a check-in that links the visit never leaves a live check-in naming a voided visit', async () => {
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const person = await createPersonFixture(t, { kind: 'adult' });
+      const arrived = await post(t, '/v1/visits', desk, {
+        facilityId: t.facilityId,
+        arrivals: [{ personId: person, visitorCategory: 'spectator' }],
+      });
+      expect(arrived.status, JSON.stringify(arrived.body)).toBe(201);
+      const visitId = arrived.body.visits[0].id as string;
+      const [voided, checkin] = await Promise.all([
+        post(t, `/v1/visits/${visitId}/void`, desk, {
+          reason: 'Recorded by mistake',
+          expectedRevision: 1,
+        }),
+        post(t, '/v1/session-checkins', otherDesk, { personId: person, activity: sessionRef(p) }),
+      ]);
+      expect(checkin.status, JSON.stringify(checkin.body)).toBe(201);
+      if (voided.status === 200) {
+        // The void went first: the check-in found no open arrival to link.
+        expect(checkin.body.visitId).toBeNull();
+      } else {
+        expect(voided.status, JSON.stringify(voided.body)).toBe(409);
+        expect(voided.body.details).toMatchObject({ code: 'live_checkins' });
+        expect(checkin.body.visitId).toBe(visitId);
+      }
+    }
+    const contradictions = await t.db
+      .selectFrom('session_checkins as c')
+      .innerJoin('visits as v', (join) =>
+        join.onRef('v.organization_id', '=', 'c.organization_id').onRef('v.id', '=', 'c.visit_id'),
+      )
+      .select('c.id')
+      .where('c.organization_id', '=', t.organizationId)
+      .where('c.status', 'in', ['held', 'admitted'])
+      .where('v.status', '=', 'voided')
+      .execute();
+    expect(contradictions).toEqual([]);
+  });
 });

@@ -1,6 +1,7 @@
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
+import { createOfferingSessionFixture } from '../../catalog';
 import { createPersonFixture } from '../../identity';
 import {
   at,
@@ -391,5 +392,93 @@ describe('attendance observations and corrections (§4.8, SPK-ENTRY-005, §4.5)'
     const outsider = await createPersonFixture(t, { kind: 'adult' });
     const held = await post(t, '/v1/session-checkins', desk, { personId: outsider, activity: ref });
     expect(held.body).toMatchObject({ status: 'held', basis: null });
+  });
+  it('SPK-ENTRY-001 / SPK-ENTRY-004 / SPK-ENTRY-005: no check-in or observed attendance ahead of the activity day, and no attendance for a canceled activity — online or offline (R4-OPS-MODULES-06)', async () => {
+    const now = t.clock.now();
+    const nextWeek = await createOfferingSessionFixture(t, {
+      offeringId: p.offering.offeringId,
+      scheduledStart: new Date(at('2027-01-23', '10:00')),
+      scheduledEnd: new Date(at('2027-01-23', '11:00')),
+    });
+    const canceled = await createOfferingSessionFixture(t, {
+      offeringId: p.offering.offeringId,
+      scheduledStart: new Date(at(TODAY, '12:00')),
+      scheduledEnd: new Date(at(TODAY, '13:00')),
+      status: 'canceled',
+    });
+    const nextWeekRef = { type: 'session', offeringId: p.offering.offeringId, sessionId: nextWeek };
+    const canceledRef = { type: 'session', offeringId: p.offering.offeringId, sessionId: canceled };
+
+    // A check-in for next week's session is refused and holds nothing.
+    const early = await post(t, '/v1/session-checkins', desk, {
+      personId: fam.childA,
+      activity: nextWeekRef,
+    });
+    expect(early.status, JSON.stringify(early.body)).toBe(409);
+    expect(early.body.details).toMatchObject({
+      code: 'activity_not_today',
+      activityDate: '2027-01-23',
+    });
+    const held = await t.db
+      .selectFrom('session_checkins')
+      .select('id')
+      .where('activity_id', '=', nextWeek)
+      .execute();
+    expect(held).toEqual([]);
+
+    // Attendance is not observed ahead of the activity day, nor for a canceled activity.
+    const ahead = await observe(desk, {
+      personId: fam.childA,
+      activity: nextWeekRef,
+      observedState: 'absent',
+    });
+    expect(ahead.status, JSON.stringify(ahead.body)).toBe(409);
+    expect(ahead.body.details).toMatchObject({ code: 'activity_not_today' });
+    const ofCanceled = await observe(desk, {
+      personId: fam.childA,
+      activity: canceledRef,
+      observedState: 'present',
+    });
+    expect(ofCanceled.status, JSON.stringify(ofCanceled.body)).toBe(409);
+    expect(ofCanceled.body.details).toMatchObject({ code: 'activity_canceled' });
+
+    // Offline: the same items are rejected with the same reasons.
+    const batch = await post(t, '/v1/offline-sync', desk, {
+      deviceId: 'tablet-window',
+      clientBatchId: newId(),
+      facilityId: t.facilityId,
+      snapshot: { reference: 'roster-window', takenAt: now.toISOString() },
+      items: [
+        {
+          kind: 'attendance',
+          clientObservationId: newId(),
+          observedAt: now.toISOString(),
+          personId: fam.childA,
+          activity: nextWeekRef,
+          observedState: 'absent',
+        },
+        {
+          kind: 'attendance',
+          clientObservationId: newId(),
+          observedAt: now.toISOString(),
+          personId: fam.childA,
+          activity: canceledRef,
+          observedState: 'present',
+        },
+      ],
+    });
+    expect(batch.status, JSON.stringify(batch.body)).toBe(201);
+    expect(
+      batch.body.items.map((i: { outcome: string; reason: string }) => [i.outcome, i.reason]),
+    ).toEqual([
+      ['rejected', 'activity_not_today'],
+      ['rejected', 'activity_canceled'],
+    ]);
+    const recorded = await t.db
+      .selectFrom('attendance_observations')
+      .select('id')
+      .where('activity_id', 'in', [nextWeek, canceled])
+      .execute();
+    expect(recorded).toEqual([]);
   });
 });

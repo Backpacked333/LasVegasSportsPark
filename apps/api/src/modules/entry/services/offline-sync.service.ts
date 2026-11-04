@@ -22,6 +22,8 @@ import {
   Outbox,
   snapshotActor,
   UnitOfWork,
+  type ActionDefinition,
+  type AuthorizationTargetInput,
   type Clock,
   type Trx,
 } from '../../../kernel';
@@ -36,7 +38,7 @@ import {
   type FacilityFacts,
   type ResolvedActivity,
 } from './activity-resolver';
-import { AttendanceService } from './attendance.service';
+import { AttendanceService, attendanceWindowIssue } from './attendance.service';
 import { denialReasonFor, ReleasesService } from './releases.service';
 import { StaffScope } from './staff-scope';
 import { attendanceLockKey, lockEntrySubjects, presenceLockKey } from './subject-locks';
@@ -60,7 +62,10 @@ interface BatchContext {
   organizationId: string;
   facility: FacilityFacts;
   policy: EntryPolicy;
-  desk: boolean;
+  /** entry.record_arrival at the batch facility (POST /v1/visits, desk roles scoped here). */
+  arrivalDesk: boolean;
+  /** entry.record_departure at the batch facility (POST /v1/departures). */
+  departureDesk: boolean;
   /** The principal holds entry.record_release at the facility (the online pickup desk roles). */
   releaseDesk: boolean;
   /** Per activity: entry.record_assigned_release is held and the principal is assigned to it. */
@@ -71,7 +76,12 @@ interface BatchContext {
   snapshotTakenAt: Date;
   receivedAt: Date;
   activities: Map<string, ResolvedActivity | null>;
-  assigned: Map<string, boolean>;
+  /**
+   * Per activity: the principal may act on it as online (StaffScope.requireForActivity) —
+   * entry.record_attendance at the activity, or entry.record_assigned_attendance and an
+   * accepted assignment (SPK-UX-007).
+   */
+  activityAuthority: Map<string, boolean>;
   correlationId: string | null;
   exceptionIds: Set<string>;
 }
@@ -160,7 +170,6 @@ export class OfflineSyncService {
     if (stored) return replayOf(stored, body, fingerprint);
 
     const policy = policyForFacility(this.policy, facility.settings);
-    const desk = this.scope.hasDeskRole(principal);
     const refs = body.items.flatMap((item) =>
       item.kind === 'attendance'
         ? [item.activity]
@@ -170,45 +179,64 @@ export class OfflineSyncService {
     );
     // Owning modules are read before the transaction (their services use the root connection).
     const activities = await this.resolver.resolveMany(organizationId, refs);
-    const assigned = new Map<string, boolean>();
-    if (!desk && principal.personId) {
-      for (const [key, activity] of activities) {
-        assigned.set(
-          key,
-          activity !== null &&
-            (await this.scope.isAssigned(organizationId, activity, principal.personId)),
-        );
-      }
+    // §4.15 "offline grants no authority beyond online", §4.11 one action registry: every item
+    // kind is decided by the action its online command requires, at this facility or activity,
+    // so the kernel applies each held role's own facility scope (§4.3, §4.14, identity-05). A
+    // desk role scoped to another facility never makes the principal desk staff here, even when
+    // another role (a coach scoped here) let the batch itself through entry.sync_offline.
+    const facilityTarget: AuthorizationTargetInput = {
+      type: 'facility',
+      id: body.facilityId,
+      organizationId,
+      facilityId: body.facilityId,
+    };
+    const decide = async (
+      action: ActionDefinition,
+      target: AuthorizationTargetInput,
+    ): Promise<boolean> => (await this.authorization.decide(principal, action, target)).allowed;
+    const activityTarget = (activity: ResolvedActivity): AuthorizationTargetInput => ({
+      type: 'activity',
+      id: activity.detail.id,
+      organizationId,
+      facilityId: activity.facilityId,
+    });
+    // POST /v1/visits and POST /v1/departures (desk roles of this facility).
+    const arrivalDesk = await decide(EntryActions.recordArrival, facilityTarget);
+    const departureDesk = await decide(EntryActions.recordDeparture, facilityTarget);
+    // The accepted (or completed) workforce assignment of the principal, per activity.
+    const assignedCache = new Map<string, boolean>();
+    const assignedTo = async (key: string, activity: ResolvedActivity): Promise<boolean> => {
+      if (!principal.personId) return false;
+      const cached = assignedCache.get(key);
+      if (cached !== undefined) return cached;
+      const held = await this.scope.isAssigned(organizationId, activity, principal.personId);
+      assignedCache.set(key, held);
+      return held;
+    };
+    // POST /v1/attendance-observations (StaffScope.requireForActivity): entry.record_attendance
+    // at the activity, or entry.record_assigned_attendance there and an accepted assignment.
+    const activityAuthority = new Map<string, boolean>();
+    for (const [key, activity] of activities) {
+      if (!activity) continue;
+      const target = activityTarget(activity);
+      activityAuthority.set(
+        key,
+        (await decide(EntryActions.recordAttendance, target)) ||
+          ((await decide(EntryActions.recordAssignedAttendance, target)) &&
+            (await assignedTo(key, activity))),
+      );
     }
     // §4.11 one action registry: a queued release needs the same authority as an online one
     // (SPK-ENTRY-007) — the pickup desk roles, or a coach assigned to the release's activity.
-    const releaseDesk = (
-      await this.authorization.decide(principal, EntryActions.recordRelease, {
-        type: 'facility',
-        id: body.facilityId,
-        organizationId,
-        facilityId: body.facilityId,
-      })
-    ).allowed;
+    const releaseDesk = await decide(EntryActions.recordRelease, facilityTarget);
     const releaseAssigned = new Map<string, boolean>();
     if (!releaseDesk && principal.personId) {
       for (const [key, activity] of activities) {
         if (!activity) continue;
-        const field = await this.authorization.decide(
-          principal,
-          EntryActions.recordAssignedRelease,
-          {
-            type: 'activity',
-            id: activity.detail.id,
-            organizationId,
-            facilityId: activity.facilityId,
-          },
-        );
         releaseAssigned.set(
           key,
-          field.allowed &&
-            (assigned.get(key) ??
-              (await this.scope.isAssigned(organizationId, activity, principal.personId))),
+          (await decide(EntryActions.recordAssignedRelease, activityTarget(activity))) &&
+            (await assignedTo(key, activity)),
         );
       }
     }
@@ -245,7 +273,8 @@ export class OfflineSyncService {
           organizationId,
           facility,
           policy,
-          desk,
+          arrivalDesk,
+          departureDesk,
           releaseDesk,
           releaseAssigned,
           batchId,
@@ -254,7 +283,7 @@ export class OfflineSyncService {
           snapshotTakenAt,
           receivedAt,
           activities,
-          assigned,
+          activityAuthority,
           correlationId,
           exceptionIds: new Set(),
         };
@@ -545,7 +574,7 @@ export class OfflineSyncService {
     if (!activity) return { rejected: 'activity_not_found' };
     // §4.15 "scoped roster": the snapshot covers one facility only.
     if (activity.facilityId !== ctx.facility.id) return { rejected: 'outside_snapshot_scope' };
-    if (!ctx.desk && !ctx.assigned.get(key)) return { rejected: 'not_assigned' };
+    if (!ctx.activityAuthority.get(key)) return { rejected: 'not_assigned' };
     return { activity };
   }
 
@@ -565,6 +594,9 @@ export class OfflineSyncService {
     if (!resolved || 'rejected' in resolved) {
       return result(item, 'rejected', resolved ? resolved.rejected : 'activity_not_found', null);
     }
+    // R4-OPS-MODULES-06: as online, nothing is observed for a canceled activity or ahead of its day.
+    const outside = attendanceWindowIssue(resolved.activity, observedAt);
+    if (outside) return result(item, 'rejected', outside, null);
     if (!(await this.personActive(ctx, trx, item.personId))) {
       return result(item, 'rejected', 'person_not_found', null);
     }
@@ -614,7 +646,7 @@ export class OfflineSyncService {
     const flags = stale ? ['stale_snapshot'] : [];
     const previous = await this.byClientId(trx, 'visits', ctx, item.clientObservationId);
     if (previous) return result(item, 'duplicate', 'already_recorded', previous);
-    if (!ctx.desk) return result(item, 'rejected', 'not_permitted', null);
+    if (!ctx.arrivalDesk) return result(item, 'rejected', 'not_permitted', null);
     if (!(await this.personActive(ctx, trx, item.personId))) {
       return result(item, 'rejected', 'person_not_found', null);
     }
@@ -804,7 +836,7 @@ export class OfflineSyncService {
   ): Promise<OfflineItemResult> {
     const previous = await this.byClientId(trx, 'departures', ctx, item.clientObservationId);
     if (previous) return result(item, 'duplicate', 'already_recorded', previous);
-    if (!ctx.desk) return result(item, 'rejected', 'not_permitted', null);
+    if (!ctx.departureDesk) return result(item, 'rejected', 'not_permitted', null);
     const visit = await this.visits.openVisit(
       trx,
       ctx.organizationId,
