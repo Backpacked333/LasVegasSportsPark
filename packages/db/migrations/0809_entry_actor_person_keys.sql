@@ -9,8 +9,16 @@
 -- a child over (SPK-ENTRY-007).
 --
 -- Every writer stores the signed-in principal's person (null for a system principal, which the
--- keys allow); identity never deletes a person (a merged person's row stays). The keys are added
--- NOT VALID and then validated, so existing rows are checked without a long exclusive lock.
+-- keys allow); identity never deletes a person (a merged person's row stays).
+--
+-- Locking: migrateToLatest runs each migration file in one transaction, and every lock taken in
+-- it is held until that transaction commits. Each `add constraint ... foreign key ... not valid`
+-- takes SHARE ROW EXCLUSIVE on its entry table and on `persons` (writes to them wait), but checks
+-- no existing row, so this file holds those locks only for the catalog changes. New and updated
+-- rows are checked from here on. Existing rows are checked by 0810 in its own transaction:
+-- VALIDATE CONSTRAINT takes only SHARE UPDATE EXCLUSIVE on the entry table and ROW SHARE on
+-- `persons`, so writes continue while it scans. Validating in this file would scan every table
+-- while the SHARE ROW EXCLUSIVE locks above are still held.
 
 alter table passes
   add constraint passes_issued_by_person_fk
@@ -44,12 +52,3 @@ alter table occupancy_snapshots
   add constraint occupancy_snapshots_taken_by_person_fk
     foreign key (organization_id, taken_by_person_id) references persons (organization_id, id)
     not valid;
-
-alter table passes validate constraint passes_issued_by_person_fk;
-alter table visits validate constraint visits_recorded_by_person_fk;
-alter table session_checkins validate constraint session_checkins_recorded_by_person_fk;
-alter table attendance_observations validate constraint attendance_observations_recorded_by_person_fk;
-alter table departures validate constraint departures_recorded_by_person_fk;
-alter table release_records validate constraint release_records_staff_person_fk;
-alter table offline_sync_batches validate constraint offline_sync_batches_submitted_by_person_fk;
-alter table occupancy_snapshots validate constraint occupancy_snapshots_taken_by_person_fk;

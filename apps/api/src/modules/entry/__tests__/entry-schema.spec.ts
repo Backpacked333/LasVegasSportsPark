@@ -1,7 +1,7 @@
 import { newId } from '@sportspark/contracts';
-import { json, seedOrganization } from '@sportspark/db';
+import { json, loadMigrationFiles, seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
-import { afterAll, beforeAll, describe, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createOfferingFixture, createOfferingSessionFixture } from '../../catalog';
 import { createEnrollmentFixture } from '../../enrollment';
@@ -1259,5 +1259,49 @@ describe('entry schema invariants (migration 0800)', () => {
         .values(row(staff) as never)
         .execute();
     }
+  });
+  it("R4-DB-INVARIANTS-08 (0809, 0810): the actor keys are validated over existing rows in a migration of their own, so the scans never run under 0809's SHARE ROW EXCLUSIVE locks", async () => {
+    const keys = [
+      ['passes', 'passes_issued_by_person_fk'],
+      ['visits', 'visits_recorded_by_person_fk'],
+      ['session_checkins', 'session_checkins_recorded_by_person_fk'],
+      ['attendance_observations', 'attendance_observations_recorded_by_person_fk'],
+      ['departures', 'departures_recorded_by_person_fk'],
+      ['release_records', 'release_records_staff_person_fk'],
+      ['offline_sync_batches', 'offline_sync_batches_submitted_by_person_fk'],
+      ['occupancy_snapshots', 'occupancy_snapshots_taken_by_person_fk'],
+    ] as const;
+    // Every key exists and is validated (rows written before 0809 were checked).
+    const rows = await sql<{ conname: string; convalidated: boolean }>`
+      select k.conname, k.convalidated
+      from pg_constraint k
+      join pg_class r on r.oid = k.conrelid
+      join pg_namespace n on n.oid = r.relnamespace
+      where n.nspname = current_schema() and k.contype = 'f'
+        and k.conname = any(${keys.map(([, name]) => name)})
+      order by k.conname
+    `.execute(t.db);
+    expect(rows.rows).toEqual(
+      keys
+        .map(([, conname]) => ({ conname, convalidated: true }))
+        .sort((a, b) => (a.conname < b.conname ? -1 : 1)),
+    );
+    // migrateToLatest runs each file in one transaction: 0809 only adds the keys NOT VALID, 0810
+    // validates them, so the validation scans hold only SHARE UPDATE EXCLUSIVE / ROW SHARE.
+    const files = await loadMigrationFiles();
+    const add = files.find((f) => f.fileName === '0809_entry_actor_person_keys.sql')!;
+    const validate = files.find((f) => f.fileName === '0810_entry_validate_actor_person_keys.sql')!;
+    const statements = (file: { sql: string }) =>
+      file.sql
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('--'))
+        .join('\n')
+        .toLowerCase();
+    expect(statements(add)).not.toContain('validate constraint');
+    for (const [table, name] of keys) {
+      expect(statements(add)).toContain(`add constraint ${name}`);
+      expect(statements(validate)).toContain(`alter table ${table} validate constraint ${name};`);
+    }
+    expect(statements(validate)).not.toContain('add constraint');
   });
 });
