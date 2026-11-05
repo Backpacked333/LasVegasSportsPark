@@ -1140,6 +1140,9 @@ export type DiscountEvaluationLine = z.infer<typeof DiscountEvaluationLineSchema
  * One basket line submitted for a discount preview. The server resolves the offering's kind and
  * program and prices the line from its effective price rule (SPK-PAY-001); `offeringKind`,
  * `programId` and `baseAmountMinor` are accepted for compatibility and ignored.
+ * `participantPersonId` (whose per-person limits apply) must be the caller or someone the caller
+ * holds `register` over, unless the caller's staff authority covers the line's facility
+ * (PARTICIPANT_AUTHORITY_REQUIRED otherwise, SPK-IAM-003, §4.10).
  */
 export const DiscountPreviewLineSchema = z
   .object({
@@ -1155,7 +1158,11 @@ export const DiscountPreviewLineSchema = z
 export const EvaluateDiscountsBody = z
   .object({
     currency: CurrencyCode,
-    /** Evaluation instant; defaults to the clock. Staff only (customers preview the current instant). */
+    /**
+     * Evaluation instant; defaults to the clock. Only for staff authority that covers the facility
+     * of every line's offering; everyone else (customers, staff without a reading role, a reader
+     * scoped to other facilities) previews the current instant (ACCESS_DENIED otherwise).
+     */
     at: Instant.optional(),
     lines: z.array(DiscountPreviewLineSchema).min(1).max(100),
     codes: z.array(DiscountCode).max(10).default([]),
