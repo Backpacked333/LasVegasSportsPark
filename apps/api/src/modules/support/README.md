@@ -153,7 +153,11 @@ and `close` events of `POST /cases/{id}/transition` (there are no separate route
   message about a child shows a recipient count); a child's timeline does not name the paying
   guardian. Children appear by given name only; dates of birth, contacts, message bodies,
   payment-method tokens, provider references and tender evidence never appear. Facility-scoped
-  staff see their facilities' records and organization-wide ones.
+  staff see their facilities' records and organization-wide ones. A refund the provider reported
+  failed after it was recorded succeeded (finance's `reversedAt`) is the kind `refund.reversed`,
+  "Refund reversed", never `refund.succeeded` (R4-PROVIDER-OUTCOMES-02; **Verified**:
+  `timeline.spec.ts` "R4-PROVIDER-OUTCOMES-02 / SPK-SUPPORT-001 …"); it stays at the time support
+  indexed the refund (support does not index `finance.refund_reversed`).
 - **Cases (SPK-SUPPORT-002, `cases.spec.ts`):** service levels by priority (proposed, see below),
   owner validation (a current staff member who works cases), queue validation, the full CaseMachine,
   stale revisions, idempotent replay, the authorization matrix (other staff and every customer
@@ -183,8 +187,12 @@ and `close` events of `POST /cases/{id}/transition` (there are no separate route
   one, so the current notice is resent for any number of subjects and its copies are resent too,
   and a genuinely newer change refuses the notice and every copy of it. The notice is read again
   after the copy is queued, in the same transaction: a newer notice that committed after the first
-  read refuses the resend and the copy is discarded with it. What remains is pending in
-  communications (below).
+  read refuses the resend and the copy is discarded with it. A narrower newer notice that replaced
+  the notice only for some people (communications' per-recipient pointer,
+  `recipients[].supersededByNotificationId`, R4-COMMS-AUTOMATION-03) refuses the resend for a case
+  subject among them and leaves it allowed for the others; a pointer to support's own copy is no
+  replacement (**Verified**: "R4-COMMS-AUTOMATION-03 / SPK-COMMS-005: a narrower newer notice that
+  reached one family …"). What remains is pending in communications (below).
 - **Settling a helper outcome (support-migration-04/06/08):** the reviewer needs the kernel's
   `exceptions.manage` and must see the outcome's queue (a front-desk case worker is refused), and the
   finance-owned exception is resolved as the reviewer, not the system. A refund helper settles
@@ -332,14 +340,6 @@ DEC-015 (support coverage, service objectives) and the §6.6 support/operations 
     "moved" can still arrive after it. Closing it needs communications to refuse or supersede the
     copy under its own locks (a resend entry point that refuses a superseded source under the
     source's row lock, and a supersession that also covers notices queued meanwhile).
-  - Until communications' per-recipient supersession (R4-COMMS-AUTOMATION-03) is merged, the
-    resend's copy is queued through the same supersession as any notice: it points the notice it
-    copies at itself and fails the other recipients' push, email and SMS attempts of that notice
-    not yet handed to a provider (`SUPERSEDED`). Support's check treats a pointer to its own copy as
-    no replacement; the lost attempts are communications'. After that merge, a newer notice that
-    reaches only some recipients leaves the notice's own pointer empty and marks only those
-    recipients; support's check reads the notice's pointer, not the recipients', so a resend to a
-    subject such a narrower notice already replaced is not refused yet.
 - **Today cost (R3-PERFORMANCE-01, pending in the kernel):** the bounds above cap the work of
   one read, and the exception histories and the coverage source are batched (above). Readiness
   eligibility is evaluated per roster (competition `evaluateRoster`, R4-CARRY-01): a fixed number

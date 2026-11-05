@@ -1077,6 +1077,72 @@ describe('case actions (SPK-SUPPORT-003)', () => {
     expect(current.status, JSON.stringify(current.body)).toBe(201);
   });
 
+  it('R4-COMMS-AUTOMATION-03 / SPK-COMMS-005: a narrower newer notice that reached one family makes the older notice stale for that family only; its case resend is refused, the other family’s succeeds', async () => {
+    const second = await adultCustomer(t);
+    const event = newId();
+    const sendNotice = async (title: string, subjects: string[]) => {
+      const composed = await post(t, '/v1/notifications', operator, {
+        kind: 'schedule_changed',
+        subject: { type: 'event', id: event },
+        title,
+        body: `${title}.`,
+        audience: { subjectPersonIds: subjects },
+      });
+      expect(composed.status, JSON.stringify(composed.body)).toBe(201);
+      const sent = await post(t, `/v1/notifications/${composed.body.id}/send`, operator, {});
+      expect(sent.status, JSON.stringify(sent.body)).toBeLessThan(300);
+      await drainOutbox(t);
+      return composed.body.id as string;
+    };
+    const resend = async (caseId: string, notificationId: string) => {
+      const res = await post(t, `/v1/cases/${caseId}/resend-notification`, operator, {
+        notificationId,
+        reason: 'Customer says the message never arrived',
+      });
+      await drainOutbox(t);
+      return res;
+    };
+    const both = await sendNotice('Sunday game now at 10:00', [
+      people.adult.personId,
+      second.personId,
+    ]);
+    // A newer change reached the first family only (one team, a support resend of a newer notice).
+    const narrower = await sendNotice('Sunday game now at 11:00', [people.adult.personId]);
+    const deliveries = await get(t, `/v1/notifications/${both}/deliveries`, operator);
+    expect(deliveries.status).toBe(200);
+    const pointers = (
+      deliveries.body.recipients as Array<{
+        personId: string;
+        subjectPersonIds: string[];
+        supersededByNotificationId: string | null;
+      }>
+    ).map((r) => ({
+      first:
+        r.personId === people.adult.personId || r.subjectPersonIds.includes(people.adult.personId),
+      by: r.supersededByNotificationId,
+    }));
+    expect(pointers.some((p) => p.first && p.by === narrower)).toBe(true);
+    expect(pointers.filter((p) => !p.first).every((p) => p.by === null)).toBe(true);
+
+    const caseA = await openCase(operator, people.adult.personId);
+    const caseB = await openCase(operator, second.personId);
+    const actionsOfA = async () => (await get(t, `/v1/cases/${caseA}`, operator)).body.actions;
+    const before = await actionsOfA();
+    const refused = await resend(caseA, both);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.details).toMatchObject({
+      code: 'NOTICE_SUPERSEDED',
+      supersededByNotificationId: narrower,
+    });
+    expect(await actionsOfA()).toEqual(before);
+    const forB = await resend(caseB, both);
+    expect(forB.status, JSON.stringify(forB.body)).toBe(201);
+    expect(forB.body.action).toMatchObject({ status: 'succeeded' });
+    // support's own copy for the second family replaces nothing for it: resending again works
+    const again = await resend(caseB, both);
+    expect(again.status, JSON.stringify(again.body)).toBe(201);
+  });
+
   it('R4-COMMS-AUTOMATION-04: a newer notice that commits while the resend is being prepared discards the copy; nothing is recorded', async () => {
     const event = newId();
     const sendNotice = async (title: string) => {

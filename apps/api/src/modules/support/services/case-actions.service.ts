@@ -10,6 +10,7 @@ import {
   type EventPayload,
   type LinkCaseActionInput,
   type Notification,
+  type NotificationDeliveries,
   type Principal,
   type RequestRefundInput,
   type ResendNotificationInput,
@@ -436,6 +437,10 @@ export class CaseActionsService {
       // not resent; the same answer as communications' own delivery retry. Nothing is recorded.
       // Support's own resend copies of the same notice replace nothing (replacementOf).
       await this.assertCurrentNotice(trx, principal, organizationId, original.notification, null);
+      // R4-COMMS-AUTOMATION-03 follow-up: a narrower newer notice replaces this one only for the
+      // people it reaches (communications' per-recipient pointer); for the case subject among
+      // them it is just as stale, while another subject's copy stays current.
+      await this.assertCurrentForSubject(trx, organizationId, original, subject, null);
       const supportOperationId = await this.operations.create(trx, {
         organizationId,
         kind: 'support.resend_notification',
@@ -474,12 +479,20 @@ export class CaseActionsService {
       // has pointed the notice at itself by now, so the copy is discarded with the whole
       // transaction rather than sent after the newer change. A newer notice still being queued
       // when this transaction commits is not seen here (pending in communications, see README).
+      const copy = { id: resent.id, sourceId: input.notificationId };
       await this.assertCurrentNotice(
         trx,
         principal,
         organizationId,
         await this.notifications.get(principal, input.notificationId),
-        { id: resent.id, sourceId: input.notificationId },
+        copy,
+      );
+      await this.assertCurrentForSubject(
+        trx,
+        organizationId,
+        await this.notifications.deliveries(principal, input.notificationId),
+        subject,
+        copy,
       );
       // SUP-02: the compose's audit record through the kernel's AuditReader (IF-44).
       const [composedAudit] = await this.auditReader.forTarget(
@@ -541,6 +554,37 @@ export class CaseActionsService {
       code: 'NOTICE_SUPERSEDED',
       supersededByNotificationId: replaced.supersededByNotificationId,
     });
+  }
+
+  /**
+   * R4-COMMS-AUTOMATION-03 follow-up (SPK-COMMS-005): refuses RESOURCE_CONFLICT NOTICE_SUPERSEDED
+   * when a newer notice replaced `deliveries`' notice for the case subject only (a recipient row
+   * of the subject carries `supersededByNotificationId`). Support's own resend copies of the same
+   * notice point there too and replace nothing, so a pointer to one of them is not a refusal.
+   */
+  private async assertCurrentForSubject(
+    trx: Trx,
+    organizationId: string,
+    deliveries: NotificationDeliveries,
+    subject: string,
+    pendingCopy: ResendCopy | null,
+  ): Promise<void> {
+    const origin = await this.resendOriginOf(
+      trx,
+      organizationId,
+      deliveries.notification.id,
+      pendingCopy,
+    );
+    for (const recipient of deliveries.recipients) {
+      if (recipient.personId !== subject && !recipient.subjectPersonIds.includes(subject)) continue;
+      const by = recipient.supersededByNotificationId;
+      if (!by) continue;
+      if ((await this.resendOriginOf(trx, organizationId, by, pendingCopy)) === origin) continue;
+      throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
+        code: 'NOTICE_SUPERSEDED',
+        supersededByNotificationId: by,
+      });
+    }
   }
 
   /**
