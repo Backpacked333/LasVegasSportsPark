@@ -362,6 +362,31 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     );
   });
 
+  it("SPK-UX-009 (R4-CLIENTS-A11Y-COPY-03): a missing start time or space is each choice's hint, so it is read with the choice", async () => {
+    const app = renderFlow(partyRoutes(), G.party);
+    const time = await screen.findByRole('radio', { name: PARTY_TIME });
+    fireEvent.changeText(screen.getByLabelText('Number of guests'), '8');
+    await press('Send request');
+    expect(await screen.findByTestId('booking-time-error')).toHaveTextContent(
+      /Choose a start time\./,
+    );
+    expect(screen.getByRole('radio', { name: PARTY_TIME })).toHaveProp(
+      'accessibilityHint',
+      'Error: Choose a start time.',
+    );
+    fireEvent.press(time);
+    expect(screen.getByRole('radio', { name: PARTY_TIME }).props.accessibilityHint).toBeUndefined();
+    await press('Send request');
+    expect(await screen.findByTestId('booking-resources-error')).toHaveTextContent(
+      /Choose a free space\./,
+    );
+    expect(screen.getByRole('radio', { name: 'Party room' })).toHaveProp(
+      'accessibilityHint',
+      'Error: Choose a free space.',
+    );
+    expect(posts(app)).toHaveLength(0);
+  });
+
   it('a weekly rental sends its number of weeks; weeks that are not free (RESOURCE_CONFLICT) are listed and the times read again', async () => {
     const app = renderFlow(
       rentalRoutes({

@@ -78,13 +78,14 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   reference cannot be shown again" with the pass listed to withdraw.
 - **No definite answer (§4.9, SPK-UX-008).** A pass issue or withdrawal, an acknowledgement, an
   RSVP or a support request whose answer is lost (`mayHaveTakenEffect`: no response after sending,
-  a 5xx) reads "No answer yet: this may already have been recorded", never "Something went wrong",
+  a 5xx other than a refusal before running, a success whose answer could not be read) reads "No answer yet: this may already have been recorded", never "Something went wrong",
   and "Check again" resends exactly the request that got no answer under the same idempotency key
   (an issue then answers for the pass it made, see Pass above; the RSVP keeps its `expectedRevision`;
   the support request is resent as sent even after the draft was edited, and an edited draft is
   kept). IDEMPOTENCY_OUTCOME_UNAVAILABLE reads "This may already have been done" with "Reload".
   The pass, inbox and support screens use the account `CommandError`, the RSVP the teams
-  `CommandFailure`; both decide with `src/api/command-outcome.ts`.
+  `CommandFailure`; both decide with `src/api/command-outcome.ts` (the shared api-client
+  predicates).
 - **Inbox (SPK-COMMS-004).** Read and acknowledge send the attempt's `revision` (the newest the
   screen knows); a stale read reloads the list; a stale acknowledgment shows the code with
   "Reload". "Acknowledge" waits while the read just sent is in flight (it bumps the revision).

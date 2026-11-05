@@ -17,12 +17,18 @@
 import type { ApiError } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
 import { CommandFailure } from '../../features/money/CommandFailure';
 import { formatDateRange } from '../../features/money/format';
-import { ButtonRow, Caption, ChoiceRow, Section } from '../../features/money/ui';
+import {
+  ButtonRow,
+  Caption,
+  ChoiceGroup,
+  ChoiceRow,
+  FieldError,
+  Section,
+} from '../../features/money/ui';
 import { registrationRoutes } from '../../features/registration/routes';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -49,6 +55,7 @@ export function RenewMembership({
   });
   const [targetId, setTargetId] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
+  const missingError = missing ? 'Choose the membership to renew into.' : null;
   const [failure, setFailure] = useState<ApiError | null>(null);
   const open = (targets.data ?? []).filter((o) => o.publicationState === 'registration_open');
 
@@ -84,7 +91,7 @@ export function RenewMembership({
       ) : open.length === 0 && !targets.hasNextPage ? (
         <Caption>No membership is open for registration right now.</Caption>
       ) : (
-        <View accessibilityRole="radiogroup" accessibilityLabel="Membership to renew into">
+        <ChoiceGroup label="Membership to renew into" error={missingError}>
           {open.map((o) => (
             <ChoiceRow
               key={o.id}
@@ -99,10 +106,11 @@ export function RenewMembership({
               }}
             />
           ))}
-        </View>
+        </ChoiceGroup>
       )}
       <LoadMore pages={targets} label="memberships" />
-      {missing ? <Caption>▲ Choose the membership to renew into.</Caption> : null}
+      {/* Announced when it appears, like every field error (SPK-UX-009). */}
+      <FieldError error={missingError} testID="renew-target-error" />
       {failure ? (
         <CommandFailure
           error={failure}

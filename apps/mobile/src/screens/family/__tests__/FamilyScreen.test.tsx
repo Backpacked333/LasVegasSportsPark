@@ -233,6 +233,12 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(
       within(form).getByRole('alert', { name: /Choose at least one permission to pass on/ }),
     ).toBeOnTheScreen();
+    // R4-CLIENTS-A11Y-COPY-03: the required choice's error is read with each permission.
+    for (const row of within(form).getAllByRole('checkbox')) {
+      expect(row.props.accessibilityHint).toMatch(
+        /Error: Choose at least one permission to pass on\.$/,
+      );
+    }
     expect(within(form).getByLabelText('Their email address')).toHaveProp('value', 'jo-example');
     expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
   });

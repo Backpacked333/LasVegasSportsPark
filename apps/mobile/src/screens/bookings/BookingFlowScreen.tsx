@@ -50,6 +50,7 @@ import {
   Body,
   ButtonRow,
   Caption,
+  ChoiceGroup,
   ChoiceRow,
   Field,
   FieldError,
@@ -289,7 +290,10 @@ function BookingForm({
     }
     if (!time) next.time = 'Choose a start time.';
     else if (resourceCount !== null && chosen.length !== resourceCount) {
-      next.resources = `Choose ${resourceCount} of the free ${resourceCount === 1 ? 'space' : 'spaces'}.`;
+      next.resources =
+        resourceCount === 1
+          ? 'Choose a free space.'
+          : `Choose ${resourceCount} of the free spaces.`;
     }
     setErrors(next);
     if (Object.keys(next).length > 0 || !time) return;
@@ -418,7 +422,8 @@ function BookingForm({
         ) : (
           <>
             {timesNotice}
-            <View accessibilityRole="radiogroup" accessibilityLabel="Start time">
+            {/* A required choice: its error is each time's hint too (SPK-UX-009). */}
+            <ChoiceGroup label="Start time" error={errors.time}>
               {times.map((t) => (
                 <ChoiceRow
                   key={t.start}
@@ -433,7 +438,7 @@ function BookingForm({
                   }}
                 />
               ))}
-            </View>
+            </ChoiceGroup>
           </>
         )}
         <FieldError error={errors.time} testID="booking-time-error" />
@@ -444,9 +449,10 @@ function BookingForm({
           <Caption>
             {`This ${kind} reserves ${resourceCount} ${resourceCount === 1 ? 'space' : 'spaces'}. Choose from those free at ${formatWhen(time.start, zone.zone)}.`}
           </Caption>
-          <View
-            accessibilityRole={resourceCount === 1 ? 'radiogroup' : 'list'}
-            accessibilityLabel="Spaces to reserve"
+          <ChoiceGroup
+            label="Spaces to reserve"
+            role={resourceCount === 1 ? 'radiogroup' : 'list'}
+            error={errors.resources}
           >
             {time.resources.map((r) => (
               <ChoiceRow
@@ -457,7 +463,7 @@ function BookingForm({
                 onPress={() => toggleResource(r.resourceId)}
               />
             ))}
-          </View>
+          </ChoiceGroup>
           <FieldError error={errors.resources} testID="booking-resources-error" />
         </Section>
       ) : null}

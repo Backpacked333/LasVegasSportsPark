@@ -167,6 +167,138 @@ describe('SCR-C-25 ContributionScreen', () => {
     await app.settle();
   });
 
+  it('SPK-PAY-007 RESPONSE_UNREADABLE (R4-CLIENTS-A11Y-COPY-01): a success status whose answer could not be read is "No answer yet", never "Not done", keeps the payment methods hidden and "Check again" keeps the key', async () => {
+    let calls = 0;
+    const app = renderContribution({
+      'POST /contribution-requests/{id}/pay': () => {
+        calls += 1;
+        // The payment committed; something in front of the API cut its answer short.
+        return calls === 1
+          ? fakeResponse(201, '{"payment":{"id":"tru')
+          : fakeResponse(201, outcome('processing'));
+      },
+      'GET /payments/{id}': { status: 200, body: paymentAttempt({ status: 'processing' }) },
+      'GET /me/payments': { status: 200, body: { items: [], nextCursor: null } },
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Development payment: succeeds' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: RESPONSE_UNREADABLE/)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
+    // What the API recorded is read again at once, so an attempt it holds is shown.
+    await waitFor(() => expect(app.requestsTo('GET', '/me/payments')).toHaveLength(2));
+    await app.settle();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();
+    const keys = app.keysOf('POST', '/contribution-requests/{id}/pay');
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    await app.settle();
+  });
+
+  it('SPK-AT-028 (R4-CLIENTS-A11Y-COPY-01): payments paused during a restore (503 recovery_mode) are "Not done" with the API message, never "No answer yet", and paying stays possible', async () => {
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    const app = renderContribution({
+      'POST /contribution-requests/{id}/pay': () =>
+        fakeResponse(
+          503,
+          apiErrorBody('INTEGRATION_UNAVAILABLE', {
+            message: paused,
+            nextAction: 'retry_later',
+            details: { reason: 'recovery_mode' },
+          }),
+        ),
+      'GET /me/payments': { status: 200, body: { items: [], nextCursor: null } },
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Development payment: succeeds' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    expect(await screen.findByLabelText('Not done')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.queryByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeNull();
+    expect(screen.queryByText(/Do not pay again/)).toBeNull();
+    // Nothing ran: the payment methods and Pay stay on offer.
+    expect(screen.getByRole('radio', { name: 'Development payment: succeeds' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Pay $75.00' })).toBeEnabled();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      `Not done. ${paused} Nothing was changed: the service did not run this request, so nothing was paid or recorded. Try again.`,
+      { queue: true },
+    );
+    await app.settle();
+  });
+
+  it('SPK-AT-028 SPK-PAY-007 (R4-CLIENTS-A11Y-COPY-01): when "Check again" of a payment that got no answer is refused during a restore, the payment methods stay hidden and nothing claims that nothing was paid', async () => {
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    let attempts = 0;
+    const app = renderContribution({
+      'POST /contribution-requests/{id}/pay': () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('Network request failed');
+        return attempts === 2
+          ? fakeResponse(
+              503,
+              apiErrorBody('INTEGRATION_UNAVAILABLE', {
+                message: paused,
+                nextAction: 'retry_later',
+                details: { reason: 'recovery_mode' },
+              }),
+            )
+          : fakeResponse(201, outcome('processing'));
+      },
+      'GET /payments/{id}': { status: 200, body: paymentAttempt({ status: 'processing' }) },
+      'GET /me/payments': { status: 200, body: { items: [], nextCursor: null } },
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Development payment: succeeds' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Pay $75.00' }));
+    });
+    await screen.findByLabelText('No answer yet: this may already have been recorded');
+    await app.settle();
+    (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mockClear();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByTestId('contribution-check-refused')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Check not run')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'This check could not run now; the earlier payment may still have gone through. Do not pay again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/nothing was paid or recorded/)).toBeNull();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    // Another method would send a new key beside a payment that may have been taken: never offered.
+    expect(screen.queryByRole('radio', { name: /^Development payment/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay $75.00' })).toBeNull();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      `Check not run. ${paused} This check could not run now; the earlier payment may still have gone through. Do not pay again. Check again.`,
+      { queue: true },
+    );
+    await app.settle();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Payment processing')).toBeOnTheScreen();
+    const keys = app.keysOf('POST', '/contribution-requests/{id}/pay');
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
+    await app.settle();
+  });
+
   it('SPK-UX-009: a VoiceOver user who pays and gets no answer hears "No answer yet" (iOS has no live regions)', async () => {
     const app = renderContribution(
       {

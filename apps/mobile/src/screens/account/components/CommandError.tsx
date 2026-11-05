@@ -7,25 +7,31 @@
  * idempotency key is reused (§4.9).
  *
  * An answer after which the command may have taken effect (`mayHaveTakenEffect`: a lost
- * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx)
- * is never "Something went wrong": it reads "No answer yet: this may already have been recorded"
+ * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx, a
+ * success status whose body could not be read (RESPONSE_UNREADABLE)) is never "Something went
+ * wrong": it reads "No answer yet: this may already have been recorded"
  * and "Check again" resubmits the same request under the same key, which the API answers with the
  * stored outcome or runs once. IDEMPOTENCY_OUTCOME_UNAVAILABLE (`tookEffectOutcomeLost`: an
  * earlier attempt committed, its answer lost) is "This may already have been done" with "Reload"
- * (`ui/OutcomeLost`: every API record on screen is read again), never "Something went wrong". IDEMPOTENCY_SECRET_WITHHELD is a success whose one-time link cannot be shown again:
- * screens whose create returns a link show `SecretWithheld` (with "Revoke and issue a new link");
- * here it is never called a failure either.
+ * (`ui/OutcomeLost`: every API record on screen is read again), never "Something went wrong".
+ * IDEMPOTENCY_SECRET_WITHHELD is a success whose one-time link cannot be shown again: screens whose
+ * create returns a link show `SecretWithheld` (with "Revoke and issue a new link"); here it is
+ * never called a failure either. A refusal before running (`refusedBeforeRunning`: SPK-AT-028)
+ * changed nothing although it is a 503: "Not done" with the API's message
+ * (`ui/RefusedBeforeRunning`), never "No answer yet".
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text } from 'react-native';
 import {
   mayHaveTakenEffect,
+  refusedBeforeRunning,
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../../api/command-outcome';
 import { LiveRegion, sentences } from '../../../ui/announce';
 import { Button } from '../../../ui/Button';
 import { OutcomeLost } from '../../../ui/OutcomeLost';
+import { RefusedBeforeRunning } from '../../../ui/RefusedBeforeRunning';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { colors, spacing, type } from '../../../ui/theme';
@@ -93,6 +99,9 @@ export function CommandError({
   }
   if (tookEffectOutcomeLost(error)) {
     return <OutcomeLost error={error} />;
+  }
+  if (refusedBeforeRunning(error)) {
+    return <RefusedBeforeRunning error={error} onRetry={onRetry} />;
   }
   if (mayHaveTakenEffect(error)) {
     const recovery = recoveryActionFor(error);

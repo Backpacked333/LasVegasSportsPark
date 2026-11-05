@@ -8,7 +8,7 @@
 import { DEFAULT_TIMEOUT_MS } from '@sportspark/api-client';
 import { apiErrorBody, fakeResponse, type FakeRequest } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
-import { Share } from 'react-native';
+import { AccessibilityInfo, Share } from 'react-native';
 import {
   CAPTAIN_ACTIONS,
   IDS,
@@ -727,6 +727,38 @@ describe('SCR-C-23 RosterScreen', () => {
         within(section).getByLabelText('Reason. Give the reason for the handover.'),
       ).toBeOnTheScreen();
       expect(app.requestsTo('POST', '/team-entries/{id}/roles/handover')).toHaveLength(0);
+    });
+
+    it('SPK-UX-009 (NA-A01, R4-CLIENTS-A11Y-COPY-03): the role and new-holder choice errors are announced and read with each choice', async () => {
+      renderRoster();
+      const section = await screen.findByTestId('role-handover');
+      fireEvent.changeText(within(section).getByLabelText('Reason'), 'Moving away for the season');
+      fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
+      const roleError = within(section).getByTestId('handover-role-error');
+      expect(roleError).toHaveTextContent('▲ Choose the role to hand over.');
+      expect(roleError).toHaveProp('accessibilityLiveRegion', 'polite');
+      expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+        'Choose the role to hand over.',
+        { queue: true },
+      );
+      expect(within(section).getByRole('radio', { name: 'Captain, held by you' })).toHaveProp(
+        'accessibilityHint',
+        'Error: Choose the role to hand over.',
+      );
+      // The role is chosen; the new holder is still missing.
+      fireEvent.press(within(section).getByRole('radio', { name: 'Captain, held by you' }));
+      fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
+      const holderError = within(section).getByTestId('handover-holder-error');
+      expect(holderError).toHaveTextContent('▲ Choose who takes the role.');
+      expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+        'Choose who takes the role.',
+        { queue: true },
+      );
+      expect(within(section).getByRole('radio', { name: 'Pat Player' })).toHaveProp(
+        'accessibilityHint',
+        'Error: Choose who takes the role.',
+      );
+      expect(within(section).queryByTestId('handover-role-error')).toBeNull();
     });
 
     it('SPK-AT-013: a new holder the rule set refuses shows the API reasons and code', async () => {

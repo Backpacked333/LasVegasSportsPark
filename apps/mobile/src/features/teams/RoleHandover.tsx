@@ -31,6 +31,7 @@ import {
   Body,
   ButtonRow,
   CommandFailure,
+  FieldError,
   OfflineNotice,
   RadioGroup,
   RadioRow,
@@ -156,7 +157,7 @@ export function RoleHandover({
         The role passes to an active roster member at once; the change is recorded with your reason
         and the earlier role is kept as history.
       </Body>
-      <RadioGroup label="Role to hand over">
+      <RadioGroup label="Role to hand over" error={errors.role}>
         {leaders.map((r) => (
           <RadioRow
             key={r.id}
@@ -171,12 +172,13 @@ export function RoleHandover({
           />
         ))}
       </RadioGroup>
-      {errors.role ? <Body>{`▲ ${errors.role}`}</Body> : null}
+      {/* Announced when they appear, like every field error (SPK-UX-009). */}
+      <FieldError error={errors.role} testID="handover-role-error" />
       {record ? (
         candidates.length === 0 ? (
           <Body>No active roster member can take this role now.</Body>
         ) : (
-          <RadioGroup label="New holder">
+          <RadioGroup label="New holder" error={errors.to}>
             {candidates.map((m) => (
               <RadioRow
                 key={m.personId}
@@ -191,7 +193,7 @@ export function RoleHandover({
           </RadioGroup>
         )
       ) : null}
-      {errors.to ? <Body>{`▲ ${errors.to}`}</Body> : null}
+      <FieldError error={errors.to} testID="handover-holder-error" />
       <TextField
         label="Reason"
         value={reason}

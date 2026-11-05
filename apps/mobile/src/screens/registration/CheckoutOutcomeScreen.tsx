@@ -14,6 +14,11 @@
  * - "Payment received. We are completing your registration." (recovery required) and "Payment
  *   returned. Registration was not completed." (compensated).
  *
+ * When "Check again" of a new payment that got no answer is refused before running
+ * (`refusedAfterNoAnswer`: payments paused while the service recovers from a restore, SPK-AT-028),
+ * the screen stays "Checking your new payment" and shows "Check not run" with the API's message:
+ * the earlier payment may still have gone through (R4-CLIENTS-A11Y-COPY-01).
+ *
  * A checkout of another account is answered NOT_FOUND and reads "not available". Offline, the last
  * known status is shown with its age. The checkout's status and the payment's are announced to
  * screen readers when they appear and whenever a re-read changes them (`ui/announce`, SPK-UX-009).
@@ -23,7 +28,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import {
+  mayHaveTakenEffect,
+  refusedAfterNoAnswer,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
@@ -47,6 +56,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -95,16 +105,22 @@ function RetryPayment({
   };
   if (confirming) {
     return (
-      <ButtonRow>
-        <Button
-          label="Check again"
-          variant="secondary"
-          onPress={() => void submit()}
-          disabled={reachable === false}
-          busy={retry.isProcessing}
-          accessibilityHint="Asks about the same payment again; it is never charged twice"
-        />
-      </ButtonRow>
+      <View>
+        <ButtonRow>
+          <Button
+            label="Check again"
+            variant="secondary"
+            onPress={() => void submit()}
+            disabled={reachable === false}
+            busy={retry.isProcessing}
+            accessibilityHint="Asks about the same payment again; it is never charged twice"
+          />
+        </ButtonRow>
+        {/* SPK-AT-028: the check did not run; the earlier payment may still go through. */}
+        {failure && refusedAfterNoAnswer(failure) ? (
+          <RefusedBeforeRunning error={failure} priorUnknown payment testID="retry-check-refused" />
+        ) : null}
+      </View>
     );
   }
   if (!DevPaymentMethodPicker) {

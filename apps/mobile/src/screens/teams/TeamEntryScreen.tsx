@@ -57,6 +57,7 @@ import {
   ButtonRow,
   CommandFailure,
   Detail,
+  FieldError,
   OfflineNotice,
   RadioGroup,
   RadioRow,
@@ -298,7 +299,7 @@ function EntryForm({
         </Section>
       )}
       <Section title="Season">
-        <RadioGroup label="Open seasons">
+        <RadioGroup label="Open seasons" error={seasonError}>
           {choices.map((season) => (
             <RadioRow
               key={season.id}
@@ -309,7 +310,8 @@ function EntryForm({
             />
           ))}
         </RadioGroup>
-        {seasonError ? <Body>{`▲ ${seasonError}`}</Body> : null}
+        {/* Announced when it appears, like every field error (SPK-UX-009). */}
+        <FieldError error={seasonError} testID="team-entry-season-error" />
       </Section>
       {seasonId ? <Divisions seasonId={seasonId} /> : null}
       <Section title={prior ? 'Renew' : 'Create'}>

@@ -6,6 +6,7 @@
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import {
   IDS,
   basket,
@@ -172,6 +173,29 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
     fireEvent.changeText(screen.getByLabelText('To (HH:MM)'), '19:00');
     fireEvent.press(screen.getByRole('button', { name: 'Add this time' }));
     expect(screen.getByText('✕ The end time must be after the start time.')).toBeOnTheScreen();
+  });
+
+  it('SPK-UX-009 (R4-CLIENTS-A11Y-COPY-03): a time without a day shows "Choose a day." at the day choice, read with each day, never at a time field', async () => {
+    renderPlacement({ routes: routes() });
+    fireEvent.changeText(await screen.findByLabelText('From (HH:MM)'), '18:00');
+    fireEvent.changeText(screen.getByLabelText('To (HH:MM)'), '19:00');
+    fireEvent.press(screen.getByRole('button', { name: 'Add this time' }));
+    expect(screen.getByTestId('availability-day-error')).toHaveTextContent('✕ Choose a day.');
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Choose a day.',
+      { queue: true },
+    );
+    expect(screen.getByRole('radio', { name: 'Tuesday' })).toHaveProp(
+      'accessibilityHint',
+      'Error: Choose a day.',
+    );
+    expect(screen.getByTestId('availability-to')).not.toHaveProp(
+      'accessibilityHint',
+      'Error: Choose a day.',
+    );
+    fireEvent.press(screen.getByRole('radio', { name: 'Tuesday' }));
+    expect(screen.queryByTestId('availability-day-error')).toBeNull();
+    expect(screen.getByRole('radio', { name: 'Tuesday' }).props.accessibilityHint).toBeUndefined();
   });
 
   it('VALIDATION_FAILED: shows the API message at the field and keeps the input', async () => {

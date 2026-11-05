@@ -9,16 +9,18 @@ import {
   type ApiError,
   type Schema,
 } from '@sportspark/api-client';
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   mayHaveTakenEffect,
+  refusedBeforeRunning,
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
 import { LiveRegion, LiveText, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
@@ -92,7 +94,14 @@ export function ButtonRow({ children }: { children: ReactNode }) {
   return <View style={styles.buttonRow}>{children}</View>;
 }
 
-/** A radio row: role and checked state are announced; the mark is a glyph, never colour only. */
+/** The error of the choice a `RadioRow` belongs to (`RadioGroup error`), read with each row. */
+const ChoiceErrorContext = createContext<string | null>(null);
+
+/**
+ * A radio row: role and checked state are announced; the mark is a glyph, never colour only. While
+ * its group shows an error ("Choose the player to ask."), the error is the row's hint, so it is
+ * read with the choice (SPK-UX-009).
+ */
 export function RadioRow({
   label,
   detail,
@@ -108,10 +117,12 @@ export function RadioRow({
   disabled?: boolean;
   testID?: string;
 }) {
+  const groupError = useContext(ChoiceErrorContext);
   return (
     <Pressable
       accessibilityRole="radio"
       accessibilityLabel={detail ? `${label}, ${detail}` : label}
+      accessibilityHint={groupError ? `Error: ${groupError}` : undefined}
       accessibilityState={{ checked, disabled }}
       disabled={disabled}
       onPress={onSelect}
@@ -137,12 +148,44 @@ export function RadioRow({
   );
 }
 
-export function RadioGroup({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * A labelled radio group. `error` (a required choice not made) is the group's and each row's
+ * hint, so it is read with the choice; show it under the group with `FieldError`, which announces
+ * it when it appears (SPK-UX-009, NA-A01).
+ */
+export function RadioGroup({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: string | null;
+  children: ReactNode;
+}) {
   return (
-    <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.group}>
+    <View
+      accessibilityRole="radiogroup"
+      accessibilityLabel={label}
+      accessibilityHint={error ? `Error: ${error}` : undefined}
+      style={styles.group}
+    >
       <Text style={styles.fieldLabel}>{label}</Text>
-      {children}
+      <ChoiceErrorContext.Provider value={error ?? null}>{children}</ChoiceErrorContext.Provider>
     </View>
+  );
+}
+
+/**
+ * A choice's (or a field's) error, shown under it and announced to screen readers when it appears
+ * (`ui/announce`: a live region on Android, an announcement on iOS; SPK-UX-009, NA-A01), so a
+ * person who sends a form without choosing hears why nothing was sent.
+ */
+export function FieldError({ error, testID }: { error?: string | null; testID?: string }) {
+  if (!error) return null;
+  return (
+    <LiveText style={styles.error} announcement={error} accessibilityRole="alert" testID={testID}>
+      {`▲ ${error}`}
+    </LiveText>
   );
 }
 
@@ -277,16 +320,19 @@ export function detailCodeOf(error: ApiError): string | null {
  * NOT_FOUND) is "not available" with no hint that a record exists (§4.10).
  *
  * An answer after which the command may have taken effect (`mayHaveTakenEffect`: a lost
- * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx,
- * PAYMENT_OUTCOME_UNKNOWN) is never "Not done" (§4.9, SPK-PAY-007): it reads "No answer yet: this
+ * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx, a
+ * success status whose body could not be read (RESPONSE_UNREADABLE), PAYMENT_OUTCOME_UNKNOWN) is
+ * never "Not done" (§4.9, SPK-PAY-007): it reads "No answer yet: this
  * may already have been recorded", and "Check again" repeats the same request under the same key,
  * which the API answers with the stored outcome or runs once. IDEMPOTENCY_OUTCOME_UNAVAILABLE
  * (`tookEffectOutcomeLost`: an earlier attempt committed, its answer lost) is "This may already have
  * been done" with "Reload" (`ui/OutcomeLost`: every API record on screen is read again), never
  * "Not done". IDEMPOTENCY_SECRET_WITHHELD is a success whose one-time link cannot be shown again;
  * screens whose create returns a link show `SecretWithheld` instead, and this never calls it a
- * failure either. Pass `read` for a failed read: it changed nothing, so it is "Not loaded" and
- * "Try again".
+ * failure either. A refusal before running (`refusedBeforeRunning`: payments paused while the
+ * service recovers from a restore, SPK-AT-028) changed nothing although it is a 503: it is "Not
+ * done" with the API's message (`ui/RefusedBeforeRunning`), never "No answer yet". Pass `read` for
+ * a failed read: it changed nothing, so it is "Not loaded" and "Try again".
  */
 export function CommandFailure({
   error,
@@ -325,6 +371,13 @@ export function CommandFailure({
     return (
       <View testID={testID}>
         <OutcomeLost error={error} />
+      </View>
+    );
+  }
+  if (!read && refusedBeforeRunning(error)) {
+    return (
+      <View testID={testID}>
+        <RefusedBeforeRunning error={error} onRetry={onRetry} />
       </View>
     );
   }

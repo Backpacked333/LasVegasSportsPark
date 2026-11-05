@@ -1,17 +1,34 @@
 /**
  * What a command's failure says about its effect, in one place for every customer screen (§4.9,
- * §4.14, SPK-PAY-007, SPK-UX-008). The shared failure views (account `CommandError`, teams
- * `CommandFailure`, money `CommandFailure`, registration `CommandError`, `ui/SecretWithheld`) and
- * the payment screens (SCR-C-14, SCR-C-15, SCR-C-25, SCR-C-34) decide with these predicates only.
+ * §4.10, §4.14, SPK-PAY-007, SPK-UX-008, SPK-AT-028). The shared failure views (account
+ * `CommandError`, teams `CommandFailure`, money `CommandFailure`, registration `CommandError`,
+ * `ui/SecretWithheld`) and the payment screens (SCR-C-14, SCR-C-15, SCR-C-25, SCR-C-34) decide
+ * with these predicates only.
  *
- * - `mayHaveTakenEffect`: no definite answer. The request may have reached the API and committed:
- *   no response (a lost connection while waiting, `kind: 'network'`, or the client's timeout), the
- *   same key still running (IDEMPOTENCY_IN_PROGRESS), a server failure (INTERNAL_ERROR, any 5xx: a
- *   command can fail after an earlier transaction of it committed), or a payment the API holds as
- *   unknown (PAYMENT_OUTCOME_UNKNOWN). Such an answer is never shown as "Not done": "Check again"
- *   repeats the same request under the same idempotency key, which the API answers with the stored
- *   outcome or runs once. `ApiError.outcomeUnknown` covers only the timeout and
+ * They are the shared predicates of `@sportspark/api-client` (`outcome.ts`, `idempotency.ts`), the
+ * same ones the staff dashboard decides with, re-exported here so the customer app has no copy of
+ * its own that could drift from them (R4-CLIENTS-A11Y-COPY-01):
+ *
+ * - `mayHaveTakenEffect`: no definite answer to a command, so the request may have reached the API
+ *   and committed: no response (a lost connection while waiting, `kind: 'network'`, or the
+ *   client's timeout), the same key still running (IDEMPOTENCY_IN_PROGRESS), a server failure
+ *   (INTERNAL_ERROR, any 5xx: a command can fail after an earlier transaction of it committed), a
+ *   success status whose body could not be read (RESPONSE_UNREADABLE: a 2xx means the API
+ *   answered success), or a payment the API holds as unknown (PAYMENT_OUTCOME_UNKNOWN). Such an
+ *   answer is never shown as "Not done": "Check again" repeats the same request under the same
+ *   idempotency key, which the API answers with the stored outcome or runs once. A failed read
+ *   (`ApiError.method` is `get`) changed nothing and is never one, and neither is a refusal before
+ *   running, although it is a 503. `ApiError.outcomeUnknown` covers only the timeout and
  *   PAYMENT_OUTCOME_UNKNOWN, so screens use this instead.
+ * - `refusedBeforeRunning`: INTEGRATION_UNAVAILABLE from a guard that answers before the
+ *   idempotency key is claimed, so this request did not run: `details.reason: 'recovery_mode'`
+ *   (payments are paused while the organization recovers from a restore, §5.8, SPK-AT-028) or
+ *   `'disabled'`. On a first attempt nothing ran at all: screens show it as "Not done" with the
+ *   API's message ("Payments are paused ... Try again later."), never as "No answer yet" or "Do not
+ *   pay again" (`ui/RefusedBeforeRunning`). When it answers a re-check of an attempt that got no
+ *   answer (`refusedAfterNoAnswer`), only the check did not run and the outcome stays open.
+ * - `outcomeStillOpen`: the key is kept and the outcome is open (not after a refusal before
+ *   running, where this request did not run; the customer app has no form that locks on it).
  * - `tookEffectOutcomeLost`: IDEMPOTENCY_OUTCOME_UNAVAILABLE. An earlier attempt under this key
  *   committed changes, but its response was never recorded (the API stopped first, and its lease
  *   lapsed), so the API will not run it again and cannot say what it returned (next action
@@ -21,6 +38,9 @@
  *   done", and a create form does not create again beside the record it may have made. The hooks
  *   keep the intent's key after it (`keepsIntentAfterFailure`), so an unchanged resubmission is
  *   answered the same way instead of running under a new key.
+ * - `keepsIntentAfterFailure`: whether the next attempt of the same input keeps the intent's key:
+ *   while the outcome is not known (`ApiError.keepsIntent`) and after IDEMPOTENCY_OUTCOME_
+ *   UNAVAILABLE, where a new key would run the command a second time.
  * - `secretWithheldOf`: IDEMPOTENCY_SECRET_WITHHELD. A retry of a create command whose response
  *   carried a one-time secret (an invitation or a calendar feed link) found that the first attempt
  *   succeeded; the secret is returned only in the original response, which never reached this
@@ -28,58 +48,72 @@
  *   revoke it and issue a new one (next action `revoke_and_reissue`).
  * - `mustNotCreateAgain`: either of the last two. A create form holds back creating again and shows
  *   `ui/SecretWithheld`, which points to where the record is listed.
+ *
+ * One rule is the customer app's own, because only its command hooks know which attempts share an
+ * idempotency key: `refusedAfterNoAnswer` (below).
  */
-import { keepsIntentAfter, type ApiError } from '@sportspark/api-client';
+import {
+  ApiError,
+  mayHaveTakenEffect,
+  refusedBeforeRunning,
+  tookEffectOutcomeLost,
+} from '@sportspark/api-client';
 
-export function mayHaveTakenEffect(error: ApiError): boolean {
-  return (
-    error.isOffline ||
-    error.code === 'IDEMPOTENCY_IN_PROGRESS' ||
-    error.code === 'INTERNAL_ERROR' ||
-    error.code === 'PAYMENT_OUTCOME_UNKNOWN' ||
-    (error.status ?? 0) >= 500
-  );
-}
+export {
+  OUTCOME_LOST_CODE,
+  RESPONSE_UNREADABLE_CODE,
+  SECRET_WITHHELD_CODE,
+  keepsIntentAfterFailure,
+  mayHaveTakenEffect,
+  mustNotCreateAgain,
+  outcomeStillOpen,
+  refusedBeforeRunning,
+  secretWithheldOf,
+  tookEffectOutcomeLost,
+} from '@sportspark/api-client';
 
-export const OUTCOME_LOST_CODE = 'IDEMPOTENCY_OUTCOME_UNAVAILABLE';
+/** Refusals before running that answered a re-check of an attempt left without an answer. */
+const refusedRechecks = new WeakSet<object>();
 
-export function tookEffectOutcomeLost(error: ApiError): boolean {
-  return error.code === OUTCOME_LOST_CODE;
+/**
+ * A refusal before running (`refusedBeforeRunning`) that answered a re-check: an earlier attempt
+ * under the same idempotency key got no definite answer (`mayHaveTakenEffect`) or committed with
+ * its answer lost (`tookEffectOutcomeLost`), and "Check again" (or the automatic re-check on
+ * returning to the app) sent it again. The kernel RecoveryGuard answers before the idempotency
+ * interceptor reads the key's stored outcome, so the refusal proves only that this check did not
+ * run; it says nothing about the earlier attempt, which may have committed or charged a card (the
+ * SPK-AT-028 case: a payment sent just before an outage, checked again after a restore). The
+ * outcome stays open: payment screens keep "Do not pay again" and keep paying blocked (SPK-PAY-007,
+ * "Unknown outcomes must be reconciled before another operation risks charging the customer
+ * again"), and `ui/RefusedBeforeRunning` reads "Check not run", never "Nothing was changed"
+ * (R4-CLIENTS-A11Y-COPY-01). Marked by the command hooks (`useApiCommand`, teams
+ * `useKeyedCommands`) through `NoAnswerMemory`.
+ */
+export function refusedAfterNoAnswer(error: unknown): boolean {
+  return !!error && typeof error === 'object' && refusedRechecks.has(error);
 }
 
 /**
- * Whether the next attempt of the same input must keep the intent's idempotency key. As
- * `keepsIntentAfter` (api-client), and also after IDEMPOTENCY_OUTCOME_UNAVAILABLE: the API never
- * stores that answer but gives it again for the same key, whereas a new key would run the command
- * a second time (`ApiError.keepsIntent` ends the intent there).
+ * What one command hook remembers about its attempts: the idempotency key whose last answered
+ * attempt left the outcome open. A refusal before running under that key is marked
+ * (`refusedAfterNoAnswer`) and leaves it open; any other definite answer settles it.
  */
-export function keepsIntentAfterFailure(error: unknown): boolean {
-  if (
-    error &&
-    typeof error === 'object' &&
-    (error as { code?: unknown }).code === OUTCOME_LOST_CODE
-  )
-    return true;
-  return keepsIntentAfter(error);
-}
+export class NoAnswerMemory {
+  private key: string | null = null;
 
-export const SECRET_WITHHELD_CODE = 'IDEMPOTENCY_SECRET_WITHHELD';
+  /** An attempt under `key` failed with `error`. */
+  failed(key: string, error: unknown): void {
+    if (refusedBeforeRunning(error)) {
+      if (this.key === key && error && typeof error === 'object') refusedRechecks.add(error);
+      return;
+    }
+    // Anything that is not the typed client error (a programming error) may still have been sent.
+    const open = !ApiError.is(error) || mayHaveTakenEffect(error) || tookEffectOutcomeLost(error);
+    this.key = open ? key : null;
+  }
 
-/**
- * The record an IDEMPOTENCY_SECRET_WITHHELD answer names, or null when the error is another one.
- * `resourceId` is null when the API could not name it (the stored response had no id).
- */
-export function secretWithheldOf(error: ApiError): { resourceId: string | null } | null {
-  if (error.code !== SECRET_WITHHELD_CODE) return null;
-  const details = error.details as { resourceId?: unknown } | null | undefined;
-  const resourceId =
-    details && typeof details === 'object' && typeof details.resourceId === 'string'
-      ? details.resourceId
-      : null;
-  return { resourceId };
-}
-
-/** The create may already have made its record: do not send it again under a new key. */
-export function mustNotCreateAgain(error: ApiError | null): boolean {
-  return error !== null && (secretWithheldOf(error) !== null || tookEffectOutcomeLost(error));
+  /** The API answered with success, or the intent was abandoned: nothing is open any more. */
+  settled(): void {
+    this.key = null;
+  }
 }
