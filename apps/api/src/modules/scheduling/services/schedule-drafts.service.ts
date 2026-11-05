@@ -279,6 +279,13 @@ export class ScheduleDraftsService {
    * records (base revisions), 3 recheck physical conflicts, 4 verify fixture obligations,
    * 5 commit the approved revision, 6 record durable follow-up events, 7 bump published revisions
    * (customer and staff views read the published revision). Any failure rolls everything back.
+   *
+   * R4-REPLAY-IDEMPOTENCY-02 (§4.8, §4.9, §4.12): the operation is created inside the publication
+   * transaction, so it commits only together with the publication (as `succeeded`). A process that
+   * stops mid-publication leaves neither a publication nor an operation stuck `running`, and the
+   * request's idempotency key records no committed work, so a retry with the same key publishes.
+   * A refusal after the publication started is recorded in a new transaction (recordFailure) as a
+   * `failed` operation, which the key then names.
    */
   async publish(
     principal: Principal,
@@ -287,29 +294,12 @@ export class ScheduleDraftsService {
     correlationId?: string,
   ): Promise<Publication> {
     const organizationId = organizationOf(principal);
-    const operationId = await this.uow.run(async ({ trx }) => {
-      const draft = await this.load(trx, organizationId, draftId);
-      if (!draft) throw errors.notFound('schedule draft', draftId);
-      await this.authorization.require(principal, SchedulingActions.publishSchedule, {
-        type: 'schedule_draft',
-        id: draftId,
-        organizationId,
-        facilityId: draft.facility_id,
-      });
-      assertExpectedRevision(meta.expectedRevision, draft.revision);
-      ScheduleDraftMachine.next(draft.status, 'publish');
-      return this.operations.create(trx, {
-        organizationId,
-        kind: 'scheduling.publish_schedule',
-        requestedBy: principal,
-        correlationId: correlationId ?? null,
-        input: { draftId },
-        status: 'running',
-      });
-    });
-
+    // The operation of the attempt that reached the publication steps; null while the
+    // preconditions (draft, authorization, revision, lifecycle) refuse it, which records nothing.
+    const attempt: { operationId: string | null } = { operationId: null };
     try {
       return await this.uow.run(async ({ trx }) => {
+        attempt.operationId = null;
         // 1. recheck authorization against the locked draft
         const draft = await this.load(trx, organizationId, draftId, true);
         if (!draft) throw errors.notFound('schedule draft', draftId);
@@ -321,6 +311,15 @@ export class ScheduleDraftsService {
         });
         assertExpectedRevision(meta.expectedRevision, draft.revision);
         const publishing = ScheduleDraftMachine.next(draft.status, 'publish');
+        const operationId = await this.operations.create(trx, {
+          organizationId,
+          kind: 'scheduling.publish_schedule',
+          requestedBy: principal,
+          correlationId: correlationId ?? null,
+          input: { draftId },
+          status: 'running',
+        });
+        attempt.operationId = operationId;
         await trx
           .updateTable('schedule_drafts')
           .set({ status: publishing })
@@ -486,22 +485,17 @@ export class ScheduleDraftsService {
         return publicationView(row);
       });
     } catch (error) {
-      if (DomainError.is(error)) {
-        await this.recordFailure(
-          principal,
-          organizationId,
-          draftId,
-          operationId,
-          error,
-          correlationId,
-        );
-      } else {
-        await this.uow.run((ctx) =>
-          this.operations.transition(ctx.trx, operationId, 'failed', {
-            error: { code: 'INTERNAL_ERROR', message: 'Publication failed unexpectedly.' },
-          }),
-        );
-      }
+      // Refused by a precondition before the publication started: nothing changed and nothing is
+      // recorded (the draft and the key stay as they were).
+      if (attempt.operationId === null) throw error;
+      await this.recordFailure(
+        principal,
+        organizationId,
+        draftId,
+        attempt.operationId,
+        error,
+        correlationId,
+      );
       throw error;
     }
   }
@@ -587,17 +581,42 @@ export class ScheduleDraftsService {
   // internals
   // ---------------------------------------------------------------------------------------------
 
+  /**
+   * Records a publication that failed after it started (R4-REPLAY-IDEMPOTENCY-02). The publication
+   * transaction rolled back together with its operation, so this transaction creates the readable
+   * `failed` operation (which the request's idempotency key names) and, for a domain refusal, moves
+   * the draft to `failed` with the reasons. An error that surfaced after the publication had in fact
+   * committed (a lost commit acknowledgement) records nothing: the publication and its `succeeded`
+   * operation stand.
+   */
   private async recordFailure(
     principal: Principal,
     organizationId: string,
     draftId: string,
-    operationId: string,
-    error: DomainError,
+    attemptedOperationId: string,
+    cause: unknown,
     correlationId?: string,
   ): Promise<void> {
+    const error = DomainError.is(cause) ? cause : null;
     await this.uow.run(async ({ trx }) => {
-      const draft = await this.load(trx, organizationId, draftId, true);
-      if (draft && ScheduleDraftMachine.can(draft.status, 'fail')) {
+      const committed = await trx
+        .selectFrom('publications')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('draft_id', '=', draftId)
+        .where('operation_id', '=', attemptedOperationId)
+        .executeTakeFirst();
+      if (committed) return;
+      const operationId = await this.operations.create(trx, {
+        organizationId,
+        kind: 'scheduling.publish_schedule',
+        requestedBy: principal,
+        correlationId: correlationId ?? null,
+        input: { draftId },
+        status: 'running',
+      });
+      const draft = error ? await this.load(trx, organizationId, draftId, true) : undefined;
+      if (error && draft && ScheduleDraftMachine.can(draft.status, 'fail')) {
         const result: ValidationResult = {
           ok: false,
           validatedAt: this.clock.now().toISOString(),
@@ -631,16 +650,15 @@ export class ScheduleDraftsService {
           details: { code: error.code },
         });
       }
-      const operation = await trx
-        .selectFrom('operations')
-        .select('status')
-        .where('id', '=', operationId)
-        .executeTakeFirst();
-      if (operation && operation.status === 'running') {
-        await this.operations.transition(trx, operationId, 'failed', {
-          error: { code: error.code, message: error.message, details: error.details },
-        });
-      }
+      await this.operations.transition(trx, operationId, 'failed', {
+        error: error
+          ? { code: error.code, message: error.message, details: error.details }
+          : {
+              // The operator log keeps the cause; readers see the generic message (R3-SECURITY-05).
+              code: 'INTERNAL_ERROR',
+              message: `Publication failed unexpectedly: ${cause instanceof Error ? cause.message : String(cause)}`,
+            },
+      });
     });
   }
 
