@@ -9,6 +9,7 @@
     ],
     "catalog.session_retimed": [
       "enrollment.follow_session_retimed",
+      "entry.follow_session_retimed",
       "workforce.follow_session_retimed"
     ],
     "communications.delivery_requested": ["communications.dispatch_notification"],
@@ -61,6 +62,7 @@
     "finance.payment_outcome_unknown": ["support.index_payment"],
     "finance.payment_received": ["support.index_payment"],
     "finance.refund_requested": ["support.index_refund"],
+    "finance.refund_reversed": ["finance.notify_refund_reversed"],
     "finance.refund_settled": [
       "finance.complete_compensation",
       "finance.pos_return_refund_outcome",
@@ -85,6 +87,7 @@
       "communications.schedule_change_notice",
       "competition.sync_fixture_schedule",
       "enrollment.booking_follow_event",
+      "entry.follow_event_changed",
       "entry.withdraw_on_event_canceled",
       "support.index_schedule_change",
       "workforce.follow_event"

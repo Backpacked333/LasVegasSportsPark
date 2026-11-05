@@ -3,7 +3,8 @@ import { OutboxDispatcher } from '../kernel';
 import { createTestApp, type TestApp } from '../testing';
 import { DOMAIN_MODULES } from '../modules';
 import { createAcknowledgmentFixture, createOfferingFixture } from '../modules/catalog';
-import { DeliveryWorker } from '../modules/communications';
+import { deliverQueued } from '../modules/communications';
+import { createContactPointFixture } from '../modules/identity';
 import {
   addRosterMemberFixture,
   createDivisionFixture,
@@ -54,6 +55,12 @@ describe('cross-module readiness and arrival ports in the assembled application'
   const player = async (teamEntryId: string, acknowledged: boolean) => {
     const person = await adultCustomer(t);
     await addRosterMemberFixture(t, { teamEntryId, personId: person.personId });
+    await createContactPointFixture(t, {
+      personId: person.personId,
+      kind: 'email',
+      value: `${person.personId}@example.test`,
+      verified: true,
+    });
     if (acknowledged) {
       await createAcknowledgmentFixture(t, {
         subjectPersonId: person.personId,
@@ -92,6 +99,12 @@ describe('cross-module readiness and arrival ports in the assembled application'
     divisionId = await createDivisionFixture(t, { seasonId: season.seasonId });
     for (const name of ['Home', 'Away']) {
       const captain = await adultCustomer(t);
+      await createContactPointFixture(t, {
+        personId: captain.personId,
+        kind: 'email',
+        value: `${captain.personId}@example.test`,
+        verified: true,
+      });
       const entry = await createTeamEntryFixture(t, {
         seasonId: season.seasonId,
         captainPersonId: captain.personId,
@@ -189,7 +202,9 @@ describe('cross-module readiness and arrival ports in the assembled application'
     const before = await readiness();
     expect(check(before, 'notifications')).toBe('unknown');
     await drain();
-    await t.app.get(DeliveryWorker).runOnce();
+    // R4-COMMS-AUTOMATION-06: dispatched, only the in-app copies are delivered (not evidence).
+    expect(check(await readiness(), 'notifications')).toBe('unknown');
+    await deliverQueued(t.app);
     await drain();
     const after = await readiness();
     expect(
