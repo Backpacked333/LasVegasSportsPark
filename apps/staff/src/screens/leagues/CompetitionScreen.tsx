@@ -29,7 +29,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { deviceZoneHint } from '../../ui/time';
+import { inputZoneHint } from '../../ui/time';
 
 type Competition = Schema<'Competition'>;
 
@@ -206,14 +206,14 @@ function CreateSeasonForm({ competition }: { competition: Competition }) {
           type="datetime-local"
           value={opensAt}
           onChange={setOpensAt}
-          hint={deviceZoneHint()}
+          hint={inputZoneHint(null)}
         />
         <TextField
           label="Registration closes"
           type="datetime-local"
           value={closesAt}
           onChange={setClosesAt}
-          hint={deviceZoneHint()}
+          hint={inputZoneHint(null)}
         />
       </div>
       <TextField

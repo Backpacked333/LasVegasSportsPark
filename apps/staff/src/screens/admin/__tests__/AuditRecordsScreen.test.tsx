@@ -227,7 +227,7 @@ describe('SCR-S-46 AuditRecordsScreen', () => {
     // SPK-SCHED-008: both ends of the period name the device zone they are read in.
     for (const label of ['Occurred from', 'Occurred before']) {
       expect(within(form).getByLabelText(label)).toHaveAccessibleDescription(
-        /^Your time zone \(.+\)\.$/,
+        /^Your device's time zone \(.+\)\.$/,
       );
     }
     await user.click(within(form).getByRole('button', { name: 'Show records' }));

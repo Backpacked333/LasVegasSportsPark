@@ -16,7 +16,7 @@ import { CommandError, fieldErrorsOf } from '../../ui/CommandFeedback';
 import { SelectField, TextAreaField, TextField } from '../../ui/FormFields';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
-import { deviceZoneHint, localInputToIso } from '../../ui/time';
+import { inputZoneHint, localInputToIso } from '../../ui/time';
 
 export const REVIEW_OWNER_ROLES = [
   { value: 'support_operator', label: 'support_operator' },
@@ -141,7 +141,7 @@ export function OpenAccessReviewScreen() {
         <TextField
           label="Review effect ends"
           type="datetime-local"
-          hint={`Optional. Leave empty to keep the review in effect until it is closed. ${deviceZoneHint()}`}
+          hint={`Optional. Leave empty to keep the review in effect until it is closed. ${inputZoneHint(null)}`}
           value={until}
           onChange={setUntil}
           error={errors['until'] ?? apiErrors['effectiveTo']}

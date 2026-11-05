@@ -660,10 +660,10 @@ describe('SPK-SCHED-008 role assignment times name the device time zone', () => 
     render(app({ 'GET /staff-memberships': page([staffMembershipView()]) }).at('/admin/accounts'));
     const assignForm = await screen.findByRole('form', { name: 'Assign staff roles' });
     expect(within(assignForm).getByLabelText('Effective from')).toHaveAccessibleDescription(
-      'Leave empty to start now. Your time zone (America/New_York).',
+      "Leave empty to start now. Your device's time zone (America/New_York).",
     );
     expect(within(assignForm).getByLabelText('Effective until')).toHaveAccessibleDescription(
-      'Leave empty for no end date; set one for a time-bounded assignment. Your time zone (America/New_York).',
+      "Leave empty for no end date; set one for a time-bounded assignment. Your device's time zone (America/New_York).",
     );
     const row = await listedMembership();
     await user.click(within(row).getByRole('button', { name: 'Change roles or scope' }));
@@ -671,7 +671,7 @@ describe('SPK-SCHED-008 role assignment times name the device time zone', () => 
       name: `Change membership ${MEMBERSHIP_1.slice(0, 8)}`,
     });
     expect(within(form).getByLabelText('New end')).toHaveAccessibleDescription(
-      'Leave empty to keep the current end. Your time zone (America/New_York).',
+      "Leave empty to keep the current end. Your device's time zone (America/New_York).",
     );
   });
 });

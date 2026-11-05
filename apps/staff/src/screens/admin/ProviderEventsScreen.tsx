@@ -12,16 +12,13 @@ import { useState, type FormEvent } from 'react';
 import { useApiPages } from '../../api/useApiPages';
 import { InsightQueryBoundary } from '../../features/insight-admin/feedback';
 import { SelectField, TextField } from '../../features/insight-admin/fields';
-import {
-  deviceTimeZone,
-  formatInstant,
-  localDateTimeToInstant,
-} from '../../features/insight-admin/format';
+import { formatInstant, localDateTimeToInstant } from '../../features/insight-admin/format';
 import { PROVIDER_EVENT_BADGES } from '../../features/insight-admin/labels';
 import { AdminNav } from '../../features/insight-admin/nav';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { inputZoneHint } from '../../ui/time';
 
 type ProviderEvent = Schema<'ProviderEvent'>;
 type ProviderEventStatus = Schema<'ProviderEventStatus'>;
@@ -148,7 +145,7 @@ export function ProviderEventsScreen() {
             type="datetime-local"
             value={from}
             onChange={setFrom}
-            hint={`Your time zone (${deviceTimeZone()}).`}
+            hint={inputZoneHint(null)}
             error={errors.from}
           />
           <TextField
@@ -156,7 +153,7 @@ export function ProviderEventsScreen() {
             type="datetime-local"
             value={to}
             onChange={setTo}
-            hint={`Your time zone (${deviceTimeZone()}).`}
+            hint={inputZoneHint(null)}
             error={errors.to}
           />
         </div>

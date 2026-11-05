@@ -3,7 +3,8 @@
  * substitutes never bypass eligibility, SPK-AT-013 a suspended player added as a substitute is
  * refused with reasons, POL-032, DEC-066 pending).
  */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fakeResponse } from '@sportspark/api-client/testing';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -581,5 +582,117 @@ describe('SPK-SCHED-008 roster times in the facility time zone, with the clock n
         changes: [{ action: 'remove', effectiveTo: '2026-11-07T23:00:00.000Z' }],
       }),
     );
+  });
+  it.each(['GET /divisions/{id}', 'GET /facilities'])(
+    'SPK-SCHED-008: while %s has not answered, a typed time is never read in a guessed zone',
+    async (held) => {
+      const user = userEvent.setup();
+      let answer: () => void = () => undefined;
+      const heldResponse = (facilityRoutes as Record<string, { status: number; body: unknown }>)[
+        held
+      ]!;
+      const app = createTestApp({
+        routes: {
+          ...facilityRoutes,
+          [held]: () =>
+            new Promise<Response>((resolve) => {
+              answer = () => resolve(fakeResponse(heldResponse.status, heldResponse.body));
+            }),
+          'POST /team-entries/{id}/roster': ok(roster([member()])),
+        },
+      });
+      render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+      await screen.findByRole('list', { name: 'Roster' });
+      const asOf = screen.getByLabelText('Roster as of');
+      expect(asOf).toHaveAccessibleDescription(
+        "Leave empty for now (2026-10-24 08:00). Finding the facility's time zone.",
+      );
+      // "Roster as of": the typed time is not sent; the field says the roster is as of now meanwhile.
+      await user.type(asOf, '2026-10-17T19:00');
+      expect(
+        await screen.findByText(
+          "The facility's time zone is still loading: the roster is shown as of now until it is known.",
+        ),
+      ).toBeInTheDocument();
+      // A removal and an addition are refused with a field error and post nothing.
+      await user.click(screen.getByRole('button', { name: 'Remove Alex Keeper from the roster' }));
+      const removal = screen.getByRole('form', { name: 'Remove Alex Keeper' });
+      const until = within(removal).getByLabelText('Effective until');
+      expect(until).toHaveAccessibleDescription(
+        "Leave empty for now. Past matches keep the player on their record. Finding the facility's time zone.",
+      );
+      await user.type(within(removal).getByLabelText(/^Reason/), 'Moved away.');
+      await user.type(until, '2026-11-07T18:00');
+      await user.click(within(removal).getByRole('button', { name: 'Remove from the roster' }));
+      expect(
+        within(removal).getByText(
+          "The facility's time zone is still loading. Try again in a moment.",
+        ),
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Add a player' }));
+      const addition = screen.getByRole('form', { name: 'Add a player' });
+      expect(within(addition).getByLabelText('Effective from')).toHaveAccessibleDescription(
+        "Leave empty for now. Finding the facility's time zone.",
+      );
+      await user.type(within(addition).getByLabelText(/^Player: person reference/), ID.child);
+      await user.selectOptions(within(addition).getByLabelText(/^Playing status/), 'active');
+      await user.type(within(addition).getByLabelText('Effective from'), '2026-11-07T18:00');
+      await user.click(within(addition).getByRole('button', { name: 'Add to the roster' }));
+      expect(
+        within(addition).getByText(
+          "The facility's time zone is still loading. Try again in a moment.",
+        ),
+      ).toBeInTheDocument();
+      expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+      expect(
+        app.fake.requests.some((r) => r.route === '/team-entries/{id}/roster' && 'at' in r.query),
+      ).toBe(false);
+      // Once the zone is known the same typed time is read in it, and nothing was guessed before.
+      act(() => answer());
+      await waitFor(() =>
+        expect(asOf).toHaveAccessibleDescription(
+          'Leave empty for now (2026-10-24 05:00). Facility time (America/Los_Angeles).',
+        ),
+      );
+      await waitFor(() =>
+        expect(
+          app.fake.requests
+            .filter((r) => r.route === '/team-entries/{id}/roster' && r.method === 'GET')
+            .map((r) => r.query.at),
+        ).toContain('2026-10-18T02:00:00.000Z'),
+      );
+      await user.click(within(addition).getByRole('button', { name: 'Add to the roster' }));
+      await waitFor(() =>
+        expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toMatchObject({
+          changes: [{ action: 'add', effectiveFrom: '2026-11-08T02:00:00.000Z' }],
+        }),
+      );
+    },
+  );
+
+  it('SPK-SCHED-008: a roster time that happens twice at the facility is refused, never guessed', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { ...facilityRoutes, 'POST /team-entries/{id}/roster': ok(roster([member()])) },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await screen.findByRole('list', { name: 'Roster' });
+    const asOf = screen.getByLabelText('Roster as of');
+    await waitFor(() => expect(asOf).toHaveAccessibleDescription(/Facility time/));
+    // 01:30 on 1 November 2026 happens twice in Los Angeles (PDT, then PST).
+    const twice =
+      '01:30 happens twice on this date in America/Los_Angeles (clocks go back). Choose a time outside the repeated hour.';
+    await user.type(asOf, '2026-11-01T01:30');
+    expect(await screen.findByText(`${twice} The roster is shown as of now.`)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Remove Alex Keeper from the roster' }));
+    const removal = screen.getByRole('form', { name: 'Remove Alex Keeper' });
+    await user.type(within(removal).getByLabelText(/^Reason/), 'Moved away.');
+    await user.type(within(removal).getByLabelText('Effective until'), '2026-11-01T01:30');
+    await user.click(within(removal).getByRole('button', { name: 'Remove from the roster' }));
+    expect(within(removal).getByText(twice)).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    expect(
+      app.fake.requests.some((r) => r.route === '/team-entries/{id}/roster' && 'at' in r.query),
+    ).toBe(false);
   });
 });

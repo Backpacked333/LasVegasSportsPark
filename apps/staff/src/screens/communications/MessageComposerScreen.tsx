@@ -31,12 +31,7 @@ import {
   TextField,
   fieldErrorsOf,
 } from '../../features/operations/fields';
-import {
-  humanize,
-  idList,
-  inputZoneHint,
-  instantFromZonedInput,
-} from '../../features/operations/format';
+import { humanize, idList, inputZoneHint, readZonedInput } from '../../features/operations/format';
 import { nameOf, usePersonNames } from '../../features/operations/context';
 import { PersonSearch } from '../../features/operations/PersonSearch';
 import { useApp } from '../../providers/AppProviders';
@@ -146,9 +141,11 @@ export function Composer({
     if (kind === 'schedule_changed' && (!before.trim() || !after.trim())) {
       next.details = 'A schedule change shows the old and the new practical details.';
     }
+    // SPK-SCHED-008: a time that happens twice or never on a daylight-saving change is refused.
+    const when = readZonedInput(scheduledFor, facility.timezone);
+    if (when.error) next.scheduledFor = when.error;
     setProblems(next);
     if (Object.keys(next).length > 0 || !category) return;
-    const when = instantFromZonedInput(scheduledFor, facility.timezone);
     void command
       .submit({
         body: {
@@ -162,7 +159,7 @@ export function Composer({
           ...(before.trim() ? { detailsBefore: { summary: before.trim() } } : {}),
           ...(after.trim() ? { detailsAfter: { summary: after.trim() } } : {}),
           protected: isProtected,
-          ...(when ? { scheduledFor: when } : {}),
+          ...(when.iso ? { scheduledFor: when.iso } : {}),
         },
       })
       .then((notification) => navigate(detailPath(notification.id)))
@@ -320,7 +317,7 @@ export function Composer({
         value={scheduledFor}
         onChange={setScheduledFor}
         hint={`${inputZoneHint(facility.timezone)} A reminder that becomes obsolete before it is sent is suppressed.`}
-        error={apiErrors.scheduledFor}
+        error={problems.scheduledFor ?? apiErrors.scheduledFor}
       />
       <div className="ops-actions">
         <Button type="submit" busy={command.isProcessing} disabled={!online}>

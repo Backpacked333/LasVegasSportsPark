@@ -42,7 +42,6 @@ import {
 } from '../../features/insight-admin/feedback';
 import { CheckboxGroup, SelectField, TextField } from '../../features/insight-admin/fields';
 import {
-  deviceTimeZone,
   formatInstant,
   localDateTimeToInstant,
   shortId,
@@ -61,6 +60,7 @@ import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { inputZoneHint } from '../../ui/time';
 
 type StaffMembership = Schema<'StaffMembership'>;
 type StaffMembershipView = Schema<'StaffMembershipView'>;
@@ -355,7 +355,7 @@ function AssignRoles() {
         type="datetime-local"
         value={draft.effectiveFrom}
         onChange={(effectiveFrom) => set({ effectiveFrom })}
-        hint={`Leave empty to start now. Your time zone (${deviceTimeZone()}).`}
+        hint={`Leave empty to start now. ${inputZoneHint(null)}`}
         error={errors.effectiveFrom ?? apiFields.effectiveFrom}
       />
       <TextField
@@ -363,7 +363,7 @@ function AssignRoles() {
         type="datetime-local"
         value={draft.effectiveTo}
         onChange={(effectiveTo) => set({ effectiveTo })}
-        hint={`Leave empty for no end date; set one for a time-bounded assignment. Your time zone (${deviceTimeZone()}).`}
+        hint={`Leave empty for no end date; set one for a time-bounded assignment. ${inputZoneHint(null)}`}
         error={errors.effectiveTo ?? apiFields.effectiveTo}
       />
       <TextField
@@ -473,7 +473,7 @@ function ChangeMembership({
         type="datetime-local"
         value={until}
         onChange={setUntil}
-        hint={`Leave empty to keep the current end. Your time zone (${deviceTimeZone()}).`}
+        hint={`Leave empty to keep the current end. ${inputZoneHint(null)}`}
         error={errors.until}
       />
       <div>

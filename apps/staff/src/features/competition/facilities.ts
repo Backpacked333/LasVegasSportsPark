@@ -8,8 +8,9 @@
 import { useMemo } from 'react';
 import { hasAnswered, useFacilitySummary } from '../../api/facility-directory';
 import { useApiQuery } from '../../api/useApiQuery';
+import { knownTimeZone } from '../../ui/time';
 import type { Option } from './fields';
-import { knownTimeZone, shortRef } from './format';
+import { shortRef } from './format';
 
 const DIRECTORY_STALE_MS = 5 * 60_000;
 

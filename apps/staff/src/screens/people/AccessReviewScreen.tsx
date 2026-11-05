@@ -49,7 +49,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { deviceZoneHint, formatDateTime, localInputToIso } from '../../ui/time';
+import { formatDateTime, inputZoneHint, localInputToIso } from '../../ui/time';
 import { AuditHistory } from '../today/AuditHistory';
 import { REVIEW_OWNER_ROLES, type ReviewOwnerRole } from './OpenAccessReviewScreen';
 import { DECISION_KINDS, REVIEW_STATUS_TONE, type DecisionKind } from './review-vocabulary';
@@ -469,7 +469,7 @@ function DecisionForm({ review }: { review: AccessReview }) {
                 label="Ends at"
                 type="datetime-local"
                 required
-                hint={deviceZoneHint()}
+                hint={inputZoneHint(null)}
                 value={until}
                 onChange={setUntil}
                 error={errors['until'] ?? apiErrors['effectiveTo']}

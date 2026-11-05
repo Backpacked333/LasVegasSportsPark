@@ -97,7 +97,7 @@ describe('SCR-S-47 ProviderEventsScreen', () => {
     // SPK-SCHED-008: both ends of the period name the device zone they are read in.
     for (const label of ['Received from', 'Received before']) {
       expect(within(form).getByLabelText(label)).toHaveAccessibleDescription(
-        /^Your time zone \(.+\)\.$/,
+        /^Your device's time zone \(.+\)\.$/,
       );
     }
     await user.click(within(form).getByRole('button', { name: 'Show events' }));

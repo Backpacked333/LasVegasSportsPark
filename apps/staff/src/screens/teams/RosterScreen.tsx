@@ -15,7 +15,10 @@
  *
  * Times (SPK-SCHED-008): "Roster as of", "Effective from" and "Effective until" are read, and the
  * roster's dates shown, in the time zone of the division's facility when it is known; otherwise in
- * the device's zone. Every date-and-time field names its clock in its hint.
+ * the device's zone. Every date-and-time field names its clock in its hint. A time typed before the
+ * zone is known is not read in a guessed zone, and a time that happens twice or never on a
+ * daylight-saving change is refused with a field error ("Ambiguous or nonexistent times require
+ * resolution"): a change posts nothing, and "Roster as of" says the roster is shown as of now.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -37,19 +40,16 @@ import {
   isRecordReference,
   parseWholeNumber,
 } from '../../features/competition/fields';
-import {
-  formatInstant,
-  inputZoneHint,
-  isoToZonedInput,
-  zonedInputToIso,
-} from '../../features/competition/format';
+import { formatInstant, isoToZonedInput } from '../../features/competition/format';
 import { ROSTER_ELIGIBILITY, ROSTER_STATUS, humanizeCode } from '../../features/competition/labels';
 import { TeamsNav } from '../../features/competition/nav';
 import { PENDING } from '../../features/competition/pending';
 import { PersonSearchField } from '../../features/competition/PersonSearchField';
+import { readZonedInput, type ZonedInput } from '../../features/schedule-facilities/time';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { inputZoneHint } from '../../ui/time';
 
 type Member = Schema<'RosterMember'>;
 type Workspace = Schema<'TeamEntryWorkspace'>;
@@ -64,17 +64,18 @@ function clockHint(clock: FacilityClock): string {
   return clock.settled ? inputZoneHint(clock.zone) : "Finding the facility's time zone.";
 }
 
+/** The field error of a roster change whose time was typed before the facility's zone is known. */
+const CLOCK_LOADING_ERROR = "The facility's time zone is still loading. Try again in a moment.";
+
 /**
- * A typed roster date and time as an instant in the roster's clock: `{ iso: undefined }` when the
- * field is empty (now), `{ error }` when it cannot be read yet or is not a date and time.
+ * A typed roster date and time as an instant in the roster's clock (SPK-SCHED-008): `{}` when the
+ * field is empty (now); `{ error }` when the zone is not known yet, or the value is not a date and
+ * time or happens twice or never on a daylight-saving change (never guessed).
  */
-function readRosterTime(value: string, clock: FacilityClock): { iso?: string; error?: string } {
+function readRosterTime(value: string, clock: FacilityClock): ZonedInput {
   if (!value.trim()) return {};
-  if (!clock.settled) {
-    return { error: "The facility's time zone is still loading. Try again in a moment." };
-  }
-  const iso = zonedInputToIso(value, clock.zone);
-  return iso ? { iso } : { error: 'Enter a date and time, or leave it empty.' };
+  if (!clock.settled) return { error: CLOCK_LOADING_ERROR };
+  return readZonedInput(value, clock.zone);
 }
 
 function EligibilityIndicator({ member }: { member: Member }) {
@@ -387,8 +388,14 @@ export function RosterScreen() {
   // CMP-02: what the kernel allows this viewer on this entry now; the client never decides it.
   const canManage = workspace.data?.viewer.availableActions.includes(MANAGE_ROSTER_ACTION) === true;
   const clock = useDivisionClock(workspace.data?.division?.id, hasAnswered(workspace));
-  // A time typed before the zone is known is not read yet: the roster stays as of now meanwhile.
-  const atIso = readRosterTime(at, clock).iso;
+  // A time that cannot be read (yet) is never sent: the roster stays as of now, and the field says so.
+  const asOf = readRosterTime(at, clock);
+  const atIso = asOf.iso;
+  const asOfError = !asOf.error
+    ? null
+    : clock.settled
+      ? `${asOf.error} The roster is shown as of now.`
+      : "The facility's time zone is still loading: the roster is shown as of now until it is known.";
   const roster = useApiQuery({
     path: '/team-entries/{id}/roster',
     request: {
@@ -417,6 +424,7 @@ export function RosterScreen() {
           value={at}
           onChange={setAt}
           hint={`Leave empty for now (${isoToZonedInput(now.toISOString(), clock.zone).replace('T', ' ')}). ${clockHint(clock)}`}
+          error={asOfError}
         />
         <CheckboxField
           label="Include pending and removed rows"

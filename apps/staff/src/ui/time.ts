@@ -54,13 +54,37 @@ export function deviceTimeZone(): string | null {
   }
 }
 
+/** `timeZone` when the platform knows it as an IANA zone, otherwise null (the device zone, named). */
+export function knownTimeZone(timeZone: string | null | undefined): string | null {
+  if (!timeZone) return null;
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone });
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The hint of a `datetime-local` field read with `localInputToIso` (SPK-SCHED-008): the device's
- * zone, named, so a time typed on a device in another zone is never mistaken for facility time.
+ * "your device's time zone (America/New_York)", or "your device's time zone" when the platform does
+ * not say: the one wording for the device's clock on every staff screen (SPK-UX-010).
  */
-export function deviceZoneHint(): string {
+export function deviceZonePhrase(): string {
   const zone = deviceTimeZone();
-  return zone ? `Your device's time zone (${zone}).` : "Your device's time zone.";
+  return zone ? `your device's time zone (${zone})` : "your device's time zone";
+}
+
+/**
+ * The hint naming the clock a `datetime-local` field is read in (SPK-SCHED-008), in one wording on
+ * every staff screen (SPK-UX-010): "Facility time (America/Los_Angeles)." when the facility's zone
+ * is known, otherwise "Your device's time zone (America/New_York).", so a time typed on a device in
+ * another zone is never mistaken for facility time.
+ */
+export function inputZoneHint(timeZone: string | null | undefined): string {
+  const zone = knownTimeZone(timeZone);
+  if (zone) return `Facility time (${zone}).`;
+  const phrase = deviceZonePhrase();
+  return `${phrase[0]!.toUpperCase()}${phrase.slice(1)}.`;
 }
 
 /** A `datetime-local` input value (device zone) as an ISO instant, or null when empty or invalid. */

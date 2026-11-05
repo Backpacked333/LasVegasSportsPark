@@ -65,7 +65,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { deviceZoneHint, formatDateTime, localInputToIso } from '../../ui/time';
+import { formatDateTime, inputZoneHint, localInputToIso } from '../../ui/time';
 import { AUTHORITY_KEY } from './PersonRecordScreen';
 
 /** The OpenAPI component is nullable (it is reused as a nullable field elsewhere); a created one is not. */
@@ -454,7 +454,7 @@ function RelationshipForm({ personId }: { personId: string }) {
         <TextField
           label="Effective from"
           type="datetime-local"
-          hint={`Leave empty to start now. ${deviceZoneHint()}`}
+          hint={`Leave empty to start now. ${inputZoneHint(null)}`}
           value={from}
           onChange={setFrom}
           error={apiErrors['effectiveFrom']}
@@ -462,7 +462,7 @@ function RelationshipForm({ personId }: { personId: string }) {
         <TextField
           label="Effective to"
           type="datetime-local"
-          hint={`Leave empty for no end date. ${deviceZoneHint()}`}
+          hint={`Leave empty for no end date. ${inputZoneHint(null)}`}
           value={to}
           onChange={setTo}
           error={errors['to'] ?? apiErrors['effectiveTo']}

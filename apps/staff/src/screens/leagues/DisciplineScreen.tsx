@@ -42,7 +42,7 @@ import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { deviceZoneHint } from '../../ui/time';
+import { inputZoneHint } from '../../ui/time';
 import { Appeals, Decisions } from './DisciplineRecords';
 
 type Suspension = Schema<'Suspension'>;
@@ -333,14 +333,14 @@ function ProposeSuspensionForm() {
           type="datetime-local"
           value={from}
           onChange={setFrom}
-          hint={deviceZoneHint()}
+          hint={inputZoneHint(null)}
         />
         <TextField
           label="Effective until"
           type="datetime-local"
           value={to}
           onChange={setTo}
-          hint={deviceZoneHint()}
+          hint={inputZoneHint(null)}
           error={err('to', 'terms.effectiveTo')}
         />
         <NumberField

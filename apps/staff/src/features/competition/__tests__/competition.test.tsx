@@ -10,7 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FACILITY_A, createTestApp, mePermissions } from '../../../testing/test-app';
 import { fieldErrorsOf, reasonsOf } from '../CommandError';
-import { inputZoneHint, isoToZonedInput, knownTimeZone, zonedInputToIso } from '../format';
+import { isoToZonedInput } from '../format';
 import {
   FIXTURE_STATUS,
   READINESS_STATUS,
@@ -71,44 +71,22 @@ describe('competition error helpers (§4.10)', () => {
   });
 });
 
-describe('SPK-SCHED-008 date-and-time fields read in a named clock', () => {
+/**
+ * Reading a typed time (`readZonedInput`) and naming its clock (`inputZoneHint`) are shared by every
+ * staff screen and tested with them (schedule-facilities/__tests__/time.test.ts, ui/__tests__/time.test.ts).
+ */
+describe('SPK-SCHED-008 date-and-time fields shown in a named clock', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it('SPK-SCHED-008: reads a typed time in the facility zone, not the device zone', () => {
+  it('SPK-SCHED-008: puts a stored instant back into a field in the facility zone, not the device zone', () => {
     vi.stubEnv('TZ', 'America/New_York');
-    // 18:00 Pacific standard time is 02:00Z the next day; the New York device would say 23:00Z.
-    expect(zonedInputToIso('2026-11-07T18:00', 'America/Los_Angeles')).toBe(
-      '2026-11-08T02:00:00.000Z',
-    );
-    expect(zonedInputToIso('2026-11-07T18:00', null)).toBe('2026-11-07T23:00:00.000Z');
     expect(isoToZonedInput('2026-11-08T02:00:00.000Z', 'America/Los_Angeles')).toBe(
       '2026-11-07T18:00',
     );
     expect(isoToZonedInput('2026-11-08T02:00:00.000Z', null)).toBe('2026-11-07T21:00');
-    expect(zonedInputToIso('', 'America/Los_Angeles')).toBeUndefined();
-    expect(zonedInputToIso('not a time', 'America/Los_Angeles')).toBeUndefined();
-  });
-
-  it('SPK-SCHED-008: resolves daylight-saving gaps and repeats the same way as the operations screens', () => {
-    // 01:30 happens twice on 1 November 2026 in Los Angeles: the first occurrence (PDT) is used.
-    expect(zonedInputToIso('2026-11-01T01:30', 'America/Los_Angeles')).toBe(
-      '2026-11-01T08:30:00.000Z',
-    );
-    // 02:30 never happens on 8 March 2026: the same time after the change (03:30 PDT).
-    expect(zonedInputToIso('2026-03-08T02:30', 'America/Los_Angeles')).toBe(
-      '2026-03-08T10:30:00.000Z',
-    );
-  });
-
-  it('SPK-SCHED-008: every hint names its clock; an unknown zone falls back to the device zone, named', () => {
-    vi.stubEnv('TZ', 'America/New_York');
-    expect(inputZoneHint('America/Los_Angeles')).toBe('Facility time (America/Los_Angeles).');
-    expect(inputZoneHint(null)).toBe("Your device's time zone (America/New_York).");
-    expect(knownTimeZone('Not/AZone')).toBeNull();
-    expect(inputZoneHint('Not/AZone')).toBe("Your device's time zone (America/New_York).");
-    expect(zonedInputToIso('2026-11-07T18:00', 'Not/AZone')).toBe('2026-11-07T23:00:00.000Z');
+    expect(isoToZonedInput('2026-11-08T02:00:00.000Z', 'Not/AZone')).toBe('2026-11-07T21:00');
   });
 });
 

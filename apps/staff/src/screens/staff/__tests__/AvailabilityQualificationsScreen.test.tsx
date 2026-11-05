@@ -173,6 +173,41 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
     );
   });
 
+  it('SPK-SCHED-008: refuses a window or evidence time that never happens at the facility, instead of moving it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: routes() });
+    render(app.at('/staff/availability'));
+    const form = await screen.findByRole('form', { name: 'Add an availability window' });
+    // The facility directory gives America/Los_Angeles: clocks go forward at 02:00 on 8 March 2026.
+    await waitFor(() =>
+      expect(within(form).getByLabelText('Starts')).toHaveAccessibleDescription(
+        'Facility time (America/Los_Angeles).',
+      ),
+    );
+    await user.type(within(form).getByLabelText('Starts'), '2026-03-08T02:30');
+    await user.type(within(form).getByLabelText('Ends'), '2026-03-08T05:00');
+    await user.selectOptions(within(form).getByLabelText('Kind'), 'unavailable');
+    await user.click(within(form).getByRole('button', { name: 'Add window' }));
+    expect(
+      within(form).getByText(
+        '02:30 does not exist on this date in America/Los_Angeles (clocks go forward). Choose another time, for example 03:30.',
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Record qualification evidence' }));
+    const evidence = screen.getByRole('form', { name: 'Record qualification evidence' });
+    await user.type(within(evidence).getByLabelText('Qualification'), 'referee_grade_8');
+    await user.type(within(evidence).getByLabelText('Valid from'), '2026-01-01T09:00');
+    // 01:30 on 1 November 2026 happens twice (PDT, then PST): neither is picked.
+    await user.type(within(evidence).getByLabelText('Valid to (optional)'), '2026-11-01T01:30');
+    await user.click(within(evidence).getByRole('button', { name: 'Record evidence' }));
+    expect(
+      within(evidence).getByText(
+        '01:30 happens twice on this date in America/Los_Angeles (clocks go back). Choose a time outside the repeated hour.',
+      ),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
   it('shows evidence the viewer may not read as not available', async () => {
     const app = createTestApp({
       routes: routes({
@@ -364,7 +399,7 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
     });
     render(app.at('/staff/availability'));
     const form = await screen.findByRole('form', { name: 'Add an availability window' });
-    expect(await within(form).findAllByText('Facility time, America/New_York.')).not.toHaveLength(
+    expect(await within(form).findAllByText('Facility time (America/New_York).')).not.toHaveLength(
       0,
     );
     // §4.5: the Today feed computes every operational source; zones are configuration.
@@ -391,7 +426,7 @@ describe('SCR-S-32 AvailabilityQualificationsScreen', () => {
     });
     render(app.at('/staff/availability'));
     const form = await screen.findByRole('form', { name: 'Add an availability window' });
-    expect(await within(form).findAllByText('Facility time, America/New_York.')).not.toHaveLength(
+    expect(await within(form).findAllByText('Facility time (America/New_York).')).not.toHaveLength(
       0,
     );
     expect(app.fake.requests.find((r) => r.route === '/facilities/{id}')?.params).toEqual({
