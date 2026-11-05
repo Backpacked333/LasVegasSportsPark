@@ -386,7 +386,12 @@ describe('SCR-S-40 Delivery status', () => {
     expect(screen.getByTestId('recheck-excluded')).toHaveTextContent(
       '1 recipient was excluded at the recheck',
     );
-    expect(screen.getByText(/DEC-041/)).toBeInTheDocument();
+    // R4-COMMS-AUTOMATION-07: an unknown outcome is explained; without the reconcile action it is
+    // not offered for recording.
+    expect(screen.getByTestId('unknown-deliveries')).toHaveTextContent(
+      /1 delivery has an unknown outcome.*Recording it is not available to you/,
+    );
+    expect(screen.queryByRole('button', { name: /Record the outcome/ })).toBeNull();
     // Without the retry action the failed delivery is not offered for retry.
     expect(
       screen.getByText('Retrying a failed delivery is not available to you'),
@@ -568,6 +573,70 @@ describe('SCR-S-40 Delivery status', () => {
       expect(await screen.findByText(/Retry, Email/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Retry the failed delivery/ })).toBeNull();
     });
+  });
+});
+
+describe('R4-COMMS-AUTOMATION-07 / §4.11 recording an unknown delivery outcome', () => {
+  beforeEach(() => window.localStorage.clear());
+  const UNKNOWN = '0192f1a0-0000-7000-8000-0000000003c2';
+
+  it('records what the provider or family confirmed with evidence and the expected revision; only on an unknown external attempt', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': mePermissions({
+          actions: [{ id: 'communications.reconcile_delivery', facilityIds: [FACILITY_A] }],
+        }),
+        'GET /notifications/{id}': { status: 200, body: notification('dispatched') },
+        'GET /notifications/{id}/deliveries': {
+          status: 200,
+          body: {
+            ...DELIVERIES.body,
+            recipients: [
+              {
+                ...recipient(RECIPIENT_A, ADULT, 'authorized'),
+                supersededByNotificationId: '0192f1a0-0000-7000-8000-0000000004d1',
+              },
+              recipient(RECIPIENT_B, CHILD_1, 'revoked'),
+            ],
+          },
+        },
+        'POST /delivery-attempts/{id}/reconcile': {
+          status: 200,
+          body: attempt(UNKNOWN, RECIPIENT_A, 'push', 'failed', {
+            failureCode: 'PROVIDER_ERROR',
+            revision: 2,
+          }),
+        },
+      }),
+    });
+    render(app.at(`/communications/notifications/${NOTICE}`));
+    const label = 'Push to Sam Rivera (staff role: front_desk)';
+    await user.click(await screen.findByRole('button', { name: `Record the outcome: ${label}` }));
+    // Only the unknown push is offered: not the failed email nor the in-app copy.
+    expect(screen.getAllByRole('button', { name: /^Record the outcome:/ })).toHaveLength(1);
+    expect(screen.getByTestId('recipient-superseded')).toHaveTextContent(
+      'Replaced for this person by a newer notice',
+    );
+    const form = screen.getByRole('form', { name: `Record the outcome: ${label}` });
+    await user.click(within(form).getByRole('button', { name: 'Record the outcome' }));
+    expect(within(form).getByText('Choose what was confirmed.')).toBeInTheDocument();
+    expect(within(form).getByText('Say what was checked.')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/delivery-attempts/{id}/reconcile')).toBe(
+      false,
+    );
+    await user.selectOptions(within(form).getByLabelText(/What was confirmed/), 'failed');
+    await user.type(within(form).getByLabelText(/^Evidence/), 'Parent says it never arrived');
+    await user.click(within(form).getByRole('button', { name: 'Record the outcome' }));
+    expect(await screen.findByText(/Recorded: /)).toBeInTheDocument();
+    const sent = app.fake.requests.find((r) => r.route === '/delivery-attempts/{id}/reconcile');
+    expect(sent?.params.id).toBe(UNKNOWN);
+    expect(sent?.body).toEqual({
+      outcome: 'failed',
+      evidence: 'Parent says it never arrived',
+      expectedRevision: 1,
+    });
+    expect(sent?.headers['idempotency-key']).toBeTruthy();
   });
 });
 

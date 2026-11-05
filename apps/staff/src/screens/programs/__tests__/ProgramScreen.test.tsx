@@ -75,6 +75,19 @@ describe('SCR-S-14 ProgramScreen', () => {
     expect(within(items[0]!).getByText(/North Park 1/)).toBeInTheDocument();
   });
 
+  it('R4-AUTHZ-TARGETS-03: an empty offering list says it covers the facilities the viewer can see', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /programs/{id}/offerings': ok({ items: [], nextCursor: null }) }),
+    });
+    render(app.at(`/programs/${PROGRAM_ID}`));
+    expect(await screen.findByText('No offerings you can see')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'No dated offerings in this state at the facilities you can see. Create a draft offering below.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('§4.5: pages the offerings with the API cursor, keeps them when Load more fails, and narrows by state', async () => {
     const user = userEvent.setup();
     let fail = true;

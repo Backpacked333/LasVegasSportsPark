@@ -1,8 +1,9 @@
 /**
  * Choose an offering by program (SCR-S-25 add line, SCR-S-26 waitlists, SCR-S-27 enrollments and
- * transfer targets). Staff pick the program (`GET /v1/programs`), then one of its offerings in any
- * publication state (`GET /v1/programs/{id}/offerings`); the API decides what the viewer may list
- * and an ACCESS_DENIED answer shows "not available". Both lists are the API's keyset pages: while
+ * transfer targets). Staff pick the program (`GET /v1/programs`), then one of its offerings
+ * (`GET /v1/programs/{id}/offerings`, which lists the offerings in any publication state at the
+ * facilities the viewer's catalog.read_catalog roles cover, R4-AUTHZ-TARGETS-03); the API decides
+ * what the viewer may list and an ACCESS_DENIED answer shows "not available". Both lists are the API's keyset pages: while
  * the API says more exist, "Load more programs" or "Load more offerings" sits next to the choice,
  * so nothing is cut off silently (§4.5). (The staff view of `GET /v1/offerings?view=staff` lists
  * offerings across programs by facility; choosing by program keeps the list short.)
@@ -85,7 +86,7 @@ export function OfferingPicker({
                 ? 'Choose an offering'
                 : offerings.hasNextPage
                   ? 'None on the first page: load more offerings'
-                  : 'This program has no offerings'
+                  : 'No offerings of this program at the facilities you can see'
               : (failure(offerings.error, 'Offerings') ?? 'Loading offerings…')
         }
         options={offeringOptions}

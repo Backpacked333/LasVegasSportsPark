@@ -176,9 +176,9 @@ export function ProgramScreen() {
                 label="offerings"
                 isEmpty={(items) => items.length === 0}
                 empty={{
-                  title: 'No offerings',
+                  title: 'No offerings you can see',
                   description:
-                    'This program has no dated offerings in this state. Create a draft offering below.',
+                    'No dated offerings in this state at the facilities you can see. Create a draft offering below.',
                 }}
               >
                 {(items) => (
