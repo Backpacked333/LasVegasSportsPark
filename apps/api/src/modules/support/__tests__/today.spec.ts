@@ -305,6 +305,82 @@ describe('Today workspace (SPK-UX-006)', () => {
     expect(referee?.coverage.uncoveredSlots).toEqual([1]);
   });
 
+  it('SPK-UX-006 / §5.11 (R4-COMMS-AUTOMATION-07, R4-OPS-MODULES-02): an unknown delivery offers the front desk its reconcile command, and an unreleased restriction its release', async () => {
+    const raise = (input: Parameters<OperationalExceptions['raise']>[1]) =>
+      t.db.transaction().execute((trx) => t.app.get(OperationalExceptions).raise(trx, input));
+    const attemptId = '01890000-0000-7000-8000-000000000011';
+    const notificationId = '01890000-0000-7000-8000-000000000012';
+    const restrictionId = '01890000-0000-7000-8000-000000000013';
+    const unknown = await raise({
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      category: 'communications.delivery_unknown',
+      severity: 'warning',
+      title: 'email delivery of "Game moved" has an unknown outcome',
+      affectedType: 'delivery_attempt',
+      affectedId: attemptId,
+      ownerQueue: 'front_desk',
+      dedupeKey: `communications:delivery_attempt_unknown:${attemptId}`,
+      details: {
+        notificationId,
+        recipientId: '01890000-0000-7000-8000-000000000014',
+        channel: 'email',
+        error: 'timeout',
+      },
+    });
+    const unreleased = await raise({
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      category: 'facilities.restriction_unreleased_at_end',
+      severity: 'warning',
+      title: 'Pitch 2 restriction ended without a release',
+      affectedType: 'restriction',
+      affectedId: restrictionId,
+      ownerQueue: 'facilities_operator',
+      dedupeKey: `restriction:${restrictionId}:unreleased_at_end`,
+      details: { restrictionId },
+    });
+
+    const deskItem = byId(await feedOf(desk), `exception:${unknown.id}`);
+    expect(deskItem, 'the front desk owns the unknown delivery').toBeDefined();
+    expect(
+      deskItem!.nextActions
+        .filter((a) => !a.action.startsWith('exceptions.'))
+        .map((a) => [a.action, a.verb, a.method, a.href]),
+    ).toEqual([
+      [
+        'communications.reconcile_delivery',
+        'open',
+        'POST',
+        `/v1/delivery-attempts/${attemptId}/reconcile`,
+      ],
+      [
+        'communications.read_notification',
+        'view',
+        'GET',
+        `/v1/notifications/${notificationId}/deliveries`,
+      ],
+    ]);
+
+    const managerItem = byId(await feedOf(manager), `exception:${unreleased.id}`);
+    expect(
+      managerItem!.nextActions
+        .filter((a) => !a.action.startsWith('exceptions.'))
+        .map((a) => [a.action, a.method, a.href]),
+    ).toEqual([
+      [
+        'facilities.release_to_service',
+        'POST',
+        `/v1/maintenance-restrictions/${restrictionId}/release`,
+      ],
+    ]);
+    // A viewer who may not reconcile a delivery is never offered the command.
+    const financeView = byId(await feedOf(finance), `exception:${unknown.id}`);
+    expect(financeView?.nextActions.map((a) => a.action) ?? []).not.toContain(
+      'communications.reconcile_delivery',
+    );
+  });
+
   it('§4.3: a facility filter that names another organization’s facility is not found', async () => {
     const other = await otherOrganization(t);
     const res = await get(t, `/v1/today?facilityId=${other.facilityId}`, manager);
