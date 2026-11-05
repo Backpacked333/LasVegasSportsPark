@@ -14,9 +14,10 @@ import { keepFakePrincipals } from './support';
 /**
  * R4-OPS-MODULES-03 (SPK-FAC-004 "must not silently reopen a field if a separate inspection remains
  * required", SPK-FAC-002 "resolution and inspection"). The release gate needs a passed inspection
- * that speaks for the work as it now stands: recorded at or after the restriction's approval and
- * the task's latest resolution, with the task not back at work. The FixedClock advances between
- * steps, as real requests do.
+ * that speaks for the work as it now stands: inspected at or after the restriction's approval and
+ * the end of the task's latest work (when it last left in_progress, migration 0907), with the task
+ * not back at work. Resolving or closing an open task records no new work. The FixedClock advances
+ * between steps, as real requests do.
  */
 describe('release gate: the inspection must follow the current work (R4-OPS-MODULES-03, SPK-FAC-004)', () => {
   let t: TestApp;
@@ -54,7 +55,7 @@ describe('release gate: the inspection must follow the current work (R4-OPS-MODU
   const minute = () => t.clock.advance(60_000);
   const task = async (id: string) =>
     (await t.http.get(`/v1/maintenance-tasks/${id}`).set(auth)).body;
-  const setStatus = async (id: string, status: 'in_progress' | 'resolved') => {
+  const setStatus = async (id: string, status: 'in_progress' | 'resolved' | 'closed') => {
     const current = await task(id);
     const res = await t.http
       .patch(`/v1/maintenance-tasks/${id}`)
@@ -62,7 +63,9 @@ describe('release gate: the inspection must follow the current work (R4-OPS-MODU
       .set('Idempotency-Key', key())
       .send({
         status,
-        ...(status === 'resolved' ? { resolution: { summary: 'repaired' } } : {}),
+        ...(status === 'resolved' || (status === 'closed' && !current.resolution)
+          ? { resolution: { summary: 'repaired' } }
+          : {}),
         expectedRevision: current.revision,
       });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -204,5 +207,61 @@ describe('release gate: the inspection must follow the current work (R4-OPS-MODU
     await inspect(taskId, 'passed');
     expect((await task(taskId)).status).toBe('open');
     expect((await release(restrictionId)).status).toBe(200);
+  });
+
+  it('SPK-FAC-004: an open task whose pass is followed by closing or resolving the task is released on that pass (no work happened after it)', async () => {
+    // closed straight from open after the pass
+    const closedTask = await gatedTask(pitch.northHalfId, 'Corner flag socket loose');
+    const closedRestriction = await restrict(pitch.northHalfId, closedTask, '2026-11-24');
+    minute();
+    const pass = await inspect(closedTask, 'passed');
+    minute();
+    const closed = await setStatus(closedTask, 'closed');
+    expect(closed).toMatchObject({ status: 'closed' });
+    expect(closed.resolvedAt > pass.inspectedAt).toBe(true);
+    const releasedClosed = await release(closedRestriction);
+    expect(releasedClosed.status, JSON.stringify(releasedClosed.body)).toBe(200);
+    expect(releasedClosed.body.status).toBe('released');
+
+    // resolved from open after the pass, then closed
+    const resolvedTask = await gatedTask(pitch.southHalfId, 'Divider winch sticks');
+    const resolvedRestriction = await restrict(pitch.southHalfId, resolvedTask, '2026-11-24');
+    minute();
+    await inspect(resolvedTask, 'passed');
+    minute();
+    expect((await setStatus(resolvedTask, 'resolved')).status).toBe('resolved');
+    minute();
+    expect((await setStatus(resolvedTask, 'closed')).status).toBe('closed');
+    const releasedResolved = await release(resolvedRestriction);
+    expect(releasedResolved.status, JSON.stringify(releasedResolved.body)).toBe(200);
+  });
+
+  it('SPK-FAC-004: a pass recorded while the task was at work does not release the area once the work ends; closing from in_progress ends the work', async () => {
+    const taskId = await gatedTask(pitch.northHalfId, 'Floodlight bracket rewelded');
+    const restrictionId = await restrict(pitch.northHalfId, taskId, '2026-11-25');
+    minute();
+    await setStatus(taskId, 'in_progress');
+    minute();
+    const midWork = await inspect(taskId, 'passed');
+    minute();
+    const closed = await setStatus(taskId, 'closed');
+    expect(closed.status).toBe('closed');
+    const stale = await release(restrictionId);
+    expect(stale.status).toBe(422);
+    expect(stale.body).toMatchObject({
+      code: 'ELIGIBILITY_FAILED',
+      details: {
+        code: 'inspection_required',
+        cause: 'inspection_predates_current_work',
+        taskStatus: 'closed',
+        inspectionRequiredAfter: closed.closedAt,
+        latestInspection: { id: midWork.id, outcome: 'passed' },
+      },
+    });
+    // a pass of the finished work releases it
+    minute();
+    await inspect(taskId, 'passed');
+    const released = await release(restrictionId);
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
   });
 });

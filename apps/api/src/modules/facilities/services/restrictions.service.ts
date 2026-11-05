@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
@@ -25,6 +26,7 @@ import {
   UnitOfWork,
   executorFor,
   type Clock,
+  type OperationalExceptionRow,
   type Trx,
 } from '../../../kernel';
 import { CLOCK, DATABASE } from '../../../kernel/tokens';
@@ -61,16 +63,81 @@ const INSPECTION_REQUIRED_MESSAGES: Record<InspectionGateCause, string> = {
   work_in_progress:
     'The maintenance task is back at work; resolve it and pass an inspection before this area returns to service.',
   inspection_predates_current_work:
-    "The latest passed inspection predates the restriction or the task's latest resolution; a new passed inspection is required before this area returns to service.",
+    "The latest passed inspection predates the restriction's approval or the end of the task's latest work; a new passed inspection is required before this area returns to service.",
 };
 
 interface OutstandingInspection {
   cause: InspectionGateCause;
   taskId: string;
   taskStatus: string;
-  /** The pass must be inspected at or after this instant (the approval or the latest resolution). */
+  /**
+   * The pass must be inspected at or after this instant: the later of the restriction's approval
+   * and the end of the task's latest work (`work_completed_at`, migration 0907).
+   */
   inspectionRequiredAfter: string | null;
   latestInspection: { id: string; outcome: string; inspectedAt: string } | null;
+}
+
+/** What one `facilities.restriction_unreleased_at_end` item states (R4-OPS-MODULES-02). */
+interface UnreleasedAtEndStatement {
+  severity: 'high' | 'critical' | 'warning';
+  title: string;
+  deadlineAt: Date;
+  details: Record<string, unknown>;
+}
+
+/**
+ * R4-OPS-MODULES-02 (SPK-FAC-004, SPK-AT-021): the item due now for an active restriction reaching
+ * its end unreleased. Before the end with the inspection outstanding: `high`, inspect and release
+ * or continue it. After the end with the inspection outstanding: `critical`, because the
+ * uninspected area is open in scheduling. After the end with the inspection passed: `warning`, the
+ * authorized release is still missing.
+ */
+function unreleasedAtEndStatement(
+  row: RestrictionRow,
+  end: Date,
+  ended: boolean,
+  outstanding: OutstandingInspection | null,
+): UnreleasedAtEndStatement {
+  return {
+    severity: outstanding ? (ended ? 'critical' : 'high') : 'warning',
+    title: outstanding
+      ? ended
+        ? 'A restriction ended with its inspection outstanding; the area is open in scheduling'
+        : 'A restriction ends with its inspection outstanding: inspect and release, or continue it'
+      : 'A restriction ended without an authorized release',
+    deadlineAt: end,
+    // JSON round trip: compared with the stored jsonb, which keeps no undefined members
+    details: JSON.parse(
+      JSON.stringify({
+        restrictionId: row.id,
+        taskId: row.task_id,
+        resourceId: row.resource_id,
+        assetId: row.asset_id,
+        interval: { start: iso(row.start), end: iso(row.end) },
+        ended,
+        inspectionOutstanding: outstanding,
+      }),
+    ) as Record<string, unknown>,
+  };
+}
+
+/**
+ * Whether an open item still states exactly what is due now: its severity, title, deadline and
+ * details (whether the interval ended, the gate's cause, the instant the pass must follow, the
+ * latest inspection). Anything else is superseded and replaced.
+ */
+function statesCurrently(
+  exception: OperationalExceptionRow,
+  statement: UnreleasedAtEndStatement,
+): boolean {
+  return (
+    exception.severity === statement.severity &&
+    exception.title === statement.title &&
+    exception.deadline_at !== null &&
+    new Date(exception.deadline_at).getTime() === statement.deadlineAt.getTime() &&
+    isDeepStrictEqual(exception.details, statement.details)
+  );
 }
 
 export interface ApproveRestrictionInput {
@@ -1059,13 +1126,14 @@ export class RestrictionsService implements OperatingStatusPort {
   /**
    * The inspection gate of a restriction (SPK-FAC-004, SPK-FAC-002 "resolution and inspection"),
    * or null when it is satisfied or the restriction's task requires none. R4-OPS-MODULES-03: the
-   * latest inspection must be a pass recorded at or after both the restriction's approval and the
-   * task's latest resolution, and the task must not be back at work (`in_progress`). A pass from
-   * before the task was reopened for rework, or the pass that released an earlier restriction of
-   * the task, therefore never releases the area: `in_progress` is left only by resolving or closing
-   * the task, which stamps a new resolution instant the old pass predates. An open or assigned task
-   * may be released on a pass after the approval (the inspection found the area fit, no work was
-   * needed).
+   * latest inspection must be a pass inspected at or after both the restriction's approval and the
+   * end of the task's latest work (`work_completed_at`, migration 0907: stamped when the task leaves
+   * `in_progress`), and the task must not be back at work (`in_progress`). A pass from before the
+   * task was reopened for rework, or the pass that released an earlier restriction of the task,
+   * therefore never releases the area: `in_progress` is left only by resolving or closing the task,
+   * which stamps a new work end the old pass predates. Resolving or closing an open or assigned task
+   * records the outcome without new work, so a pass after the approval still releases the area,
+   * before or after that close (the inspection found the area fit).
    */
   private async outstandingInspection(
     trx: Trx,
@@ -1078,7 +1146,7 @@ export class RestrictionsService implements OperatingStatusPort {
     const latest = await this.reader.latestInspection(trx, organizationId, task.id);
     const notBefore = Math.max(
       restriction.approved_at ? new Date(restriction.approved_at).getTime() : 0,
-      task.resolved_at ? new Date(task.resolved_at).getTime() : 0,
+      task.work_completed_at ? new Date(task.work_completed_at).getTime() : 0,
     );
     let cause: InspectionGateCause | null = null;
     if (task.status === 'in_progress') cause = 'work_in_progress';
@@ -1110,17 +1178,20 @@ export class RestrictionsService implements OperatingStatusPort {
    * - continued by a follow-on restriction (active, same area and same task, covering its end):
    *   nothing is due now; an exception raised earlier is settled;
    * - the task's inspection is outstanding (the release gate would refuse): a `high` exception
-   *   before the end, so the area is inspected and released or kept closed by a follow-on;
-   * - the interval has ended without a release: a `warning` exception, since only the authorized
-   *   release returns the space to service on record;
+   *   before the end, so the area is inspected and released or kept closed by a follow-on, and a
+   *   `critical` one once the interval has ended, since the uninspected area is then open in
+   *   scheduling;
+   * - the interval has ended without a release (the inspection passed): a `warning` exception,
+   *   since only the authorized release returns the space to service on record;
    * - otherwise (the inspection passed and the end is still ahead): nothing is due; an exception
    *   raised earlier is settled.
    *
    * One open exception per restriction (dedupe key `restriction:<id>:unreleased_at_end`, queue
-   * `facilities_operator`); an open one whose severity no longer holds (the inspection passed after
-   * the end, or the task went back to work) is settled and replaced, so it never misstates the
-   * cause. The release settles it in its own unit of work. Returns the number of
-   * restrictions with an open exception after the run.
+   * `facilities_operator`). An open one that no longer states what is due now (its severity, title,
+   * deadline or details differ: the interval ended, the inspection passed, the cause changed, the
+   * task went back to work) is settled and replaced, so it never misstates why the area is open.
+   * The release settles it in its own unit of work. Returns the number of restrictions with an
+   * open exception after the run.
    */
   async raiseUnreleasedAtEndExceptions(
     trx: Trx,
@@ -1162,44 +1233,31 @@ export class RestrictionsService implements OperatingStatusPort {
         );
         continue;
       }
-      const severity = outstanding ? 'high' : 'warning';
-      // The open exception describes the restriction as it was when raised: once the inspection
-      // passes after the end (high -> warning) or the task goes back to work (warning -> high), it
-      // is settled with that fact and replaced, so the item never misstates why the area is open.
+      const statement = unreleasedAtEndStatement(row, end, ended, outstanding);
+      // The open exception states the restriction as it was when raised. Once that is no longer
+      // what is due now (the interval ended with the inspection outstanding, the inspection passed
+      // after the end, the cause changed, the task went back to work), it is settled with the new
+      // statement and replaced, so the item never misstates why the area is open.
       await this.settleUnreleasedAtEnd(
         trx,
         row,
-        outstanding
-          ? 'The inspection the task requires is outstanding again; replaced by a high-severity item.'
-          : 'The inspection the task requires has passed; the restriction still awaits its authorized release.',
+        `Superseded: ${statement.title}${outstanding ? ` (cause ${outstanding.cause})` : ''}.`,
         null,
         row.status,
-        (exception) => exception.severity !== severity,
+        (exception) => !statesCurrently(exception, statement),
       );
       await this.exceptions.raise(trx, {
         organizationId,
         facilityId: row.facility_id,
         category: RESTRICTION_UNRELEASED_AT_END,
-        severity,
-        title: outstanding
-          ? ended
-            ? 'A restriction ended with its inspection outstanding; the area is open in scheduling'
-            : 'A restriction ends with its inspection outstanding: inspect and release, or continue it'
-          : 'A restriction ended without an authorized release',
+        severity: statement.severity,
+        title: statement.title,
         affectedType: 'restriction',
         affectedId: row.id,
         ownerQueue: 'facilities_operator',
-        deadlineAt: end,
+        deadlineAt: statement.deadlineAt,
         dedupeKey: `restriction:${row.id}:unreleased_at_end`,
-        details: {
-          restrictionId: row.id,
-          taskId: row.task_id,
-          resourceId: row.resource_id,
-          assetId: row.asset_id,
-          interval: { start: iso(row.start), end: iso(row.end) },
-          ended,
-          inspectionOutstanding: outstanding,
-        },
+        details: statement.details,
       });
       raised += 1;
     }
@@ -1230,7 +1288,8 @@ export class RestrictionsService implements OperatingStatusPort {
    * Settles the restriction's open or acknowledged `facilities.restriction_unreleased_at_end`
    * exception with the fact that ends it (the release, a follow-on, a passed inspection), under the
    * system actor `SETTLE_UNRELEASED_AT_END_ACTOR` (the command's own audit names the person).
-   * `only` limits the settlement to the exceptions it selects (a severity that no longer holds).
+   * `only` limits the settlement to the exceptions it selects (one that no longer states what is
+   * due now).
    */
   private async settleUnreleasedAtEnd(
     trx: Trx,
@@ -1238,7 +1297,7 @@ export class RestrictionsService implements OperatingStatusPort {
     reason: string,
     correlationId: string | null,
     status: string = row.status,
-    only?: (exception: { severity: string }) => boolean,
+    only?: (exception: OperationalExceptionRow) => boolean,
   ): Promise<number> {
     const open = await this.exceptions.list(
       row.organization_id,

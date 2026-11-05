@@ -26,7 +26,7 @@ import { seedAsset } from '../testing/facilities-fixtures';
  * Integrity invariants proven at the database (CLAUDE.md "Integrity that matters is enforced in
  * the database"): rows are inserted through Kysely, bypassing the services.
  */
-describe('facilities schema invariants (migrations 0900-0906)', () => {
+describe('facilities schema invariants (migrations 0900-0907)', () => {
   let t: TestApp;
   let db: Db;
   let org: string;
@@ -66,6 +66,7 @@ describe('facilities schema invariants (migrations 0900-0906)', () => {
     resolution: null,
     resolved_at: null,
     closed_at: null,
+    work_completed_at: null,
     preventive_schedule_id: null,
     occurrence_index: null,
     ...extra,
@@ -394,6 +395,45 @@ describe('facilities schema invariants (migrations 0900-0906)', () => {
       closed_at: new Date(),
     });
     await expect(insertTask({ occurrence_index: 3 })).rejects.toSatisfy(isCheckViolation);
+  });
+
+  it('SPK-FAC-004: only a task that has been at work carries the end of its work, the release gate anchor (R4-OPS-MODULES-03, migration 0907)', async () => {
+    const ended = new Date('2026-10-19T13:00:00Z');
+    // an open task (never at work) cannot carry it
+    await expect(insertTask({ work_completed_at: ended })).rejects.toSatisfy(isCheckViolation);
+    // back at work after an earlier work end, resolved and closed tasks may carry it
+    await insertTask({ status: 'in_progress', work_completed_at: ended });
+    await insertTask({
+      status: 'resolved',
+      resolution: json({ summary: 'fixed' }),
+      resolved_at: ended,
+      work_completed_at: ended,
+    });
+    const closedFromOpen = await insertTask({
+      status: 'closed',
+      resolution: json({ summary: 'found fit' }),
+      resolved_at: ended,
+      closed_at: ended,
+    });
+    // a task that has carried it cannot be moved back to open with it
+    const atWork = await insertTask({ status: 'in_progress', work_completed_at: ended });
+    await expect(
+      db
+        .updateTable('maintenance_tasks')
+        .set({ status: 'open' })
+        .where('organization_id', '=', org)
+        .where('id', '=', atWork)
+        .execute(),
+    ).rejects.toSatisfy(isCheckViolation);
+    expect(
+      (
+        await db
+          .selectFrom('maintenance_tasks')
+          .select('work_completed_at')
+          .where('id', '=', closedFromOpen)
+          .executeTakeFirstOrThrow()
+      ).work_completed_at,
+    ).toBeNull();
   });
 
   it('SPK-FAC-003/004: approval, activation and release facts are inseparable from the state', async () => {

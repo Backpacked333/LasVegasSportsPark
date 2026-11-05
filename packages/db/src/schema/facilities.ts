@@ -85,6 +85,11 @@ export interface MaintenanceTasksTable {
   resolution: Json<JsonObject> | null;
   resolved_at: NullableTimestamp;
   closed_at: NullableTimestamp;
+  /**
+   * When the task's work last ended: set when it leaves `in_progress` (migration 0907); the release
+   * gate's pass must not predate it (SPK-FAC-004, R4-OPS-MODULES-03).
+   */
+  work_completed_at: NullableTimestamp;
   preventive_schedule_id: string | null;
   occurrence_index: number | null;
   revision: Generated<number>;

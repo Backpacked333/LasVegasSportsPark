@@ -652,7 +652,7 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
     expect(released.status).toBe('released');
   });
 
-  it('authorization, idempotency and uniqueness: front desk cannot restrict, replays return the same restriction, one open restriction per task', async () => {
+  it('authorization, idempotency and uniqueness: front desk cannot restrict, replays return the same restriction, one open restriction per task at any instant', async () => {
     const body = {
       facilityId: facility,
       resourceId: pitch.northHalfId,

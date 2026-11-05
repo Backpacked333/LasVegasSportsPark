@@ -20,7 +20,9 @@ import { keepFakePrincipals } from './support';
  * scheduling closure ends with it, so an active restriction nobody releases stops blocking the area
  * at its end. The periodic job facilities.raise_unreleased_restriction_exceptions raises one owned
  * exception per such restriction for the facilities operator: `high` before the end while the
- * task's inspection is outstanding, `warning` once the interval ended without a release. A
+ * task's inspection is outstanding, `critical` once the interval ended with it still outstanding
+ * (the area is open in scheduling), `warning` once the interval ended without a release. An open
+ * item that no longer states what is due now is settled and replaced. A
  * follow-on restriction of the same task (migration 0906) keeps the area closed past the end under
  * the same inspection gate. Tests advance the FixedClock and call PeriodicJobRunner.runOnce.
  */
@@ -313,12 +315,12 @@ describe('restrictions reaching the end of their interval unreleased (R4-OPS-MOD
     const id: string = created.body.id;
     const openOf = async () => (await exceptionsOf(id)).filter((e) => e.status === 'open');
 
-    // the interval ends with the inspection still outstanding: high
+    // the interval ends with the inspection still outstanding: critical, the area is open
     t.clock.set(at('2026-11-20', '19:00'));
     await run();
     expect(await openOf()).toEqual([
       expect.objectContaining({
-        severity: 'high',
+        severity: 'critical',
         title:
           'A restriction ended with its inspection outstanding; the area is open in scheduling',
         details: expect.objectContaining({
@@ -328,12 +330,12 @@ describe('restrictions reaching the end of their interval unreleased (R4-OPS-MOD
       }),
     ]);
 
-    // the inspection passes after the end: the high item no longer holds and is replaced
+    // the inspection passes after the end: the critical item no longer holds and is replaced
     await resolveAndPass(taskId);
     await run();
     const afterPass = await exceptionsOf(id);
     expect(afterPass.map((e) => [e.status, e.severity])).toEqual([
-      ['resolved', 'high'],
+      ['resolved', 'critical'],
       ['open', 'warning'],
     ]);
     expect(afterPass[1]).toMatchObject({
@@ -344,7 +346,7 @@ describe('restrictions reaching the end of their interval unreleased (R4-OPS-MOD
     await run();
     expect((await openOf()).map((e) => e.severity)).toEqual(['warning']);
 
-    // rework is found before anyone releases the area: high again, with the new cause
+    // rework is found before anyone releases the area: critical again, with the new cause
     const task = (await t.http.get(`/v1/maintenance-tasks/${taskId}`).set(auth)).body;
     const reopened = await patch(`/v1/maintenance-tasks/${taskId}`, {
       status: 'in_progress',
@@ -354,7 +356,7 @@ describe('restrictions reaching the end of their interval unreleased (R4-OPS-MOD
     await run();
     expect(await openOf()).toEqual([
       expect.objectContaining({
-        severity: 'high',
+        severity: 'critical',
         details: expect.objectContaining({
           inspectionOutstanding: expect.objectContaining({ cause: 'work_in_progress' }),
         }),
@@ -375,5 +377,104 @@ describe('restrictions reaching the end of their interval unreleased (R4-OPS-MOD
       'resolved',
     ]);
     expect(await openOf()).toEqual([]);
+  });
+
+  it('SPK-FAC-004: an item raised before the end is replaced when the interval ends with the inspection outstanding (critical), and whenever its cause changes at the same severity', async () => {
+    t.clock.set(at('2026-11-26', '06:00'));
+    const taskId = await inspectedTask(pitch.northHalfId, 'Corner flag socket split');
+    const created = await post('/v1/maintenance-restrictions', {
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      taskId,
+      kind: 'closed',
+      interval: { start: at('2026-11-26', '08:00'), end: at('2026-11-26', '18:00') },
+      reason: 'Corner flag socket',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id: string = created.body.id;
+    const causeOf = (e: { details: unknown }) =>
+      (e.details as { inspectionOutstanding: { cause: string } | null }).inspectionOutstanding
+        ?.cause ?? null;
+    const summary = async () =>
+      (await exceptionsOf(id)).map((e) => [e.status, e.severity, causeOf(e)]);
+
+    // before the end, nothing inspected yet: high
+    await run();
+    expect(await summary()).toEqual([['open', 'high', 'not_inspected']]);
+    expect((await exceptionsOf(id))[0]).toMatchObject({
+      title:
+        'A restriction ends with its inspection outstanding: inspect and release, or continue it',
+      details: { ended: false },
+    });
+
+    // the inspection fails before the end: the severity stays high, the cause changes
+    t.clock.set(at('2026-11-26', '10:00'));
+    const failed = await post(`/v1/maintenance-tasks/${taskId}/inspections`, {
+      outcome: 'failed',
+    });
+    expect(failed.status, JSON.stringify(failed.body)).toBe(201);
+    await run();
+    expect(await summary()).toEqual([
+      ['resolved', 'high', 'not_inspected'],
+      ['open', 'high', 'inspection_failed'],
+    ]);
+    // a replay that changes nothing keeps the one item
+    await run();
+    expect(await summary()).toHaveLength(2);
+
+    // the interval ends with the inspection still outstanding: the area reopens in scheduling ...
+    t.clock.set(at('2026-11-26', '19:00'));
+    await expect(
+      createScheduledEvent(events, {
+        organizationId: org,
+        facilityId: facility,
+        resourceIds: [pitch.northHalfId],
+        start: at('2026-11-26', '19:30'),
+        end: at('2026-11-26', '20:30'),
+      }),
+    ).resolves.toBeDefined();
+    // ... so the early warning is replaced by a critical item that says so
+    expect(await run()).toMatchObject({ ran: true, failed: false });
+    expect(await summary()).toEqual([
+      ['resolved', 'high', 'not_inspected'],
+      ['resolved', 'high', 'inspection_failed'],
+      ['open', 'critical', 'inspection_failed'],
+    ]);
+    const ended = (await exceptionsOf(id))[2];
+    expect(ended).toMatchObject({
+      title: 'A restriction ended with its inspection outstanding; the area is open in scheduling',
+      owner_queue: 'facilities_operator',
+      details: { ended: true, inspectionOutstanding: { cause: 'inspection_failed', taskId } },
+    });
+    expect(new Date(ended?.deadline_at as Date).toISOString()).toBe(at('2026-11-26', '18:00'));
+
+    // the task goes to work: still critical, the cause changes again
+    t.clock.advance(60_000);
+    const task = (await t.http.get(`/v1/maintenance-tasks/${taskId}`).set(auth)).body;
+    const started = await patch(`/v1/maintenance-tasks/${taskId}`, {
+      status: 'in_progress',
+      expectedRevision: task.revision,
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    await run();
+    expect((await summary()).slice(2)).toEqual([
+      ['resolved', 'critical', 'inspection_failed'],
+      ['open', 'critical', 'work_in_progress'],
+    ]);
+
+    // repaired and inspected: only the authorized release is missing (warning), which settles it
+    await resolveAndPass(taskId);
+    await run();
+    expect((await summary()).slice(3)).toEqual([
+      ['resolved', 'critical', 'work_in_progress'],
+      ['open', 'warning', null],
+    ]);
+    const released = await post(
+      `/v1/maintenance-restrictions/${id}/release`,
+      { reason: 'reworked and inspected', expectedRevision: await restrictionRevision(id) },
+      managerAuth,
+    );
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect((await exceptionsOf(id)).filter((e) => e.status === 'open')).toEqual([]);
   });
 });
