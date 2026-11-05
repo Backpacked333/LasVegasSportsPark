@@ -9,7 +9,7 @@ import {
   type ApiError,
   type Schema,
 } from '@sportspark/api-client';
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   mayHaveTakenEffect,
@@ -94,7 +94,14 @@ export function ButtonRow({ children }: { children: ReactNode }) {
   return <View style={styles.buttonRow}>{children}</View>;
 }
 
-/** A radio row: role and checked state are announced; the mark is a glyph, never colour only. */
+/** The error of the choice a `RadioRow` belongs to (`RadioGroup error`), read with each row. */
+const ChoiceErrorContext = createContext<string | null>(null);
+
+/**
+ * A radio row: role and checked state are announced; the mark is a glyph, never colour only. While
+ * its group shows an error ("Choose the player to ask."), the error is the row's hint, so it is
+ * read with the choice (SPK-UX-009).
+ */
 export function RadioRow({
   label,
   detail,
@@ -110,10 +117,12 @@ export function RadioRow({
   disabled?: boolean;
   testID?: string;
 }) {
+  const groupError = useContext(ChoiceErrorContext);
   return (
     <Pressable
       accessibilityRole="radio"
       accessibilityLabel={detail ? `${label}, ${detail}` : label}
+      accessibilityHint={groupError ? `Error: ${groupError}` : undefined}
       accessibilityState={{ checked, disabled }}
       disabled={disabled}
       onPress={onSelect}
@@ -139,12 +148,44 @@ export function RadioRow({
   );
 }
 
-export function RadioGroup({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * A labelled radio group. `error` (a required choice not made) is the group's and each row's
+ * hint, so it is read with the choice; show it under the group with `FieldError`, which announces
+ * it when it appears (SPK-UX-009, NA-A01).
+ */
+export function RadioGroup({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: string | null;
+  children: ReactNode;
+}) {
   return (
-    <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.group}>
+    <View
+      accessibilityRole="radiogroup"
+      accessibilityLabel={label}
+      accessibilityHint={error ? `Error: ${error}` : undefined}
+      style={styles.group}
+    >
       <Text style={styles.fieldLabel}>{label}</Text>
-      {children}
+      <ChoiceErrorContext.Provider value={error ?? null}>{children}</ChoiceErrorContext.Provider>
     </View>
+  );
+}
+
+/**
+ * A choice's (or a field's) error, shown under it and announced to screen readers when it appears
+ * (`ui/announce`: a live region on Android, an announcement on iOS; SPK-UX-009, NA-A01), so a
+ * person who sends a form without choosing hears why nothing was sent.
+ */
+export function FieldError({ error, testID }: { error?: string | null; testID?: string }) {
+  if (!error) return null;
+  return (
+    <LiveText style={styles.error} announcement={error} accessibilityRole="alert" testID={testID}>
+      {`▲ ${error}`}
+    </LiveText>
   );
 }
 

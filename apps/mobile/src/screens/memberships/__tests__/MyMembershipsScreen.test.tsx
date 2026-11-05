@@ -14,6 +14,7 @@ import {
   type FakeHandler,
 } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import { createRouterMock } from '../../../features/money/testing/fixtures';
 import {
   createMoneyTestApp as createTestApp,
@@ -201,6 +202,28 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
       kind: 'membership',
       limit: '20',
     });
+  });
+
+  it('SPK-UX-009 (NA-A01, R4-CLIENTS-A11Y-COPY-03): renewing without a membership chosen announces the error and reads it with each choice', async () => {
+    const app = renderScreen();
+    const mine = await screen.findByTestId(`membership-${G.membership}`);
+    fireEvent.press(within(mine).getByRole('button', { name: 'Renew' }));
+    const option = await screen.findByRole('radio', { name: /Adult membership 2027/ });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to a basket' }));
+    });
+    const error = screen.getByTestId('renew-target-error');
+    expect(error).toHaveTextContent('▲ Choose the membership to renew into.');
+    expect(error).toHaveProp('accessibilityLiveRegion', 'polite');
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Choose the membership to renew into.',
+      { queue: true },
+    );
+    expect(option).toHaveProp('accessibilityHint', 'Error: Choose the membership to renew into.');
+    expect(renewals(app)).toHaveLength(0);
+    fireEvent.press(option);
+    expect(screen.queryByTestId('renew-target-error')).toBeNull();
+    expect(option.props.accessibilityHint).toBeUndefined();
   });
 
   it('PARTICIPANT_AUTHORITY_REQUIRED is "not available to your account"; CAPABILITY_DISABLED is turned off', async () => {

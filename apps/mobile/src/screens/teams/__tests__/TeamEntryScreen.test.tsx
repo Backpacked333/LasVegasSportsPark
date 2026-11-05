@@ -7,6 +7,7 @@
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import {
   IDS,
   competition,
@@ -98,6 +99,23 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     fireEvent.press(await screen.findByRole('button', { name: 'Create the team entry' }));
     expect(screen.getByLabelText('Team name. Enter the team name.')).toBeOnTheScreen();
     expect(screen.getByText('▲ Choose a season.')).toBeOnTheScreen();
+    expect(app.requestsTo('POST', '/team-entries')).toHaveLength(0);
+  });
+
+  it('SPK-UX-009 (NA-A01, R4-CLIENTS-A11Y-COPY-03): a missing season is announced when it is the only error, and read with each season', async () => {
+    const app = renderEntry(null);
+    fireEvent.changeText(await screen.findByLabelText('Team name'), 'Desert Foxes');
+    fireEvent.press(screen.getByRole('button', { name: 'Create the team entry' }));
+    const error = screen.getByTestId('team-entry-season-error');
+    expect(error).toHaveTextContent('▲ Choose a season.');
+    expect(error).toHaveProp('accessibilityLiveRegion', 'polite');
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Choose a season.',
+      { queue: true },
+    );
+    for (const season of screen.getAllByRole('radio')) {
+      expect(season).toHaveProp('accessibilityHint', 'Error: Choose a season.');
+    }
     expect(app.requestsTo('POST', '/team-entries')).toHaveLength(0);
   });
 

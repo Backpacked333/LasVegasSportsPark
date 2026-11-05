@@ -7,7 +7,7 @@
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
-import { Linking } from 'react-native';
+import { AccessibilityInfo, Linking } from 'react-native';
 import { readSupportContact } from '../../../config/app-config';
 import {
   CHILD,
@@ -109,6 +109,34 @@ const sent = (app: ReturnType<typeof createTestApp>) =>
 beforeEach(() => mockPush.mockClear());
 
 describe('SCR-C-38 SupportScreen: opening a request (POST /v1/me/support-requests)', () => {
+  it('SPK-UX-009 (NA-A01, R4-CLIENTS-A11Y-COPY-03): a missing category, the only error, is announced and read with each category', async () => {
+    const app = renderSupport();
+    const form = await screen.findByTestId('support-request');
+    fireEvent.press(await within(form).findByRole('radio', { name: 'Sam' }));
+    fireEvent.changeText(within(form).getByLabelText('Title'), 'Practice time for Sam');
+    fireEvent.changeText(
+      within(form).getByLabelText('What do you need?'),
+      'The Saturday session moved; can Sam stay at 10?',
+    );
+    fireEvent.press(within(form).getByRole('button', { name: 'Send request' }));
+    const error = within(form).getByTestId('support-category-error');
+    expect(error).toHaveTextContent('▲ Choose what your request is about.');
+    expect(error).toHaveProp('accessibilityLiveRegion', 'polite');
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Choose what your request is about.',
+      { queue: true },
+    );
+    expect(within(form).getByRole('radio', { name: categoryLabel('Schedule') })).toHaveProp(
+      'accessibilityHint',
+      'Error: Choose what your request is about.',
+    );
+    // The people and teams the request may be about are another choice: no error there.
+    expect(
+      within(form).getByRole('radio', { name: 'Sam' }).props.accessibilityHint,
+    ).toBeUndefined();
+    expect(sent(app)).toHaveLength(0);
+  });
+
   it('SPK-SUPPORT-002: sends a request about a child the account views, with one key, and shows it as sent', async () => {
     const app = renderSupport();
     const form = await fillDraft();

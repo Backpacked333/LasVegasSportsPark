@@ -50,8 +50,10 @@ import {
   Body,
   ButtonRow,
   Caption,
+  ChoiceGroup,
   ChoiceRow,
   Field,
+  FieldError,
   Section,
   TextField,
 } from '../../features/money/ui';
@@ -298,7 +300,7 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
         ))}
       </View>
 
-      <View accessibilityRole="radiogroup" accessibilityLabel="What is it about">
+      <ChoiceGroup label="What is it about" error={errors.category}>
         <Caption>What is it about</Caption>
         {CATEGORIES.map((category) => (
           <ChoiceRow
@@ -316,13 +318,9 @@ function SupportRequestForm({ linked }: { linked: { type: RelatedType; id: strin
             testID={`support-category-${category}`}
           />
         ))}
-        {errors.category ? (
-          <Caption>
-            {'▲ '}
-            {errors.category}
-          </Caption>
-        ) : null}
-      </View>
+        {/* Announced when it appears, like every field error (SPK-UX-009). */}
+        <FieldError error={errors.category} testID="support-category-error" />
+      </ChoiceGroup>
 
       {draft.category === 'registration' ? (
         <View accessibilityRole="radiogroup" accessibilityLabel="Which registration (optional)">

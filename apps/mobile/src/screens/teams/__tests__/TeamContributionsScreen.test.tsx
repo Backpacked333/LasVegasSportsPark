@@ -5,6 +5,7 @@
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import {
   IDS,
   baseRoutes,
@@ -205,6 +206,30 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
       screen.queryByLabelText('No answer yet: this may already have been recorded'),
     ).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+  });
+
+  it('SPK-UX-009 (NA-A01, R4-CLIENTS-A11Y-COPY-03): sending without a player announces "Choose the player to ask." and reads it with each player choice', async () => {
+    const app = renderContributions();
+    fireEvent.changeText(await screen.findByLabelText('Amount (USD)'), '25');
+    fireEvent.press(screen.getByRole('button', { name: 'Request contribution' }));
+    const error = screen.getByTestId('contribution-player-error');
+    expect(error).toHaveTextContent('▲ Choose the player to ask.');
+    // A live region for TalkBack, an announcement for VoiceOver (no text field error fires).
+    expect(error).toHaveProp('accessibilityLiveRegion', 'polite');
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Choose the player to ask.',
+      { queue: true },
+    );
+    expect(screen.getByRole('radio', { name: 'Pat Player' })).toHaveProp(
+      'accessibilityHint',
+      'Error: Choose the player to ask.',
+    );
+    expect(app.requestsTo('POST', '/obligations/{id}/contribution-requests')).toHaveLength(0);
+    fireEvent.press(screen.getByRole('radio', { name: 'Pat Player' }));
+    expect(screen.queryByTestId('contribution-player-error')).toBeNull();
+    expect(
+      screen.getByRole('radio', { name: 'Pat Player' }).props.accessibilityHint,
+    ).toBeUndefined();
   });
 
   it('empty: no team obligation means individual billing or no fee recorded yet', async () => {
