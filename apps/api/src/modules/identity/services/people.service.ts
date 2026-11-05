@@ -46,6 +46,7 @@ import { IdentityEvents } from '../identity.events';
 import type { PersonDirectoryPort, PersonDisplayName, PersonSummary } from '../identity.ports';
 import {
   assertKindMatchesDateOfBirth,
+  canonicalPersonIdOf,
   displayNameOf,
   escapeLike,
   isUuid,
@@ -299,9 +300,16 @@ export class PeopleService implements PersonDirectoryPort {
       if (current.status === 'merged') {
         throw errors.invalidTransition('Person', 'merged', 'update');
       }
-      const dateOfBirth =
-        input.dateOfBirth === undefined ? current.date_of_birth : input.dateOfBirth;
-      assertKindMatchesDateOfBirth(current.kind, dateOfBirth, this.clock.now());
+      // §4.5 (R4-PRIVACY-02): kind is fixed when the record is made, and age moves with the clock,
+      // so only a date of birth this command changes is checked against the kind. A child record
+      // whose person has since reached ADULT_AGE_YEARS stays editable (names, status) and stays a
+      // child record: what happens at majority is pending (DEC-004, README "Policy defaults").
+      const dateOfBirthChanges =
+        input.dateOfBirth !== undefined && input.dateOfBirth !== current.date_of_birth;
+      const dateOfBirth = dateOfBirthChanges ? (input.dateOfBirth ?? null) : current.date_of_birth;
+      if (dateOfBirthChanges) {
+        assertKindMatchesDateOfBirth(current.kind, dateOfBirth, this.clock.now());
+      }
       // A staff role that covers person updates, not staff kind alone (SPK-IAM-001).
       if (
         input.status !== undefined &&
@@ -833,20 +841,8 @@ export class PeopleService implements PersonDirectoryPort {
     personId: string,
     trx?: Trx,
   ): Promise<string> {
-    const db = trx ?? executorFor(this.db);
-    let current = personId;
     // Merges form a chain (A→B, later B→C); follow it with a bounded walk.
-    for (let hop = 0; hop < 16; hop += 1) {
-      const row = await db
-        .selectFrom('persons')
-        .select('merged_into_person_id')
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', current)
-        .executeTakeFirst();
-      if (!row?.merged_into_person_id) return current;
-      current = row.merged_into_person_id;
-    }
-    return current;
+    return canonicalPersonIdOf(trx ?? executorFor(this.db), organizationId, personId);
   }
 
   // -------------------------------------------------------------------------------------------

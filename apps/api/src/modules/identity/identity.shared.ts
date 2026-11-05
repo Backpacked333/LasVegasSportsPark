@@ -288,6 +288,59 @@ export async function lockPersonsForShare(
 }
 
 /**
+ * SPK-IAM-007: the person an id resolves to after merges (A→B, later B→C), by a bounded walk along
+ * `merged_into_person_id`; the id itself when it was not merged (or is unknown).
+ */
+export async function canonicalPersonIdOf(
+  db: Db | Trx,
+  organizationId: string,
+  personId: string,
+): Promise<string> {
+  let current = personId;
+  for (let hop = 0; hop < 16; hop += 1) {
+    const row = await db
+      .selectFrom('persons')
+      .select('merged_into_person_id')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', current)
+      .executeTakeFirst();
+    if (!row?.merged_into_person_id) return current;
+    current = row.merged_into_person_id;
+  }
+  return current;
+}
+
+/**
+ * §4.9, SPK-IAM-007: refuses a command that names a merged person record (400 VALIDATION_FAILED,
+ * `details.mergedIntoPersonId` the record it now resolves to), so a screen read before the merge
+ * re-reads and names the survivor instead of acting on a record the merge has emptied. The caller
+ * has share-locked the person (lockPersonsForShare) and passed its authorization check first, so a
+ * command racing the merge waits for it and only an authorized caller learns of the merge.
+ */
+export async function refuseMergedPerson(
+  trx: Trx,
+  organizationId: string,
+  personId: string,
+  field: string,
+): Promise<void> {
+  const person = await trx
+    .selectFrom('persons')
+    .select('status')
+    .where('organization_id', '=', organizationId)
+    .where('id', '=', personId)
+    .executeTakeFirst();
+  if (person?.status !== 'merged') return;
+  throw errors.validation(
+    `${field} names a person record that was merged into another; name that record instead.`,
+    {
+      field,
+      personId,
+      mergedIntoPersonId: await canonicalPersonIdOf(trx, organizationId, personId),
+    },
+  );
+}
+
+/**
  * The issuer snapshot stored on a claim (`claims.issued_by`): the audit actor plus the facility
  * scope over which the issuer assigned staff roles at issue (`staffAssignmentScope`;
  * R3-SECURITY-01), so acceptance can tell whether the issuer could have handed over the subject's
