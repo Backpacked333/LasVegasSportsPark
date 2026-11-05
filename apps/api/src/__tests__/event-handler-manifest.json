@@ -1,0 +1,107 @@
+{
+  "outbox": {
+    "automation.recommendation_expiry_due": ["automation.expire_recommendation"],
+    "catalog.offering_updated": ["enrollment.sync_capacity"],
+    "catalog.session_canceled": [
+      "enrollment.follow_session_canceled",
+      "entry.withdraw_on_session_canceled",
+      "workforce.follow_session"
+    ],
+    "catalog.session_retimed": [
+      "enrollment.follow_session_retimed",
+      "entry.follow_session_retimed",
+      "workforce.follow_session_retimed"
+    ],
+    "communications.delivery_requested": ["communications.dispatch_notification"],
+    "communications.notification_dispatched": ["support.index_message"],
+    "competition.availability_requested": ["communications.notify_availability_request"],
+    "competition.fixture_changed": ["workforce.follow_fixture"],
+    "competition.result_published": ["communications.notify_result_published"],
+    "competition.team_invitation_created": ["communications.notify_team_invitation"],
+    "core.capability_changed": ["enrollment.resume_after_capability_enabled"],
+    "enrollment.application_decided": ["enrollment.notify_registration_outcome"],
+    "enrollment.assessment_published": ["enrollment.notify_assessment_published"],
+    "enrollment.capacity_released": ["enrollment.offer_waitlist"],
+    "enrollment.enrollment_canceled": [
+      "enrollment.booking_follow_cancellation",
+      "enrollment.membership_canceled",
+      "enrollment.revoke_package"
+    ],
+    "enrollment.enrollment_completed": ["enrollment.membership_completed"],
+    "enrollment.enrollment_confirmed": [
+      "enrollment.booking_follow_confirmation",
+      "enrollment.issue_package",
+      "enrollment.notify_registration_confirmed",
+      "enrollment.retire_redundant_waitlist_entries",
+      "enrollment.start_membership"
+    ],
+    "enrollment.enrollment_transferred": ["enrollment.retire_redundant_waitlist_entries"],
+    "enrollment.hold_expiry_due": ["enrollment.expire_hold"],
+    "enrollment.makeup_expiry_due": ["enrollment.expire_makeup"],
+    "enrollment.placement_assigned": ["enrollment.notify_placement"],
+    "enrollment.recommendation_shared": ["enrollment.notify_recommendation_shared"],
+    "enrollment.session_booked": ["enrollment.retire_redundant_waitlist_entries"],
+    "enrollment.session_booking_changed": [
+      "enrollment.notify_session_booking_canceled",
+      "enrollment.retire_redundant_waitlist_entries"
+    ],
+    "enrollment.waitlist_left": ["enrollment.notify_waitlist_retired"],
+    "enrollment.waitlist_offer_made": ["enrollment.notify_waitlist_offer"],
+    "entry.pass_revoked": ["entry.queue_device_revocations"],
+    "facilities.maintenance_task_due_reached": ["facilities.escalate_overdue_task"],
+    "finance.checkout_compensated": ["finance.notify_checkout_compensated"],
+    "finance.checkout_expiry_due": ["finance.abort_expired_checkout"],
+    "finance.checkout_payment_received": ["finance.finalize_checkout"],
+    "finance.checkout_recovery_required": ["finance.notify_checkout_recovery"],
+    "finance.contribution_requested": ["finance.notify_contribution_requested"],
+    "finance.installment_failed": ["finance.notify_installment_failed"],
+    "finance.installment_notice": ["finance.notify_installment_due"],
+    "finance.installment_notice_due": ["finance.record_installment_notice"],
+    "finance.order_paid": ["support.index_order"],
+    "finance.payment_failed": ["finance.notify_payment_failed", "support.index_payment"],
+    "finance.payment_outcome_unknown": ["support.index_payment"],
+    "finance.payment_received": ["support.index_payment"],
+    "finance.refund_requested": ["support.index_refund"],
+    "finance.refund_reversed": ["finance.notify_refund_reversed"],
+    "finance.refund_settled": [
+      "finance.complete_compensation",
+      "finance.pos_return_refund_outcome",
+      "support.index_refund"
+    ],
+    "identity.access_grant_revoked": ["communications.reevaluate_revoked_grant"],
+    "identity.access_restricted": ["communications.reevaluate_restricted_access"],
+    "identity.access_review_decided": ["support.access_review_escalation"],
+    "identity.account_relinked": ["communications.revoke_push_on_relink"],
+    "identity.persons_merged": [
+      "communications.follow_person_merge",
+      "competition.follow_person_merge",
+      "enrollment.follow_person_merge",
+      "entry.follow_person_merge",
+      "finance.follow_person_merge",
+      "workforce.follow_person_merge"
+    ],
+    "reporting.export_expiry_due": ["reporting.expire_export"],
+    "scheduling.closure_lifted": ["facilities.reconcile_lifted_closure"],
+    "scheduling.event_changed": [
+      "catalog.follow_scheduling_event",
+      "communications.schedule_change_notice",
+      "competition.sync_fixture_schedule",
+      "enrollment.booking_follow_event",
+      "entry.follow_event_changed",
+      "entry.withdraw_on_event_canceled",
+      "support.index_schedule_change",
+      "workforce.follow_event"
+    ],
+    "scheduling.schedule_published": ["communications.schedule_published_summary"],
+    "support.helper_outcome_due": ["support.helper_outcome_overdue"],
+    "workforce.assignment_changed": [
+      "enrollment.booking_staffing",
+      "workforce.assignment_offer_notice"
+    ]
+  },
+  "inbox": {
+    "fake-access-control": ["entry.access_device_signal", "entry.access_event"],
+    "fake-messaging": ["communications.delivery_receipt"],
+    "fake-payments": ["finance.apply_payment_event"]
+  }
+}

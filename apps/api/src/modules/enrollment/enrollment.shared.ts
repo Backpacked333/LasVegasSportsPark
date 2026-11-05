@@ -1,0 +1,777 @@
+import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
+import {
+  decodeCursor,
+  encodeCursor,
+  errors,
+  systemPrincipal,
+  z,
+  type Application,
+  type Basket,
+  type BasketLine,
+  type CapacityPool,
+  type EligibilityOverride,
+  type EligibilityResult,
+  type Enrollment,
+  type FinancialConsequence,
+  type Hold,
+  type MakeupEntitlement,
+  type PlacementReason,
+  type PlacementRequest,
+  type PolicyReferences,
+  type PriceSnapshot,
+  type Principal,
+  type RegistrationActorSnapshot,
+  type SessionBooking,
+  type TrialParticipation,
+  type WaitlistEntry,
+  type WaitlistOffer,
+} from '@sportspark/contracts';
+import type {
+  ApplicationsTable,
+  BasketLinesTable,
+  BasketsTable,
+  CapacityPoolsTable,
+  Db,
+  EnrollmentsTable,
+  HoldsTable,
+  MakeupEntitlementsTable,
+  MakeupRedemptionsTable,
+  PlacementRequestsTable,
+  SessionBookingsTable,
+  TrialParticipationsTable,
+  WaitlistEntriesTable,
+  WaitlistOffersTable,
+} from '@sportspark/db';
+import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
+import {
+  snapshotActor,
+  type ActionDefinition,
+  type AuthorizationService,
+  type AuthorizationTargetInput,
+  type RequestWithContext,
+  type Trx,
+  KeysetInstant,
+  keysetInstant,
+} from '../../kernel';
+import { IdentityActions } from '../identity';
+
+/** Correlation id assigned by the kernel middleware, for audit and outbox records (§4.10). */
+export const CorrelationId = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): string | null =>
+    ctx.switchToHttp().getRequest<RequestWithContext>().correlationId ?? null,
+);
+
+export type Reader = Db | Trx;
+
+export function organizationOf(principal: Principal): string {
+  if (!principal.organizationId) throw errors.authenticationRequired();
+  return principal.organizationId;
+}
+
+/**
+ * R3-TRACE-A-02 (§2.1, §4.10, §4.14, SPK-IAM-001/003): should a denied staff-only command on a
+ * customer-private record read as NOT_FOUND? Yes for anyone who may not even read the record
+ * (another household, or a staff member whose roles and own relationships do not reach it), so its
+ * existence never leaks; whoever may read it (their own child's, or a staff reader in scope) gets
+ * the honest ACCESS_DENIED. The decision is the kernel's, never the principal's kind, and it is
+ * the read's own decision: `facilityIds` are the record's facilities, as its GET checks them (a
+ * record readable at any of them, such as a makeup redeemable at several, is readable; none given:
+ * organization-wide), so a staff reader scoped to another facility is hidden from as GET hides.
+ */
+export async function hiddenFrom(
+  authorization: AuthorizationService,
+  principal: Principal,
+  readAction: ActionDefinition,
+  target: AuthorizationTargetInput,
+  facilityIds?: string | ReadonlyArray<string | null | undefined> | null,
+): Promise<boolean> {
+  if (principal.kind === 'system') return false;
+  const facilities = [
+    ...new Set(
+      (typeof facilityIds === 'string' ? [facilityIds] : (facilityIds ?? [])).filter(
+        (id): id is string => !!id,
+      ),
+    ),
+  ];
+  for (const facilityId of facilities.length > 0 ? facilities : [undefined]) {
+    const readTarget = facilityId ? { ...target, facilityId } : target;
+    if ((await authorization.decide(principal, readAction, readTarget)).allowed) return false;
+  }
+  return true;
+}
+
+/**
+ * R4-PRIVACY-03 (§4.10 "errors must not reveal another household's protected record existence";
+ * CLAUDE.md: a customer-private record the caller may not see answers `protectedNotFound`): the
+ * authority check of a command that names persons by id (a participant, a booker, a basket
+ * owner). A person id that does not exist already answers `protectedNotFound('person')`
+ * (`RegistrationEvaluator.participant`); when `action` is denied, a caller who may not even read
+ * one of the named persons (`identity.read_person`: themselves, a relationship holding `view`,
+ * a staff reader) gets the same answer, so "exists in another household" and "does not exist" read
+ * alike. Whoever may read every named person gets the kernel's honest refusal
+ * (PARTICIPANT_AUTHORITY_REQUIRED for a guardian holding `view` but not `register`, ACCESS_DENIED
+ * for a staff role out of scope), as identity's relationship commands answer (SPK-AT-001 rows 7-8).
+ */
+export async function requireOverNamedPersons(
+  authorization: AuthorizationService,
+  principal: Principal,
+  action: ActionDefinition,
+  target: AuthorizationTargetInput,
+  namedPersonIds: ReadonlyArray<string>,
+): Promise<void> {
+  if ((await authorization.decide(principal, action, target)).allowed) return;
+  if (principal.kind !== 'anonymous') {
+    for (const personId of new Set(namedPersonIds)) {
+      const readable = await authorization.decide(principal, IdentityActions.readPerson, {
+        type: 'person',
+        id: personId,
+        organizationId: target.organizationId,
+        subjectPersonIds: [personId],
+        protected: true,
+      });
+      if (!readable.allowed) throw errors.protectedNotFound('person');
+    }
+  }
+  await authorization.require(principal, action, target);
+}
+
+/** The system principal enrollment uses for its own follow-up work (outbox handlers, timers). */
+export function enrollmentSystem(organizationId: string, label = 'enrollment'): Principal {
+  return systemPrincipal(organizationId, label);
+}
+
+/**
+ * §4.7 (1), §4.14, SPK-REG-009: the payer a command may name. Staff acting on their role (an
+ * assisted registration, `staff` from `EnrollmentFacilityScope.actsAsStaff`) may name another
+ * payer; anyone else, including a staff member acting for their own family (R3-TRACE-A-02), may
+ * name only an adult in `allowed` (themselves, or the basket owner they already hold authority
+ * over). Finance lets only the payer quote and pay, so naming an unrelated adult would also leave
+ * the registration unpayable.
+ */
+export function resolveCustomerPayer(
+  staff: boolean,
+  requested: string | null | undefined,
+  allowed: ReadonlyArray<string | null | undefined>,
+): string | null {
+  if (requested === undefined || requested === null) return null;
+  if (staff) return requested;
+  if (!allowed.includes(requested)) {
+    throw errors.participantAuthorityRequired(
+      'A customer may name only themselves as payer; staff may name another payer (SPK-REG-009).',
+    );
+  }
+  return requested;
+}
+
+/**
+ * SPK-PAY-001/002: whether a price basis owes nothing, counting the approved non-inclusive fees
+ * and taxes finance adds on top of the base price (an amount fee is per unit; a percentage of a
+ * zero net is zero). Only then may a registration skip the finance checkout; finance's quote
+ * total is zero in exactly these cases before discounts and credits, which finance applies.
+ */
+export function owesNothing(price: PriceSnapshot | null | undefined, quantity: number): boolean {
+  if (!price) return true;
+  if (price.basePriceMinor * quantity !== 0) return false;
+  return price.chargeLines.every(
+    (charge) => charge.inclusive === true || (charge.amountMinor ?? 0) === 0,
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Payer privacy (SPK-AT-004, §4.14): a guardian who may see a child's participation does not
+// learn which other adult registered or pays for it. Staff, the payer and the registrant see all.
+// ---------------------------------------------------------------------------------------------
+
+const REDACTED_ACTOR: RegistrationActorSnapshot = {
+  kind: 'customer',
+  accountId: null,
+  personId: null,
+  staffRoles: [],
+  actorLabel: 'another authorized adult',
+};
+
+/**
+ * Who reads a registration record, for payer privacy: their person, and whether a staff role that
+ * reads the record at its facility (or the system) is what lets them read it. A staff member who
+ * reads their own child's record through a relationship is a family reader (R3-TRACE-A-02).
+ */
+export interface RecordViewer {
+  personId: string | null;
+  staff: boolean;
+}
+
+/** The viewer of a record read by `principal`; `staff` comes from `EnrollmentFacilityScope.actsAsStaff`. */
+export function viewerOf(principal: Principal, staff: boolean): RecordViewer {
+  return {
+    personId: principal.personId,
+    staff: principal.kind === 'system' || (principal.kind === 'staff' && staff),
+  };
+}
+
+function seesPrivateFacts(viewer: RecordViewer, personIds: ReadonlyArray<string | null>): boolean {
+  if (viewer.staff) return true;
+  return viewer.personId !== null && personIds.includes(viewer.personId);
+}
+
+export function redactApplication(viewer: RecordViewer, application: Application): Application {
+  if (seesPrivateFacts(viewer, [application.payerPersonId, application.submittedByPersonId])) {
+    return application;
+  }
+  return {
+    ...application,
+    submittedBy:
+      application.submittedBy.kind === 'staff' ? application.submittedBy : REDACTED_ACTOR,
+    submittedByPersonId: null,
+    payerPersonId: null,
+  };
+}
+
+export function redactEnrollment(viewer: RecordViewer, enrollment: Enrollment): Enrollment {
+  if (seesPrivateFacts(viewer, [enrollment.payerPersonId, enrollment.registeredBy.personId])) {
+    return enrollment;
+  }
+  return {
+    ...enrollment,
+    registeredBy:
+      enrollment.registeredBy.kind === 'staff' ? enrollment.registeredBy : REDACTED_ACTOR,
+    payerPersonId: null,
+    basketId: null,
+    basketLineId: null,
+    orderRef: null,
+    cancellationConsequence: null,
+    transferConsequence: null,
+  };
+}
+
+export function redactSessionBooking(
+  viewer: RecordViewer,
+  booking: SessionBooking,
+): SessionBooking {
+  if (seesPrivateFacts(viewer, [booking.payerPersonId, booking.bookedBy.personId])) return booking;
+  return {
+    ...booking,
+    bookedBy: booking.bookedBy.kind === 'staff' ? booking.bookedBy : REDACTED_ACTOR,
+    payerPersonId: null,
+  };
+}
+
+export function redactWaitlistEntry(
+  viewer: RecordViewer,
+  entry: WaitlistEntry,
+  requestedByPersonId: string | null,
+): WaitlistEntry {
+  if (seesPrivateFacts(viewer, [entry.payerPersonId, requestedByPersonId])) return entry;
+  return { ...entry, payerPersonId: null };
+}
+
+/**
+ * SPK-AT-004, §4.14: another authorized adult who may read a child's trial does not learn which
+ * adult booked it. Staff, the registrant and the participant themself see the registrant; a
+ * staff registrant (an assisted booking) stays visible, as on the sibling records.
+ */
+export function redactTrialParticipation(
+  viewer: RecordViewer,
+  trial: TrialParticipation,
+): TrialParticipation {
+  if (seesPrivateFacts(viewer, [trial.registeredBy.personId, trial.participantPersonId])) {
+    return trial;
+  }
+  if (trial.registeredBy.kind === 'staff') return trial;
+  return { ...trial, registeredBy: REDACTED_ACTOR, assistedByPersonId: null };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Keyset pages (§4.5, ENR-01/02): newest first on (created_at desc, id desc). The cursor carries
+// created_at as the database's own text so microseconds survive the round trip.
+// ---------------------------------------------------------------------------------------------
+
+// R2-API-CONTRACT-01b: the instant is the shared kernel shape, so a crafted cursor (year 0000, an
+// impossible date, free text) reads as the first page instead of failing the cast with a 500.
+const CreatedCursor = z.object({ at: KeysetInstant, id: z.uuid() });
+export type CreatedKeyset = z.infer<typeof CreatedCursor>;
+
+/** The decoded cursor, or null (absent or malformed: the first page). */
+export function decodeCreatedCursor(cursor: string | undefined): CreatedKeyset | null {
+  return decodeCursor(cursor, CreatedCursor);
+}
+
+/** `created_at` of `table` as an ISO-8601 UTC instant with microseconds, selected as `cursor_at`. */
+export function cursorAt(table: string): RawBuilder<string> {
+  return keysetInstant(`${table}.created_at`);
+}
+
+/** Rows strictly after the cursor in (created_at desc, id desc) order. */
+export function beforeCursor(table: string, cursor: CreatedKeyset): RawBuilder<SqlBool> {
+  return sql<SqlBool>`(${sql.ref(`${table}.created_at`)}, ${sql.ref(`${table}.id`)}) < (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+}
+
+/** Splits a `limit + 1` read into the page and its next cursor. */
+export function keysetPage<R extends { id: string; cursor_at: string }>(
+  rows: readonly R[],
+  limit: number,
+): { rows: R[]; nextCursor: string | null } {
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    nextCursor:
+      rows.length > limit && last ? encodeCursor({ at: last.cursor_at, id: last.id }) : null,
+  };
+}
+
+export const iso = (value: Date | string): string => new Date(value).toISOString();
+export const isoOrNull = (value: Date | string | null | undefined): string | null =>
+  value === null || value === undefined ? null : iso(value);
+
+export function minutesFrom(now: Date, minutes: number): Date {
+  return new Date(now.getTime() + minutes * 60_000);
+}
+
+export function actorSnapshot(principal: Principal): RegistrationActorSnapshot {
+  const snapshot = snapshotActor(principal);
+  return {
+    kind: principal.kind,
+    accountId: principal.accountId,
+    personId: principal.personId,
+    staffRoles: [...principal.staffRoles],
+    actorLabel: String(snapshot['actorLabel'] ?? principal.actorLabel),
+  };
+}
+
+/**
+ * The registrant snapshot of a family-facing record (who registered, booked, queued or opened it;
+ * SPK-REG-009, SPK-AT-004). A staff member acting through their own self or guardian authority
+ * (`staff` false, R3-TRACE-A-02) is recorded as the customer they acted as, so the record is not
+ * shown as staff-assisted and payer privacy hides them from the other adults as it hides any
+ * family registrant. The audit record keeps the full principal.
+ */
+export function registrantSnapshot(
+  principal: Principal,
+  staff: boolean,
+): RegistrationActorSnapshot {
+  const snapshot = actorSnapshot(principal);
+  if (staff || principal.kind !== 'staff') return snapshot;
+  // The whole snapshot is the customer's: the label takes the form the principal resolver gives an
+  // account without staff roles (`customer:<account id prefix>`), never `staff:<roles>:…`.
+  return {
+    ...snapshot,
+    kind: 'customer',
+    staffRoles: [],
+    actorLabel: customerActorLabel(principal.accountId),
+  };
+}
+
+/** The actor label of a customer account (identity's principal resolver uses the same form). */
+export function customerActorLabel(accountId: string | null | undefined): string {
+  return accountId ? `customer:${accountId.slice(0, 8)}` : 'customer';
+}
+
+/** SPK-REG-009: the staff actor of an assisted record, apart from participant and payer. */
+export function assistedBy(principal: Principal, staff: boolean): string | null {
+  return staff ? principal.personId : null;
+}
+
+function toActor(value: Record<string, unknown>): RegistrationActorSnapshot {
+  return {
+    kind: (value['kind'] as RegistrationActorSnapshot['kind']) ?? 'system',
+    accountId: (value['accountId'] as string | null) ?? null,
+    personId: (value['personId'] as string | null) ?? null,
+    staffRoles: Array.isArray(value['staffRoles']) ? (value['staffRoles'] as string[]) : [],
+    actorLabel: String(value['actorLabel'] ?? 'unknown'),
+  };
+}
+
+function emptyToNull<T>(value: Record<string, unknown> | null | undefined): T | null {
+  if (!value || Object.keys(value).length === 0) return null;
+  return value as unknown as T;
+}
+
+export function toPolicyReferences(value: Record<string, unknown>): PolicyReferences {
+  return {
+    eligibilityPolicyVersionId: (value['eligibilityPolicyVersionId'] as string | null) ?? null,
+    cancellationPolicyVersionId: (value['cancellationPolicyVersionId'] as string | null) ?? null,
+    requiredFormPolicyVersionIds: Array.isArray(value['requiredFormPolicyVersionIds'])
+      ? (value['requiredFormPolicyVersionIds'] as string[])
+      : [],
+    approvalPolicyVersionId: (value['approvalPolicyVersionId'] as string | null) ?? null,
+    bookingTermsPolicyVersionId: (value['bookingTermsPolicyVersionId'] as string | null) ?? null,
+  };
+}
+
+/** Runs `fn` inside a savepoint so a failing line of a partial basket rolls back alone. */
+export async function withSavepoint<T>(trx: Trx, name: string, fn: () => Promise<T>): Promise<T> {
+  await sql.raw(`savepoint "${name}"`).execute(trx);
+  try {
+    const result = await fn();
+    await sql.raw(`release savepoint "${name}"`).execute(trx);
+    return result;
+  } catch (error) {
+    await sql.raw(`rollback to savepoint "${name}"`).execute(trx);
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Row → contract mappers
+// ---------------------------------------------------------------------------------------------
+
+export function toCapacityPool(row: Selectable<CapacityPoolsTable>): CapacityPool {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    scopeType: row.scope_type,
+    scopeId: row.scope_id,
+    unit: row.unit,
+    constraintKind: row.constraint_kind,
+    capacity: row.capacity,
+    committed: row.committed,
+    held: row.held,
+    available: row.capacity - row.committed - row.held,
+    participantsPerStaff: row.participants_per_staff,
+    staffCount: row.staff_count,
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toHold(row: Selectable<HoldsTable>): Hold {
+  return {
+    id: row.id,
+    poolId: row.pool_id,
+    quantity: row.quantity,
+    ownerKind: row.owner_kind,
+    ownerId: row.owner_id,
+    basketId: row.basket_id,
+    status: row.status,
+    acquiredAt: iso(row.acquired_at),
+    expiresAt: iso(row.expires_at),
+    committedAt: isoOrNull(row.committed_at),
+    releasedAt: isoOrNull(row.released_at),
+    expiredAt: isoOrNull(row.expired_at),
+    releaseReason: row.release_reason,
+    revision: row.revision,
+  };
+}
+
+export function toApplication(row: Selectable<ApplicationsTable>): Application {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    participantPersonId: row.participant_person_id,
+    intent: row.intent,
+    status: row.status,
+    submittedBy: toActor(row.submitted_by),
+    submittedByPersonId: row.submitted_by_person_id,
+    payerPersonId: row.payer_person_id,
+    eligibility: emptyToNull<EligibilityResult>(row.eligibility_result),
+    override: emptyToNull<EligibilityOverride>(row.override),
+    requiresApproval: row.requires_approval,
+    teamEntryId: row.team_entry_id,
+    sessionId: row.session_id,
+    notes: row.notes,
+    submittedAt: isoOrNull(row.submitted_at),
+    decidedAt: isoOrNull(row.decided_at),
+    decidedByPersonId: row.decided_by_person_id,
+    decisionReason: row.decision_reason,
+    withdrawnAt: isoOrNull(row.withdrawn_at),
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toEnrollment(row: Selectable<EnrollmentsTable>): Enrollment {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    participantPersonId: row.participant_person_id,
+    intent: row.intent,
+    entitlementDefinitionId: row.entitlement_definition_id,
+    equivalenceKey: row.equivalence_key,
+    status: row.status,
+    payerPersonId: row.payer_person_id,
+    registeredBy: toActor(row.registered_by),
+    assistedByPersonId: row.assisted_by_person_id,
+    sourceApplicationId: row.source_application_id,
+    basketId: row.basket_id,
+    basketLineId: row.basket_line_id,
+    placementRequestId: row.placement_request_id,
+    trialParticipationId: row.trial_participation_id,
+    orderRef: row.order_ref,
+    lastOperationId: row.last_operation_id,
+    price: emptyToNull<PriceSnapshot>(row.price_snapshot),
+    policies: toPolicyReferences(row.policy_references),
+    confirmedAt: isoOrNull(row.confirmed_at),
+    canceledAt: isoOrNull(row.canceled_at),
+    cancellationReason: row.cancellation_reason,
+    cancellationPolicyVersionId: row.cancellation_policy_version_id,
+    cancellationConsequence: emptyToNull<FinancialConsequence>(row.cancellation_consequence),
+    transferredAt: isoOrNull(row.transferred_at),
+    transferredToEnrollmentId: row.transferred_to_enrollment_id,
+    transferredFromEnrollmentId: row.transferred_from_enrollment_id,
+    transferConsequence: emptyToNull<FinancialConsequence>(row.transfer_consequence),
+    completedAt: isoOrNull(row.completed_at),
+    // ENR-02: HTTP views enrich these (EnrollmentViews); ports return the bare record.
+    offering: null,
+    pendingReason: null,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export interface BasketLineRow extends Selectable<BasketLinesTable> {
+  offering_kind?: string | null;
+  application_status?: string | null;
+}
+
+export function toBasketLine(row: BasketLineRow): BasketLine {
+  return {
+    id: row.id,
+    basketId: row.basket_id,
+    sequence: row.sequence,
+    participantPersonId: row.participant_person_id,
+    offeringId: row.offering_id,
+    offeringKind: (row.offering_kind as BasketLine['offeringKind']) ?? null,
+    sessionId: row.session_id,
+    teamEntryId: row.team_entry_id,
+    intent: row.intent,
+    quantity: row.quantity,
+    applicationId: row.application_id,
+    applicationStatus: (row.application_status as BasketLine['applicationStatus']) ?? null,
+    trialParticipationId: row.trial_participation_id,
+    entitlementDefinitionId: row.entitlement_definition_id,
+    equivalenceKey: row.equivalence_key,
+    eligibility: emptyToNull<EligibilityResult>(row.eligibility_result),
+    price: emptyToNull<PriceSnapshot>(row.price_snapshot),
+    policies: toPolicyReferences(row.policy_references),
+    requiresApproval: row.requires_approval,
+    enrollmentId: row.enrollment_id,
+    outcome: row.outcome,
+    outcomeReason: row.outcome_reason,
+    revision: row.revision,
+  };
+}
+
+/**
+ * SPK-REG-004/007: a line still awaiting human approval before payment. Only a line that can still
+ * be fulfilled (pending or held) counts; a failed or released line (its application declined or
+ * withdrawn, or it failed in a partial hold) no longer blocks the held lines of its basket.
+ */
+export function awaitsApproval(line: BasketLine): boolean {
+  return (
+    line.requiresApproval &&
+    (line.outcome === 'pending' || line.outcome === 'held') &&
+    line.applicationStatus !== 'accepted'
+  );
+}
+
+export function toBasket(
+  row: Selectable<BasketsTable>,
+  lines: BasketLine[],
+  holds: Hold[],
+): Basket {
+  const subtotalMinor = lines.reduce(
+    (sum, line) => sum + (line.price ? line.price.basePriceMinor * line.quantity : 0),
+    0,
+  );
+  return {
+    id: row.id,
+    ownerPersonId: row.owner_person_id,
+    payerPersonId: row.payer_person_id,
+    createdBy: toActor(row.created_by),
+    assistedByPersonId: row.assisted_by_person_id,
+    fulfillmentMode: row.fulfillment_mode,
+    partialAcceptedAt: isoOrNull(row.partial_accepted_at),
+    status: row.status,
+    holdExpiresAt: isoOrNull(row.hold_expires_at),
+    currency: row.currency,
+    subtotalMinor,
+    approvalPending: lines.some(awaitsApproval),
+    orderRef: row.order_ref,
+    lastOperationId: row.last_operation_id,
+    lines,
+    holds,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toPlacementRequest(row: Selectable<PlacementRequestsTable>): PlacementRequest {
+  return {
+    id: row.id,
+    participantPersonId: row.participant_person_id,
+    applicationId: row.application_id,
+    enrollmentId: row.enrollment_id,
+    offeringId: row.offering_id,
+    seasonId: row.season_id,
+    status: row.status,
+    availability: row.availability as PlacementRequest['availability'],
+    preferredCompetitionId: row.preferred_competition_id,
+    preferredDivisionId: row.preferred_division_id,
+    declaredLevel: row.declared_level,
+    positionPreferences: row.position_preferences as string[],
+    requestedTeammatePersonIds: row.requested_teammate_person_ids as string[],
+    notes: row.notes,
+    proposedTeamEntryId: row.proposed_team_entry_id,
+    proposedAt: isoOrNull(row.proposed_at),
+    proposalReasons: row.proposal_reasons as PlacementReason[],
+    assignedTeamEntryId: row.assigned_team_entry_id,
+    assignedTeamName: null,
+    assignedAt: isoOrNull(row.assigned_at),
+    decidedByPersonId: row.decided_by_person_id,
+    decisionReasons: row.decision_reasons as PlacementReason[],
+    rosterMembershipRef: row.roster_membership_ref,
+    lastOperationId: row.last_operation_id,
+    releasedAt: isoOrNull(row.released_at),
+    releaseReason: row.release_reason,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toSessionBooking(row: Selectable<SessionBookingsTable>): SessionBooking {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    sessionId: row.session_id,
+    participantPersonId: row.participant_person_id,
+    kind: row.kind,
+    status: row.status,
+    poolId: row.pool_id,
+    holdId: row.hold_id,
+    makeupEntitlementId: row.makeup_entitlement_id,
+    entitlementBasis: row.entitlement_basis,
+    packageEntitlementId: row.package_entitlement_id,
+    membershipEnrollmentId: row.membership_enrollment_id,
+    creditDisposition: row.credit_disposition,
+    scheduledStart: iso(row.scheduled_start),
+    scheduledEnd: iso(row.scheduled_end),
+    bookedBy: toActor(row.booked_by),
+    assistedByPersonId: row.assisted_by_person_id,
+    payerPersonId: row.payer_person_id,
+    price: emptyToNull<PriceSnapshot>(row.price_snapshot),
+    policies: toPolicyReferences(row.policy_references),
+    eligibility: emptyToNull<EligibilityResult>(row.eligibility_result),
+    expiresAt: isoOrNull(row.expires_at),
+    confirmedAt: isoOrNull(row.confirmed_at),
+    canceledAt: isoOrNull(row.canceled_at),
+    cancelReason: row.cancel_reason,
+    expiredAt: isoOrNull(row.expired_at),
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toMakeupEntitlement(
+  row: Selectable<MakeupEntitlementsTable>,
+  redemptions: Selectable<MakeupRedemptionsTable>[],
+): MakeupEntitlement {
+  return {
+    id: row.id,
+    participantPersonId: row.participant_person_id,
+    originatingEnrollmentId: row.originating_enrollment_id,
+    originatingSessionId: row.originating_session_id,
+    originKind: row.origin_kind,
+    originReference: row.origin_reference,
+    eligibleOfferingIds: row.eligible_offering_ids as string[],
+    eligibleProgramIds: row.eligible_program_ids as string[],
+    reason: row.reason,
+    expiresAt: iso(row.expires_at),
+    redemptionLimit: row.redemption_limit,
+    redeemedCount: row.redeemed_count,
+    status: row.status,
+    redemptions: redemptions.map((r) => ({
+      id: r.id,
+      sessionBookingId: r.session_booking_id,
+      kind: r.kind,
+      reversesRedemptionId: r.reverses_redemption_id,
+      redeemedAt: iso(r.redeemed_at),
+    })),
+    revokedAt: isoOrNull(row.revoked_at),
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toWaitlistOffer(row: Selectable<WaitlistOffersTable>): WaitlistOffer {
+  return {
+    id: row.id,
+    waitlistEntryId: row.waitlist_entry_id,
+    poolId: row.pool_id,
+    holdId: row.hold_id,
+    quantity: row.quantity,
+    offeredAt: iso(row.offered_at),
+    expiresAt: iso(row.expires_at),
+    status: row.status,
+    acceptedAt: isoOrNull(row.accepted_at),
+    acceptedBasketId: row.accepted_basket_id,
+    acceptedEnrollmentId: row.accepted_enrollment_id,
+    acceptedSessionBookingId: row.accepted_session_booking_id,
+    declinedAt: isoOrNull(row.declined_at),
+    expiredAt: isoOrNull(row.expired_at),
+    revision: row.revision,
+  };
+}
+
+export function toWaitlistEntry(
+  row: Selectable<WaitlistEntriesTable>,
+  position: number | null,
+  offers: Selectable<WaitlistOffersTable>[],
+): WaitlistEntry {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    poolId: row.pool_id,
+    sessionId: row.session_id,
+    participantPersonId: row.participant_person_id,
+    intent: row.intent,
+    priorityBasis: row.priority_basis,
+    priorityRank: row.priority_rank,
+    joinedAt: iso(row.joined_at),
+    queuedAt: iso(row.queued_at),
+    preferences: row.preferences,
+    payerPersonId: row.payer_person_id,
+    status: row.status,
+    position,
+    offerCount: row.offer_count,
+    offers: offers.map(toWaitlistOffer),
+    acceptedEnrollmentId: row.accepted_enrollment_id,
+    withdrawnAt: isoOrNull(row.withdrawn_at),
+    removedAt: isoOrNull(row.removed_at),
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toTrialParticipation(
+  row: Selectable<TrialParticipationsTable>,
+): TrialParticipation {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    sessionId: row.session_id,
+    sessionBookingId: row.session_booking_id,
+    participantPersonId: row.participant_person_id,
+    applicationId: row.application_id,
+    status: row.status,
+    scheduledFor: isoOrNull(row.scheduled_for),
+    attendedAt: isoOrNull(row.attended_at),
+    noShowAt: isoOrNull(row.no_show_at),
+    canceledAt: isoOrNull(row.canceled_at),
+    followUpConsent: row.follow_up_consent,
+    followUp: row.follow_up,
+    convertedEnrollmentId: row.converted_enrollment_id,
+    convertedBasketId: row.converted_basket_id,
+    convertedAt: isoOrNull(row.converted_at),
+    registeredBy: toActor(row.registered_by),
+    assistedByPersonId: row.assisted_by_person_id,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}

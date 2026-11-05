@@ -1,0 +1,35 @@
+{
+  "name": "@sportspark/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sportspark operating API — NestJS modular monolith and durable workers",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b",
+    "start": "node dist/main.js",
+    "start:worker": "node dist/worker.js",
+    "dev": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && node dist/main.js",
+    "test": "vitest run",
+    "openapi": "tsx scripts/emit-openapi.ts",
+    "permission-matrix": "tsx scripts/emit-permission-matrix.ts",
+    "seed:dev": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && tsx scripts/seed-dev.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "12.2.0",
+    "@nestjs/core": "12.2.0",
+    "@nestjs/platform-express": "12.2.0",
+    "@sportspark/contracts": "workspace:*",
+    "@sportspark/db": "workspace:*",
+    "jose": "6.2.13",
+    "kysely": "0.29.7",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "12.2.0",
+    "@types/express": "5.0.6",
+    "@types/supertest": "7.2.1",
+    "supertest": "7.3.1"
+  }
+}

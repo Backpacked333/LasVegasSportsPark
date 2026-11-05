@@ -1,0 +1,53 @@
+/**
+ * Expo app configuration (spec §4.1, §4.13). Values that are operator decisions are not invented
+ * here: bundle identifiers, supported OS versions, the minimum supported app version and the API
+ * compatibility window are DEC-061 (Technical lead/operator; privacy declarations Operator/privacy
+ * owner) and stay unset until decided.
+ */
+import type { ConfigContext, ExpoConfig } from 'expo/config';
+
+/** The build's app version; sent to the API in the client identification header. */
+export const APP_VERSION = '0.1.0';
+
+export default ({ config }: ConfigContext): ExpoConfig => ({
+  ...config,
+  name: 'Sportspark',
+  slug: 'sportspark',
+  version: APP_VERSION,
+  scheme: 'sportspark',
+  userInterfaceStyle: 'automatic',
+  plugins: ['expo-router'],
+  extra: {
+    // Development default; Android emulators reach the host at http://10.0.2.2:3000/v1.
+    apiBaseUrl: process.env.SPORTSPARK_API_BASE_URL ?? 'http://localhost:3000/v1',
+    // Age after which shown data counts as stale (SCR-C-40). Pending DEC-032/DEC-033: unset means
+    // the app shows the age of data but does not call it stale.
+    staleDataThresholdMinutes: process.env.SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES
+      ? Number(process.env.SPORTSPARK_STALE_DATA_THRESHOLD_MINUTES)
+      : null,
+    // Organization whose public catalog signed-out visitors browse (deployment setting, SCR-C-07).
+    organizationSlug: process.env.SPORTSPARK_ORGANIZATION_SLUG ?? null,
+    // Approved placement fields (SCR-C-10). Pending DEC-051: unset until the operator approves them.
+    placementFields: process.env.SPORTSPARK_PLACEMENT_FIELDS
+      ? process.env.SPORTSPARK_PLACEMENT_FIELDS.split(',').map((f: string) => f.trim())
+      : null,
+    // Verified-link domains (SCR-C-39). Pending DEC-061: unset, so release builds open no https link.
+    verifiedLinkHosts: process.env.SPORTSPARK_VERIFIED_LINK_HOSTS
+      ? process.env.SPORTSPARK_VERIFIED_LINK_HOSTS.split(',').map((h: string) => h.trim())
+      : [],
+    // Whether supervised pickup is used. Pending DEC-075 (and DEC-005): unset, so pickup shows as pending.
+    supervisedPickup:
+      process.env.SPORTSPARK_SUPERVISED_PICKUP === 'true'
+        ? true
+        : process.env.SPORTSPARK_SUPERVISED_PICKUP === 'false'
+          ? false
+          : null,
+    // How customers reach the facility for help (SCR-C-38): facility facts, unset until the
+    // operator provides them (support coverage is DEC-015).
+    supportContact: {
+      phone: process.env.SPORTSPARK_SUPPORT_PHONE ?? null,
+      email: process.env.SPORTSPARK_SUPPORT_EMAIL ?? null,
+      hours: process.env.SPORTSPARK_SUPPORT_HOURS ?? null,
+    },
+  },
+});

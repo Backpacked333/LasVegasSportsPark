@@ -1,0 +1,734 @@
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  errors,
+  SEASON_READINESS_MAX_FIXTURES,
+  systemPrincipal,
+  type EligibilityEvaluation,
+  type EligibilitySeverity,
+  type Event,
+  type FixtureDetail,
+  type FixtureReadiness,
+  type FixtureReadinessIssue,
+  type Principal,
+  type ReadinessCounts,
+  type ReadinessStatus,
+  type SeasonReadiness,
+  type SeasonReadinessQuery,
+} from '@sportspark/contracts';
+import type { Db } from '@sportspark/db';
+import { sql } from 'kysely';
+import {
+  AuditReader,
+  AuthorizationService,
+  CLOCK,
+  DATABASE,
+  FacilityDirectory,
+  executorFor,
+  type Clock,
+} from '../../../kernel';
+import { ClosuresService, EventsService, ResourcesService } from '../../scheduling';
+import {
+  CHANGE_NOTICE_CHECK_PORT,
+  FINANCIAL_CONDITIONS_PORT,
+  FORMS_CHECK_PORT,
+  type ChangeNoticeCheckPort,
+  type ConditionFinding,
+  type FinancialConditionsPort,
+  type FormsCheckPort,
+} from '../competition-matches.ports';
+import { MatchActions } from '../competition-matches.actions';
+import { CompetitionActions } from '../competition.actions';
+import { fixtureFacilityIdOf, loadRuleSetRow, loadSeasonRow } from '../competition.queries';
+import {
+  RESTRICTED_SOURCE_TYPES,
+  iso,
+  organizationOf,
+  readsRestrictedDetail,
+  ruleSetContentOf,
+} from '../competition.shared';
+import {
+  READINESS_CHECK_REGISTRY,
+  SUSPENSION_CHECK_PORT,
+  type ReadinessCheckRegistry,
+  type ReadinessIssue,
+  type SuspensionCheckPort,
+} from '../ports';
+import { DisputesService } from './disputes.service';
+import { EligibilityService } from './eligibility.service';
+import { FixturesService } from './fixtures.service';
+import { RosterService } from './roster.service';
+import {
+  READ_TEAM_OBLIGATION_ACTION,
+  TeamEntriesService,
+  localDateTime,
+  moneyText,
+} from './team-entries.service';
+
+/** Readiness checks registered by the workforce module carry this prefix (required officials). */
+export const WORKFORCE_CHECK_PREFIX = 'workforce.';
+
+interface IssueInput {
+  code: string;
+  severity: EligibilitySeverity;
+  message: string;
+  source: { type: string; id: string | null };
+  responsibleRole: string;
+  requiredAction: string;
+  deadline?: string | null;
+}
+
+/**
+ * Match readiness (SPK-READY-001..004, §4.8 `GET /v1/fixtures/{id}/readiness`). Derived on every
+ * read from authoritative records — never a stored "ready" flag: the published time and field and
+ * the field's operational status come from the scheduling module, team approval and rosters from
+ * part 1, eligibility (including suspensions through the discipline port) from the eligibility
+ * port, required officials from the readiness check registry (workforce), forms and financial
+ * conditions from their ports, disputes from this module. Each issue carries severity (blocking,
+ * warning, info or unknown), reason, source record, responsible role, required action, the
+ * evaluation instant and a deadline (SPK-READY-002/003). Unknown evidence is reported as unknown,
+ * never as ready; a missing RSVP alone is informational.
+ */
+@Injectable()
+export class ReadinessService {
+  constructor(
+    @Inject(DATABASE) private readonly db: Db,
+    @Inject(CLOCK) private readonly clock: Clock,
+    private readonly fixtures: FixturesService,
+    private readonly entries: TeamEntriesService,
+    private readonly roster: RosterService,
+    private readonly eligibility: EligibilityService,
+    private readonly events: EventsService,
+    private readonly closures: ClosuresService,
+    private readonly resources: ResourcesService,
+    private readonly disputes: DisputesService,
+    @Inject(READINESS_CHECK_REGISTRY) private readonly registry: ReadinessCheckRegistry,
+    @Inject(SUSPENSION_CHECK_PORT) private readonly suspensions: SuspensionCheckPort,
+    @Inject(FORMS_CHECK_PORT) private readonly forms: FormsCheckPort,
+    @Inject(FINANCIAL_CONDITIONS_PORT) private readonly finance: FinancialConditionsPort,
+    @Inject(CHANGE_NOTICE_CHECK_PORT) private readonly notices: ChangeNoticeCheckPort,
+    private readonly auditReader: AuditReader,
+    private readonly authorization: AuthorizationService,
+    private readonly facilities: FacilityDirectory,
+  ) {}
+
+  async evaluate(principal: Principal, fixtureId: string): Promise<FixtureReadiness> {
+    // Authorization: whoever may read the fixture may read its readiness (protected NOT_FOUND, §4.10).
+    const detail = await this.fixtures.get(principal, fixtureId);
+    const organizationId = organizationOf(principal);
+    // R3-TRACE-A-01 (SPK-DISC-004): every reader of the fixture reads its readiness; restricted
+    // record ids (suspensions, disputes, incidents, audit records) reach only a staff role that
+    // reads discipline in the fixture's facility, never an official, coach or scheduler who reads
+    // readiness, nor a captain, player or guardian because they also hold some other staff role.
+    const restrictedDetail = await readsRestrictedDetail(this.authorization, principal, {
+      organizationId,
+      facilityId: await fixtureFacilityIdOf(this.db, organizationId, fixtureId),
+    });
+    return this.assess(organizationId, detail, {
+      restricted: !restrictedDetail,
+      viewer: principal,
+    });
+  }
+
+  /**
+   * CMP-01 (SPK-READY-001): the readiness of each fixture of a season in one read, for staff who
+   * hold the readiness read action. At most SEASON_READINESS_MAX_FIXTURES fixtures (narrow the
+   * window with from/to); counts only, unknown stays unknown.
+   */
+  async seasonSummary(
+    principal: Principal,
+    seasonId: string,
+    query: SeasonReadinessQuery,
+  ): Promise<SeasonReadiness> {
+    const organizationId = organizationOf(principal);
+    const db = executorFor(this.db);
+    const season = await loadSeasonRow(db, organizationId, seasonId);
+    if (!season) throw errors.notFound('season', seasonId);
+    // Staff only: a customer principal names no subject, so the kernel refuses it.
+    await this.authorization.require(principal, MatchActions.readReadiness, {
+      type: 'season',
+      id: seasonId,
+      organizationId,
+    });
+    let q = db
+      .selectFrom('fixtures')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('season_id', '=', seasonId);
+    if (query.from) q = q.where('scheduled_end', '>', new Date(query.from));
+    if (query.to) q = q.where('scheduled_start', '<', new Date(query.to));
+    const rows = await q
+      .orderBy(sql`scheduled_start asc nulls last`)
+      .orderBy('id')
+      .limit(SEASON_READINESS_MAX_FIXTURES + 1)
+      .execute();
+    if (rows.length > SEASON_READINESS_MAX_FIXTURES) {
+      throw errors.validation(
+        `More than ${SEASON_READINESS_MAX_FIXTURES} fixtures match; narrow the window with from and to.`,
+        { code: 'TOO_MANY_FIXTURES', limit: SEASON_READINESS_MAX_FIXTURES },
+      );
+    }
+    const evaluatedAt = iso(this.clock.now());
+    const items: SeasonReadiness['items'] = [];
+    for (const row of rows) {
+      const detail = await this.fixtures.detail(db, principal, row);
+      items.push({
+        fixtureId: row.id,
+        ...countsOf(await this.assess(organizationId, detail, { viewer: principal })),
+      });
+    }
+    return { seasonId, evaluatedAt, items };
+  }
+
+  /**
+   * The assessment of one fixture whose read the caller has authorized. `restricted` hides
+   * restricted source record ids (customers). `viewer` scopes the team-balance findings
+   * (R3-TRACE-B-01b, see `financeFindingsFor`); without it they pass through unchanged.
+   */
+  async assess(
+    organizationId: string,
+    detail: FixtureDetail,
+    options: { restricted?: boolean; viewer?: Principal } = {},
+  ): Promise<FixtureReadiness> {
+    const fixtureId = detail.id;
+    const now = this.clock.now();
+    const evaluatedAt = iso(now);
+    // The fixture's copied time until the authoritative event is read below (SPK-READY-004).
+    let scheduledStart = detail.scheduledStart;
+    let scheduledEnd = detail.scheduledEnd;
+    let at = scheduledStart ? new Date(scheduledStart) : now;
+    let deadline = scheduledStart;
+    const system = systemPrincipal(organizationId, 'competition.readiness');
+    // Issues remember the check that raised them, so each check's verdict is computed from its own
+    // issues whatever order the checks report in.
+    const issues: Array<FixtureReadinessIssue & { check: string }> = [];
+    const checkNames: string[] = [];
+    const restricted = options.restricted ?? false;
+    const add = (check: string, input: IssueInput): void => {
+      if (!checkNames.includes(check)) checkNames.push(check);
+      issues.push({
+        check,
+        code: input.code,
+        severity: input.severity,
+        message: input.message,
+        // SPK-DISC-004 / §4.10: discipline, dispute and audit record ids are restricted; customers
+        // see the reason, the responsible role and the action, never the restricted record id.
+        source:
+          restricted && RESTRICTED_SOURCE_TYPES.has(input.source.type)
+            ? { type: input.source.type, id: null }
+            : input.source,
+        responsibleRole: input.responsibleRole,
+        requiredAction: input.requiredAction,
+        lastEvaluatedAt: evaluatedAt,
+        deadline: input.deadline === undefined ? deadline : input.deadline,
+      });
+    };
+    const check = (name: string) => {
+      if (!checkNames.includes(name)) checkNames.push(name);
+    };
+
+    const season = await loadSeasonRow(this.db, organizationId, detail.seasonId);
+    const ruleSet = season
+      ? await loadRuleSetRow(this.db, organizationId, season.rule_set_id)
+      : null;
+    const rules = ruleSet ? ruleSetContentOf(ruleSet) : null;
+
+    // 1. Published time and field (scheduling is the authority).
+    check('schedule');
+    let event: Event | null = null;
+    if (detail.status === 'canceled' || detail.status === 'played' || detail.status === 'forfeit') {
+      add('schedule', {
+        code: `fixture_${detail.status}`,
+        severity: 'info',
+        message: `The fixture is ${detail.status}; readiness no longer applies.`,
+        source: { type: 'fixture', id: fixtureId },
+        responsibleRole: 'league_manager',
+        requiredAction: 'None.',
+      });
+    } else if (detail.status !== 'scheduled' || !detail.schedulingEventId) {
+      add('schedule', {
+        code: 'not_scheduled',
+        severity: 'blocking',
+        message: `The fixture is ${detail.status}: no published time and field.`,
+        source: { type: 'fixture', id: fixtureId },
+        responsibleRole: 'scheduler',
+        requiredAction: 'Schedule the fixture and publish the schedule.',
+        deadline: null,
+      });
+    } else {
+      event = await this.events.getEvent(system, detail.schedulingEventId);
+      if (event.status !== 'published') {
+        add('schedule', {
+          code: 'event_not_published',
+          severity: 'blocking',
+          message: `The scheduling event is ${event.status}.`,
+          source: { type: 'event', id: event.id },
+          responsibleRole: 'scheduler',
+          requiredAction: 'Publish the schedule draft that holds this game.',
+        });
+      }
+      // SPK-READY-002 / SPK-READY-004: scheduling is the authority for the time. When the event
+      // moved and the fixture's copy has not caught up yet, that evidence is stale: say so, and
+      // evaluate rosters, eligibility and the deadline at the event's time, never the old one.
+      if (
+        event.scheduledStart !== detail.scheduledStart ||
+        event.scheduledEnd !== detail.scheduledEnd
+      ) {
+        scheduledStart = event.scheduledStart;
+        scheduledEnd = event.scheduledEnd;
+        at = new Date(event.scheduledStart);
+        deadline = event.scheduledStart;
+        add('schedule', {
+          code: 'schedule_out_of_sync',
+          severity: 'unknown',
+          message:
+            'The fixture still shows an earlier time than its scheduling event; it is being brought up to date.',
+          source: { type: 'event', id: event.id },
+          responsibleRole: 'league_manager',
+          requiredAction: 'Retry shortly; investigate the competition follow-up if it persists.',
+        });
+      }
+    }
+
+    // 2. Field operational status: resource inventory status and active closures.
+    check('field');
+    if (event) {
+      for (const resourceId of event.resourceIds) {
+        const resource = await this.resources.getResource(system, resourceId);
+        if (resource.status === 'closed') {
+          add('field', {
+            code: 'resource_closed',
+            severity: 'blocking',
+            message: `${resource.name} is closed in the inventory.`,
+            source: { type: 'resource', id: resource.id },
+            responsibleRole: 'facilities_operator',
+            requiredAction: 'Return the space to service or move the game.',
+          });
+        } else if (resource.status === 'restricted') {
+          add('field', {
+            code: 'resource_restricted',
+            severity: 'warning',
+            message: `${resource.name} is restricted in the inventory.`,
+            source: { type: 'resource', id: resource.id },
+            responsibleRole: 'facilities_operator',
+            requiredAction: 'Confirm the restriction allows the game.',
+          });
+        }
+      }
+      const closures = await this.closures.listClosures(system, event.facilityId, 'active');
+      for (const closure of closures) {
+        const overlaps =
+          new Date(closure.interval.start) < new Date(event.scheduledEnd) &&
+          new Date(event.scheduledStart) < new Date(closure.interval.end);
+        if (!overlaps) continue;
+        const affects =
+          closure.resourceId === null ||
+          event.resourceIds.includes(closure.resourceId) ||
+          (closure.impact?.affectedEvents.some((e) => e.eventId === event?.id) ?? false) ||
+          (closure.resolution?.unresolvedEventIds.includes(event.id) ?? false);
+        if (affects) {
+          add('field', {
+            code: 'field_closed',
+            severity: 'blocking',
+            message: `An active closure (${closure.reason}) covers the field at game time.`,
+            source: { type: 'closure', id: closure.id },
+            responsibleRole: 'scheduler',
+            requiredAction: 'Move the game or lift the closure through the authorized procedure.',
+          });
+        }
+      }
+    }
+
+    // 3. Required officials and other registered checks (workforce, finance, facilities …).
+    //    Workforce registers its officials check under a `workforce.` name; a check that fails to
+    //    answer is reported as unknown evidence, never as a pass (SPK-READY-002).
+    const registered = this.registry.checks();
+    const hasWorkforce = registered.some((c) => c.name.startsWith(WORKFORCE_CHECK_PREFIX));
+    if (!hasWorkforce) check('officials');
+    for (const { name, check: run } of registered) {
+      check(name);
+      let found: ReadinessIssue[];
+      try {
+        found = await run({ organizationId, fixtureId, at });
+      } catch {
+        add(name, {
+          code: 'check_unavailable',
+          severity: 'unknown',
+          message: `The ${name} check did not answer; its evidence is unknown.`,
+          source: { type: 'readiness_check', id: name },
+          responsibleRole: 'system_administrator',
+          requiredAction: 'Retry later; investigate the failing check if it persists.',
+        });
+        continue;
+      }
+      for (const issue of found) {
+        add(name, {
+          code: issue.code,
+          severity: issue.severity,
+          message: issue.message,
+          source: issue.source,
+          responsibleRole: issue.responsibleRole,
+          requiredAction: issue.requiredAction,
+          deadline: issue.deadline,
+        });
+      }
+    }
+    if (!hasWorkforce) {
+      // Until the workforce module registers its check, officials are unknown, never ok (SPK-STAFF-002).
+      add('officials', {
+        code: 'officials_unknown',
+        severity: 'unknown',
+        message: 'No assignment authority is registered; accepted officials cannot be confirmed.',
+        source: { type: 'fixture', id: fixtureId },
+        responsibleRole: 'league_manager',
+        requiredAction:
+          'Confirm accepted official assignments once the workforce check is registered.',
+      });
+    }
+
+    // 4 + 5. Team acceptance and minimum eligible roster per rule set.
+    check('teams');
+    check('rosters');
+    const sides: FixtureReadiness['sides'] = [];
+    const allPersons = new Set<string>();
+    const minimum = rules?.minimumPlayers ?? 0;
+    for (const side of [detail.home, detail.away]) {
+      if (!side) continue;
+      const entry = await this.entries.findTeamEntry(organizationId, side.entryId);
+      if (!entry) continue;
+      if (entry.status !== 'approved') {
+        add('teams', {
+          code: 'entry_not_approved',
+          severity: 'blocking',
+          message: `${side.teamName}'s entry is ${entry.status}.`,
+          source: { type: 'team_entry', id: entry.id },
+          responsibleRole: 'league_manager',
+          requiredAction: 'Approve the entry or replace the fixture.',
+        });
+      }
+      const members = await this.roster.effectiveRoster(organizationId, side.entryId, at);
+      let eligible = 0;
+      let unknown = 0;
+      // R4-CARRY-01 (§4.12, SPK-UX-006, SPK-STAFF-002): the whole roster in one evaluation, its
+      // reads bounded by the entry rather than repeated player by player.
+      const evaluations = await this.eligibility.evaluateRoster(
+        organizationId,
+        side.entryId,
+        members.map((member) => ({ personId: member.personId, membershipStatus: member.status })),
+        at,
+        {
+          existingMembership: true,
+          fixtureId,
+          // R3-TIME-MONEY-03 (SPK-SCHED-008): a match-date age is the local date at the venue
+          timezone: event?.timezone ?? detail.venue?.timezone ?? null,
+        },
+      );
+      for (const [index, member] of members.entries()) {
+        allPersons.add(member.personId);
+        const evaluation = evaluations[index] as EligibilityEvaluation;
+        if (evaluation.eligible) eligible += 1;
+        else if (evaluation.reasons.every((r) => r.severity !== 'blocking')) unknown += 1;
+        for (const reason of evaluation.reasons) {
+          if (reason.code === 'suspended') {
+            add('rosters', {
+              code: 'player_suspended',
+              severity: 'warning',
+              message: `A player on ${side.teamName}'s roster is suspended for this fixture.`,
+              source: reason.source,
+              responsibleRole: 'captain',
+              requiredAction: 'The player must not take part; the roster count excludes them.',
+            });
+          }
+        }
+      }
+      if (eligible < minimum) {
+        add('rosters', {
+          code: 'insufficient_eligible_roster',
+          severity: eligible + unknown >= minimum ? 'unknown' : 'blocking',
+          message:
+            eligible + unknown >= minimum
+              ? `${side.teamName} has ${eligible} confirmed eligible players and ${unknown} with unknown evidence; ${minimum} are required.`
+              : `${side.teamName} has ${eligible} eligible players; ${minimum} are required.`,
+          source: { type: 'team_entry', id: side.entryId },
+          responsibleRole: 'captain',
+          requiredAction: 'Add eligible players or resolve the eligibility issues.',
+        });
+      }
+      sides.push({
+        teamEntryId: side.entryId,
+        teamName: side.teamName,
+        entryStatus: entry.status,
+        rosterSize: members.length,
+        eligiblePlayers: eligible,
+        unknownPlayers: unknown,
+        minimumPlayers: minimum,
+      });
+    }
+    if (!detail.away) {
+      add('teams', {
+        code: 'bye',
+        severity: 'info',
+        message: 'This fixture is a bye.',
+        source: { type: 'fixture', id: fixtureId },
+        responsibleRole: 'league_manager',
+        requiredAction: 'None.',
+        deadline: null,
+      });
+    }
+
+    // 6 + 7. Required forms and financial conditions (ports; unknown until registered).
+    const conditionContext = {
+      fixtureId,
+      seasonId: detail.seasonId,
+      teamEntryIds: sides.map((s) => s.teamEntryId),
+      personIds: [...allPersons],
+      at,
+      registrationOfferingRef: season?.registration_offering_ref ?? null,
+    };
+    check('forms');
+    for (const finding of await this.forms.requiredForms(organizationId, conditionContext)) {
+      this.addCondition(add, 'forms', finding);
+    }
+    check('finance');
+    for (const finding of await this.financeFindingsFor(
+      organizationId,
+      detail,
+      conditionContext,
+      options.viewer,
+    )) {
+      this.addCondition(add, 'finance', finding);
+    }
+
+    // 8. Unresolved suspensions: proposals awaiting approval about roster players.
+    check('suspensions');
+    if (allPersons.size > 0) {
+      const proposed = await this.db
+        .selectFrom('suspensions')
+        .select(['id', 'subject_person_id'])
+        .where('organization_id', '=', organizationId)
+        .where('subject_person_id', 'in', [...allPersons])
+        .where('status', '=', 'proposed')
+        .execute();
+      for (const row of proposed) {
+        add('suspensions', {
+          code: 'suspension_pending_approval',
+          severity: 'unknown',
+          message: 'A proposed suspension of a roster player awaits approval.',
+          source: { type: 'suspension', id: row.id },
+          responsibleRole: 'league_manager',
+          requiredAction: 'Approve or overturn the proposed suspension before the game.',
+        });
+      }
+    }
+
+    // 9. Pending disputes affecting play.
+    check('disputes');
+    for (const dispute of await this.disputes.pendingForFixture(
+      this.db,
+      organizationId,
+      fixtureId,
+    )) {
+      add('disputes', {
+        code: 'dispute_pending',
+        severity: 'warning',
+        message: `A dispute on this fixture is ${dispute.status.replaceAll('_', ' ')}.`,
+        source: { type: 'dispute', id: dispute.id },
+        responsibleRole: 'league_manager',
+        requiredAction: 'Decide the dispute.',
+      });
+    }
+
+    // 10. Material change notifications: the fixture's own change history (this module's audit
+    //     records) says whether a published game was moved or postponed; delivery evidence
+    //     belongs to the communications module (CHANGE_NOTICE_CHECK_PORT, unknown by default).
+    check('notifications');
+    // CMP-11 (§4.2): the fixture's audited history through the kernel's AuditReader (IF-44).
+    const history = await this.auditReader.forTarget(organizationId, 'fixture', fixtureId, {
+      actions: [CompetitionActions.manageFixtures.id],
+      limit: 200,
+    });
+    const change = history.find((record) => {
+      const kind = record.details['change'];
+      return (
+        kind === 'rescheduled' ||
+        kind === 'postponed' ||
+        (kind === 'synced_from_scheduling' && record.details['previousStatus'] === 'scheduled')
+      );
+    });
+    if (change) {
+      const findings = await this.notices.changeNotices(organizationId, {
+        ...conditionContext,
+        changedAt: new Date(change.occurredAt),
+        schedulingEventId: detail.schedulingEventId,
+        scheduledStart,
+        scheduledEnd,
+      });
+      for (const finding of findings) this.addCondition(add, 'notifications', finding);
+    }
+
+    // 11. RSVP: informational only (SPK-READY-002 "a missing RSVP alone must not become a block").
+    check('availability');
+    for (const side of [detail.home, detail.away]) {
+      if (!side) continue;
+      if (side.availability.noResponse > 0) {
+        add('availability', {
+          code: 'rsvp_missing',
+          severity: 'info',
+          message: `${side.availability.noResponse} player(s) of ${side.teamName} have not responded.`,
+          source: { type: 'team_entry', id: side.entryId },
+          responsibleRole: 'captain',
+          requiredAction: 'Ask players to respond; RSVP is not an eligibility condition.',
+        });
+      }
+    }
+
+    return {
+      fixtureId,
+      fixtureStatus: detail.status,
+      status: statusOf(issues),
+      evaluatedAt,
+      scheduledStart,
+      checks: checkNames.map((name) => {
+        const own = issues.filter((i) => i.check === name);
+        return { name, status: statusOf(own), issueCount: own.length };
+      }),
+      issues: issues.map(({ check: _check, ...issue }) => issue),
+      sides,
+    };
+  }
+
+  /**
+   * R3-TRACE-B-01b (§4.14 field-level authorization, §4.7 invariant 1, SPK-READY-001/003,
+   * SPK-PAY-004, SPK-CAP-002): finance reports a team balance per team entry, and readiness is read
+   * by the players and guardians of both teams. A finding about an entry goes only to a viewer
+   * finance lets read that entry's obligation (`finance.read_obligation`: finance readers, the
+   * entry's captain or responsible payer), with the amounts and, as its deadline, the next due
+   * date (SPK-READY-003), shown in the division facility's time zone (SPK-SCHED-008). Every other
+   * viewer gets, instead of any entry-level finding, one fixture-level finding that names no entry
+   * and states no balance, whether or not an entry has one, so their readiness reads the same for
+   * a fixture with or without a balance. Whether a team balance affects play awaits POL-017
+   * (DEC-056), so both stay `unknown`, never a pass or a block.
+   */
+  private async financeFindingsFor(
+    organizationId: string,
+    detail: FixtureDetail,
+    context: Parameters<FinancialConditionsPort['fixtureConditions']>[1],
+    viewer: Principal | undefined,
+  ): Promise<ConditionFinding[]> {
+    const findings = await this.finance.fixtureConditions(organizationId, context);
+    if (!viewer || context.teamEntryIds.length === 0) return findings;
+    const admitted = new Map<string, boolean>();
+    for (const teamEntryId of new Set(context.teamEntryIds)) {
+      const decision = await this.authorization.decide(viewer, READ_TEAM_OBLIGATION_ACTION, {
+        type: 'obligation',
+        organizationId,
+        teamEntryId,
+        protected: true,
+      });
+      admitted.set(teamEntryId, decision.allowed);
+    }
+    const scoped: ConditionFinding[] = [];
+    let timezone: string | null | undefined;
+    for (const finding of findings) {
+      const teamEntryId = finding.source.type === 'team_entry' ? finding.source.id : null;
+      if (teamEntryId === null) {
+        scoped.push(finding);
+        continue;
+      }
+      if (!admitted.get(teamEntryId)) continue;
+      if (finding.status === 'satisfied' || !this.finance.entryFinancialStatus) {
+        scoped.push(finding);
+        continue;
+      }
+      const financial = await this.finance.entryFinancialStatus(organizationId, teamEntryId);
+      if (financial.status !== 'outstanding') {
+        scoped.push(finding);
+        continue;
+      }
+      if (timezone === undefined) timezone = await this.divisionTimezone(organizationId, detail);
+      const count = financial.openObligations;
+      const amounts = financial.outstanding
+        .map((o) => moneyText(o.amountMinor, o.currency))
+        .join(' and ');
+      const due = financial.nextDueAt
+        ? `; the next payment is due ${localDateTime(financial.nextDueAt, timezone)}`
+        : '';
+      scoped.push({
+        ...finding,
+        message: `${count} open team obligation${count === 1 ? '' : 's'} with ${amounts} outstanding${due}. Whether an open team balance affects play awaits the approved participation policy (POL-017).`,
+        deadline: financial.nextDueAt,
+      });
+    }
+    const someWithheld = [...admitted.values()].some((allowed) => !allowed);
+    const fixtureLevel = scoped.some(
+      (f) => f.source.type === 'fixture' && f.status !== 'satisfied',
+    );
+    if (someWithheld && !fixtureLevel) {
+      scoped.push({
+        status: 'unknown',
+        code: 'team_balance_policy_pending',
+        message:
+          "Whether team balances affect play awaits the approved participation policy (POL-017); each team's captain and the league see their own team's balance.",
+        source: { type: 'fixture', id: detail.id },
+        responsibleRole: 'finance_operator',
+        requiredAction:
+          'The finance operator records the approved participation policy for team balances.',
+        deadline: null,
+      });
+    }
+    return scoped;
+  }
+
+  /** The time zone of the fixture's division facility, or null when it has none (UTC shown). */
+  private async divisionTimezone(
+    organizationId: string,
+    detail: FixtureDetail,
+  ): Promise<string | null> {
+    if (!detail.divisionId) return null;
+    const division = await this.db
+      .selectFrom('divisions')
+      .select('facility_id')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', detail.divisionId)
+      .executeTakeFirst();
+    const facilityId = division?.facility_id ?? null;
+    if (!facilityId) return null;
+    const facility = (await this.facilities.describe(organizationId, [facilityId], this.db)).get(
+      facilityId,
+    );
+    return facility?.timezone ?? null;
+  }
+
+  private addCondition(
+    add: (check: string, input: IssueInput) => void,
+    check: string,
+    finding: ConditionFinding,
+  ): void {
+    if (finding.status === 'satisfied') return;
+    add(check, {
+      code: finding.code,
+      severity: finding.status === 'unknown' ? 'unknown' : 'blocking',
+      message: finding.message,
+      source: finding.source,
+      responsibleRole: finding.responsibleRole,
+      requiredAction: finding.requiredAction,
+      deadline: finding.deadline,
+    });
+  }
+}
+
+/** CMP-01: the counts a summary carries (unknown stays unknown, never ready). */
+export function countsOf(readiness: FixtureReadiness): ReadinessCounts {
+  return {
+    status: readiness.status,
+    blockingCount: readiness.issues.filter((i) => i.severity === 'blocking').length,
+    unknownCount: readiness.issues.filter((i) => i.severity === 'unknown').length,
+  };
+}
+
+/** SPK-READY-002: blocked when anything blocks; unknown when evidence is missing; warning; else ready. */
+export function statusOf(issues: Array<{ severity: EligibilitySeverity }>): ReadinessStatus {
+  if (issues.some((i) => i.severity === 'blocking')) return 'blocked';
+  if (issues.some((i) => i.severity === 'unknown')) return 'unknown';
+  if (issues.some((i) => i.severity === 'warning')) return 'warning';
+  return 'ready';
+}

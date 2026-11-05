@@ -1,0 +1,10 @@
+node_modules
+dist
+pnpm-lock.yaml
+docs/api/openapi.json
+# Generated from docs/api/openapi.json (pnpm --filter @sportspark/api-client generate)
+packages/api-client/src/generated/
+# Expo and Vite output
+.expo
+apps/mobile/ios
+apps/mobile/android

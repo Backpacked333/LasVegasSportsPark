@@ -1,0 +1,22 @@
+{
+  "name": "@sportspark/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PostgreSQL schema, SQL migrations, Kysely types, and test database harness",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "migrate": "tsx src/cli/migrate.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.11",
+    "@sportspark/contracts": "workspace:*",
+    "kysely": "0.29.7",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
+  }
+}

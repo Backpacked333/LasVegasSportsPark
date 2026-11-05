@@ -1,0 +1,313 @@
+import { sql } from 'kysely';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Outbox, OutboxDispatcher, UnitOfWork } from '../../../kernel';
+import type { TestApp } from '../../../testing';
+import { IdentityEvents } from '../../identity';
+import { at, createScheduledEvent, EventsService } from '../../scheduling';
+import { MERGED_PERSON_OVERLAP } from '../workforce.policy';
+import {
+  createAssignmentFixture,
+  createAvailabilityFixture,
+  createQualificationFixture,
+  createRequirementFixture,
+} from '../testing/workforce-fixtures';
+import {
+  adultCustomer,
+  competitionWorld,
+  drainOutbox,
+  post,
+  scheduleFixture,
+  staffMember,
+  workforceTestApp,
+  type Actor,
+  type CompetitionWorld,
+} from './support';
+
+/**
+ * Person merge follow-up (WRK-05; SPK-IAM-007, SPK-STAFF-001, §4.2, IF-21, IF-09): workforce never
+ * rewrites a person id; reads resolve merges through the person directory, and a merge that leaves
+ * one person holding overlapping accepted assignments raises one scheduler exception.
+ */
+describe('person merge follow-up (WRK-05)', () => {
+  let t: TestApp;
+  let world: CompetitionWorld;
+  let events: EventsService;
+  let administrator: Actor;
+
+  beforeAll(async () => {
+    t = await workforceTestApp();
+    world = await competitionWorld(t);
+    events = t.app.get(EventsService);
+    administrator = await staffMember(t, ['system_administrator']);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  /**
+   * R2-TESTS-04: merges through identity itself (POST /v1/duplicate-candidates, then its merge as a
+   * system administrator), so the persons table, the person_merges row and the
+   * identity.persons_merged event are exactly what identity produces, and every module's follow-up
+   * runs. `drainOutbox` fails on any handler failure (R2-TESTS-01). Answers the merge id.
+   */
+  async function merge(survivorPersonId: string, mergedPersonId: string): Promise<string> {
+    const flagged = await post(t, '/v1/duplicate-candidates', administrator, {
+      personAId: survivorPersonId,
+      personBId: mergedPersonId,
+      reasons: ['same name and date of birth'],
+      score: 90,
+    });
+    expect(flagged.status, JSON.stringify(flagged.body)).toBe(201);
+    const done = await post(
+      t,
+      `/v1/duplicate-candidates/${flagged.body.id as string}/merge`,
+      administrator,
+      { survivorPersonId, reason: 'Confirmed in person' },
+    );
+    expect(done.status, JSON.stringify(done.body)).toBe(201);
+    await drainOutbox(t);
+    const mergeId = done.body.id as string;
+    const recorded = await t.db
+      .selectFrom('person_merges')
+      .select('id')
+      .where('id', '=', mergeId)
+      .execute();
+    expect(recorded).toHaveLength(1);
+    return mergeId;
+  }
+
+  /** The identity.persons_merged payload identity enqueued for a merge. */
+  async function mergedPayload(mergeId: string): Promise<Record<string, unknown>> {
+    const row = await t.db
+      .selectFrom('outbox_events')
+      .select('payload')
+      .where('event_type', '=', 'identity.persons_merged')
+      .where(sql<boolean>`payload->>'mergeId' = ${mergeId}`)
+      .executeTakeFirstOrThrow();
+    return row.payload as Record<string, unknown>;
+  }
+
+  /** Announces the same merge again under a new event id and delivers it. */
+  async function announceAgain(payload: Record<string, unknown>): Promise<void> {
+    await t.app.get(UnitOfWork).run(async ({ trx }) => {
+      await t.app.get(Outbox).enqueue(trx, IdentityEvents.personsMerged, {
+        organizationId: t.organizationId,
+        aggregateType: 'person',
+        aggregateId: payload['survivorPersonId'] as string,
+        payload: payload as never,
+      });
+    });
+    const summary = await t.app.get(OutboxDispatcher).runOnce(200);
+    expect(summary.dead).toBe(0);
+    expect(summary.retried).toBe(0);
+  }
+
+  const overlapExceptions = (survivorPersonId: string) =>
+    t.db
+      .selectFrom('operational_exceptions')
+      .selectAll()
+      .where('category', '=', MERGED_PERSON_OVERLAP)
+      .where('affected_id', '=', survivorPersonId)
+      .execute();
+
+  async function acceptedCoaching(
+    personId: string,
+    half: 'north' | 'south',
+    date: string,
+    from: string,
+    to: string,
+  ) {
+    const north = half === 'north';
+    const event = await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [north ? world.pitch.northHalfId : world.pitch.southHalfId],
+      start: at(date, from),
+      end: at(date, to),
+      kind: 'practice',
+      title: `Practice ${date} ${from}`,
+    });
+    return createAssignmentFixture(t, {
+      targetType: 'event',
+      targetId: event.id,
+      personId,
+      kind: 'coach',
+      role: 'head_coach',
+      status: 'accepted',
+      scheduledStart: event.scheduledStart,
+      scheduledEnd: event.scheduledEnd,
+    });
+  }
+
+  const assignmentRows = (ids: string[]) =>
+    t.db
+      .selectFrom('assignments')
+      .select(['id', 'person_id', 'status', 'revision'])
+      .where('id', 'in', ids)
+      .orderBy('id')
+      .execute();
+
+  it('SPK-IAM-007: overlapping accepted assignments of the two persons raise one scheduler exception and change nothing', async () => {
+    const survivor = await adultCustomer(t);
+    const merged = await adultCustomer(t);
+    // 09:00-10:00 and 09:30-10:30 on 2027-03-06 overlap; 2027-03-07 does not overlap anything
+    const kept = await acceptedCoaching(survivor.personId, 'north', '2027-03-06', '09:00', '10:00');
+    const clashing = await acceptedCoaching(
+      merged.personId,
+      'south',
+      '2027-03-06',
+      '09:30',
+      '10:30',
+    );
+    const apart = await acceptedCoaching(merged.personId, 'north', '2027-03-07', '09:00', '10:00');
+    const before = await assignmentRows([kept, clashing, apart]);
+
+    const mergeId = await merge(survivor.personId, merged.personId);
+
+    const raised = await overlapExceptions(survivor.personId);
+    expect(raised).toHaveLength(1);
+    expect(raised[0]).toMatchObject({
+      owner_queue: 'scheduler',
+      status: 'open',
+      severity: 'high',
+      affected_type: 'person',
+      facility_id: t.facilityId,
+      details: {
+        mergeId,
+        survivorPersonId: survivor.personId,
+        mergedPersonId: merged.personId,
+        assignmentIds: [kept, clashing].sort(),
+        overlaps: [{ survivorAssignmentId: kept, mergedAssignmentId: clashing }],
+      },
+    });
+    // no assignment row is rewritten
+    expect(await assignmentRows([kept, clashing, apart])).toEqual(before);
+  });
+
+  it('a replayed merge event raises nothing new', async () => {
+    const survivor = await adultCustomer(t);
+    const merged = await adultCustomer(t);
+    await acceptedCoaching(survivor.personId, 'north', '2027-03-13', '09:00', '10:00');
+    await acceptedCoaching(merged.personId, 'south', '2027-03-13', '09:00', '10:00');
+    const mergeId = await merge(survivor.personId, merged.personId);
+    const payload = await mergedPayload(mergeId);
+    expect(await overlapExceptions(survivor.personId)).toHaveLength(1);
+    // the same delivery replayed
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', locked_until: null, dispatched_at: null })
+      .where('event_type', '=', 'identity.persons_merged')
+      .where('aggregate_id', '=', survivor.personId)
+      .execute();
+    await drainOutbox(t);
+    // the same merge announced again under another event id (idempotent by merge id)
+    await announceAgain(payload);
+    expect(await overlapExceptions(survivor.personId)).toHaveLength(1);
+    // a merge without overlapping work raises nothing
+    const quiet = await adultCustomer(t);
+    const folded = await adultCustomer(t);
+    await acceptedCoaching(folded.personId, 'north', '2027-03-14', '09:00', '10:00');
+    await merge(quiet.personId, folded.personId);
+    expect(await overlapExceptions(quiet.personId)).toEqual([]);
+  });
+
+  it('a qualification verified for the merged person satisfies a requirement for the survivor', async () => {
+    const game = await scheduleFixture(t, world, { date: '2027-03-20' });
+    await createRequirementFixture(t, {
+      targetType: 'fixture',
+      targetId: game.fixtureId,
+      kind: 'official',
+      role: 'referee',
+      requiredQualifications: ['referee_level_one'],
+    });
+    const survivor: Actor = await adultCustomer(t);
+    const merged = await adultCustomer(t);
+    await createQualificationFixture(t, { personId: merged.personId, kind: 'referee_level_one' });
+    const propose = () =>
+      post(t, '/v1/assignments', world.leagueManager, {
+        personId: survivor.personId,
+        kind: 'official',
+        targetType: 'fixture',
+        targetId: game.fixtureId,
+        role: 'referee',
+      });
+    const refused = await propose();
+    expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+    expect(refused.body.details.reasons).toEqual([
+      expect.objectContaining({ code: 'qualification_missing', kind: 'referee_level_one' }),
+    ]);
+
+    await merge(survivor.personId, merged.personId);
+    const allowed = await propose();
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(201);
+    // the evidence is read, not moved: the qualification still names the merged person
+    const evidence = await t.http
+      .get(`/v1/qualifications?personId=${survivor.personId}`)
+      .set(world.leagueManager.header);
+    expect(evidence.status).toBe(200);
+    expect(evidence.body).toEqual([
+      expect.objectContaining({ personId: merged.personId, kind: 'referee_level_one' }),
+    ]);
+
+    // declared unavailability of the merged person holds for the survivor as well
+    const later = await scheduleFixture(t, world, { date: '2027-03-21' });
+    await createAvailabilityFixture(t, {
+      personId: merged.personId,
+      start: at('2027-03-21', '12:00'),
+      end: at('2027-03-21', '23:00'),
+      kind: 'unavailable',
+    });
+    const unavailable = await post(t, '/v1/assignments', world.leagueManager, {
+      personId: survivor.personId,
+      kind: 'official',
+      targetType: 'fixture',
+      targetId: later.fixtureId,
+      role: 'referee',
+    });
+    expect(unavailable.status, JSON.stringify(unavailable.body)).toBe(409);
+    expect(unavailable.body.details.conflicts).toEqual([
+      expect.objectContaining({ code: 'person_unavailable' }),
+    ]);
+  });
+
+  it('SPK-STAFF-001 / SPK-READY-004: revoking the merged person’s qualification raises the survivor’s unqualified accepted assignment', async () => {
+    const game = await scheduleFixture(t, world, { date: '2027-03-22' });
+    await createRequirementFixture(t, {
+      targetType: 'fixture',
+      targetId: game.fixtureId,
+      kind: 'official',
+      role: 'referee',
+      requiredQualifications: ['referee_level_two'],
+    });
+    const survivor: Actor = await adultCustomer(t);
+    const merged = await adultCustomer(t);
+    const evidence = await createQualificationFixture(t, {
+      personId: merged.personId,
+      kind: 'referee_level_two',
+    });
+    await merge(survivor.personId, merged.personId);
+    const assignment = await createAssignmentFixture(t, {
+      targetType: 'fixture',
+      targetId: game.fixtureId,
+      personId: survivor.personId,
+      kind: 'official',
+      role: 'referee',
+      status: 'accepted',
+      scheduledStart: game.start,
+      scheduledEnd: game.end,
+    });
+    const revoked = await post(t, `/v1/qualifications/${evidence}/revoke`, world.leagueManager, {
+      reason: 'Licence suspended',
+    });
+    expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+    const raised = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['status', 'owner_queue', 'severity', 'affected_id'])
+      .where('category', '=', 'workforce.unqualified_assignment')
+      .where('affected_id', '=', assignment)
+      .execute();
+    expect(raised).toEqual([
+      { status: 'open', owner_queue: 'league_manager', severity: 'high', affected_id: assignment },
+    ]);
+  });
+});

@@ -1,0 +1,131 @@
+/*
+ * Layout for the registration and finance screens (SPK-UX-010: dense but understandable staff
+ * views). Class names are prefixed `rf-` so they never collide with other screen groups. Status is
+ * carried by StatusBadge text and glyph, never by these colours (SPK-UX-009).
+ */
+.rf-section-nav ul {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.rf-section-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  text-decoration: none;
+}
+.rf-section-nav a[aria-current='page'] {
+  border: 2px solid var(--color-primary);
+  font-weight: 600;
+}
+.rf-panel {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+}
+.rf-panel > h3,
+.rf-panel > h4 {
+  margin-top: 0;
+}
+.rf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+.rf-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.rf-field input,
+.rf-field select,
+.rf-field textarea {
+  min-height: var(--touch);
+  font: inherit;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-muted);
+  border-radius: 4px;
+}
+.rf-field [aria-invalid='true'] {
+  border: 2px solid var(--tone-danger);
+}
+.rf-check {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rf-check input {
+  min-height: 24px;
+  min-width: 24px;
+}
+.rf-error {
+  color: var(--tone-danger);
+  font-size: 0.875rem;
+}
+.rf-error::before {
+  content: '✕ ';
+}
+.rf-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--space-3);
+  margin: 0;
+}
+.rf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+.rf-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+}
+.rf-facts dt {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+}
+.rf-facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+.rf-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.rf-table th,
+.rf-table td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+.rf-table-wrap {
+  overflow-x: auto;
+}
+.rf-steps {
+  padding-left: var(--space-5);
+}
+/* A locked money form (outcome unknown): the fieldset carries no visual frame of its own. */
+.rf-plain {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.rf-locked {
+  margin: var(--space-2) 0;
+}

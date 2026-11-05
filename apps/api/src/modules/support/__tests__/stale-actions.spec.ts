@@ -1,0 +1,452 @@
+import { systemPrincipal } from '@sportspark/contracts';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  OperationsService,
+  PeriodicJobRegistry,
+  PeriodicJobRunner,
+  UnitOfWork,
+} from '../../../kernel';
+import type { TestApp } from '../../../testing';
+import { FakePaymentProvider, RefundsService, createCapturedPaymentFixture } from '../../finance';
+import { createOrganizationPeople, type OrganizationPeople } from '../../identity';
+import {
+  CASE_ACTION_STALE_CATEGORY,
+  CaseActionsService,
+  SETTLE_STALE_CASE_ACTIONS_JOB,
+} from '../services/case-actions.service';
+import { DEFAULT_SUPPORT_POLICY } from '../support.policy';
+import { drainOutbox, get, key, post, staffMember, supportTestApp, type Actor } from './support';
+
+/** The technical default of SUPPORT_STALE_ACTION_SECONDS (support.settings.ts). */
+const STALE_MS = 900_000;
+
+/**
+ * SUP-04 (SPK-SUPPORT-002, §4.11 "unknown kept explicit until reconciled", §4.12): helper
+ * requests left `requested` are settled from the owning module's outcome by
+ * `support.settle_stale_case_actions`, and a case is not resolved or closed past a related
+ * operation that waits for recovery without an audited acknowledgment.
+ */
+describe('stale helper requests and open recovery (SUP-04)', () => {
+  let t: TestApp;
+  let manager: Actor;
+  let people: OrganizationPeople;
+  let runner: PeriodicJobRunner;
+
+  beforeAll(async () => {
+    t = await supportTestApp();
+    manager = await staffMember(t, ['general_manager']);
+    people = await createOrganizationPeople(t);
+    runner = t.app.get(PeriodicJobRunner);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  const openCase = async (extra: object = {}) => {
+    const res = await post(t, '/v1/cases', manager, {
+      category: 'payment',
+      title: 'Duplicate charge',
+      subjectPersonId: people.adult.personId,
+      ...extra,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return res.body as { id: string; revision: number };
+  };
+  const helperState = async (caseActionId: string) => {
+    const action = await t.db
+      .selectFrom('case_actions')
+      .select([
+        'status',
+        'error',
+        'support_operation_id',
+        'command_operation_id',
+        'audit_record_id',
+      ])
+      .where('id', '=', caseActionId)
+      .executeTakeFirstOrThrow();
+    const operation = await t.db
+      .selectFrom('operations')
+      .select('status')
+      .where('id', '=', action.support_operation_id as string)
+      .executeTakeFirstOrThrow();
+    const exceptions = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'owner_queue', 'status'])
+      .where('affected_id', '=', caseActionId)
+      .orderBy('opened_at')
+      .execute();
+    return { ...action, operation: operation.status, exceptions };
+  };
+  const runJob = async () => {
+    const [summary] = await runner.runOnce([SETTLE_STALE_CASE_ACTIONS_JOB], {
+      ignoreInterval: true,
+    });
+    expect(summary).toMatchObject({ ran: true, failed: false });
+    return summary!;
+  };
+  /** Requests a refund whose outcome the process fails to record (it dies after finance). */
+  const leaveRequested = async (options: { financeAnswers: boolean; title?: string }) => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 3000,
+    });
+    const supportCase = await openCase(options.title ? { title: options.title } : {});
+    const actions = t.app.get(CaseActionsService);
+    const refunds = t.app.get(RefundsService);
+    const lost = vi
+      .spyOn(actions as unknown as { complete: () => Promise<unknown> }, 'complete')
+      .mockRejectedValue(new Error('connection lost while recording the outcome'));
+    const unanswered = options.financeAnswers
+      ? null
+      : vi
+          .spyOn(refunds, 'request')
+          .mockRejectedValueOnce(new Error('connection reset before the request was sent'));
+    const res = await post(t, `/v1/cases/${supportCase.id}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 1000,
+      reason: 'Charged twice',
+    });
+    lost.mockRestore();
+    unanswered?.mockRestore();
+    expect(res.status).toBe(500);
+    const action = (await get(t, `/v1/cases/${supportCase.id}`, manager)).body.actions[0];
+    expect(action.status).toBe('requested');
+    return { caseId: supportCase.id, actionId: action.id as string, payment };
+  };
+
+  it('is registered every 300 seconds, owned by the support operator queue (§4.12)', () => {
+    expect(t.app.get(PeriodicJobRegistry).get(SETTLE_STALE_CASE_ACTIONS_JOB)).toMatchObject({
+      intervalSeconds: 300,
+      failureOwner: 'support_operator',
+    });
+  });
+
+  it('a refund helper left requested is settled from the refund attempt’s outcome', async () => {
+    const { caseId, actionId, payment } = await leaveRequested({ financeAnswers: true });
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'operation_id', 'status'])
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    // Not stale yet: the job reads nothing.
+    expect((await runJob()).processed).toBe(0);
+    expect((await helperState(actionId)).status).toBe('requested');
+
+    t.clock.advance(STALE_MS + 1000);
+    expect((await runJob()).processed).toBe(1);
+    const state = await helperState(actionId);
+    expect(state).toMatchObject({
+      status: 'succeeded',
+      command_operation_id: refund.operation_id,
+      operation: 'succeeded',
+      exceptions: [],
+    });
+    expect(state.audit_record_id).not.toBeNull();
+    const detail = await get(t, `/v1/cases/${caseId}`, manager);
+    expect(detail.body.actions[0]).toMatchObject({
+      status: 'succeeded',
+      record: { type: 'refund_attempt', id: refund.id },
+    });
+    expect(detail.body.events.at(-1)).toMatchObject({
+      kind: 'action_link',
+      actor: { actorLabel: SETTLE_STALE_CASE_ACTIONS_JOB },
+    });
+    // The delayed follow-up of the request then finds the outcome recorded and does nothing.
+    t.clock.advance(DEFAULT_SUPPORT_POLICY.helperOutcomeGraceMinutes * 60_000);
+    await drainOutbox(t);
+    expect(await helperState(actionId)).toMatchObject({ status: 'succeeded', exceptions: [] });
+    // Recording it again changes nothing.
+    expect((await runJob()).processed).toBe(0);
+  });
+
+  it('without an owning-module outcome the request stays requested with one support.case_action_stale exception', async () => {
+    const { actionId } = await leaveRequested({ financeAnswers: false });
+    t.clock.advance(STALE_MS + 1000);
+    await runJob();
+    await runJob();
+    expect(await helperState(actionId)).toMatchObject({
+      status: 'requested',
+      operation: 'running',
+      exceptions: [
+        { category: CASE_ACTION_STALE_CATEGORY, owner_queue: 'finance_operator', status: 'open' },
+      ],
+    });
+    // The grace-period follow-up makes it unknown with the finance-owned exception, which
+    // supersedes the stale-request exception.
+    t.clock.advance(DEFAULT_SUPPORT_POLICY.helperOutcomeGraceMinutes * 60_000);
+    await drainOutbox(t);
+    expect(await helperState(actionId)).toMatchObject({
+      status: 'unknown',
+      operation: 'recovery_required',
+      exceptions: [
+        { category: CASE_ACTION_STALE_CATEGORY, status: 'resolved' },
+        { category: 'support.helper_outcome_unknown', status: 'open' },
+      ],
+    });
+  });
+
+  it('a case linked to a recovery_required operation cannot be resolved without acknowledgment; with it the acknowledgment is audited', async () => {
+    const uow = t.app.get(UnitOfWork);
+    const operations = t.app.get(OperationsService);
+    const operationId = await uow.run(async ({ trx }) => {
+      const id = await operations.create(trx, {
+        organizationId: t.organizationId,
+        kind: 'finance.checkout',
+        requestedBy: systemPrincipal(t.organizationId, 'tests'),
+        status: 'running',
+      });
+      await operations.transition(trx, id, 'recovery_required', {
+        error: {
+          code: 'FULFILLMENT_INCOMPLETE',
+          message: 'Payment captured, enrollment not created',
+        },
+      });
+      return id;
+    });
+    const supportCase = await openCase({
+      relatedRecords: [{ type: 'operation', id: operationId }],
+    });
+    const resolve = (extra: object) =>
+      post(t, `/v1/cases/${supportCase.id}/transition`, manager, {
+        event: 'resolve',
+        expectedRevision: supportCase.revision,
+        resolution: { kind: 'information_provided', summary: 'Explained the delay' },
+        ...extra,
+      });
+    const refused = await resolve({});
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: {
+        code: 'RELATED_RECORD_IN_RECOVERY',
+        operations: [{ operationId, kind: 'finance.checkout', status: 'recovery_required' }],
+      },
+    });
+    // An acknowledgment records why.
+    const noReason = await resolve({ acknowledgeOpenRecovery: true });
+    expect(noReason.status).toBe(400);
+    const reason = 'Finance is recovering the checkout; the customer was told when to expect it';
+    const resolved = await resolve({ acknowledgeOpenRecovery: true, reason });
+    expect(resolved.status, JSON.stringify(resolved.body)).toBe(200);
+    expect(resolved.body.events.at(-1)).toMatchObject({
+      kind: 'status',
+      toStatus: 'resolved',
+      details: { acknowledgedOpenRecovery: [operationId] },
+    });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'reason', 'details'])
+      .where('target_id', '=', supportCase.id)
+      .where('action', '=', 'support.work_case')
+      .execute();
+    expect(audit).toEqual([
+      expect.objectContaining({
+        reason,
+        details: expect.objectContaining({
+          event: 'resolve',
+          acknowledgedOpenRecovery: [operationId],
+        }),
+      }),
+    ]);
+    // Closing asks again while the recovery is still open.
+    const close = await post(t, `/v1/cases/${supportCase.id}/transition`, manager, {
+      event: 'close',
+      expectedRevision: resolved.body.revision,
+    });
+    expect(close.status).toBe(409);
+    expect(close.body.details.code).toBe('RELATED_RECORD_IN_RECOVERY');
+    // Once the owning module recovers the operation the case closes without acknowledgment.
+    await uow.run(({ trx }) =>
+      operations.transition(trx, operationId, 'succeeded', { result: { recovered: true } }),
+    );
+    const closed = await post(
+      t,
+      `/v1/cases/${supportCase.id}/transition`,
+      manager,
+      { event: 'close', expectedRevision: resolved.body.revision },
+      key(),
+    );
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+  });
+
+  it('R4-PROVIDER-OUTCOMES-03: a request left requested whose refund finance has not settled is never succeeded early; once finance settles it the job records succeeded, after the grace-period follow-up too', async () => {
+    const provider = t.app.get(FakePaymentProvider);
+    provider.scriptRefunds('processing');
+    const { actionId, payment } = await leaveRequested({ financeAnswers: true });
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'operation_id', 'status'])
+      .where('payment_attempt_id', '=', payment.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    expect(refund.status).toBe('processing');
+    t.clock.advance(STALE_MS + 1000);
+    await runJob();
+    // A processing refund is no outcome: never `succeeded` before the money moved.
+    expect(await helperState(actionId)).toMatchObject({
+      status: 'requested',
+      operation: 'running',
+      exceptions: [{ category: CASE_ACTION_STALE_CATEGORY, status: 'open' }],
+    });
+    // The grace-period follow-up runs as it does in production (the outbox is drained): the
+    // request becomes unknown with the finance-owned exception.
+    t.clock.advance(1000);
+    await drainOutbox(t);
+    expect(await helperState(actionId)).toMatchObject({
+      status: 'unknown',
+      operation: 'recovery_required',
+      exceptions: [
+        { category: CASE_ACTION_STALE_CATEGORY, status: 'resolved' },
+        { category: 'support.helper_outcome_unknown', status: 'open' },
+      ],
+    });
+    // Still processing at finance: the job records nothing.
+    await runJob();
+    expect((await helperState(actionId)).status).toBe('unknown');
+    provider.settleRefund(refund.id, 'succeeded');
+    await t.app.get(RefundsService).reconcile(t.organizationId, refund.id, null);
+    await runJob();
+    expect(await helperState(actionId)).toMatchObject({
+      status: 'succeeded',
+      error: null,
+      command_operation_id: refund.operation_id,
+      operation: 'succeeded',
+      exceptions: [
+        { category: CASE_ACTION_STALE_CATEGORY, status: 'resolved' },
+        { category: 'support.helper_outcome_unknown', status: 'resolved' },
+      ],
+    });
+  });
+
+  it('R4-PROVIDER-OUTCOMES-03 / §4.11: a refund finance answered processing is recorded from finance’s settlement by the job — declined is failed, succeeded lets the case resolve as action_taken — with no reviewer', async () => {
+    const provider = t.app.get(FakePaymentProvider);
+    const refunds = t.app.get(RefundsService);
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 5000,
+    });
+    const supportCase = await openCase();
+    const requestProcessing = async (amountMinor: number) => {
+      provider.scriptRefunds('processing');
+      const res = await post(t, `/v1/cases/${supportCase.id}/request-refund`, manager, {
+        paymentAttemptId: payment.paymentAttemptId,
+        amountMinor,
+        reason: 'Charged twice',
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(res.body.action).toMatchObject({
+        status: 'unknown',
+        error: { code: 'REFUND_OUTCOME_PENDING' },
+        record: { type: 'refund_attempt' },
+      });
+      // The answer no longer promises what nothing does: the job records finance's outcome.
+      expect(res.body.action.error.message).toContain(SETTLE_STALE_CASE_ACTIONS_JOB);
+      return {
+        actionId: res.body.action.id as string,
+        refundId: res.body.action.record.id as string,
+      };
+    };
+
+    // The provider declines the refund later.
+    const declined = await requestProcessing(1000);
+    await runJob();
+    expect(await helperState(declined.actionId)).toMatchObject({
+      status: 'unknown',
+      operation: 'recovery_required',
+      exceptions: [{ category: 'support.helper_outcome_unknown', status: 'open' }],
+    });
+    provider.settleRefund(declined.refundId, 'failed');
+    expect((await refunds.reconcile(t.organizationId, declined.refundId, null)).status).toBe(
+      'failed',
+    );
+    await runJob();
+    expect(await helperState(declined.actionId)).toMatchObject({
+      status: 'failed',
+      error: {
+        code: 'REFUND_NOT_EFFECTIVE',
+        details: { refundId: declined.refundId, refundStatus: 'failed' },
+      },
+      operation: 'failed',
+      exceptions: [{ category: 'support.helper_outcome_unknown', status: 'resolved' }],
+    });
+    const notTaken = await post(t, `/v1/cases/${supportCase.id}/transition`, manager, {
+      event: 'resolve',
+      expectedRevision: (await get(t, `/v1/cases/${supportCase.id}`, manager)).body.revision,
+      resolution: { kind: 'action_taken', summary: 'Refunded' },
+    });
+    expect(notTaken.status).toBe(409);
+
+    // The provider settles another one long after the grace-period follow-up ran.
+    const settled = await requestProcessing(1500);
+    t.clock.advance(DEFAULT_SUPPORT_POLICY.helperOutcomeGraceMinutes * 60_000 + STALE_MS);
+    await drainOutbox(t);
+    await runJob();
+    expect((await helperState(settled.actionId)).status).toBe('unknown');
+    provider.settleRefund(settled.refundId, 'succeeded');
+    await refunds.reconcile(t.organizationId, settled.refundId, null);
+    await runJob();
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['operation_id', 'status'])
+      .where('id', '=', settled.refundId)
+      .executeTakeFirstOrThrow();
+    expect(refund.status).toBe('succeeded');
+    expect(await helperState(settled.actionId)).toMatchObject({
+      status: 'succeeded',
+      error: null,
+      command_operation_id: refund.operation_id,
+      operation: 'succeeded',
+      exceptions: [{ category: 'support.helper_outcome_unknown', status: 'resolved' }],
+    });
+    const detail = await get(t, `/v1/cases/${supportCase.id}`, manager);
+    expect(detail.body.events.at(-1)).toMatchObject({
+      kind: 'action_link',
+      actor: { actorLabel: SETTLE_STALE_CASE_ACTIONS_JOB },
+    });
+    // Recording it again changes nothing.
+    await runJob();
+    expect((await helperState(settled.actionId)).status).toBe('succeeded');
+    const resolved = await post(t, `/v1/cases/${supportCase.id}/transition`, manager, {
+      event: 'resolve',
+      expectedRevision: detail.body.revision,
+      resolution: { kind: 'action_taken', summary: 'Refunded the duplicate week' },
+    });
+    expect(resolved.status, JSON.stringify(resolved.body)).toBe(200);
+  });
+
+  it('R4-PRIVACY-05 / §4.14: a customer-written case title never appears in a support.case_action_stale or support.helper_outcome_unknown exception title', async () => {
+    const title = 'Refund for Mia (custody change, father must not be told)';
+    const { caseId, actionId } = await leaveRequested({ financeAnswers: false, title });
+    t.clock.advance(STALE_MS + 1000);
+    await runJob();
+    t.clock.advance(DEFAULT_SUPPORT_POLICY.helperOutcomeGraceMinutes * 60_000);
+    await drainOutbox(t);
+    const raised = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['category', 'owner_queue', 'title', 'details'])
+      .where('affected_id', '=', actionId)
+      .orderBy('opened_at')
+      .execute();
+    // The finance queue may not read the case; it gets identifiers and enumerations only, and
+    // the case id for a reader who may open it.
+    expect(raised).toEqual([
+      expect.objectContaining({
+        category: CASE_ACTION_STALE_CATEGORY,
+        owner_queue: 'finance_operator',
+        title: 'A finance.refund requested from a support case has no recorded outcome yet',
+        details: expect.objectContaining({ caseId, caseActionId: actionId }),
+      }),
+      expect.objectContaining({
+        category: 'support.helper_outcome_unknown',
+        owner_queue: 'finance_operator',
+        title: 'A refund requested from a support case has no recorded outcome',
+        details: expect.objectContaining({ caseId, caseActionId: actionId }),
+      }),
+    ]);
+    const anywhere = await t.db
+      .selectFrom('operational_exceptions')
+      .select('id')
+      .where((eb) => eb.or([eb('title', 'like', '%Mia%'), eb('title', 'like', '%custody%')]))
+      .execute();
+    expect(anywhere).toEqual([]);
+  });
+});

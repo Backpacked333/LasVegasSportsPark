@@ -1,0 +1,576 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
+import {
+  errors,
+  type AvailabilitySummary,
+  type Competition,
+  type Division,
+  type DivisionCriteria,
+  type EligibilityReason,
+  type EligibilityReferenceDate,
+  type Fixture,
+  type FixtureAvailabilityResponse,
+  type JoinRequest,
+  type Principal,
+  type RosterMember,
+  type RuleSet,
+  type RuleSetContent,
+  type Season,
+  type Team,
+  type TeamEntry,
+  type TeamInvitation,
+  type TeamRoleRecord,
+} from '@sportspark/contracts';
+import type {
+  AvailabilityResponsesTable,
+  CompetitionsTable,
+  DivisionsTable,
+  FixturesTable,
+  JoinRequestsTable,
+  RosterMembershipsTable,
+  RosterPlayingStatus,
+  RuleSetsTable,
+  TeamEntriesTable,
+  TeamInvitationsTable,
+  TeamRolesTable,
+  TeamsTable,
+} from '@sportspark/db';
+import { sql, type Selectable } from 'kysely';
+import type { ActionDefinition, AuthorizationService, RequestWithContext } from '../../kernel';
+import { localDateOf } from '../scheduling';
+import { MatchActions } from './competition-matches.actions';
+import type { FixtureSummary, TeamEntrySummary } from './ports';
+
+/** Correlation id assigned by the kernel middleware, for audit and outbox records (§4.10). */
+export const CorrelationId = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): string | null =>
+    ctx.switchToHttp().getRequest<RequestWithContext>().correlationId ?? null,
+);
+
+export function organizationOf(principal: Principal): string {
+  if (!principal.organizationId) throw errors.authenticationRequired();
+  return principal.organizationId;
+}
+
+/**
+ * Source records customers (captains, players, guardians) may learn about only through the issue
+ * itself: their ids are restricted (SPK-DISC-004, SPK-CAP-002, §4.10).
+ */
+export const RESTRICTED_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  'suspension',
+  'dispute',
+  'audit_record',
+  'incident',
+]);
+
+/**
+ * Where a staff role must apply for {@link staffAuthority}: the organization, and the facility of
+ * the record when one is known (the division's facility for entries and rosters; the fixture's
+ * venue, else its division's facility, for fixtures, results, readiness and disputes). A record
+ * with no known facility (a season-wide list, a team, a discipline record, a division without a
+ * facility) is decided organization-wide.
+ */
+export interface StaffAuthorityTarget {
+  organizationId: string;
+  facilityId?: string | null;
+}
+
+/**
+ * R3-TRACE-A-01 (§2.1 "access depends on the specific action and scope, not merely a role label",
+ * SPK-IAM-001/003, §3.1 "a coach who is also a parent receives each permission only in its proper
+ * scope"): whether the principal acts on `action` with staff authority, meaning a system principal
+ * of the organization, or a staff principal holding one of the action's staff roles whose facility
+ * scope covers `target.facilityId` (when the caller names one; the kernel skips the facility check
+ * otherwise). The decision names no subject and no team entry, so the kernel can only allow it on
+ * the staff-role basis. Staff kind alone does not count: identity marks every holder of any staff
+ * role as kind `staff`, so a captain who is also an official or a coach is a captain on the
+ * customer path (registration windows, required approvals, redacted views) unless the action
+ * itself lists one of their roles, in that record's facility.
+ */
+export async function staffAuthority(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  action: ActionDefinition,
+  target: StaffAuthorityTarget,
+): Promise<boolean> {
+  if (principal.kind === 'system') return principal.organizationId === target.organizationId;
+  if (principal.kind !== 'staff') return false;
+  const decision = await authorization.decide(principal, action, {
+    type: action.id,
+    organizationId: target.organizationId,
+    facilityId: target.facilityId ?? null,
+  });
+  return decision.allowed;
+}
+
+/**
+ * R3-TRACE-A-01 (SPK-DISC-004, SPK-CAP-002, §4.10): whether the principal sees restricted detail in
+ * eligibility explanations, invitation and join previews, roster refusals and fixture readiness:
+ * exact ages, other-team counts and the ids of restricted records (suspensions, disputes,
+ * incidents, audit records). It belongs to the staff roles that read discipline
+ * (`competition.read_discipline`, league management) in the record's facility, never to a staff
+ * role that only reads, manages or invites to the entry (front desk, coach, official, support,
+ * finance), and never to a captain, player or guardian.
+ */
+export function readsRestrictedDetail(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  target: StaffAuthorityTarget,
+): Promise<boolean> {
+  return staffAuthority(authorization, principal, MatchActions.readDiscipline, target);
+}
+
+export const iso = (value: Date | string): string => new Date(value).toISOString();
+export const isoOrNull = (value: Date | string | null | undefined): string | null =>
+  value === null || value === undefined ? null : iso(value);
+
+export function newToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+export function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+export interface Effectivity {
+  effective_from: Date | string;
+  effective_to: Date | string | null;
+}
+
+/** Half-open effectivity [from, to). */
+export function isEffectiveAt(row: Effectivity, at: Date): boolean {
+  const from = new Date(row.effective_from).getTime();
+  const to =
+    row.effective_to === null ? Number.POSITIVE_INFINITY : new Date(row.effective_to).getTime();
+  const t = at.getTime();
+  return from <= t && t < to;
+}
+
+export const PLAYING_STATUSES: readonly RosterPlayingStatus[] = ['active', 'guest', 'substitute'];
+/** Statuses that count toward the rule set's roster maximum (guests have their own limit). */
+export const ROSTER_LIMIT_STATUSES: readonly RosterPlayingStatus[] = ['active', 'substitute'];
+
+/**
+ * Date on which age eligibility is evaluated (SPK-COMP-002 "Eligibility reference dates", §4.5:
+ * never a stored age). Returned as a `YYYY-MM-DD` string.
+ *
+ * R3-TIME-MONEY-03 (SPK-SCHED-008): `match_date` and `calendar_year_start` are the facility-local
+ * calendar date (and its year) of `at` in `timezone`, the IANA zone of the facility where the game
+ * is played or the division is run: a 17:30 kickoff in Las Vegas is still that local day, never
+ * the next UTC day. `timezone` is null only when no facility is known; the UTC date is used then
+ * and {@link referenceDateZoneNote} says so in the reason.
+ */
+export function referenceDateFor(
+  rule: EligibilityReferenceDate,
+  season: { starts_on: string },
+  at: Date,
+  timezone: string | null,
+): string {
+  const localDate = (): string =>
+    timezone ? localDateOf(timezone, at) : at.toISOString().slice(0, 10);
+  switch (rule.rule) {
+    case 'season_start':
+      return season.starts_on;
+    case 'calendar_year_start':
+      return `${localDate().slice(0, 4)}-01-01`;
+    case 'match_date':
+      return localDate();
+    case 'fixed_date':
+      return rule.date;
+  }
+}
+
+/** Whether the reference date depends on the instant (and so on the facility's time zone). */
+export function referenceDateUsesInstant(rule: EligibilityReferenceDate): boolean {
+  return rule.rule === 'match_date' || rule.rule === 'calendar_year_start';
+}
+
+/** The note an age reason carries when an instant-based reference date fell back to UTC. */
+export function referenceDateZoneNote(
+  rule: EligibilityReferenceDate,
+  timezone: string | null,
+): string {
+  return referenceDateUsesInstant(rule) && !timezone
+    ? ' (UTC date: no facility time zone is known)'
+    : '';
+}
+
+/** Whole years between a date of birth and a reference date (both `YYYY-MM-DD`). */
+export function ageOn(dateOfBirth: string, referenceDate: string): number {
+  const [by, bm, bd] = dateOfBirth.split('-').map(Number) as [number, number, number];
+  const [ry, rm, rd] = referenceDate.split('-').map(Number) as [number, number, number];
+  let age = ry - by;
+  if (rm < bm || (rm === bm && rd < bd)) age -= 1;
+  return age;
+}
+
+export function ruleSetContentOf(row: { content: Record<string, unknown> }): RuleSetContent {
+  return row.content as unknown as RuleSetContent;
+}
+
+export function criteriaOf(row: { criteria: Record<string, unknown> }): DivisionCriteria {
+  const c = row.criteria as Partial<DivisionCriteria>;
+  return {
+    ageBand: c.ageBand ?? null,
+    level: c.level ?? null,
+    category: c.category ?? null,
+    format: c.format ?? null,
+  };
+}
+
+/** Columns for seasons with the date cast both drivers return as `YYYY-MM-DD`. */
+export const seasonColumns = [
+  'seasons.id',
+  'seasons.organization_id',
+  'seasons.competition_id',
+  'seasons.name',
+  'seasons.rule_set_id',
+  sql<string>`seasons.starts_on::text`.as('starts_on'),
+  sql<string>`seasons.ends_on::text`.as('ends_on'),
+  'seasons.registration_offering_ref',
+  'seasons.registration_opens_at',
+  'seasons.registration_closes_at',
+  'seasons.status',
+  'seasons.revision',
+  'seasons.created_at',
+  'seasons.updated_at',
+] as const;
+
+export interface SeasonRow {
+  id: string;
+  organization_id: string;
+  competition_id: string;
+  name: string;
+  rule_set_id: string;
+  starts_on: string;
+  ends_on: string;
+  registration_offering_ref: string | null;
+  registration_opens_at: Date | string | null;
+  registration_closes_at: Date | string | null;
+  status: Season['status'];
+  revision: number;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Row mapping
+// ---------------------------------------------------------------------------------------------
+export function toCompetition(row: Selectable<CompetitionsTable>): Competition {
+  return {
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    sportFormat: row.sport_format,
+    description: row.description,
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toRuleSet(row: Selectable<RuleSetsTable>): RuleSet {
+  return {
+    id: row.id,
+    name: row.name,
+    format: row.format,
+    version: row.version,
+    content: ruleSetContentOf(row),
+    supersedesRuleSetId: row.supersedes_rule_set_id,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toSeason(row: SeasonRow): Season {
+  return {
+    id: row.id,
+    competitionId: row.competition_id,
+    name: row.name,
+    ruleSetId: row.rule_set_id,
+    startsOn: row.starts_on,
+    endsOn: row.ends_on,
+    registrationOfferingRef: row.registration_offering_ref,
+    registrationOpensAt: isoOrNull(row.registration_opens_at),
+    registrationClosesAt: isoOrNull(row.registration_closes_at),
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toDivision(row: Selectable<DivisionsTable>, entryCount: number): Division {
+  return {
+    id: row.id,
+    seasonId: row.season_id,
+    name: row.name,
+    criteria: criteriaOf(row),
+    facilityId: row.facility_id,
+    capacityTeamEntries: row.capacity_team_entries,
+    entryCount,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toTeam(row: Selectable<TeamsTable>): Team {
+  const colors = row.colors as { primary?: string; secondary?: string };
+  return {
+    id: row.id,
+    name: row.name,
+    colors: {
+      ...(colors.primary ? { primary: colors.primary } : {}),
+      ...(colors.secondary ? { secondary: colors.secondary } : {}),
+    },
+    createdByPersonId: row.created_by_person_id,
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export interface RosterFacts {
+  rosterCount: number;
+  rosterMin: number;
+  rosterMax: number;
+}
+
+export function toTeamEntry(
+  row: Selectable<TeamEntriesTable>,
+  roster: RosterFacts,
+  teamName: string,
+): TeamEntry {
+  return {
+    id: row.id,
+    seasonId: row.season_id,
+    divisionId: row.division_id,
+    teamId: row.team_id,
+    teamName,
+    status: row.status,
+    appliedByPersonId: row.applied_by_person_id,
+    appliedAt: iso(row.applied_at),
+    approvedAt: isoOrNull(row.approved_at),
+    approvalNote: row.approval_note,
+    rejectedAt: isoOrNull(row.rejected_at),
+    rejectionReason: row.rejection_reason,
+    withdrawnAt: isoOrNull(row.withdrawn_at),
+    withdrawalReason: row.withdrawal_reason,
+    financialStatusRef: row.financial_status_ref,
+    eligibilityStatus: row.eligibility_status,
+    eligibilityReasons: row.eligibility_reasons as EligibilityReason[],
+    renewedFromEntryId: row.renewed_from_entry_id,
+    // Derived, never stored (SPK-COMP-004): enough eligible players within the rule set's limits.
+    rosterComplete:
+      roster.rosterCount >= roster.rosterMin && roster.rosterCount <= roster.rosterMax,
+    rosterCount: roster.rosterCount,
+    rosterMin: roster.rosterMin,
+    rosterMax: roster.rosterMax,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toTeamEntrySummary(
+  row: Selectable<TeamEntriesTable>,
+  team: { name: string },
+  competitionId: string,
+): TeamEntrySummary {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    seasonId: row.season_id,
+    competitionId,
+    divisionId: row.division_id,
+    teamId: row.team_id,
+    teamName: team.name,
+    status: row.status,
+    financialStatusRef: row.financial_status_ref,
+    eligibilityStatus: row.eligibility_status,
+    revision: row.revision,
+  };
+}
+
+export function toTeamRole(row: Selectable<TeamRolesTable>): TeamRoleRecord {
+  return {
+    id: row.id,
+    teamEntryId: row.team_entry_id,
+    personId: row.person_id,
+    role: row.role,
+    effectiveFrom: iso(row.effective_from),
+    effectiveTo: isoOrNull(row.effective_to),
+  };
+}
+
+export interface RosterPerson {
+  given_name: string;
+  family_name: string;
+  kind: 'adult' | 'child';
+}
+
+export function toRosterMember(
+  row: Selectable<RosterMembershipsTable>,
+  person: RosterPerson,
+  eligibility: RosterMember['eligibility'],
+): RosterMember {
+  return {
+    id: row.id,
+    teamEntryId: row.team_entry_id,
+    personId: row.person_id,
+    // Teammates see a display name only: no date of birth, contacts or family details (SPK-CAP-002).
+    displayName: `${person.given_name} ${person.family_name}`.trim(),
+    personKind: person.kind,
+    status: row.status,
+    statusBeforeRemoval: row.status_before_removal,
+    effectiveFrom: iso(row.effective_from),
+    effectiveTo: isoOrNull(row.effective_to),
+    jerseyNumber: row.jersey_number,
+    source: row.source,
+    removedAt: isoOrNull(row.removed_at),
+    removalReason: row.removal_reason,
+    eligibility,
+  };
+}
+
+export function toTeamInvitation(row: Selectable<TeamInvitationsTable>): TeamInvitation {
+  return {
+    id: row.id,
+    teamEntryId: row.team_entry_id,
+    invitedByPersonId: row.invited_by_person_id,
+    recipientPersonId: row.recipient_person_id,
+    recipientContact:
+      row.recipient_contact_kind && row.recipient_contact_value
+        ? { kind: row.recipient_contact_kind, value: row.recipient_contact_value }
+        : null,
+    message: row.message,
+    status: row.status,
+    expiresAt: iso(row.expires_at),
+    acceptedAt: isoOrNull(row.accepted_at),
+    acceptedByPersonId: row.accepted_by_person_id,
+    revokedAt: isoOrNull(row.revoked_at),
+    rosterMembershipId: row.roster_membership_id,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toJoinRequest(row: Selectable<JoinRequestsTable>): JoinRequest {
+  return {
+    id: row.id,
+    teamEntryId: row.team_entry_id,
+    personId: row.person_id,
+    requestedByPersonId: row.requested_by_person_id,
+    message: row.message,
+    status: row.status,
+    decidedByPersonId: row.decided_by_person_id,
+    decidedAt: isoOrNull(row.decided_at),
+    decisionNote: row.decision_note,
+    rosterMembershipId: row.roster_membership_id,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toFixture(row: Selectable<FixturesTable>): Fixture {
+  return {
+    id: row.id,
+    seasonId: row.season_id,
+    divisionId: row.division_id,
+    round: row.round,
+    homeEntryId: row.home_entry_id,
+    awayEntryId: row.away_entry_id,
+    schedulingEventId: row.scheduling_event_id,
+    scheduledStart: isoOrNull(row.scheduled_start),
+    scheduledEnd: isoOrNull(row.scheduled_end),
+    status: row.status,
+    notes: row.notes,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toFixtureSummary(row: Selectable<FixturesTable>): FixtureSummary {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    seasonId: row.season_id,
+    divisionId: row.division_id,
+    round: row.round,
+    homeEntryId: row.home_entry_id,
+    awayEntryId: row.away_entry_id,
+    schedulingEventId: row.scheduling_event_id,
+    scheduledStart: row.scheduled_start ? new Date(row.scheduled_start) : null,
+    scheduledEnd: row.scheduled_end ? new Date(row.scheduled_end) : null,
+    status: row.status,
+    revision: row.revision,
+  };
+}
+
+export function toAvailabilityResponse(
+  row: Selectable<AvailabilityResponsesTable>,
+): FixtureAvailabilityResponse {
+  return {
+    id: row.id,
+    fixtureId: row.fixture_id,
+    teamEntryId: row.team_entry_id,
+    personId: row.person_id,
+    state: row.state,
+    respondedAt: isoOrNull(row.responded_at),
+    note: row.note,
+    revision: row.revision,
+  };
+}
+
+export function emptySummary(): AvailabilitySummary {
+  return { available: 0, unavailable: 0, tentative: 0, noResponse: 0 };
+}
+
+export function hoursFromNow(now: Date, hours: number): Date {
+  return new Date(now.getTime() + hours * 3600_000);
+}
+
+/**
+ * The longest scheduling event title (scheduling's `title` bound, max 200: `CreateEventSeriesBody.title`
+ * and `EventWriter.insertEvent`, `EVENT_TITLE_MAX`). There is no direct event-creation route:
+ * events are created through `EventSchedulingPort.createEvent`, series and schedule drafts. A
+ * fixture's title is composed from two captain-chosen team names of up to 200 characters each, so
+ * it is bounded here (R2-TENANCY-INPUT-02, SPK-COMMS-005, R3-DOCS-TRUTH-3-09).
+ */
+export const FIXTURE_TITLE_MAX = 200;
+const FIXTURE_TITLE_SEPARATOR = ' v ';
+
+/** `text` cut to at most `max` UTF-16 units, ending with an ellipsis when it was cut. */
+function clipTitlePart(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let out = '';
+  for (const char of text) {
+    if (out.length + char.length > max - 1) break;
+    out += char;
+  }
+  return `${out.trimEnd()}…`;
+}
+
+/**
+ * `"{home} v {away}"`, never longer than {@link FIXTURE_TITLE_MAX}: when the names do not fit,
+ * the longer one gives way first (each keeps at least half the room) and a cut name ends in `…`.
+ * Lengths count UTF-16 units, as the contract's `max` does; a surrogate pair is never split.
+ */
+export function fixtureTitle(home: string, away: string, max: number = FIXTURE_TITLE_MAX): string {
+  const full = `${home}${FIXTURE_TITLE_SEPARATOR}${away}`;
+  if (full.length <= max) return full;
+  const room = max - FIXTURE_TITLE_SEPARATOR.length;
+  let homeRoom = Math.ceil(room / 2);
+  let awayRoom = room - homeRoom;
+  if (home.length < homeRoom) {
+    homeRoom = home.length;
+    awayRoom = room - homeRoom;
+  } else if (away.length < awayRoom) {
+    awayRoom = away.length;
+    homeRoom = room - awayRoom;
+  }
+  return `${clipTitlePart(home, homeRoom)}${FIXTURE_TITLE_SEPARATOR}${clipTitlePart(away, awayRoom)}`;
+}

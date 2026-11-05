@@ -1,0 +1,1157 @@
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  DomainError,
+  SessionBookingMachine,
+  errors,
+  newId,
+  type CancelSessionBookingInput,
+  type ConfirmSessionBookingInput,
+  type CreateSessionBookingInput,
+  type EligibilityResult,
+  type ListSessionBookingsQuery,
+  type OfferingSession,
+  type PriceSnapshot,
+  type Principal,
+  type SessionBooking,
+} from '@sportspark/contracts';
+import {
+  isUniqueViolation,
+  json,
+  pgConstraintName,
+  type Db,
+  type SessionBookingKind,
+  type SessionBookingsTable,
+} from '@sportspark/db';
+import type { Selectable } from 'kysely';
+import {
+  AuditWriter,
+  AuthorizationService,
+  CLOCK,
+  CapabilityService,
+  DATABASE,
+  OperationalExceptions,
+  Outbox,
+  UnitOfWork,
+  assertExpectedRevision,
+  type Clock,
+  type Trx,
+} from '../../../kernel';
+import type { OfferingSnapshot } from '../../catalog';
+import {
+  PERSON_DIRECTORY_PORT,
+  type PersonDirectoryPort,
+  type PersonSummary,
+} from '../../identity';
+import { EnrollmentActions } from '../enrollment.actions';
+import { EnrollmentEvents } from '../enrollment.events';
+import {
+  actorSnapshot,
+  assistedBy,
+  enrollmentSystem,
+  minutesFrom,
+  organizationOf,
+  owesNothing as owesNothingFor,
+  redactSessionBooking,
+  registrantSnapshot,
+  resolveCustomerPayer,
+  toSessionBooking,
+  viewerOf,
+  type Reader,
+  requireOverNamedPersons,
+} from '../enrollment.shared';
+import { missingAcknowledgments } from '../eligibility/registration-eligibility';
+import { CapacityService, type HoldRow } from './capacity.service';
+import { CatalogSessions } from './catalog-sessions';
+import { EnrollmentsService } from './enrollments.service';
+import { EnrollmentFacilityScope } from './facility-scope';
+import { MembershipsService, type MembershipUse } from './memberships.service';
+import {
+  PackageEntitlementsService,
+  entitlementEnded,
+  type BookingCancellationCause,
+  type CreditDisposition,
+  type PackageEntitlementRow,
+} from './package-entitlements.service';
+import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
+
+export type SessionBookingRow = Selectable<SessionBookingsTable>;
+
+export interface CreateBookingInTrx {
+  kind: SessionBookingKind;
+  snapshot: OfferingSnapshot;
+  session: OfferingSession;
+  person: PersonSummary;
+  evaluation: Evaluation;
+  payerPersonId: string | null;
+  actor: Principal;
+  /**
+   * R3-TRACE-A-02 (SPK-REG-009): the actor acts on a staff role at the offering's facility
+   * (`EnrollmentFacilityScope.actsAsStaff`), so the booking is staff-assisted; a staff member
+   * booking for their own family is recorded as the customer they acted as.
+   */
+  actingAsStaff: boolean;
+  /** Holds already reserving the seat (an accepted waitlist offer); otherwise new holds are taken. */
+  existingHoldIds?: readonly string[];
+  /** Makeups are never money (SPK-YOUTH-004): no price, confirmed at once. */
+  free?: boolean;
+  makeupEntitlementId?: string | null;
+  /** ENR-11, ENR-12: a booking a package credit or a membership pays for. */
+  basis?:
+    | { kind: 'package'; packageEntitlementId: string }
+    | { kind: 'membership'; membershipEnrollmentId: string; periodKey: string | null };
+  correlationId: string | null;
+}
+
+/**
+ * GAPS-TRIAGE-01 (§6.7): the decisions a payment path for a single session of this kind waits for.
+ * Pickup payment rules are POL-045 under DEC-082 (SPK-PLACE-004) and trial rules DEC-003
+ * (SPK-YOUTH-003). A makeup seat is never money (SPK-YOUTH-004: it is redeemed from its
+ * entitlement), and a session booked with a package credit or membership is paid by it, so neither
+ * names a pickup or trial decision.
+ */
+export function sessionPaymentDecisions(kind: SessionBookingKind): string[] {
+  if (kind === 'pickup') return ['POL-045', 'DEC-082'];
+  if (kind === 'trial') return ['DEC-003'];
+  return [];
+}
+
+/** What the family can do instead, per booking kind (plain operational copy). */
+const SESSION_PAYMENT_REMEDY: Record<SessionBookingKind, string> = {
+  pickup: 'book a session that owes nothing, or one a package credit or membership covers',
+  trial: 'choose a trial that owes nothing',
+  makeup:
+    'redeem the makeup entitlement for the session (POST /v1/makeup-entitlements/{id}/redeem)',
+  session: 'book the session with a package credit or membership that covers it',
+};
+
+/**
+ * GAPS-TRIAGE-01 (SPK-PLACE-004 payment rules, SPK-YOUTH-003, SPK-PAY-001/002, §6.7): the refusal
+ * of a session booking that would owe money. No payment path exists for a single session: the
+ * finance checkout pays held basket lines that each carry an enrollment, and a pickup or trial seat
+ * is never an enrollment (SPK-PLACE-004, SPK-YOUTH-003). The rules such a path would implement are
+ * pending (`sessionPaymentDecisions`), so the booking is refused before any seat is held, any offer
+ * consumed or any record written, instead of answering 201 for a booking nobody can pay that then
+ * expires.
+ */
+export function sessionPaymentUnavailable(
+  kind: SessionBookingKind,
+  price: PriceSnapshot | null,
+): DomainError {
+  return errors.resourceConflict(
+    `This ${kind === 'trial' ? 'trial' : 'session'} has a price, and a single session cannot be paid for yet: ${SESSION_PAYMENT_REMEDY[kind]}.`,
+    {
+      code: 'SESSION_PAYMENT_UNAVAILABLE',
+      kind,
+      amountMinor: price?.basePriceMinor ?? null,
+      currency: price?.currency ?? null,
+      pendingDecisions: sessionPaymentDecisions(kind),
+    },
+  );
+}
+
+/**
+ * Session bookings (§4.4 SessionBooking, SessionBookingMachine §4.6, SPK-PLACE-004 pickup,
+ * SPK-YOUTH-003 trial seats, SPK-YOUTH-004 makeup seats). Every booking takes a seat in the
+ * session's own capacity pools (and its staffing pool, SPK-YOUTH-002) through a server-owned hold.
+ * A booking that owes nothing (base price, approved fees and taxes), or that a package credit, a
+ * membership or a makeup entitlement pays for, is confirmed at once. A booking that would owe
+ * money is refused with 409 RESOURCE_CONFLICT `SESSION_PAYMENT_UNAVAILABLE` (see
+ * `sessionPaymentUnavailable`): there is no payment step for a single session yet. Nothing here
+ * touches a roster: pickup attendance never creates league membership (SPK-PLACE-004).
+ */
+@Injectable()
+export class SessionBookingsService {
+  constructor(
+    @Inject(DATABASE) private readonly db: Db,
+    @Inject(CLOCK) private readonly clock: Clock,
+    private readonly uow: UnitOfWork,
+    private readonly authorization: AuthorizationService,
+    private readonly audit: AuditWriter,
+    private readonly outbox: Outbox,
+    private readonly evaluator: RegistrationEvaluator,
+    private readonly capacity: CapacityService,
+    private readonly enrollments: EnrollmentsService,
+    private readonly sessions: CatalogSessions,
+    private readonly scope: EnrollmentFacilityScope,
+    private readonly capabilities: CapabilityService,
+    @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
+    private readonly packages: PackageEntitlementsService,
+    private readonly memberships: MembershipsService,
+    private readonly exceptions: OperationalExceptions,
+  ) {}
+
+  async load(
+    db: Reader,
+    organizationId: string,
+    id: string,
+    forUpdate = false,
+  ): Promise<SessionBookingRow | undefined> {
+    let q = db
+      .selectFrom('session_bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id);
+    if (forUpdate) q = q.forUpdate();
+    return q.executeTakeFirst();
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // POST /session-bookings (pickup, SPK-PLACE-004)
+  // -------------------------------------------------------------------------------------------
+
+  async book(
+    principal: Principal,
+    input: CreateSessionBookingInput,
+    correlationId: string | null,
+  ): Promise<SessionBooking> {
+    const organizationId = organizationOf(principal);
+    const session = await this.sessions.get(organizationId, input.offeringId, input.sessionId);
+    return this.uow.run(async ({ trx }) => {
+      const person = await this.evaluator.participant(
+        trx,
+        organizationId,
+        input.participantPersonId,
+      );
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
+      // R4-PRIVACY-03 (§4.10): another household's participant reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.bookSession,
+        { type: 'session_booking', organizationId, facilityId, subjectPersonIds: [person.id] },
+        [person.id],
+      );
+      const staff = await this.scope.actsAsStaff(
+        principal,
+        EnrollmentActions.bookSession,
+        organizationId,
+        facilityId,
+      );
+      const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
+      const basis = input.packageEntitlementId
+        ? 'package'
+        : input.membershipEnrollmentId
+          ? 'membership'
+          : 'purchase';
+      if (basis === 'purchase' && snapshot.offering.kind !== 'pickup') {
+        throw errors.validation(
+          'Session bookings are for pickup sessions; trials and makeups have their own commands.',
+          { path: 'offeringId' },
+        );
+      }
+      // ENR-10, ENR-11, ENR-12 (DEC-016): a new booking paid by a package or a membership needs
+      // that switch, and any new pickup booking needs pickup_sessions (DEC-082); cancellation,
+      // expiry and payment outcomes never check them.
+      if (basis === 'package') {
+        await this.capabilities.require(organizationId, 'session_packages', trx);
+      }
+      if (basis === 'membership') {
+        await this.capabilities.require(organizationId, 'memberships', trx);
+      }
+      if (snapshot.offering.kind === 'pickup') {
+        await this.capabilities.require(organizationId, 'pickup_sessions', trx);
+      }
+      const participantIds = await this.persons.personIdsResolvingTo(
+        organizationId,
+        person.id,
+        trx,
+      );
+      const ids = participantIds.length > 0 ? participantIds : [person.id];
+      let entitlement: PackageEntitlementRow | null = null;
+      let membershipUse: MembershipUse | null = null;
+      if (input.packageEntitlementId) {
+        entitlement = await this.packages.lockForRedemption(
+          trx,
+          organizationId,
+          input.packageEntitlementId,
+          ids,
+          snapshot,
+        );
+      }
+      if (input.membershipEnrollmentId) {
+        membershipUse = await this.memberships.lockForBooking(
+          trx,
+          organizationId,
+          input.membershipEnrollmentId,
+          ids,
+          snapshot,
+          session,
+        );
+      }
+      const evaluation = await this.evaluator.evaluate(trx, organizationId, {
+        snapshot,
+        person,
+        intent: snapshot.offering.kind === 'pickup' ? 'pickup' : 'makeup',
+        session,
+      });
+      if (basis !== 'purchase') {
+        // The package or membership already decided which offerings it covers; the remaining
+        // checks (registration open, age, forms, session status) still apply.
+        evaluation.result.reasons = evaluation.result.reasons.filter(
+          (r) => r.code !== 'intent_offering_mismatch',
+        );
+        evaluation.result.eligible = evaluation.result.reasons.every(
+          (r) => r.severity === 'warning' || r.severity === 'info',
+        );
+      }
+      this.assertBookable(evaluation.result, person.id);
+      const row = await this.createInTrx(trx, organizationId, {
+        kind: snapshot.offering.kind === 'pickup' ? 'pickup' : 'session',
+        snapshot,
+        session,
+        person,
+        evaluation,
+        // §4.7 (1), SPK-REG-009: a customer books as their own payer; staff may name one. A
+        // package or membership booking is already paid for.
+        payerPersonId:
+          basis !== 'purchase'
+            ? null
+            : (resolveCustomerPayer(staff, input.payerPersonId, [principal.personId]) ??
+              (staff ? null : principal.personId)),
+        actor: principal,
+        actingAsStaff: staff,
+        free: basis !== 'purchase',
+        basis: entitlement
+          ? { kind: 'package', packageEntitlementId: entitlement.id }
+          : membershipUse
+            ? {
+                kind: 'membership',
+                membershipEnrollmentId: membershipUse.membership.id,
+                periodKey: membershipUse.periodKey,
+              }
+            : undefined,
+        correlationId,
+      });
+      if (entitlement) {
+        await this.packages.recordRedemption(
+          trx,
+          organizationId,
+          entitlement,
+          row,
+          principal,
+          correlationId,
+        );
+      }
+      if (membershipUse) await this.memberships.consume(trx, organizationId, membershipUse);
+      return redactSessionBooking(viewerOf(principal, staff), toSessionBooking(row));
+    });
+  }
+
+  /** Blocking eligibility and outstanding forms stop a booking (SPK-PLACE-004 entry requirements). */
+  assertBookable(result: EligibilityResult, participantPersonId: string): void {
+    if (!result.eligible) {
+      throw errors.eligibility('The participant is not eligible for this session.', {
+        participantPersonId,
+        reasons: result.reasons,
+        alternatives: result.alternatives,
+      });
+    }
+    const missing = missingAcknowledgments(result);
+    if (missing.length > 0) {
+      throw errors.missingAcknowledgment('Required forms must be acknowledged before booking.', {
+        participantPersonId,
+        policyVersionIds: missing,
+      });
+    }
+  }
+
+  /**
+   * GAPS-TRIAGE-01: the price a new booking of the offering would carry, refusing one that would
+   * owe money (`SESSION_PAYMENT_UNAVAILABLE`). Pickup and trial waitlists call it before an entry
+   * joins or an offer is made or accepted, so nobody waits for, or is offered, a seat that cannot be
+   * booked (offer generation retires such waiters with a notice; see `WaitlistService`).
+   */
+  async assertSessionPayable(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+    kind: SessionBookingKind,
+  ): Promise<PriceSnapshot | null> {
+    const price = await this.evaluator.priceSnapshot(
+      trx,
+      organizationId,
+      offeringId,
+      this.clock.now(),
+    );
+    // SPK-PAY-001/002: approved non-inclusive fees and taxes are owed too (a fee-only booking owes).
+    if (!owesNothingFor(price, 1)) throw sessionPaymentUnavailable(kind, price);
+    return price;
+  }
+
+  /**
+   * Shared booking body: refuses a booking that would owe money (GAPS-TRIAGE-01) before anything
+   * is held, takes (or adopts) the seat in every pool of the session, writes the booking and
+   * confirms it at once (nothing is owed).
+   */
+  async createInTrx(
+    trx: Trx,
+    organizationId: string,
+    input: CreateBookingInTrx,
+  ): Promise<SessionBookingRow> {
+    const now = this.clock.now();
+    const id = newId();
+    const policy = this.evaluator.configuration;
+    const expiresAt = minutesFrom(now, policy.holdMinutes);
+    const price: PriceSnapshot | null = input.free
+      ? null
+      : await this.assertSessionPayable(
+          trx,
+          organizationId,
+          input.snapshot.offering.id,
+          input.kind,
+        );
+
+    let holds: HoldRow[] = [];
+    if (input.existingHoldIds && input.existingHoldIds.length > 0) {
+      for (const holdId of input.existingHoldIds) {
+        holds.push(
+          await this.capacity.reassignHold(
+            trx,
+            organizationId,
+            holdId,
+            { ownerKind: 'session_booking', ownerId: id, basketId: null },
+            expiresAt,
+            input.correlationId,
+          ),
+        );
+      }
+    } else {
+      const sessionPools = await this.capacity.ensureSessionPool(
+        trx,
+        organizationId,
+        input.snapshot,
+        input.session,
+        input.actor,
+      );
+      const pools = sessionPools.filter((p) => p.status === 'active');
+      if (sessionPools.some((p) => p.status === 'closed')) {
+        // R2-JOURNEYS-01: the session was canceled meanwhile (its pools are closed).
+        throw errors.capacityUnavailable('This session was canceled; its seats are closed.', {
+          code: 'SESSION_CANCELED',
+          sessionId: input.session.id,
+        });
+      }
+      if (pools.length === 0) {
+        // SPK-PLACE-004: a session needs its own capacity before anyone can book it.
+        throw errors.validation('This session has no capacity configured.', {
+          sessionId: input.session.id,
+        });
+      }
+      if (
+        policy.waitlistFirst &&
+        (await this.capacity.othersWaiting(
+          trx,
+          organizationId,
+          { offeringId: input.snapshot.offering.id, sessionId: input.session.id },
+          input.person.id,
+        )) > 0
+      ) {
+        throw errors.capacityUnavailable(
+          'Seats of this session are offered to its waitlist first.',
+          {
+            sessionId: input.session.id,
+            waitlistFirst: true,
+          },
+        );
+      }
+      const acquired = await this.capacity.acquireHolds(trx, organizationId, {
+        pools: pools.map((p) => ({ poolId: p.id, quantity: 1 })),
+        ownerKind: 'session_booking',
+        ownerId: id,
+        actor: input.actor,
+        expiresAt,
+        correlationId: input.correlationId,
+      });
+      holds = [];
+      for (const hold of acquired) {
+        const row = await this.capacity.loadHold(trx, organizationId, hold.id);
+        if (row) holds.push(row);
+      }
+    }
+    const primary = holds[0] ?? null;
+    try {
+      await trx
+        .insertInto('session_bookings')
+        .values({
+          id,
+          organization_id: organizationId,
+          offering_id: input.snapshot.offering.id,
+          session_id: input.session.id,
+          participant_person_id: input.person.id,
+          kind: input.kind,
+          status: 'pending',
+          pool_id: primary?.pool_id ?? null,
+          hold_id: primary?.id ?? null,
+          makeup_entitlement_id: input.makeupEntitlementId ?? null,
+          entitlement_basis: input.makeupEntitlementId
+            ? 'makeup'
+            : (input.basis?.kind ?? 'purchase'),
+          package_entitlement_id:
+            input.basis?.kind === 'package' ? input.basis.packageEntitlementId : null,
+          membership_enrollment_id:
+            input.basis?.kind === 'membership' ? input.basis.membershipEnrollmentId : null,
+          membership_period_key: input.basis?.kind === 'membership' ? input.basis.periodKey : null,
+          scheduled_start: input.session.scheduledStart,
+          scheduled_end: input.session.scheduledEnd,
+          booked_by: json(registrantSnapshot(input.actor, input.actingAsStaff)),
+          booked_by_person_id: input.actor.personId,
+          // SPK-REG-009: the staff actor is recorded apart from participant and payer.
+          assisted_by_person_id: assistedBy(input.actor, input.actingAsStaff),
+          payer_person_id: input.payerPersonId,
+          price_snapshot: price ? json(price) : null,
+          policy_references: json(
+            this.evaluator.policyReferences(input.snapshot, input.evaluation.approvalPolicy),
+          ),
+          eligibility_result: json(input.evaluation.result),
+          // Nothing is owed, so the booking is confirmed below and its seat holds never lapse.
+          expires_at: null,
+          confirmed_at: null,
+          canceled_at: null,
+          cancel_reason: null,
+          expired_at: null,
+        })
+        .execute();
+    } catch (error) {
+      if (isUniqueViolation(error) && pgConstraintName(error) === 'session_bookings_live_idx') {
+        throw errors.duplicateEntitlement(
+          'The participant already has a booking for this session.',
+          {
+            participantPersonId: input.person.id,
+            sessionId: input.session.id,
+          },
+        );
+      }
+      throw error;
+    }
+    await this.audit.record(trx, {
+      organizationId,
+      actor: input.actor,
+      action: EnrollmentActions.bookSession.id,
+      targetType: 'session_booking',
+      targetId: id,
+      afterRevision: 1,
+      correlationId: input.correlationId,
+      details: {
+        kind: input.kind,
+        offeringId: input.snapshot.offering.id,
+        sessionId: input.session.id,
+        holdIds: holds.map((h) => h.id),
+        assistedByStaff: input.actingAsStaff,
+        priceRuleId: price?.priceRuleId ?? null,
+      },
+    });
+    await this.outbox.enqueue(trx, EnrollmentEvents.sessionBooked, {
+      organizationId,
+      aggregateType: 'session_booking',
+      aggregateId: id,
+      correlationId: input.correlationId,
+      payload: {
+        organizationId,
+        bookingId: id,
+        offeringId: input.snapshot.offering.id,
+        sessionId: input.session.id,
+        participantPersonId: input.person.id,
+        kind: input.kind,
+        status: 'confirmed',
+      },
+    });
+    // Nothing is owed: the seat is committed now (SessionBookingMachine pending → confirmed).
+    for (const hold of holds) {
+      await this.capacity.commitHold(
+        trx,
+        organizationId,
+        hold.id,
+        { sessionBookingId: id },
+        input.correlationId,
+      );
+    }
+    await trx
+      .updateTable('session_bookings')
+      .set({
+        status: SessionBookingMachine.next('pending', 'confirm'),
+        confirmed_at: now,
+        revision: 2,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .execute();
+    const row = await this.load(trx, organizationId, id);
+    if (!row) throw errors.internal('session booking vanished');
+    return row;
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Reads
+  // -------------------------------------------------------------------------------------------
+
+  async get(principal: Principal, id: string): Promise<SessionBooking> {
+    const organizationId = organizationOf(principal);
+    const row = await this.load(this.db, organizationId, id);
+    if (!row) throw errors.protectedNotFound('session_booking');
+    const facilityId = await this.scope.facilityOf(organizationId, row.offering_id);
+    await this.authorization.require(principal, EnrollmentActions.readSessionBooking, {
+      type: 'session_booking',
+      id,
+      organizationId,
+      facilityId,
+      subjectPersonIds: [row.participant_person_id],
+      protected: true,
+    });
+    return redactSessionBooking(
+      await this.scope.viewer(
+        principal,
+        EnrollmentActions.readSessionBooking,
+        organizationId,
+        facilityId,
+      ),
+      toSessionBooking(row),
+    );
+  }
+
+  async list(principal: Principal, query: ListSessionBookingsQuery): Promise<SessionBooking[]> {
+    const organizationId = organizationOf(principal);
+    if (!query.participantPersonId) {
+      // A whole session's list is a staff view (entry, organizers).
+      await this.authorization.require(principal, EnrollmentActions.readCapacity, {
+        type: 'session_booking',
+        organizationId,
+      });
+      if (!query.sessionId)
+        throw errors.validation('sessionId or participantPersonId is required.');
+    } else {
+      await this.authorization.require(principal, EnrollmentActions.readSessionBooking, {
+        type: 'session_booking',
+        organizationId,
+        subjectPersonIds: [query.participantPersonId],
+        protected: true,
+      });
+    }
+    // §4.3, §4.14: facility-scoped staff list only their facilities' bookings.
+    const listAction = query.participantPersonId
+      ? EnrollmentActions.readSessionBooking
+      : EnrollmentActions.readCapacity;
+    const offerings = await this.scope.listOfferings(
+      principal,
+      listAction,
+      organizationId,
+      query.participantPersonId,
+    );
+    if (offerings?.length === 0) return [];
+    let q = this.db
+      .selectFrom('session_bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .orderBy('scheduled_start')
+      .orderBy('id');
+    if (query.participantPersonId)
+      q = q.where('participant_person_id', '=', query.participantPersonId);
+    if (query.sessionId) q = q.where('session_id', '=', query.sessionId);
+    if (offerings) q = q.where('offering_id', 'in', offerings);
+    if (query.status) q = q.where('status', '=', query.status);
+    const rows = await q.execute();
+    const viewerFor = await this.scope.viewersByOffering(
+      principal,
+      listAction,
+      organizationId,
+      rows.map((r) => r.offering_id),
+    );
+    return rows.map((r) => redactSessionBooking(viewerFor(r.offering_id), toSessionBooking(r)));
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Confirm (owes nothing) and cancel
+  // -------------------------------------------------------------------------------------------
+
+  async confirm(
+    principal: Principal,
+    id: string,
+    input: ConfirmSessionBookingInput,
+    correlationId: string | null,
+  ): Promise<SessionBooking> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const row = await this.load(trx, organizationId, id, true);
+      if (!row) throw errors.protectedNotFound('session_booking');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
+      await this.authorization.require(principal, EnrollmentActions.bookSession, {
+        type: 'session_booking',
+        id,
+        organizationId,
+        facilityId,
+        subjectPersonIds: [row.participant_person_id],
+        protected: true,
+      });
+      assertExpectedRevision(input.expectedRevision, row.revision);
+      SessionBookingMachine.next(row.status, 'confirm');
+      // SPK-PAY-001/002: the booking's price basis (base plus approved fees and taxes) and the rule
+      // effective now must both owe nothing; a makeup redemption is free by its entitlement.
+      const price = row.price_snapshot as unknown as PriceSnapshot | null;
+      const current = row.makeup_entitlement_id
+        ? null
+        : await this.evaluator.priceSnapshot(trx, organizationId, row.offering_id);
+      if (!owesNothingFor(price, 1) || !owesNothingFor(current, 1)) {
+        // GAPS-TRIAGE-01: no checkout takes a session booking (a priced one is refused when it is
+        // made); a pending one recorded earlier owes money nobody can take, so it is cancelled or
+        // left to expire with its hold.
+        throw errors.resourceConflict(
+          'This booking owes a payment, and a single session cannot be paid for yet; cancel it or let its hold expire.',
+          {
+            code: 'PAYMENT_REQUIRED',
+            amountMinor: (current ?? price)?.basePriceMinor ?? null,
+            currency: (current ?? price)?.currency ?? null,
+            pendingDecisions: sessionPaymentDecisions(row.kind),
+          },
+        );
+      }
+      const booking = await this.enrollments.confirmSessionBooking(trx, organizationId, id, {
+        actor: principal,
+        correlationId,
+      });
+      return redactSessionBooking(
+        await this.scope.viewer(
+          principal,
+          EnrollmentActions.bookSession,
+          organizationId,
+          facilityId,
+        ),
+        booking,
+      );
+    });
+  }
+
+  async cancel(
+    principal: Principal,
+    id: string,
+    input: CancelSessionBookingInput,
+    correlationId: string | null,
+  ): Promise<SessionBooking> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const row = await this.load(trx, organizationId, id, true);
+      if (!row) throw errors.protectedNotFound('session_booking');
+      const facilityId = await this.scope.facilityOf(organizationId, row.offering_id, trx);
+      await this.authorization.require(principal, EnrollmentActions.bookSession, {
+        type: 'session_booking',
+        id,
+        organizationId,
+        facilityId,
+        subjectPersonIds: [row.participant_person_id],
+        protected: true,
+      });
+      assertExpectedRevision(input.expectedRevision, row.revision);
+      const updated = await this.cancelInTrx(
+        trx,
+        organizationId,
+        row,
+        input.reason,
+        principal,
+        correlationId,
+      );
+      return redactSessionBooking(
+        await this.scope.viewer(
+          principal,
+          EnrollmentActions.bookSession,
+          organizationId,
+          facilityId,
+        ),
+        toSessionBooking(updated),
+      );
+    });
+  }
+
+  /**
+   * Cancels a pending or confirmed booking: its seat goes back to the session pools, a makeup
+   * redemption is reversed while the session has not started (a new history row, never an
+   * update), and a linked trial is canceled with it.
+   *
+   * R2-JOURNEYS-01 (SPK-AT-009, SPK-COND-001/002, SPK-YOUTH-004): `cause` `session_canceled` is
+   * the facility's cancellation of the session. The customer notice window does not apply to it:
+   * a makeup redemption is reversed whatever the start time, and a package credit or membership
+   * session that does not come back automatically (no approved policy returns it at this instant,
+   * POL-007 staff-initiated cancellation, POL-041) raises one owned exception per booking for the
+   * program manager (`enrollment.canceled_session_entitlement_pending`) instead of being lost
+   * silently. R2-LIFECYCLES-06: nothing is returned to an entitlement that has ended (a revoked or
+   * expired package or makeup, one past its expiry while still exhausted, an ended membership;
+   * §4.6 terminal states are final); on the facility's cancellation that loss raises the same
+   * exception. The booking records who ended it (`cancel_cause`, migration 0519): the session
+   * audience and the family's own cancellation notice follow it.
+   */
+  async cancelInTrx(
+    trx: Trx,
+    organizationId: string,
+    row: SessionBookingRow,
+    reason: string,
+    actor: Principal,
+    correlationId: string | null,
+    cause: BookingCancellationCause = 'customer',
+  ): Promise<SessionBookingRow> {
+    const now = this.clock.now();
+    const status = SessionBookingMachine.next(row.status, 'cancel');
+    const freed = await this.capacity.releaseAllocationsFor(
+      trx,
+      organizationId,
+      { sessionBookingId: row.id },
+      reason,
+    );
+    for (const hold of await this.capacity.holdsOfOwner(
+      trx,
+      organizationId,
+      'session_booking',
+      row.id,
+    )) {
+      if (hold.status === 'active') {
+        await this.capacity.releaseHoldRow(trx, organizationId, hold.id, reason, correlationId);
+      }
+    }
+    // ENR-11, ENR-12: what happens to the package credit or membership session (POL-007, POL-039).
+    let disposition: CreditDisposition | null = null;
+    if (row.entitlement_basis === 'package') {
+      disposition = await this.packages.onBookingCanceled(
+        trx,
+        organizationId,
+        row,
+        actor,
+        reason,
+        correlationId,
+        cause,
+      );
+    } else if (row.entitlement_basis === 'membership') {
+      disposition = await this.memberships.onBookingCanceled(trx, organizationId, row);
+    }
+    await trx
+      .updateTable('session_bookings')
+      .set({
+        status,
+        canceled_at: now,
+        cancel_reason: reason,
+        cancel_cause: cause,
+        credit_disposition: disposition,
+        revision: row.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', row.id)
+      .where('revision', '=', row.revision)
+      .execute();
+    const makeupReversed = row.makeup_entitlement_id
+      ? await this.reverseMakeupRedemption(trx, organizationId, row, actor, now, cause)
+      : null;
+    await trx
+      .updateTable('trial_participations')
+      .set((eb) => ({
+        status: 'canceled',
+        canceled_at: now,
+        cancel_reason: reason,
+        revision: eb('revision', '+', 1),
+      }))
+      .where('organization_id', '=', organizationId)
+      .where('session_booking_id', '=', row.id)
+      .where('status', '=', 'scheduled')
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: 'enrollment.cancel_session_booking',
+      targetType: 'session_booking',
+      targetId: row.id,
+      beforeRevision: row.revision,
+      afterRevision: row.revision + 1,
+      reason,
+      correlationId,
+      details: {
+        previousStatus: row.status,
+        kind: row.kind,
+        entitlementBasis: row.entitlement_basis,
+        creditDisposition: disposition,
+        makeupReversed,
+        cause,
+      },
+    });
+    const kept =
+      (row.entitlement_basis === 'package' || row.entitlement_basis === 'membership') &&
+      disposition !== null &&
+      disposition !== 'returned';
+    if (cause === 'session_canceled' && (kept || makeupReversed === false)) {
+      await this.raiseCanceledSessionEntitlement(
+        trx,
+        organizationId,
+        row,
+        disposition,
+        makeupReversed,
+      );
+    }
+    await this.outbox.enqueue(trx, EnrollmentEvents.sessionBookingChanged, {
+      organizationId,
+      aggregateType: 'session_booking',
+      aggregateId: row.id,
+      correlationId,
+      payload: {
+        organizationId,
+        bookingId: row.id,
+        sessionId: row.session_id,
+        participantPersonId: row.participant_person_id,
+        status,
+        reason,
+      },
+    });
+    await this.capacity.enqueueCapacityReleased(
+      trx,
+      organizationId,
+      freed,
+      'session_booking_canceled',
+      correlationId,
+    );
+    const updated = await this.load(trx, organizationId, row.id);
+    if (!updated) throw errors.internal('session booking vanished');
+    return updated;
+  }
+
+  /**
+   * Reverses the makeup redemption of a canceled makeup booking (SPK-YOUTH-004: a new history row,
+   * never an update). A customer cancellation reverses it only before the session starts; the
+   * facility's cancellation of the session reverses it whatever the time (R2-JOURNEYS-01). An
+   * entitlement that has ended (expired or revoked, final, or past its expiry while still
+   * `exhausted`: the expiry job only expires active makeups) gets nothing back (R2-LIFECYCLES-06;
+   * the redemption trigger refuses it too, migrations 0516 and 0518). Answers whether a redemption
+   * was reversed, or null when none was due (no redemption, or a customer cancellation after
+   * start).
+   */
+  private async reverseMakeupRedemption(
+    trx: Trx,
+    organizationId: string,
+    row: SessionBookingRow,
+    actor: Principal,
+    now: Date,
+    cause: BookingCancellationCause,
+  ): Promise<boolean | null> {
+    if (!row.makeup_entitlement_id) return null;
+    if (cause !== 'session_canceled' && new Date(row.scheduled_start).getTime() <= now.getTime()) {
+      return null;
+    }
+    const redemption = await trx
+      .selectFrom('makeup_redemptions')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('session_booking_id', '=', row.id)
+      .where('kind', '=', 'redeem')
+      .executeTakeFirst();
+    if (!redemption) return null;
+    const entitlement = await trx
+      .selectFrom('makeup_entitlements')
+      .select(['status', 'expires_at'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', row.makeup_entitlement_id)
+      .forUpdate()
+      .executeTakeFirst();
+    if (
+      !entitlement ||
+      entitlementEnded(
+        entitlement.status !== 'active' && entitlement.status !== 'exhausted',
+        entitlement.expires_at,
+        now,
+      )
+    ) {
+      return false;
+    }
+    const inserted = await trx
+      .insertInto('makeup_redemptions')
+      .values({
+        id: newId(),
+        organization_id: organizationId,
+        makeup_entitlement_id: row.makeup_entitlement_id,
+        session_booking_id: row.id,
+        participant_person_id: row.participant_person_id,
+        kind: 'reversal',
+        reverses_redemption_id: redemption.id,
+        actor: json(actorSnapshot(actor)),
+        redeemed_at: now,
+      })
+      .onConflict((oc) => oc.doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    return !!inserted;
+  }
+
+  /**
+   * R2-JOURNEYS-01 (§4.12: no required follow-up is lost; POL-007, POL-041, DEC-003 pending): a
+   * booking the facility's session cancellation ended without its package credit, membership
+   * session or makeup coming back. One exception per booking (deduplicated, so a replay raises
+   * nothing new) names what was kept and, where it can still be returned, how
+   * (`packageRedemptionId` for `POST /v1/package-redemptions/{id}/reverse`). When the package,
+   * membership or makeup has ended (`retained_entitlement_ended`, or a makeup not reversed) nothing
+   * can be returned to it: `entitlementEnded` is true and no redemption is named, so staff decide
+   * another remedy (POL-007, DEC-003).
+   */
+  private async raiseCanceledSessionEntitlement(
+    trx: Trx,
+    organizationId: string,
+    row: SessionBookingRow,
+    disposition: CreditDisposition | null,
+    makeupReversed: boolean | null,
+  ): Promise<void> {
+    const ended = disposition === 'retained_entitlement_ended' || makeupReversed === false;
+    const redemption =
+      row.package_entitlement_id && !ended
+        ? await trx
+            .selectFrom('package_redemptions')
+            .select('id')
+            .where('organization_id', '=', organizationId)
+            .where('session_booking_id', '=', row.id)
+            .where('kind', '=', 'redeem')
+            .executeTakeFirst()
+        : undefined;
+    await this.exceptions.raise(trx, {
+      organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+      category: 'enrollment.canceled_session_entitlement_pending',
+      severity: 'warning',
+      title: 'A canceled session kept a package credit, membership session or makeup',
+      affectedType: 'session_booking',
+      affectedId: row.id,
+      ownerQueue: 'program_manager',
+      dedupeKey: `canceled_session_entitlement:${row.id}`,
+      details: {
+        sessionBookingId: row.id,
+        sessionId: row.session_id,
+        offeringId: row.offering_id,
+        participantPersonId: row.participant_person_id,
+        entitlementBasis: row.entitlement_basis,
+        packageEntitlementId: row.package_entitlement_id,
+        packageRedemptionId: redemption?.id ?? null,
+        membershipEnrollmentId: row.membership_enrollment_id,
+        makeupEntitlementId: row.makeup_entitlement_id,
+        creditDisposition: disposition,
+        makeupReversed,
+        entitlementEnded: ended,
+        pendingDecisions: ['POL-007', 'POL-041', 'DEC-003'],
+      },
+    });
+  }
+
+  /**
+   * R2-JOURNEYS-01 (SPK-AT-009 consistent publication, SPK-COND-001/002, SPK-YOUTH-004, §4.12):
+   * the facility canceled the session (catalog.session_canceled, directly or through a closure).
+   * Its live bookings are canceled with that cause (`cancelInTrx`): their seats leave the pools,
+   * linked trials end, and what each paid with is returned or raised for a decision. Runs in the
+   * outbox handler's transaction after the session's pools were closed (`CapacityService.
+   * closeSessionPools`); idempotent under replay (only live bookings move). Bookings are locked in
+   * id order before any pool, as a customer cancellation locks its booking before the pools.
+   */
+  async cancelForCanceledSession(
+    trx: Trx,
+    organizationId: string,
+    sessionId: string,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<number> {
+    const live = await this.lockLiveOfSession(trx, organizationId, sessionId);
+    const actor = enrollmentSystem(organizationId, 'enrollment.follow_session_canceled');
+    for (const row of live) {
+      await this.cancelInTrx(
+        trx,
+        organizationId,
+        row,
+        reason,
+        actor,
+        correlationId,
+        'session_canceled',
+      );
+    }
+    return live.length;
+  }
+
+  /** The session's pending and confirmed bookings, locked in id order. */
+  async lockLiveOfSession(
+    trx: Trx,
+    organizationId: string,
+    sessionId: string,
+  ): Promise<SessionBookingRow[]> {
+    return trx
+      .selectFrom('session_bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('session_id', '=', sessionId)
+      .where('status', 'in', ['pending', 'confirmed'])
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+  }
+
+  /** Hold-expiry follow-up: a pending (unpaid) booking whose seat expired becomes `expired`. */
+  async onHoldExpired(
+    trx: Trx,
+    organizationId: string,
+    hold: HoldRow,
+    actor: Principal,
+    correlationId: string | null,
+  ): Promise<void> {
+    if (!hold.owner_id) return;
+    const row = await this.load(trx, organizationId, hold.owner_id, true);
+    if (!row || row.status !== 'pending') return;
+    const now = this.clock.now();
+    for (const other of await this.capacity.holdsOfOwner(
+      trx,
+      organizationId,
+      'session_booking',
+      row.id,
+    )) {
+      if (other.status === 'active') {
+        await this.capacity.releaseHoldRow(
+          trx,
+          organizationId,
+          other.id,
+          'hold_expired',
+          correlationId,
+        );
+      }
+    }
+    await trx
+      .updateTable('session_bookings')
+      .set({
+        status: SessionBookingMachine.next(row.status, 'expire'),
+        expired_at: now,
+        revision: row.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', row.id)
+      .where('revision', '=', row.revision)
+      .execute();
+    await trx
+      .updateTable('trial_participations')
+      .set((eb) => ({
+        status: 'canceled',
+        canceled_at: now,
+        cancel_reason: 'hold_expired',
+        revision: eb('revision', '+', 1),
+      }))
+      .where('organization_id', '=', organizationId)
+      .where('session_booking_id', '=', row.id)
+      .where('status', '=', 'scheduled')
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: 'enrollment.expire_session_booking',
+      targetType: 'session_booking',
+      targetId: row.id,
+      beforeRevision: row.revision,
+      afterRevision: row.revision + 1,
+      reason: 'hold_expired',
+      correlationId,
+      details: { holdId: hold.id },
+    });
+    await this.outbox.enqueue(trx, EnrollmentEvents.sessionBookingChanged, {
+      organizationId,
+      aggregateType: 'session_booking',
+      aggregateId: row.id,
+      correlationId,
+      payload: {
+        organizationId,
+        bookingId: row.id,
+        sessionId: row.session_id,
+        participantPersonId: row.participant_person_id,
+        status: 'expired',
+        reason: 'hold_expired',
+      },
+    });
+  }
+}
