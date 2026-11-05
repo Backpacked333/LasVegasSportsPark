@@ -198,6 +198,11 @@ export interface OperationalExceptionsTable {
   facility_id: string | null;
   category: string;
   severity: ExceptionSeverity;
+  /**
+   * Migration 0017 (R4-CARRY-02): derived by the database from `severity` (critical 0, high 1,
+   * warning 2, info 3) and never written; the open-exception order and index use it.
+   */
+  severity_rank: ColumnType<number, never, never>;
   title: string;
   affected_type: string | null;
   affected_id: string | null;
