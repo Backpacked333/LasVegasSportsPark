@@ -299,4 +299,54 @@ describe('registration quotes and checkout (§4.11, SPK-PAY-001/002/007)', () =>
       .executeTakeFirstOrThrow();
     expect(tender).toMatchObject({ recorded_by_person_id: desk.personId, status: 'recorded' });
   });
+
+  it('R4-AUTHZ-TARGETS-01 / SPK-IAM-001: a co-guardian who holds a staff role without finance actions is the customer: no quote, checkout or retry for another payer', async () => {
+    const setup = await offering(t, { basePriceMinor: 4_500 });
+    // A coach who shares a child (pay included) with the basket's payer.
+    const coach = await staff(t, ['coach']);
+    const shared = await child(t, [parent, coach]);
+    const { basketId } = await basketFor(t, parent, [setup], { participants: [shared] });
+    const quoteByCoach = await post(t, '/v1/registration-quotes', coach.header, { basketId });
+    expect(quoteByCoach.status).toBe(404);
+    expect(quoteByCoach.body.code).toBe('NOT_FOUND');
+    const quote = await quoteFor(t, parent, basketId);
+    const checkoutByCoach = await post(t, '/v1/registration-checkouts', coach.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+    });
+    expect(checkoutByCoach.status).toBe(404);
+    expect(
+      await t.db
+        .selectFrom('payment_attempts')
+        .select('id')
+        .where('organization_id', '=', t.organizationId)
+        .where('payer_person_id', '=', parent.personId)
+        .where('amount_minor', '=', 4_500)
+        .execute(),
+    ).toHaveLength(0);
+    // The payer's declined checkout cannot be retried by the coach with the coach's card.
+    const declined = await post(t, '/v1/registration-checkouts', parent.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.decline },
+    });
+    expect(declined.status).toBe(201);
+    expect(declined.body.status).toBe('awaiting_payment');
+    const retryByCoach = await post(
+      t,
+      `/v1/registration-checkouts/${declined.body.id as string}/payments`,
+      coach.header,
+      { paymentMethodToken: FakePaymentTokens.succeed },
+    );
+    expect(retryByCoach.status).toBe(404);
+    // Desk staff still quote and check out for the family through their role.
+    const desk = await staff(t, ['front_desk']);
+    const retryByDesk = await post(
+      t,
+      `/v1/registration-checkouts/${declined.body.id as string}/payments`,
+      desk.header,
+      { paymentMethodToken: FakePaymentTokens.succeed },
+    );
+    expect(retryByDesk.status).toBe(201);
+    expect(retryByDesk.body.status).toBe('completed');
+  });
 });

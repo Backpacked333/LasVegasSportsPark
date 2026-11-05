@@ -476,6 +476,109 @@ describe('obligations and team billing (SPK-PAY-004/005, SPK-AT-022)', () => {
     const after = await t.http.get(`/v1/obligations/${obligation.id}`).set(captain.header);
     expect(after.body.totals).toMatchObject({ allocatedMinor: 10_000, remainingMinor: 60_000 });
   });
+
+  it("R4-AUTHZ-TARGETS-01 / SPK-IAM-001 / §4.10: a credit owner who holds a staff role without finance.redeem_credit cannot pay into another household's debt nor learn its balance", async () => {
+    const stranger = await adult(t);
+    const obligationId = await createObligationFixture(t, {
+      debtorPersonId: stranger.personId,
+      amountMinor: 9_000,
+    });
+    for (const roles of [['coach'], ['official'], ['scheduler']] as const) {
+      const holder = await staff(t, [...roles]);
+      const credit = await createCreditFixture(t, {
+        ownerPersonId: holder.personId,
+        amountMinor: 5_000,
+      });
+      for (const amountMinor of [99_000, 1_000]) {
+        const probe = await post(t, `/v1/credits/${credit}/redeem`, holder.header, {
+          obligationId,
+          amountMinor,
+        });
+        expect(probe.status).toBe(404);
+        expect(probe.body.code).toBe('NOT_FOUND');
+        expect(probe.body.details).toBeUndefined();
+      }
+    }
+    const untouched = await t.db
+      .selectFrom('obligations')
+      .select('allocated_minor')
+      .where('id', '=', obligationId)
+      .executeTakeFirstOrThrow();
+    expect(untouched.allocated_minor).toBe(0);
+    // Desk staff apply a credit to any obligation through their role.
+    const desk = await staff(t, ['front_desk']);
+    const deskCredit = await createCreditFixture(t, {
+      ownerPersonId: stranger.personId,
+      amountMinor: 1_000,
+    });
+    const applied = await post(t, `/v1/credits/${deskCredit}/redeem`, desk.header, {
+      obligationId,
+      amountMinor: 1_000,
+    });
+    expect(applied.status).toBe(201);
+  });
+
+  it('R4-AUTHZ-TARGETS-05 / SPK-PAY-004 / SPK-IAM-001: a responsible team payer who also holds a staff role reads the debt they pay', async () => {
+    for (const roles of [['coach'], ['official']] as const) {
+      const { teamEntryId } = await team(0);
+      const treasurer = await staff(t, [...roles]);
+      const obligation = await teamObligation(teamEntryId, 40_000, 'single_team_payer', {
+        responsiblePayerPersonId: treasurer.personId,
+        source: { kind: 'team_fee' },
+      });
+      const read = await t.http.get(`/v1/obligations/${obligation.id}`).set(treasurer.header);
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({
+        id: obligation.id,
+        responsiblePayerPersonId: treasurer.personId,
+        totals: { remainingMinor: 40_000 },
+      });
+      const paid = await post(t, `/v1/obligations/${obligation.id}/payments`, treasurer.header, {
+        paymentMethodToken: FakePaymentTokens.processing,
+        amountMinor: 1_000,
+      });
+      expect(paid.status).toBe(201);
+      const again = await t.http.get(`/v1/obligations/${obligation.id}`).set(treasurer.header);
+      expect(again.status).toBe(200);
+      expect(again.body.liveAttempt).toMatchObject({ amountMinor: 1_000 });
+    }
+  });
+
+  it("R4-AUTHZ-TARGETS-01 / SPK-PAY-004: a captain who also holds a staff role without finance reads never sees a player's live contribution payment", async () => {
+    for (const roles of [[], ['coach']] as const) {
+      const captain = roles.length === 0 ? await adult(t) : await staff(t, [...roles]);
+      const entry = await createTeamEntryFixture(t, {
+        seasonId,
+        captainPersonId: captain.personId,
+      });
+      const player = await adult(t);
+      await addRosterMemberFixture(t, {
+        teamEntryId: entry.teamEntryId,
+        personId: player.personId,
+      });
+      const obligation = await teamObligation(entry.teamEntryId, 40_000);
+      const request = await post(
+        t,
+        `/v1/obligations/${obligation.id}/contribution-requests`,
+        captain.header,
+        { requestedPersonId: player.personId, amountMinor: 10_000 },
+      );
+      expect(request.status).toBe(201);
+      const paying = await post(
+        t,
+        `/v1/contribution-requests/${request.body.id as string}/pay`,
+        player.header,
+        { paymentMethodToken: FakePaymentTokens.processing },
+      );
+      expect(paying.status).toBe(201);
+      const byCaptain = await t.http.get(`/v1/obligations/${obligation.id}`).set(captain.header);
+      expect(byCaptain.status).toBe(200);
+      expect(byCaptain.body.contributions).toHaveLength(1);
+      expect(byCaptain.body.liveAttempt).toBeNull();
+      const byFinance = await t.http.get(`/v1/obligations/${obligation.id}`).set(finance.header);
+      expect(byFinance.body.liveAttempt).toMatchObject({ amountMinor: 10_000 });
+    }
+  });
   it("R2-JOURNEYS-05 / SPK-COMP-004 / SPK-CAP-002: a team obligation is the entry's financial status reference, outstanding until its contributions settle it, then clear", async () => {
     const { captain, teamEntryId, roster } = await team(2);
     const workspace = async () => {

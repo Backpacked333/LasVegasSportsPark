@@ -32,9 +32,9 @@ import { BASKET_PORT, type BasketPort } from '../../enrollment';
 import { FinanceActions } from '../finance.actions';
 import { FinanceEvents } from '../finance.events';
 import {
-  isStaffLike,
   minutesFrom,
   organizationOf,
+  staffAuthority,
   toQuote,
   type QuoteRow,
   type Reader,
@@ -168,7 +168,19 @@ export class QuotesService {
         { details: { permission: 'pay', participantPersonIds: lacking } },
       );
     }
-    if (!isStaffLike(principal) && principal.personId !== payerPersonId) {
+    // R4-AUTHZ-TARGETS-01 (§2.1, SPK-IAM-001/003): desk staff quote for a family through their
+    // staff role (the kernel's decision on the action with no subjects); a staff member who holds
+    // no such role (a coach, official or scheduler with a child of their own) is the customer here.
+    const deskStaff = await staffAuthority(
+      this.authorization,
+      principal,
+      FinanceActions.createQuote,
+      {
+        type: 'basket',
+        organizationId,
+      },
+    );
+    if (!deskStaff && principal.personId !== payerPersonId) {
       // A quote is the payer's; another adult with authority over a shared child learns nothing
       // (§4.10). The owner, who named the payer, is told that only the payer may request it.
       if (ownsBasket) {

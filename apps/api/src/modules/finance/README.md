@@ -143,6 +143,19 @@ are authorized before the record is read, so a caller without the role gets `ACC
 whether or not the record exists. A captain sees a team obligation's totals and each requested
 contribution's amount and status, never a player's payment or method.
 
+Staff powers come from the kernel, never from the principal's kind (R4-AUTHZ-TARGETS-01, §2.1,
+SPK-IAM-001/003): `staffAuthority` (`finance.shared.ts`) asks the kernel for the action on a target
+with no subject persons, so it passes only for a staff role that holds the action (or the
+system actor). Quoting or checking out another payer's basket (`finance.create_quote`,
+`finance.checkout`), redeeming a credit into any obligation (`finance.redeem_credit`), the
+organization-wide obligation list, seeing every live payment on an obligation
+(`finance.read_obligation`) and the attempt named in a `PAYMENT_OUTCOME_UNKNOWN` refusal
+(`finance.read_checkout`) all go through it. A coach, official, scheduler or facilities operator
+acting for their own family is a customer there: a co-guardian with that role gets `NOT_FOUND` for
+another payer's quote or checkout, as a customer co-guardian does
+(`__tests__/checkout.spec.ts`, `__tests__/obligations.spec.ts`). A responsible payer reads the
+obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
+
 ## Ports
 
 - `PAYMENT_PROVIDER_PORT` (`PaymentProviderPort`, `finance.ports.ts`): `createPayment`,

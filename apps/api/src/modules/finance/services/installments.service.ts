@@ -212,7 +212,9 @@ export class InstallmentsService {
       });
       if (live) {
         if (live.purpose !== 'installment' || live.status === 'unknown') {
-          throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(actor, live));
+          throw errors.paymentOutcomeUnknown(
+            await outcomeUnknownDetails(this.authorization, actor, live),
+          );
         }
         return { attempt: live, planId: plan.id, held: false };
       }

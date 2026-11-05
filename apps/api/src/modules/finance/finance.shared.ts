@@ -47,7 +47,8 @@ import type {
   SettlementReconciliationsTable,
 } from '@sportspark/db';
 import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
-import type { RequestWithContext, Trx } from '../../kernel';
+import type { ActionDefinition, AuthorizationService, RequestWithContext, Trx } from '../../kernel';
+import { FinanceActions } from './finance.actions';
 
 export type Reader = Db | Trx;
 export type QuoteRow = Selectable<QuotesTable>;
@@ -76,8 +77,30 @@ export function organizationOf(principal: Principal): string {
   return principal.organizationId;
 }
 
-export function isStaffLike(principal: Principal): boolean {
-  return principal.kind === 'staff' || principal.kind === 'system';
+/**
+ * R4-AUTHZ-TARGETS-01 (§2.1, SPK-IAM-001/003, §4.14): whether the principal holds `action` through
+ * a staff role (or is the organization's own system actor). The kernel decides it on a target with
+ * no subject persons and no team entry, so only a staff role that holds the action passes: a
+ * person's own self, guardian or captain authority never counts, and neither does a staff role
+ * that does not hold the action (a coach, official, scheduler or facilities operator acting for
+ * their own family is a customer here). The finance counterpart of competition's
+ * `staffAuthority`; it replaces the principal-kind shortcut, since identity gives kind `staff` to
+ * anyone who holds any staff role.
+ */
+export async function staffAuthority(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  action: ActionDefinition,
+  target: { type: string; organizationId: string; facilityId?: string | null },
+): Promise<boolean> {
+  if (principal.kind === 'system') return principal.organizationId === target.organizationId;
+  if (principal.kind !== 'staff') return false;
+  const decision = await authorization.decide(principal, action, {
+    type: target.type,
+    organizationId: target.organizationId,
+    facilityId: target.facilityId ?? null,
+  });
+  return decision.allowed;
 }
 
 /** The system actor finance uses for follow-up work (timers, webhooks, reconciliation). */
@@ -448,18 +471,26 @@ export function toLiveAttempt(row: PaymentAttemptRow): LiveAttempt {
 }
 
 /**
- * The details of a PAYMENT_OUTCOME_UNKNOWN refusal (FIN-01): the attempt's payer and staff learn
- * which attempt is in the way (`attemptId`, with the earlier `paymentAttemptId` kept for
- * existing clients) and its purpose; anyone else learns only that a payment is on its way, never
- * another payer's attempt (§4.10).
+ * The details of a PAYMENT_OUTCOME_UNKNOWN refusal (FIN-01): the attempt's payer and the staff who
+ * read payments (`finance.read_checkout` through a staff role, R4-AUTHZ-TARGETS-01) learn which
+ * attempt is in the way (`attemptId`, with the earlier `paymentAttemptId` kept for existing
+ * clients) and its purpose; anyone else, a staff member without that role included, learns only
+ * that a payment is on its way, never another payer's attempt (§4.10).
  */
-export function outcomeUnknownDetails(
+export async function outcomeUnknownDetails(
+  authorization: Pick<AuthorizationService, 'decide'>,
   principal: Principal,
-  attempt: Pick<PaymentAttemptRow, 'id' | 'purpose' | 'status' | 'payer_person_id'>,
-): Record<string, unknown> {
+  attempt: Pick<
+    PaymentAttemptRow,
+    'id' | 'organization_id' | 'purpose' | 'status' | 'payer_person_id'
+  >,
+): Promise<Record<string, unknown>> {
   const visible =
-    isStaffLike(principal) ||
-    (principal.personId !== null && principal.personId === attempt.payer_person_id);
+    (principal.personId !== null && principal.personId === attempt.payer_person_id) ||
+    (await staffAuthority(authorization, principal, FinanceActions.readCheckout, {
+      type: 'payment_attempt',
+      organizationId: attempt.organization_id,
+    }));
   return visible
     ? {
         attemptId: attempt.id,

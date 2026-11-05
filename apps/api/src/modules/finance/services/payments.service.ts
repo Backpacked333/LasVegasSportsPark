@@ -235,7 +235,7 @@ export class PaymentsService {
       throw errors.paymentOutcomeUnknown({
         code: 'PAYMENT_IN_PROGRESS',
         message: 'A payment for this is already in progress or awaiting reconciliation.',
-        ...outcomeUnknownDetails(input.actor, live),
+        ...(await outcomeUnknownDetails(this.authorization, input.actor, live)),
       });
     }
     const id = newId();

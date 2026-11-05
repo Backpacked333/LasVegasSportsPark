@@ -381,7 +381,11 @@ export class PosSalesService {
           .where('status', 'in', [...LIVE_ATTEMPT_STATES])
           .forUpdate()
           .executeTakeFirst();
-        if (live) throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(principal, live));
+        if (live) {
+          throw errors.paymentOutcomeUnknown(
+            await outcomeUnknownDetails(this.authorization, principal, live),
+          );
+        }
       }
       const sale = await this.finalizer.lockSale(trx, organizationId, saleId);
       await this.requireOperator(principal, sale);

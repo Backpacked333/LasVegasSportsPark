@@ -1017,7 +1017,9 @@ export class CheckoutFinalizer {
       // lossy failover can roll back while the provider keeps the charge, so only provider
       // evidence resolves it (the stranded-attempt sweep in PaymentsService.reconcileStale looks
       // it up by its idempotency key and cancels it on "no record"), never an assumption here.
-      throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(actor, pending));
+      throw errors.paymentOutcomeUnknown(
+        await outcomeUnknownDetails(this.authorization, actor, pending),
+      );
     }
     const order = await trx
       .selectFrom('orders')
