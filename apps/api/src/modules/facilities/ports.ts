@@ -34,14 +34,20 @@ export interface MaintenanceReportPort {
 }
 export const MAINTENANCE_REPORT_PORT = Symbol('MAINTENANCE_REPORT_PORT');
 
-/** Used by reporting and the Today workspace: which spaces are in service right now and why not (SPK-FAC-003). */
+/**
+ * Used by reporting, the Today workspace and enrollment bookings: which spaces are in service right
+ * now and why not (SPK-FAC-003).
+ */
 export interface OperatingStatusPort {
   operatingStatus(
     principal: Principal,
     facilityId: string,
     at?: Date | string,
   ): Promise<FacilityOperatingStatus>;
-  /** Active restrictions overlapping an interval for a resource (reporting, communications). */
+  /**
+   * Active restrictions overlapping an interval for a resource (reporting, communications,
+   * enrollment booking equipment).
+   */
   activeRestrictions(
     principal: Principal,
     facilityId: string,

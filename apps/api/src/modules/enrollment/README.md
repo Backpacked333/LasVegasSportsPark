@@ -639,13 +639,11 @@ mirrored by a database transition guard.
   for the same cause (R4-MODULE-BOUNDARIES-02 rework, **Verified** `bookings.spec.ts` "SPK-COND-003
   / SPK-FAC-003 / SPK-FAC-004 (R4-MODULE-BOUNDARIES-02): the lifecycle job flags …"). What the
   scheduler then does (arranging the equipment, or a cancellation with its consequence) is
-  their call; nothing is cancelled automatically. **Pending** (a facilities change, not made
-  here): an asset's `restricted` status cannot say whether a person or a restriction set it; while
-  a restriction names the asset its window decides, so an asset put in `restricted` by hand and
-  also named by a restriction is bookable outside that window. Facilities refusing a direct
-  `restricted` on asset create and update (a restriction is the only way in; out of service is the
-  manual state) closes this; until then facilities' own release returns such an asset to service
-  the same way.
+  their call; nothing is cancelled automatically. An asset's `restricted` status always has a
+  restriction behind it: facilities refuses `restricted` on asset create and update and marks a
+  hand-unusable asset `out_of_service`, which is never bookable and which a release leaves as it
+  is (migration 0908 moved earlier hand-set ones; **Verified**: facilities
+  `asset-directory.spec.ts` "SPK-FAC-004 / SPK-COND-003 (R4-MODULE-BOUNDARIES-02) …").
   Instant mode reserves the event or weekly series (every conflict first; a taken slot writes
   nothing), declares must-be-accepted staffing on every event, and opens the basket line with a
   server-owned hold on a one-place pool for the booking, all in one unit of work. Request mode

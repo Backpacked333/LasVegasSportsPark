@@ -1,5 +1,6 @@
 import { newId, type Principal } from '@sportspark/contracts';
-import { seedOrganization } from '@sportspark/db';
+import { loadMigrationFiles, seedOrganization } from '@sportspark/db';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
@@ -295,10 +296,10 @@ describe('asset directory port (FAC-02, IF-33, SPK-COND-003)', () => {
         },
       });
     }
-    // out of service and back is not a way around it either; `restricted` is accepted
-    expect((await patchAsset(admin, 'out_of_service')).status).toBe(200);
-    expect((await patchAsset(admin, 'in_service')).status).toBe(422);
-    expect((await patchAsset(admin, 'restricted')).body.status).toBe('restricted');
+    // `restricted` is never set by an edit: only a restriction sets it (R4-MODULE-BOUNDARIES-02)
+    const manual = await patchAsset(admin, 'restricted');
+    expect(manual.status, JSON.stringify(manual.body)).toBe(400);
+    expect(manual.body.code).toBe('VALIDATION_FAILED');
     // the authorized release returns it; the proposed restriction does not keep it restricted
     const released = await restrictions.release(operator, restriction.id, { reason: 'fixed' });
     expect(released.status).toBe('released');
@@ -310,5 +311,109 @@ describe('asset directory port (FAC-02, IF-33, SPK-COND-003)', () => {
     expect((await t.http.get(`/v1/assets/${goal}`).set(operatorAuth)).body.status).toBe(
       'restricted',
     );
+  });
+
+  it('SPK-FAC-004 / SPK-COND-003 (R4-MODULE-BOUNDARIES-02): `restricted` is set only by a restriction; a person marks an asset out of service, which a release keeps, and 0908 moves hand-set restricted assets there', async () => {
+    const operatorAuth = await t.authHeader(operator);
+    const send = (method: 'post' | 'patch', path: string, body: object) =>
+      t.http[method](path).set(operatorAuth).set('Idempotency-Key', `key-${newId()}`).send(body);
+    // creating an asset `restricted` is refused, like editing one to it
+    const created = await send('post', '/v1/assets', {
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      kind: 'goal',
+      name: 'Goal G',
+      status: 'restricted',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(400);
+    expect(created.body.code).toBe('VALIDATION_FAILED');
+    const goal = await seedAsset(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      kind: 'goal',
+      name: 'Goal H',
+    });
+    const restriction = await restrictions.create(operator, {
+      facilityId: facility,
+      resourceId: pitch.northHalfId,
+      assetId: goal,
+      kind: 'closed',
+      interval: { start: at('2026-11-26', '08:00'), end: at('2026-11-26', '12:00') },
+      reason: 'Net hooks',
+      approve: true,
+    });
+    const current = async () => (await t.http.get(`/v1/assets/${goal}`).set(operatorAuth)).body;
+    const patchStatus = async (status: string) =>
+      send('patch', `/v1/assets/${goal}`, { status, expectedRevision: (await current()).revision });
+    // a person found it broken as well: out of service, and not back to service by an edit
+    expect((await patchStatus('out_of_service')).status).toBe(200);
+    expect((await patchStatus('in_service')).status).toBe(422);
+    expect((await patchStatus('restricted')).status).toBe(400);
+    // the release lifts the restriction's closure, not the person's out of service
+    await restrictions.release(operator, restriction.id, { reason: 'hooks fixed' });
+    expect((await current()).status).toBe('out_of_service');
+    expect((await patchStatus('in_service')).status).toBe(200);
+
+    // Migration 0908 (re-run here: it is idempotent): an asset set `restricted` by hand before the
+    // contract refused it, with no approved or active restriction behind it, is out of service.
+    const handSet = await seedAsset(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      kind: 'goal',
+      name: 'Goal I',
+      status: 'restricted',
+    });
+    const backed = await seedAsset(t.db, {
+      organizationId: org,
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      kind: 'goal',
+      name: 'Goal J',
+    });
+    await restrictions.create(operator, {
+      facilityId: facility,
+      resourceId: pitch.southHalfId,
+      assetId: backed,
+      kind: 'closed',
+      interval: { start: at('2026-11-27', '08:00'), end: at('2026-11-27', '12:00') },
+      reason: 'Frame check',
+      approve: true,
+    });
+    const before = await t.db
+      .selectFrom('assets')
+      .select(['id', 'status', 'revision'])
+      .where('id', 'in', [handSet, backed])
+      .execute();
+    const file = (await loadMigrationFiles()).find(
+      (f) => f.fileName === '0908_facilities_manual_restricted_assets.sql',
+    )!;
+    await sql.raw(file.sql).execute(t.db);
+    const after = await t.db
+      .selectFrom('assets')
+      .select(['id', 'status', 'revision'])
+      .where('id', 'in', [handSet, backed])
+      .execute();
+    const of = (rows: typeof after, id: string) => rows.find((r) => r.id === id)!;
+    expect(of(after, handSet)).toMatchObject({
+      status: 'out_of_service',
+      revision: of(before, handSet).revision + 1,
+    });
+    expect(of(after, backed)).toEqual(of(before, backed));
+    expect(of(after, backed).status).toBe('restricted');
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'before_revision', 'after_revision', 'details'])
+      .where('target_type', '=', 'asset')
+      .where('target_id', '=', handSet)
+      .execute();
+    expect(audit).toEqual([
+      expect.objectContaining({
+        action: 'facilities.asset_updated',
+        after_revision: of(after, handSet).revision,
+        details: expect.objectContaining({ status: 'out_of_service' }),
+      }),
+    ]);
   });
 });

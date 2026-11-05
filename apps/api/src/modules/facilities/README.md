@@ -282,16 +282,23 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
   with `ELIGIBILITY_FAILED`, `details.code = restriction_release_required`: the asset returns to
   service only through the restriction's release, which needs `facilities.release_to_service` and
   the inspection gate (a system administrator holds `manage_asset` only); it may be set
-  `restricted`, `out_of_service` or retired meanwhile. **Verified**: `asset-directory.spec.ts`
+  `out_of_service` or retired meanwhile. **Verified**: `asset-directory.spec.ts`
   "SPK-FAC-004 (R4-OPS-MODULES-05): a restricted asset returns to service only through its
-  restriction release, never through PATCH /v1/assets". Retiring an asset with open tasks is
-  refused.
+  restriction release, never through PATCH /v1/assets". `restricted` is set only by a
+  restriction: asset create and update refuse it (`VALIDATION_FAILED`), so the status always has a
+  restriction behind it and bookings decide by that restriction's window; a person marks an
+  unusable asset `out_of_service`, which a release leaves as it is. Migration 0908 moved assets set
+  `restricted` by hand (no approved or active restriction naming them) to `out_of_service`, with a
+  revision bump and an audit record each (R4-MODULE-BOUNDARIES-02; **Verified**:
+  `asset-directory.spec.ts` "SPK-FAC-004 / SPK-COND-003 (R4-MODULE-BOUNDARIES-02): `restricted` is
+  set only by a restriction …"). Retiring an asset with open tasks is refused.
 
 ## Ports (`ports.ts`, provided by `FacilitiesModule`)
 
 - `MAINTENANCE_REPORT_PORT` → `MaintenanceTasksService.reportIssue` (support, entry, automation).
 - `OPERATING_STATUS_PORT` → `RestrictionsService.operatingStatus` / `activeRestrictions`
-  (reporting, communications, Today workspace).
+  (reporting, communications, Today workspace, and enrollment bookings: equipment restrictions per
+  occurrence and the `enrollment.booking_lifecycle` equipment re-check).
 - `ASSET_DIRECTORY_PORT` (FAC-02, IF-33; SPK-COND-003) → `AssetDirectoryService.describe(organizationId,
 assetIds, trx?, { intervals? })`, registered as `ASSET_DIRECTORY_IMPL`: reads through the passed
   transaction, else the active one, and returns `{ id, facilityId, kind, name, status, usable }` per
@@ -300,13 +307,13 @@ assetIds, trx?, { intervals? })`, registered as `ASSET_DIRECTORY_IMPL`: reads th
   restriction already marks `restricted` reads unusable at every time). With the booking's
   `intervals` (R4-OPS-MODULES-05, SPK-FAC-003: a restriction affects availability for its approved
   interval), `usable` is: in service, or `restricted` only by approved or active restrictions, and
-  none of them overlaps any interval; out-of-service, retired, and manually restricted assets with no
-  restriction behind them are never usable, and a malformed interval is `VALIDATION_FAILED`
+  none of them overlaps any interval; out-of-service, retired, and `restricted` assets with no
+  restriction behind them (only possible before migration 0908) are never usable, and a malformed interval is `VALIDATION_FAILED`
   (**Verified**, `asset-directory.spec.ts` "SPK-FAC-003 / SPK-COND-003 (R4-OPS-MODULES-05): with the
   booking intervals, equipment a future restriction names is usable outside its window and unusable
-  inside it"). Enrollment's rental and party bookings do not pass their occurrences yet, so they
-  still get the conservative answer (**Pending** the enrollment change, deferred from
-  R4-OPS-MODULES-05). Unknown, malformed and other-organization ids are omitted, so a booking naming them
+  inside it"). Enrollment's rental and party bookings read the asset's status here and decide each
+  occurrence from the restrictions themselves (`OPERATING_STATUS_PORT.activeRestrictions`,
+  R4-MODULE-BOUNDARIES-02), so they do not need `intervals`. Unknown, malformed and other-organization ids are omitted, so a booking naming them
   is refused (enrollment's rental and party bookings). Scheduling equipment commitments keep the
   asset id as party id. **Verified**: `asset-directory.spec.ts` "a retired or restricted asset reads
   as not usable", "another organization's asset is omitted", "reads through the passed or active

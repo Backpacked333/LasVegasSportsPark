@@ -51880,7 +51880,7 @@ export type components = {
             /** Format: uuid */
             resourceId?: string;
             /** @enum {string} */
-            status?: "in_service" | "restricted" | "out_of_service";
+            status?: "in_service" | "out_of_service";
         };
         CreateAssignmentRequest: {
             engagement?: components["schemas"]["AssignmentEngagement"];
@@ -59692,7 +59692,7 @@ export type components = {
             /** Format: uuid */
             resourceId?: string | null;
             /** @enum {string} */
-            status?: "in_service" | "restricted" | "out_of_service" | "retired";
+            status?: "in_service" | "out_of_service" | "retired";
         };
         UpdateAssignmentRequirementRequest: {
             expectedRevision: number;

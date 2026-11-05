@@ -3103,7 +3103,6 @@
             "type": "string",
             "enum": [
               "in_service",
-              "restricted",
               "out_of_service"
             ]
           },
@@ -3177,7 +3176,6 @@
             "type": "string",
             "enum": [
               "in_service",
-              "restricted",
               "out_of_service",
               "retired"
             ]

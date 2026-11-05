@@ -110,7 +110,11 @@ export const CreateAssetBody = withCommandMeta({
   name: z.string().min(1).max(200),
   identifier: z.string().min(1).max(100).optional(),
   attributes: z.record(z.string(), z.unknown()).optional(),
-  status: AssetStatus.exclude(['retired']).optional(),
+  /**
+   * `restricted` is set only by an operating restriction's approval and lifted by its release
+   * (SPK-FAC-004); an asset that is unusable for another reason is `out_of_service`.
+   */
+  status: AssetStatus.exclude(['retired', 'restricted']).optional(),
 }).openapi('CreateAssetBody');
 export type CreateAssetBody = z.infer<typeof CreateAssetBody>;
 
@@ -120,7 +124,12 @@ export const UpdateAssetBody = withCommandMeta({
   name: z.string().min(1).max(200).optional(),
   identifier: z.string().min(1).max(100).nullable().optional(),
   attributes: z.record(z.string(), z.unknown()).optional(),
-  status: AssetStatus.optional(),
+  /**
+   * Never `restricted`: only an operating restriction sets it (and its release lifts it), so the
+   * status always says a restriction is behind it (SPK-FAC-004); the manual unusable state is
+   * `out_of_service`.
+   */
+  status: AssetStatus.exclude(['restricted']).optional(),
 })
   // §4.9: a sensitive stale edit fails rather than overwrite newer work
   .extend({ expectedRevision: Revision })
