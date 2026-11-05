@@ -192,6 +192,41 @@ export async function personSeasonMemberships(
   excludeEntryId: string,
   options: { overlapping?: boolean } = {},
 ): Promise<SeasonMembership[]> {
+  return seasonMembershipsOf(
+    await personSeasonMembershipRows(
+      db,
+      organizationId,
+      typeof personId === 'string' ? [personId] : personId,
+      seasonId,
+      at,
+      excludeEntryId,
+      options,
+    ),
+  );
+}
+
+export interface SeasonMembershipRow {
+  person_id: string;
+  team_entry_id: string;
+  status: Selectable<RosterMembershipsTable>['status'];
+  status_before_removal: Selectable<RosterMembershipsTable>['status_before_removal'];
+  division_id: string | null;
+}
+
+/**
+ * The roster rows behind `personSeasonMemberships`, for any number of people in one query
+ * (R4-CARRY-01): a roster evaluation groups them by person and applies `seasonMembershipsOf`.
+ */
+export async function personSeasonMembershipRows(
+  db: Reader,
+  organizationId: string,
+  personIds: readonly string[],
+  seasonId: string,
+  at: Date,
+  excludeEntryId: string,
+  options: { overlapping?: boolean } = {},
+): Promise<SeasonMembershipRow[]> {
+  if (personIds.length === 0) return [];
   let query = db
     .selectFrom('roster_memberships as rm')
     .innerJoin('team_entries as te', (join) =>
@@ -199,16 +234,26 @@ export async function personSeasonMemberships(
         .onRef('te.organization_id', '=', 'rm.organization_id')
         .onRef('te.id', '=', 'rm.team_entry_id'),
     )
-    .select(['rm.team_entry_id', 'rm.status', 'rm.status_before_removal', 'te.division_id'])
+    .select([
+      'rm.person_id',
+      'rm.team_entry_id',
+      'rm.status',
+      'rm.status_before_removal',
+      'te.division_id',
+    ])
     .where('rm.organization_id', '=', organizationId)
-    .where('rm.person_id', 'in', typeof personId === 'string' ? [personId] : [...personId])
+    .where('rm.person_id', 'in', [...personIds])
     .where('te.season_id', '=', seasonId)
     .where('te.status', 'in', ['applied', 'approved'])
     .where('rm.team_entry_id', '<>', excludeEntryId)
     .where('rm.status', 'in', ['active', 'guest', 'substitute', 'removed'])
     .where((eb) => eb.or([eb('rm.effective_to', 'is', null), eb('rm.effective_to', '>', at)]));
   if (!options.overlapping) query = query.where('rm.effective_from', '<=', at);
-  const rows = await query.execute();
+  return query.orderBy('rm.effective_from').orderBy('rm.id').execute();
+}
+
+/** The entries a person's season rows place them on, each entry once (multi-team rules). */
+export function seasonMembershipsOf(rows: readonly SeasonMembershipRow[]): SeasonMembership[] {
   const out: SeasonMembership[] = [];
   for (const row of rows) {
     const status = row.status === 'removed' ? row.status_before_removal : row.status;
@@ -218,6 +263,32 @@ export async function personSeasonMemberships(
       out.push({ teamEntryId: row.team_entry_id, divisionId: row.division_id, statusAt: status });
     }
   }
+  return out;
+}
+
+/**
+ * The open rows (pending or playing) of any of the people on the entry, keyed by person id, in
+ * one query (R4-CARRY-01). At most one open row per person and entry exists.
+ */
+export async function openRosterRows(
+  db: Reader,
+  organizationId: string,
+  teamEntryId: string,
+  personIds: readonly string[],
+): Promise<Map<string, RosterRow>> {
+  if (personIds.length === 0) return new Map();
+  const rows = await db
+    .selectFrom('roster_memberships')
+    .selectAll()
+    .where('organization_id', '=', organizationId)
+    .where('team_entry_id', '=', teamEntryId)
+    .where('person_id', 'in', [...personIds])
+    .where('effective_to', 'is', null)
+    .orderBy('effective_from')
+    .orderBy('id')
+    .execute();
+  const out = new Map<string, RosterRow>();
+  for (const row of rows) if (!out.has(row.person_id)) out.set(row.person_id, row);
   return out;
 }
 

@@ -2,8 +2,13 @@ import { newId } from '@sportspark/contracts';
 import { json, seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
-import { createRelationshipFixture } from '../../identity';
+import {
+  createPersonFixture,
+  createRelationshipFixture,
+  createStaffMemberFixture,
+} from '../../identity';
 import { at } from '../../scheduling';
+import { createAssignmentFixture } from '../../workforce';
 import {
   adultCustomer,
   enroll,
@@ -500,6 +505,149 @@ describe('offline synchronization (§4.15, SPK-AT-018)', () => {
       items: [attendance(fam.childA, 'present')],
     });
     expect(foreign.status).toBe(404);
+  });
+
+  it('§4.15 / §4.3 / SPK-UX-007: offline grants no authority beyond online — a desk role scoped to another facility does not make a coach of this facility desk staff here (R4-AUTHZ-TARGETS-02, R4-OPS-MODULES-01)', async () => {
+    const annex = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: annex,
+        organization_id: t.organizationId,
+        slug: `annex-${annex}`,
+        name: 'Annex',
+        timezone: 'America/Los_Angeles',
+      })
+      .execute();
+    // An adult already on site at the main facility (a departure would close their visit).
+    const adultOnSite = await createPersonFixture(t, { kind: 'adult' });
+    const onSite = await post(t, '/v1/visits', desk, {
+      facilityId: t.facilityId,
+      arrivals: [{ personId: adultOnSite, visitorCategory: 'spectator' }],
+    });
+    expect(onSite.status, JSON.stringify(onSite.body)).toBe(201);
+    const adultArriving = await createPersonFixture(t, { kind: 'adult' });
+    // Front desk of the annex only; coach here (per-role scope) or organization-wide.
+    const coachHere = await staffMember(t, ['front_desk'], { facilityIds: [annex] });
+    await createStaffMemberFixture(t, {
+      roles: ['coach'],
+      personId: coachHere.personId,
+      facilityIds: [t.facilityId],
+    });
+    const coachEverywhere = await staffMember(t, ['front_desk'], { facilityIds: [annex] });
+    await createStaffMemberFixture(t, { roles: ['coach'], personId: coachEverywhere.personId });
+
+    for (const [name, actor] of [
+      ['coach scoped here', coachHere],
+      ['coach organization-wide', coachEverywhere],
+    ] as const) {
+      // Online: not desk staff here, and not assigned to the session.
+      const visit = await post(t, '/v1/visits', actor, {
+        facilityId: t.facilityId,
+        arrivals: [{ personId: adultArriving, visitorCategory: 'spectator' }],
+      });
+      expect(visit.status, name).toBe(403);
+      const observed = await post(t, '/v1/attendance-observations', actor, {
+        personId: fam.childA,
+        activity: sessionRef(p),
+        observedState: 'absent',
+      });
+      expect(observed.status, name).toBe(403);
+      expect(observed.body.details, name).toMatchObject({ code: 'not_assigned' });
+
+      // Offline: the batch itself passes entry.sync_offline through the coach role, but every
+      // item is decided by its online action at this facility.
+      const res = await post(t, '/v1/offline-sync', actor, {
+        deviceId: `phone-${actor.personId}`,
+        clientBatchId: newId(),
+        facilityId: t.facilityId,
+        snapshot: snapshot(),
+        items: [
+          {
+            kind: 'arrival',
+            clientObservationId: newId(),
+            observedAt: at(TODAY, '10:00'),
+            personId: adultArriving,
+            visitorCategory: 'spectator',
+          },
+          {
+            kind: 'departure',
+            clientObservationId: newId(),
+            observedAt: at(TODAY, '11:20'),
+            personId: adultOnSite,
+          },
+          attendance(fam.childA, 'absent', '10:06'),
+        ],
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(
+        res.body.items.map((i: { outcome: string; reason: string }) => [i.outcome, i.reason]),
+        name,
+      ).toEqual([
+        ['rejected', 'not_permitted'],
+        ['rejected', 'not_permitted'],
+        ['rejected', 'not_assigned'],
+      ]);
+      expect(res.body.counts, name).toMatchObject({ accepted: 0, rejected: 3 });
+    }
+    // Nothing was recorded: no arrival, the on-site visit is still open, no attendance.
+    const arrived = await t.db
+      .selectFrom('visits')
+      .select('id')
+      .where('person_id', '=', adultArriving)
+      .execute();
+    expect(arrived).toEqual([]);
+    const stillOnSite = await t.db
+      .selectFrom('visits')
+      .select('status')
+      .where('id', '=', onSite.body.visits[0].id)
+      .executeTakeFirstOrThrow();
+    expect(stillOnSite.status).toBe('on_site');
+    const recorded = await t.db
+      .selectFrom('attendance_observations')
+      .select('id')
+      .where('recorded_by_person_id', 'in', [coachHere.personId, coachEverywhere.personId])
+      .execute();
+    expect(recorded).toEqual([]);
+
+    // Once assigned to the session, the coach records its attendance offline as online; arrivals
+    // and departures stay desk-only.
+    await createAssignmentFixture(t, {
+      targetType: 'session',
+      targetId: p.sessionId,
+      offeringId: p.offering.offeringId,
+      personId: coachHere.personId,
+      kind: 'coach',
+      role: 'head_coach',
+      status: 'accepted',
+      scheduledStart: p.start,
+      scheduledEnd: p.end,
+    });
+    const assigned = await post(t, '/v1/offline-sync', coachHere, {
+      deviceId: `phone-${coachHere.personId}`,
+      clientBatchId: newId(),
+      facilityId: t.facilityId,
+      snapshot: snapshot(),
+      items: [
+        attendance(fam.childA, 'present', '10:07'),
+        {
+          kind: 'departure',
+          clientObservationId: newId(),
+          observedAt: at(TODAY, '11:21'),
+          personId: adultOnSite,
+        },
+      ],
+    });
+    expect(assigned.status, JSON.stringify(assigned.body)).toBe(201);
+    expect(
+      assigned.body.items.map((i: { outcome: string; reason: string | null }) => [
+        i.outcome,
+        i.reason,
+      ]),
+    ).toEqual([
+      ['accepted', null],
+      ['rejected', 'not_permitted'],
+    ]);
   });
 
   it('§4.15: payments, capacity commitments, guardian changes and roster transfers have no offline kind; a batch carrying one is refused whole and records nothing', async () => {

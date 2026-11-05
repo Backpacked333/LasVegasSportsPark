@@ -62,6 +62,7 @@ import {
   registrantSnapshot,
   toPlacementRequest,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { CapacityService, type PoolRow } from './capacity.service';
 import { RegistrationEvaluator } from './registration-evaluator';
@@ -161,12 +162,14 @@ export class PlacementService {
         input.participantPersonId,
       );
       const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
-      await this.authorization.require(principal, EnrollmentActions.requestPlacement, {
-        type: 'placement_request',
-        organizationId,
-        facilityId,
-        subjectPersonIds: [person.id],
-      });
+      // R4-PRIVACY-03 (§4.10): another household's participant reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.requestPlacement,
+        { type: 'placement_request', organizationId, facilityId, subjectPersonIds: [person.id] },
+        [person.id],
+      );
       const staff = await this.scope.actsAsStaff(
         principal,
         EnrollmentActions.requestPlacement,
@@ -186,14 +189,10 @@ export class PlacementService {
           });
         }
       }
-      for (const teammate of input.requestedTeammatePersonIds) {
-        // Requested teammates are recorded by id only and never shown publicly (SPK-PLACE-005, DEC-051).
-        if (!(await this.evaluator.participantOrNull(trx, organizationId, teammate))) {
-          throw errors.validation('A requested teammate is not a person of this organization.', {
-            path: 'requestedTeammatePersonIds',
-          });
-        }
-      }
+      // Requested teammates are recorded by id only and never shown publicly (SPK-PLACE-005,
+      // DEC-051). They are another household's persons, so the request never says whether an id
+      // is a person of this organization (R4-PRIVACY-03, §4.10): an id that names nobody is kept
+      // and simply never matches a roster when the request is reconciled.
       const id = newId();
       try {
         await trx

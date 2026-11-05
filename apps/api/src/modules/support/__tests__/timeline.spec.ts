@@ -1,7 +1,14 @@
 import { newId, systemPrincipal, type TimelineEntry } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Inbox } from '../../../kernel';
 import type { TestApp } from '../../../testing';
-import { createCreditFixture, createObligationFixture } from '../../finance';
+import {
+  createCreditFixture,
+  createObligationFixture,
+  FAKE_PAYMENTS_PROVIDER,
+  FAKE_PAYMENTS_SIGNATURE_HEADER,
+  FakePaymentProvider,
+} from '../../finance';
 import { authHeaderForPerson, createPersonFixture } from '../../identity';
 import { EventsService, at, createScheduledEvent, seedPitchWithHalves } from '../../scheduling';
 import {
@@ -395,5 +402,36 @@ describe('customer timeline (SPK-SUPPORT-001)', () => {
         .where('id', '=', dupCase.body.id)
         .executeTakeFirstOrThrow(),
     ).toEqual(caseBefore);
+  });
+
+  it('R4-PROVIDER-OUTCOMES-02 / SPK-SUPPORT-001: a refund the provider reversed after success shows as reversed, never as refunded', async () => {
+    const before = await timelineOf(operator, parent.personId, '?limit=200');
+    const refunded = (before.body.entries as TimelineEntry[]).find(
+      (e) => e.kind === 'refund.succeeded',
+    );
+    expect(refunded, JSON.stringify(kinds(before.body.entries))).toBeDefined();
+    const refundId = refunded!.record!.id;
+    const payments = t.app.get(FakePaymentProvider);
+    payments.settleRefund(refundId, 'failed');
+    const webhook = payments.refundWebhook(refundId);
+    const delivered = await t.http
+      .post(`/v1/webhooks/payments/${FAKE_PAYMENTS_PROVIDER}`)
+      .set(FAKE_PAYMENTS_SIGNATURE_HEADER, webhook.signature)
+      .send(webhook.body as object);
+    expect(delivered.status, JSON.stringify(delivered.body)).toBeLessThan(300);
+    await t.app.get(Inbox).runOnce(200);
+    await drainOutbox(t);
+
+    const after = await timelineOf(operator, parent.personId, '?limit=200');
+    expect(after.status).toBe(200);
+    const entries = after.body.entries as TimelineEntry[];
+    const same = entries.filter((e) => e.record?.id === refundId);
+    expect(same.map((e) => e.kind)).toEqual(['refund.reversed']);
+    expect(same[0]).toMatchObject({
+      title: 'Refund reversed',
+      category: 'refund',
+      amount: { amountMinor: 2_000 },
+      details: { reversedAt: expect.any(String) },
+    });
   });
 });

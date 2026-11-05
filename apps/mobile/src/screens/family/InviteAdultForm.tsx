@@ -99,6 +99,8 @@ export function InviteAdultForm({
   const contactError = contactFormatError(contactKind, contactValue);
   const permissionsError =
     selected.length === 0 ? 'Choose at least one permission to pass on.' : null;
+  /** Shown, and read with each permission, once the form was sent without one. */
+  const shownPermissionsError = attempted ? permissionsError : null;
 
   const toggle = (permission: GrantPermission, on: boolean) => {
     setSelected((current) =>
@@ -185,7 +187,13 @@ export function InviteAdultForm({
         editable={!invite.isProcessing}
         testID="invite-contact"
       />
-      <View style={styles.permissions} accessibilityRole="list" accessibilityLabel="Permissions">
+      {/* A required choice: its error is the list's and each permission's hint (SPK-UX-009). */}
+      <View
+        style={styles.permissions}
+        accessibilityRole="list"
+        accessibilityLabel="Permissions"
+        accessibilityHint={shownPermissionsError ? `Error: ${shownPermissionsError}` : undefined}
+      >
         <Paragraph inset={false}>Permissions to pass on. Each one is separate.</Paragraph>
         {permissions.map((g) => {
           const held = heldPermissions.includes(g.permission);
@@ -199,19 +207,20 @@ export function InviteAdultForm({
               checked={selected.includes(g.permission)}
               disabled={!held || invite.isProcessing}
               onChange={(on) => toggle(g.permission, on)}
+              error={shownPermissionsError}
               testID={`invite-permission-${g.permission}`}
             />
           );
         })}
-        {attempted && permissionsError ? (
+        {shownPermissionsError ? (
           <LiveText
             style={styles.error}
             accessibilityRole="alert"
-            announcement={permissionsError}
+            announcement={shownPermissionsError}
             testID="invite-permissions-error"
           >
             {'✕ '}
-            {permissionsError}
+            {shownPermissionsError}
           </LiveText>
         ) : null}
       </View>

@@ -1,10 +1,8 @@
 /**
  * What a command's failure says about its effect (§4.9, §4.14, SPK-PAY-007, SPK-UX-008). The staff
  * dashboard's command failure views and command hooks decide with these predicates only, never
- * with a check of their own on `kind` or a single code. The customer app still keeps its own copy
- * (apps/mobile/src/api/command-outcome.ts), which does not yet have the failed-read,
- * refused-before-running and unreadable-answer rules below; moving it onto this module is recorded
- * as a follow-up for that app.
+ * with a check of their own on `kind` or a single code. The customer app re-exports these
+ * unchanged (apps/mobile/src/api/command-outcome.ts).
  *
  * - `mayHaveTakenEffect`: no definite answer to a command (never a failed read, which changed
  *   nothing: `ApiError.method` is `get`), so the request may have reached the API and committed.

@@ -674,7 +674,11 @@ describe('team entries (SPK-COMP-004, SPK-CAP-001, SPK-CAP-005, SPK-AT-002, SPK-
     // half-open window: a role ended at the clock instant is no longer effective at it
     await t.db
       .updateTable('team_roles')
-      .set({ effective_to: new Date('2026-10-23T12:00:00Z') })
+      .set({
+        effective_to: new Date('2026-10-23T12:00:00Z'),
+        ended_by: json({ kind: 'system' }),
+        ended_reason: 'stepped down',
+      })
       .where('id', '=', roleId)
       .execute();
     expect(await teamAuthority.hasTeamRole(org, coCaptain, entry.teamEntryId, 'member')).toBe(

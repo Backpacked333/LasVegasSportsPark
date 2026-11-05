@@ -9,6 +9,8 @@ import {
   type DomainEvent,
   type EventPayload,
   type LinkCaseActionInput,
+  type Notification,
+  type NotificationDeliveries,
   type Principal,
   type RequestRefundInput,
   type ResendNotificationInput,
@@ -72,6 +74,46 @@ function refundsPausedForRecovery(): DomainError {
 
 /** Finance refund states in which a refund moved no money and holds no reservation. */
 const REFUND_NO_EFFECT: readonly string[] = ['failed', 'canceled'];
+
+/**
+ * R4-PROVIDER-OUTCOMES-03 (SPK-SUPPORT-003, §4.11 rule 4 "unknown kept explicit until
+ * reconciled"): what a finance refund's status says about the command a case asked for. Only a
+ * refund finance recorded as `succeeded` moved money, so only it is "action taken"; a `failed` or
+ * `canceled` one moved none; a `requested`, `processing` or `unknown` one is not settled yet and
+ * is no outcome until finance reconciles it.
+ */
+function refundOutcomeOf(status: string): 'succeeded' | 'failed' | 'pending' {
+  if (status === 'succeeded') return 'succeeded';
+  if (REFUND_NO_EFFECT.includes(status)) return 'failed';
+  return 'pending';
+}
+
+/** The refusal of a refund as the evidence of an effective command (link and review). */
+function refundNotEffective(
+  refund: { id: string; status: string } | null | undefined,
+  refundId: string,
+) {
+  const status = refund?.status ?? 'missing';
+  if (refund && refundOutcomeOf(refund.status) === 'pending') {
+    return errors.resourceConflict(
+      `Finance has not settled this refund yet (${status}): it is not a succeeded outcome until finance reconciles it.`,
+      { code: 'REFUND_OUTCOME_PENDING', refundId, status },
+    );
+  }
+  return errors.resourceConflict(
+    `Finance recorded this refund as ${status}: it is not a succeeded outcome.`,
+    { code: 'REFUND_NOT_EFFECTIVE', refundId, status },
+  );
+}
+
+/** How many support resend copies a notice's replacement chain is followed through. */
+const RESEND_CHAIN_LIMIT = 50;
+
+/** The copy a resend queued, before its case action records it (R4-COMMS-AUTOMATION-04). */
+interface ResendCopy {
+  id: string;
+  sourceId: string;
+}
 
 /** What a refund helper asked finance for, as recorded with its intent (case_actions.input). */
 interface RefundRequestOf {
@@ -139,6 +181,8 @@ export class CaseActionsService {
 
   /** SUP-04: the job's keyset position across passes (in memory; restarts when exhausted). */
   private staleAfter: { requestedAt: Date; id: string } | null = null;
+  /** R4-PROVIDER-OUTCOMES-03: the job's keyset position over `unknown` refund helpers. */
+  private unknownAfter: { requestedAt: Date; id: string } | null = null;
 
   constructor(
     @Inject(DATABASE) private readonly db: Db,
@@ -206,6 +250,18 @@ export class CaseActionsService {
         );
         if (definition.id === FinanceActions.refund.id && evidence.audit) {
           await this.assertNotAnOutstandingHelpersRefund(trx, organizationId, evidence.audit);
+        }
+        // R4-PROVIDER-OUTCOMES-03 (SPK-SUPPORT-003): a linked action is a succeeded outcome, and a
+        // refund is one only once finance recorded it as succeeded — a declined refund, or one the
+        // provider has not settled, is not "action taken".
+        if (
+          definition.id === FinanceActions.refund.id &&
+          evidence.record?.type === 'refund_attempt'
+        ) {
+          const refund = await this.refunds.load(trx, organizationId, evidence.record.id);
+          if (!refund || refundOutcomeOf(refund.status) !== 'succeeded') {
+            throw refundNotEffective(refund, evidence.record.id);
+          }
         }
         const action = await this.record(trx, {
           row,
@@ -376,6 +432,15 @@ export class CaseActionsService {
           code: 'NOT_ADDRESSED_TO_SUBJECT',
         });
       }
+      // R4-COMMS-AUTOMATION-04 (SPK-COMMS-005 "a stale 'moved' never arrives after the
+      // cancellation"): a notice a newer one replaced carries outdated practical details, so it is
+      // not resent; the same answer as communications' own delivery retry. Nothing is recorded.
+      // Support's own resend copies of the same notice replace nothing (replacementOf).
+      await this.assertCurrentNotice(trx, principal, organizationId, original.notification, null);
+      // R4-COMMS-AUTOMATION-03 follow-up: a narrower newer notice replaces this one only for the
+      // people it reaches (communications' per-recipient pointer); for the case subject among
+      // them it is just as stale, while another subject's copy stays current.
+      await this.assertCurrentForSubject(trx, organizationId, original, subject, null);
       const supportOperationId = await this.operations.create(trx, {
         organizationId,
         kind: 'support.resend_notification',
@@ -409,6 +474,26 @@ export class CaseActionsService {
         reason: input.reason,
         correlationId,
       });
+      // R4-COMMS-AUTOMATION-04: read the notice again now that the copy is queued. A newer notice
+      // that committed after the first read, or held the notice's lock while the copy was queued,
+      // has pointed the notice at itself by now, so the copy is discarded with the whole
+      // transaction rather than sent after the newer change. A newer notice still being queued
+      // when this transaction commits is not seen here (pending in communications, see README).
+      const copy = { id: resent.id, sourceId: input.notificationId };
+      await this.assertCurrentNotice(
+        trx,
+        principal,
+        organizationId,
+        await this.notifications.get(principal, input.notificationId),
+        copy,
+      );
+      await this.assertCurrentForSubject(
+        trx,
+        organizationId,
+        await this.notifications.deliveries(principal, input.notificationId),
+        subject,
+        copy,
+      );
       // SUP-02: the compose's audit record through the kernel's AuditReader (IF-44).
       const [composedAudit] = await this.auditReader.forTarget(
         organizationId,
@@ -451,6 +536,135 @@ export class CaseActionsService {
     });
   }
 
+  /**
+   * R4-COMMS-AUTOMATION-04 (SPK-COMMS-005): refuses RESOURCE_CONFLICT NOTICE_SUPERSEDED when a
+   * newer notice replaced `notice` (see replacementOf). `pendingCopy` is the copy this resend has
+   * just queued, which has no recorded case action yet.
+   */
+  private async assertCurrentNotice(
+    trx: Trx,
+    principal: Principal,
+    organizationId: string,
+    notice: Notification,
+    pendingCopy: ResendCopy | null,
+  ): Promise<void> {
+    const replaced = await this.replacementOf(trx, principal, organizationId, notice, pendingCopy);
+    if (!replaced) return;
+    throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
+      code: 'NOTICE_SUPERSEDED',
+      supersededByNotificationId: replaced.supersededByNotificationId,
+    });
+  }
+
+  /**
+   * R4-COMMS-AUTOMATION-03 follow-up (SPK-COMMS-005): refuses RESOURCE_CONFLICT NOTICE_SUPERSEDED
+   * when a newer notice replaced `deliveries`' notice for the case subject only (a recipient row
+   * of the subject carries `supersededByNotificationId`). Support's own resend copies of the same
+   * notice point there too and replace nothing, so a pointer to one of them is not a refusal.
+   */
+  private async assertCurrentForSubject(
+    trx: Trx,
+    organizationId: string,
+    deliveries: NotificationDeliveries,
+    subject: string,
+    pendingCopy: ResendCopy | null,
+  ): Promise<void> {
+    const origin = await this.resendOriginOf(
+      trx,
+      organizationId,
+      deliveries.notification.id,
+      pendingCopy,
+    );
+    for (const recipient of deliveries.recipients) {
+      if (recipient.personId !== subject && !recipient.subjectPersonIds.includes(subject)) continue;
+      const by = recipient.supersededByNotificationId;
+      if (!by) continue;
+      if ((await this.resendOriginOf(trx, organizationId, by, pendingCopy)) === origin) continue;
+      throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
+        code: 'NOTICE_SUPERSEDED',
+        supersededByNotificationId: by,
+      });
+    }
+  }
+
+  /**
+   * R4-COMMS-AUTOMATION-04 (SPK-COMMS-005): what replaced a notice, or null while it is current.
+   * Communications points a notice at the newer schedule notice about the same subject (once
+   * dispatched) or suppresses it as obsolete (before). A support resend is a copy of the same
+   * notice and is queued through the same supersession, so it points the notice it copied at
+   * itself; that copy carries the same practical details and replaces nothing. The pointers are
+   * therefore followed through support's own resend copies of the same notice (the notices a
+   * resend helper case action recorded, traced back to the one they copy) to the first notice
+   * that is not one: that one replaced it.
+   */
+  private async replacementOf(
+    trx: Trx,
+    principal: Principal,
+    organizationId: string,
+    notice: Notification,
+    pendingCopy: ResendCopy | null,
+  ): Promise<{ supersededByNotificationId: string | null } | null> {
+    const origin = await this.resendOriginOf(trx, organizationId, notice.id, pendingCopy);
+    const seen = new Set<string>([notice.id]);
+    let current = notice;
+    for (;;) {
+      const next = current.supersededByNotificationId;
+      if (next === null) {
+        const obsolete =
+          current.status === 'suppressed' && current.suppressionReason === 'obsolete';
+        return obsolete ? { supersededByNotificationId: null } : null;
+      }
+      if (
+        seen.has(next) ||
+        seen.size > RESEND_CHAIN_LIMIT ||
+        (await this.resendOriginOf(trx, organizationId, next, pendingCopy)) !== origin
+      ) {
+        return { supersededByNotificationId: next };
+      }
+      seen.add(next);
+      // The copies are read through communications with the operator's principal, like the notice.
+      current = await this.notifications.get(principal, next);
+    }
+  }
+
+  /** The notice support resends copied `notificationId` from, followed back to the first one. */
+  private async resendOriginOf(
+    trx: Trx,
+    organizationId: string,
+    notificationId: string,
+    pendingCopy: ResendCopy | null,
+  ): Promise<string> {
+    let id = notificationId;
+    for (let depth = 0; depth < RESEND_CHAIN_LIMIT; depth += 1) {
+      const source =
+        pendingCopy?.id === id
+          ? pendingCopy.sourceId
+          : await this.resendSourceOf(trx, organizationId, id);
+      if (!source) return id;
+      id = source;
+    }
+    return id;
+  }
+
+  /** The notice a resend helper copied into `notificationId` (support's own case actions). */
+  private async resendSourceOf(
+    trx: Trx,
+    organizationId: string,
+    notificationId: string,
+  ): Promise<string | null> {
+    const resend = await trx
+      .selectFrom('case_actions')
+      .select('input')
+      .where('organization_id', '=', organizationId)
+      .where('action_id', '=', CommunicationsActions.send.id)
+      .where('via', '=', 'helper')
+      .where('record_type', '=', 'notification')
+      .where('record_id', '=', notificationId)
+      .executeTakeFirst();
+    const source = (resend?.input as { notificationId?: unknown } | undefined)?.notificationId;
+    return typeof source === 'string' ? source : null;
+  }
+
   // -------------------------------------------------------------------------------------------
   // POST /cases/{id}/request-refund → finance.refund (three steps, never one transaction)
   // -------------------------------------------------------------------------------------------
@@ -464,7 +678,13 @@ export class CaseActionsService {
    * `unknown` at once; if the process fails before any outcome is recorded, the follow-up moves the
    * action to `unknown` after the grace period (§4.7 invariant 12). Either way an owned exception
    * asks finance to check, and a retry with the same idempotency key is refused rather than
-   * requesting a second refund (§4.7 invariant 5).
+   * requesting a second refund (§4.7 invariant 5). When finance answers, the outcome recorded is
+   * the refund's own status (R4-PROVIDER-OUTCOMES-03): `succeeded` only for a refund finance
+   * recorded as succeeded, `failed` (REFUND_NOT_EFFECTIVE) for one the provider declined or that
+   * was canceled, and `unknown` (REFUND_OUTCOME_PENDING, with the finance-owned exception) for one
+   * the provider has not settled — the response is 201 with that action either way. An `unknown`
+   * refund gets finance's outcome recorded by `support.settle_stale_case_actions` once finance
+   * settles the refund (settleUnknownRefunds), or by a reviewer before that.
    */
   async requestRefund(
     principal: Principal,
@@ -591,19 +811,44 @@ export class CaseActionsService {
     const evidence = refund.operationId
       ? null
       : await this.refundAuditFor(principal, input, pending, correlationId);
+    const linked = {
+      commandOperationId: refund.operationId,
+      auditRecordId: evidence,
+      record: { type: 'refund_attempt', id: refund.id },
+    };
+    // R4-PROVIDER-OUTCOMES-03 (SPK-SUPPORT-003, §4.11 rule 4): finance answers a refund the
+    // provider declined with the refund `failed` (its reservation released), not with an error,
+    // and one the provider has not settled with `processing` or `unknown`. The outcome recorded is
+    // finance's, read the same way as the periodic job and a reviewer read it (refundOutcomeOf).
+    const outcome = refundOutcomeOf(refund.status);
+    const facts = { refundId: refund.id, refundStatus: refund.status };
     const action = await this.settleHelper(
       principal,
       caseId,
       pending,
       supportOperationId,
       correlationId,
-      {
-        status: 'succeeded',
-        commandOperationId: refund.operationId,
-        auditRecordId: evidence,
-        record: { type: 'refund_attempt', id: refund.id },
-        result: { refundId: refund.id, status: refund.status },
-      },
+      outcome === 'succeeded'
+        ? { status: 'succeeded', ...linked, result: { refundId: refund.id, status: refund.status } }
+        : outcome === 'failed'
+          ? {
+              status: 'failed',
+              ...linked,
+              error: {
+                code: 'REFUND_NOT_EFFECTIVE',
+                message: `Finance recorded the refund as ${refund.status}; nothing was refunded.`,
+                details: { ...facts, failureReason: refund.failureReason },
+              },
+            }
+          : {
+              status: 'unknown',
+              ...linked,
+              error: {
+                code: 'REFUND_OUTCOME_PENDING',
+                message: `Finance has not settled the refund yet (${refund.status}); support records finance's outcome once finance reconciles it (${SETTLE_STALE_CASE_ACTIONS_JOB}).`,
+                details: facts,
+              },
+            },
     );
     return {
       case: await this.cases.detail(this.uowReader(), organizationId, caseId),
@@ -771,8 +1016,26 @@ export class CaseActionsService {
    * `requested` (never assumed) and one `support.case_action_stale` exception asks its owner;
    * the next run reads again. Each request is one small transaction under the job's system
    * principal; the keyset position survives passes and restarts once every due request was read.
+   *
+   * R4-PROVIDER-OUTCOMES-03 (§4.11 rule 4 "unknown kept explicit until reconciled"): the same pass
+   * records finance's outcome of every refund helper already `unknown` — one finance answered
+   * `processing` or `unknown`, or one the grace-period follow-up made unknown — once finance has
+   * settled the refund (settleUnknownRefunds), whenever that happens.
    */
   async settleStale(context: {
+    now: Date;
+    batchSize: number;
+    staleSeconds: number;
+  }): Promise<{ processed: number; remaining: number }> {
+    const requested = await this.settleRequested(context);
+    const unknown = await this.settleUnknownRefunds(context.batchSize);
+    return {
+      processed: requested.processed + unknown.processed,
+      remaining: requested.remaining + unknown.remaining,
+    };
+  }
+
+  private async settleRequested(context: {
     now: Date;
     batchSize: number;
     staleSeconds: number;
@@ -835,7 +1098,9 @@ export class CaseActionsService {
         facilityId: row.facility_id,
         category: CASE_ACTION_STALE_CATEGORY,
         severity: 'warning',
-        title: `A ${current.action_id} requested from support case "${row.title.slice(0, 80)}" has no recorded outcome yet`,
+        // R4-PRIVACY-05 (§4.14): identifiers and enumerations only — the case title is the
+        // customer's free text, and the owner queue (finance for refunds) may not read the case.
+        title: `A ${current.action_id} requested from a support case has no recorded outcome yet`,
         affectedType: 'case_action',
         affectedId: current.id,
         ownerQueue: this.outcomeQueue(current.action_id),
@@ -873,23 +1138,166 @@ export class CaseActionsService {
   }
 
   /**
+   * R4-PROVIDER-OUTCOMES-03 (SPK-SUPPORT-003, §4.11 rule 4): refund helpers that are `unknown`
+   * get finance's outcome recorded once finance has settled the refund, as finance's own late
+   * answer does in settleHelper — no person asserts it. A refund finance has not settled, or no
+   * refund found for the request, leaves the action `unknown` with its finance-owned exception.
+   * Keyset-paged like the stale scan; each action is one small transaction.
+   */
+  private async settleUnknownRefunds(
+    batchSize: number,
+  ): Promise<{ processed: number; remaining: number }> {
+    let q = this.db
+      .selectFrom('case_actions')
+      .select(['id', 'organization_id', 'case_id', 'requested_at'])
+      .where('via', '=', 'helper')
+      .where('action_id', '=', FinanceActions.refund.id)
+      .where('status', '=', 'unknown')
+      .orderBy('requested_at')
+      .orderBy('id')
+      .limit(batchSize + 1);
+    const after = this.unknownAfter;
+    if (after) {
+      q = q.where(
+        sql<SqlBool>`(requested_at, id) > (${after.requestedAt}::timestamptz, ${after.id}::uuid)`,
+      );
+    }
+    const due = await q.execute();
+    const batch = due.slice(0, batchSize);
+    let processed = 0;
+    for (const action of batch) {
+      const settled = await this.uow.run(({ trx }) =>
+        this.settleOneUnknown(trx, action.organization_id, action.case_id, action.id),
+      );
+      if (settled) processed += 1;
+    }
+    const last = batch[batch.length - 1];
+    const more = due.length > batchSize;
+    this.unknownAfter =
+      more && last ? { requestedAt: new Date(last.requested_at), id: last.id } : null;
+    return { processed, remaining: more ? due.length - batch.length : 0 };
+  }
+
+  private async settleOneUnknown(
+    trx: Trx,
+    organizationId: string,
+    caseId: string,
+    caseActionId: string,
+  ): Promise<boolean> {
+    // Same lock order as settleHelper, markOverdue and settleUnknown: the case, then the action.
+    const row = await this.cases.loadForUpdate(trx, organizationId, caseId);
+    if (!row) return false;
+    const current = await trx
+      .selectFrom('case_actions')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('case_id', '=', caseId)
+      .where('id', '=', caseActionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!current || current.status !== 'unknown') return false;
+    if (current.via !== 'helper' || current.action_id !== FinanceActions.refund.id) return false;
+    const outcome = await this.financeOutcomeOfUnknownRefund(trx, current);
+    if (!outcome) return false;
+    const actor = systemPrincipal(organizationId, SETTLE_STALE_CASE_ACTIONS_JOB);
+    const action = await this.complete(trx, organizationId, toCaseAction(current), outcome);
+    if (current.support_operation_id) {
+      await this.transitionUnlessTerminal(
+        trx,
+        current.support_operation_id,
+        outcome.status,
+        outcome.status === 'succeeded'
+          ? { result: { caseActionId: action.id, settledBy: SETTLE_STALE_CASE_ACTIONS_JOB } }
+          : { error: outcome.error ?? { code: 'NO_EFFECT', message: 'no effect' } },
+      );
+    }
+    // Finance's own answer settles the question support raised (as in settleHelper).
+    const reason = `Outcome recorded from finance's refund: ${outcome.status}`;
+    await this.resolveUnknownOutcome(
+      trx,
+      actor,
+      organizationId,
+      current.id,
+      reason,
+      outcome.status,
+      null,
+    );
+    await this.resolveStale(trx, actor, organizationId, current.id, reason);
+    await this.afterRecord(trx, row, action, actor, null, null);
+    return true;
+  }
+
+  /**
+   * Finance's settled outcome of an `unknown` refund helper, or null while there is none. When
+   * finance answered the request (REFUND_OUTCOME_PENDING) the action already names the refund it
+   * recorded, which is read directly; otherwise (the outcome was lost) the refunds the request
+   * ran are found as the stale scan finds them (ownerOutcome).
+   */
+  private async financeOutcomeOfUnknownRefund(
+    trx: Trx,
+    current: CaseActionRow,
+  ): Promise<OwnerOutcome | null> {
+    const evidenced = current.command_operation_id !== null || current.audit_record_id !== null;
+    if (current.record_type !== 'refund_attempt' || current.record_id === null || !evidenced) {
+      return this.ownerOutcome(trx, current);
+    }
+    const refund = await this.refunds.load(trx, current.organization_id, current.record_id);
+    if (!refund) return null;
+    const record = { type: 'refund_attempt', id: refund.id };
+    switch (refundOutcomeOf(refund.status)) {
+      case 'pending':
+        return null;
+      case 'succeeded':
+        return {
+          status: 'succeeded',
+          commandOperationId: refund.operation_id ?? current.command_operation_id,
+          auditRecordId: current.audit_record_id,
+          record,
+        };
+      case 'failed':
+        return {
+          status: 'failed',
+          record,
+          error: {
+            code: 'REFUND_NOT_EFFECTIVE',
+            message: `Finance recorded the refund as ${refund.status}; nothing was refunded.`,
+            details: {
+              refundId: refund.id,
+              refundStatus: refund.status,
+              failureReason: refund.failure_reason,
+            },
+          },
+        };
+    }
+  }
+
+  /**
    * The owning module's outcome of a helper request, or null while it reports none. A refund
    * helper reads the refunds its request ran (RefundsService through the request's correlation
-   * id): an effective one is the outcome (unless it already evidences another case action, which
-   * a reviewer must untangle), and only failed or canceled ones mean `failed`. A resend is
-   * recorded with its request in one transaction, so no other helper is ever left `requested`
-   * with an outcome to read; communications exposes no lookup of a resend by correlation id.
+   * id): a succeeded one is the outcome (unless it already evidences another case action, which
+   * a reviewer must untangle), only failed or canceled ones mean `failed`, and one finance has not
+   * settled yet (requested, processing, unknown) leaves the request without an outcome
+   * (R4-PROVIDER-OUTCOMES-03). A resend is recorded with its request in one transaction, so no
+   * other helper is ever left `requested` with an outcome to read; communications exposes no
+   * lookup of a resend by correlation id.
    */
   private async ownerOutcome(trx: Trx, current: CaseActionRow): Promise<OwnerOutcome | null> {
     if (current.action_id !== FinanceActions.refund.id) return null;
     const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, current), trx);
     if (matches.length === 0) return null;
     let failed: { id: string; status: string } | null = null;
+    let unsettled = false;
     for (const match of matches) {
       const refund = await this.refunds.load(trx, current.organization_id, match.targetId);
       if (!refund) continue;
-      if (REFUND_NO_EFFECT.includes(refund.status)) {
+      const outcome = refundOutcomeOf(refund.status);
+      if (outcome === 'failed') {
         failed ??= { id: refund.id, status: refund.status };
+        continue;
+      }
+      // R4-PROVIDER-OUTCOMES-03: a refund finance has not settled yet is no outcome to record.
+      if (outcome === 'pending') {
+        unsettled = true;
         continue;
       }
       const elsewhere = await trx
@@ -912,7 +1320,7 @@ export class CaseActionsService {
         record: { type: 'refund_attempt', id: refund.id },
       };
     }
-    if (!failed) return null;
+    if (!failed || unsettled) return null;
     return {
       status: 'failed',
       record: { type: 'refund_attempt', id: failed.id },
@@ -940,7 +1348,9 @@ export class CaseActionsService {
       facilityId: row.facility_id,
       category: HELPER_OUTCOME_UNKNOWN_CATEGORY,
       severity: 'high',
-      title: `A refund requested from support case "${row.title.slice(0, 80)}" has no recorded outcome`,
+      // R4-PRIVACY-05 (§4.14): identifiers and enumerations only (see settleOneStale); readers
+      // who may open the case find it through details.caseId.
+      title: 'A refund requested from a support case has no recorded outcome',
       affectedType: 'case_action',
       affectedId: action.id,
       ownerQueue: REFUND_OUTCOME_QUEUE,
@@ -1166,8 +1576,8 @@ export class CaseActionsService {
    * support-migration-08 (SPK-SUPPORT-003): the evidence of a helper's succeeded outcome is the
    * command this request ran — recorded after the request, for a refund the same payment and
    * amount under the request's correlation id (finance's audit record of `finance.refund`), of a
-   * refund finance did not record as failed or canceled — and is not already another case
-   * action's evidence (one command settles one request).
+   * refund finance recorded as succeeded (R4-PROVIDER-OUTCOMES-03) — and is not already another
+   * case action's evidence (one command settles one request).
    */
   private async assertEvidenceOfRequest(
     trx: Trx,
@@ -1187,11 +1597,10 @@ export class CaseActionsService {
       const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, current), trx);
       if (!matches.some((m) => m.id === audit.id)) throw notOfThisRequest();
       const refund = await this.refunds.load(trx, current.organization_id, audit.targetId);
-      if (!refund || REFUND_NO_EFFECT.includes(refund.status)) {
-        throw errors.resourceConflict(
-          `Finance recorded this refund as ${refund?.status ?? 'missing'}: it is not a succeeded outcome.`,
-          { code: 'REFUND_NOT_EFFECTIVE', refundId: audit.targetId, status: refund?.status },
-        );
+      // R4-PROVIDER-OUTCOMES-03: finance's record wins over a reviewer's statement — only a refund
+      // finance recorded as succeeded settles the request `succeeded`.
+      if (!refund || refundOutcomeOf(refund.status) !== 'succeeded') {
+        throw refundNotEffective(refund, audit.targetId);
       }
     }
     const elsewhere = await trx

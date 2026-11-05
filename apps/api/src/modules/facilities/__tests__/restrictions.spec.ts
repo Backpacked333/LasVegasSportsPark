@@ -652,7 +652,7 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
     expect(released.status).toBe('released');
   });
 
-  it('authorization, idempotency and uniqueness: front desk cannot restrict, replays return the same restriction, one open restriction per task', async () => {
+  it('authorization, idempotency and uniqueness: front desk cannot restrict, replays return the same restriction, one open restriction per task at any instant', async () => {
     const body = {
       facilityId: facility,
       resourceId: pitch.northHalfId,
@@ -691,7 +691,7 @@ describe('operating restrictions (SPK-FAC-003/004, §4.8 POST /maintenance-restr
     expect(
       (await t.http.get(`/v1/maintenance-restrictions/${first.body.id}`).set(scoped)).status,
     ).toBe(403);
-    // one unreleased restriction per task (database unique index, reported as a conflict)
+    // one unreleased restriction per task at any instant (exclusion constraint 0906, a conflict)
     const taskRes = await post('/v1/maintenance-tasks', {
       facilityId: facility,
       resourceId: pitch.southHalfId,

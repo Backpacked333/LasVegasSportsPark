@@ -246,7 +246,8 @@ describe('SPK-COND-002 / SPK-AT-020: session package (assembled application)', (
         201,
       );
       expect(admitted).toMatchObject({ status: 'admitted', basis: { kind: 'session_booking' } });
-      // a session the package never booked does not admit
+      // a session the package never booked does not admit (checked on its own day)
+      t.clock.set(new Date(Date.parse('2026-11-20T02:00:00Z') + 5 * DAY - 15 * 60_000));
       const unbooked = await ok<{ status: string; issues: Array<{ code: string }> }>(
         post(t, '/v1/session-checkins', desk.header, {
           personId: buyer.personId,

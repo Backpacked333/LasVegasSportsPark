@@ -6,7 +6,8 @@
  * own validation is the guarantee and its field messages are shown with the result.
  */
 import { useApp, useNow } from '../../providers/AppProviders';
-import { deviceMidnight, deviceTimeZone, localDateOf } from './format';
+import { deviceZonePhrase } from '../../ui/time';
+import { deviceMidnight, localDateOf } from './format';
 import type { FacilityChoice } from './facilities';
 import type { ApiError } from '@sportspark/api-client';
 import { CommandError } from './feedback';
@@ -140,9 +141,7 @@ export function BaseParameterFields({
             value={state.from}
             onChange={(from) => set({ from })}
             hint={
-              shape === 'organization_period'
-                ? `From midnight in your time zone (${deviceTimeZone()}).`
-                : zoneHint
+              shape === 'organization_period' ? `From midnight in ${deviceZonePhrase()}.` : zoneHint
             }
             error={errors.from}
           />
@@ -154,7 +153,7 @@ export function BaseParameterFields({
             onChange={(to) => set({ to })}
             hint={
               shape === 'organization_period'
-                ? `Up to the end of this day in your time zone (${deviceTimeZone()}).`
+                ? `Up to the end of this day in ${deviceZonePhrase()}.`
                 : 'Included in the period.'
             }
             error={errors.to}

@@ -52,6 +52,16 @@ export interface PersonDirectoryPort {
    * rewriting rows. [] for an unknown or other-organization id.
    */
   personIdsResolvingTo(organizationId: string, personId: string, trx?: Trx): Promise<string[]>;
+  /**
+   * `personIdsResolvingTo` for many people in one read (R4-CARRY-01, §4.12): each given id maps to
+   * exactly the array `personIdsResolvingTo` returns for it, [] for an unknown, malformed or
+   * other-organization id, so a caller evaluating a roster reads merge history once, not per player.
+   */
+  personIdsResolvingToMany(
+    organizationId: string,
+    personIds: readonly string[],
+    trx?: Trx,
+  ): Promise<Map<string, string[]>>;
 }
 
 /** The grant behind an authority answer (ID-09, IF-46). */

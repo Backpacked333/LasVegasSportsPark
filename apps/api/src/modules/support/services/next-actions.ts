@@ -114,6 +114,45 @@ export class NextActions {
               },
             ]
           : [];
+      // R4-COMMS-AUTOMATION-07 / §4.11 / §5.11: an essential notice whose hand-off has an unknown
+      // outcome is the front desk's to reconcile with what the provider or family confirmed;
+      // the attempts list is where they establish it. Never a blind resend (§4.12).
+      case 'communications.delivery_unknown': {
+        const out: Candidate[] = [];
+        if (row.affected_type === 'delivery_attempt' && affectedId) {
+          out.push({
+            definition: CommunicationsActions.reconcileDelivery,
+            label: 'Record what the provider or family confirmed',
+            method: 'POST',
+            href: `/v1/delivery-attempts/${affectedId}/reconcile`,
+            facilityId,
+          });
+        }
+        if (typeof details['notificationId'] === 'string') {
+          out.push({
+            definition: CommunicationsActions.readNotification,
+            label: 'Review the delivery attempts',
+            method: 'GET',
+            href: `/v1/notifications/${details['notificationId']}/deliveries`,
+            facilityId,
+          });
+        }
+        return out;
+      }
+      // R4-OPS-MODULES-02 / SPK-FAC-004: a restriction whose interval ended (or is about to)
+      // without a release is settled by the authorized release, which keeps its inspection gate.
+      case 'facilities.restriction_unreleased_at_end':
+        return row.affected_type === 'restriction' && affectedId
+          ? [
+              {
+                definition: FacilitiesActions.releaseToService,
+                label: 'Release the area to service after its inspection',
+                method: 'POST',
+                href: `/v1/maintenance-restrictions/${affectedId}/release`,
+                facilityId,
+              },
+            ]
+          : [];
       default:
         if (row.category.startsWith('facilities.') && row.affected_type === 'maintenance_task') {
           return [

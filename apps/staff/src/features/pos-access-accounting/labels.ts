@@ -70,6 +70,15 @@ export const CARD_PAYMENT_STATUS: Labels<CardPaymentStatus> = {
 
 type RefundStatus = NonNullable<Schema<'PosReturn'>['refundStatus']>;
 
+/**
+ * R4-PROVIDER-OUTCOMES-02: the card refund of a return that the provider reported failed after it
+ * was recorded succeeded (`refundReversedAt`): no money went back to the card.
+ */
+export const RETURN_REFUND_REVERSED = {
+  tone: 'danger',
+  label: 'card refund reversed: not returned',
+} as const;
+
 export const RETURN_REFUND_STATUS: Labels<RefundStatus> = {
   requested: { tone: 'pending', label: 'card refund requested' },
   processing: { tone: 'pending', label: 'card refund processing' },

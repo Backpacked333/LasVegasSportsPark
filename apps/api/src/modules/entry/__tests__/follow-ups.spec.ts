@@ -2,7 +2,7 @@ import { newId, systemPrincipal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Outbox, UnitOfWork } from '../../../kernel';
 import type { TestApp } from '../../../testing';
-import { CatalogEvents } from '../../catalog';
+import { CatalogEvents, createOfferingFixture, createOfferingSessionFixture } from '../../catalog';
 import { createPersonFixture, IdentityEvents } from '../../identity';
 import {
   at,
@@ -10,8 +10,10 @@ import {
   EventsService,
   personCommitment,
   seedPitchWithHalves,
+  seedResource,
 } from '../../scheduling';
 import { ActivityResolver } from '../services/activity-resolver';
+import { CheckinsService } from '../services/checkins.service';
 import { createVisitFixture } from '../testing/entry-fixtures';
 import {
   adultCustomer,
@@ -508,6 +510,271 @@ describe('entry follow-ups (ENT-03, ENT-04)', () => {
           history: [expect.objectContaining({ personId: duplicate })],
         }),
       ]);
+    });
+  });
+  describe('moved activities (R4-OPS-MODULES-07)', () => {
+    it('SPK-ENTRY-001 / SPK-ENTRY-003 / §4.12: a live check-in follows its session when scheduling moves it — same day: the stored times follow; another day: withdrawn as activity_moved, so the person can be checked in on the new day', async () => {
+      t.clock.set(at(TODAY, '09:30'));
+      const space = await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Court R4-07',
+      });
+      const events = t.app.get(EventsService);
+      const event = await createScheduledEvent(events, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        kind: 'session',
+        title: 'Movable session',
+        start: at(TODAY, '10:00'),
+        end: at(TODAY, '11:00'),
+        resourceIds: [space.resourceId],
+        sourceType: 'catalog.session',
+      });
+      const offering = await createOfferingFixture(t, {
+        responsibleManagerPersonId: manager.personId,
+      });
+      const sessionId = await createOfferingSessionFixture(t, {
+        offeringId: offering.offeringId,
+        scheduledStart: new Date(at(TODAY, '10:00')),
+        scheduledEnd: new Date(at(TODAY, '11:00')),
+        schedulingEventId: event.id,
+      });
+      const moving: Program = {
+        offering,
+        sessionId,
+        start: at(TODAY, '10:00'),
+        end: at(TODAY, '11:00'),
+      };
+      const child = await createPersonFixture(t, { kind: 'child' });
+      await enroll(t, moving, child, fam.guardian.personId);
+      await arrive(child);
+      const admitted = await post(t, '/v1/session-checkins', desk, {
+        personId: child,
+        activity: sessionRef(moving),
+      });
+      expect(admitted.status, JSON.stringify(admitted.body)).toBe(201);
+      expect(admitted.body.status).toBe('admitted');
+      await drainOutbox(t);
+      const system = systemPrincipal(t.organizationId, 'tests');
+
+      // Same facility-local day: the admission stands, at the session's new times. (The clock
+      // advances between steps so the announcements below have a deterministic order.)
+      t.clock.set(at(TODAY, '09:40'));
+      await events.moveEvent(system, event.id, {
+        scheduledStart: at(TODAY, '10:30'),
+        scheduledEnd: at(TODAY, '11:30'),
+        reason: 'Court maintenance',
+      });
+      await drainOutbox(t);
+      const retimed = (await checkinRows(sessionId))[0]!;
+      expect(retimed).toMatchObject({
+        status: 'admitted',
+        revision: (admitted.body.revision as number) + 1,
+      });
+      expect(new Date(retimed.activity_start).toISOString()).toBe(at(TODAY, '10:30'));
+      expect(new Date(retimed.activity_end).toISOString()).toBe(at(TODAY, '11:30'));
+
+      // Another day: the check-in for this day is withdrawn, the live slot is free again.
+      t.clock.set(at(TODAY, '09:50'));
+      await events.moveEvent(system, event.id, {
+        scheduledStart: at('2027-01-23', '10:00'),
+        scheduledEnd: at('2027-01-23', '11:00'),
+        reason: 'Closure resolved by rescheduling',
+      });
+      await drainOutbox(t);
+      const moved = await checkinRows(sessionId);
+      expect(moved).toEqual([
+        expect.objectContaining({
+          id: admitted.body.id,
+          status: 'withdrawn',
+          withdrawn_reason: 'activity_moved',
+          revision: (admitted.body.revision as number) + 2,
+        }),
+      ]);
+      const announced = await t.db
+        .selectFrom('outbox_events')
+        .select('payload')
+        .where('event_type', '=', 'entry.session_checkin_changed')
+        .where('aggregate_id', '=', admitted.body.id as string)
+        .orderBy('occurred_at')
+        .execute();
+      expect(announced.map((e) => (e.payload as { status: string }).status)).toEqual([
+        'admitted',
+        'admitted',
+        'withdrawn',
+      ]);
+      // Replay-safe: both moves announced again (redeliveries under new event ids, the older one
+      // last) change nothing — the check-in follows the session as it is now, never the payload.
+      const retimedEvents = await t.db
+        .selectFrom('outbox_events')
+        .select(['payload', 'occurred_at'])
+        .where('event_type', '=', CatalogEvents.sessionRetimed.type)
+        .where('aggregate_id', '=', offering.offeringId)
+        .orderBy('occurred_at', 'desc')
+        .execute();
+      expect(retimedEvents).toHaveLength(2);
+      await t.app.get(UnitOfWork).run(async ({ trx }) => {
+        for (const row of retimedEvents) {
+          await t.app.get(Outbox).enqueue(trx, CatalogEvents.sessionRetimed, {
+            organizationId: t.organizationId,
+            aggregateType: 'offering',
+            aggregateId: offering.offeringId,
+            payload: CatalogEvents.sessionRetimed.payload.parse(row.payload),
+            correlationId: null,
+          });
+        }
+      });
+      await drainOutbox(t);
+      expect(await checkinRows(sessionId)).toEqual(moved);
+
+      // On the new day the child is checked in again (no already_checked_in).
+      t.clock.set(at('2027-01-23', '09:30'));
+      const again = await post(t, '/v1/session-checkins', desk, {
+        personId: child,
+        activity: sessionRef(moving),
+      });
+      expect(again.status, JSON.stringify(again.body)).toBe(201);
+      expect(new Date(again.body.activityStart as string).toISOString()).toBe(
+        at('2027-01-23', '10:00'),
+      );
+      t.clock.set(at(TODAY, '12:30'));
+    });
+
+    it('§4.12: a moved scheduling event withdraws its live check-ins when it moves to another day', async () => {
+      t.clock.set(at(TODAY, '09:30'));
+      const field = await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Field R4-07',
+      });
+      const player = await createPersonFixture(t, { kind: 'adult' });
+      const events = t.app.get(EventsService);
+      const event = await createScheduledEvent(events, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        resourceIds: [field.resourceId],
+        start: at(TODAY, '16:00'),
+        end: at(TODAY, '17:00'),
+        kind: 'practice',
+        sourceType: 'program',
+        commitments: [personCommitment(player, 'participant')],
+      });
+      await arrive(player);
+      const checkin = await post(t, '/v1/session-checkins', desk, {
+        personId: player,
+        activity: { type: 'event', eventId: event.id },
+      });
+      expect(checkin.status, JSON.stringify(checkin.body)).toBe(201);
+      await events.moveEvent(systemPrincipal(t.organizationId, 'tests'), event.id, {
+        scheduledStart: at('2027-01-17', '16:00'),
+        scheduledEnd: at('2027-01-17', '17:00'),
+        reason: 'Pitch closed',
+      });
+      await drainOutbox(t);
+      expect(await checkinRows(event.id)).toEqual([
+        expect.objectContaining({ status: 'withdrawn', withdrawn_reason: 'activity_moved' }),
+      ]);
+      t.clock.set(at(TODAY, '12:30'));
+    });
+
+    it('§4.12 / SPK-ENTRY-001: correcting the date of an activity that already took place never withdraws its admissions — the stored times follow and one review exception lists the check-ins kept', async () => {
+      t.clock.set(at(TODAY, '09:30'));
+      const field = await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Field R4-07 past',
+      });
+      const player = await createPersonFixture(t, { kind: 'adult' });
+      const events = t.app.get(EventsService);
+      const event = await createScheduledEvent(events, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        resourceIds: [field.resourceId],
+        start: at(TODAY, '10:00'),
+        end: at(TODAY, '11:00'),
+        kind: 'practice',
+        sourceType: 'program',
+        commitments: [personCommitment(player, 'participant')],
+      });
+      await arrive(player);
+      const checkin = await post(t, '/v1/session-checkins', desk, {
+        personId: player,
+        activity: { type: 'event', eventId: event.id },
+      });
+      expect(checkin.status, JSON.stringify(checkin.body)).toBe(201);
+      expect(checkin.body.status).toBe('admitted');
+      await drainOutbox(t);
+
+      // Three days later the schedule is corrected: the practice took place the day before.
+      t.clock.set(at('2027-01-19', '09:00'));
+      await events.moveEvent(systemPrincipal(t.organizationId, 'tests'), event.id, {
+        scheduledStart: at('2027-01-15', '10:00'),
+        scheduledEnd: at('2027-01-15', '11:00'),
+        reason: 'Record correction',
+      });
+      await drainOutbox(t);
+      const [kept] = await checkinRows(event.id);
+      expect(kept).toMatchObject({
+        id: checkin.body.id,
+        status: 'admitted',
+        withdrawn_at: null,
+        withdrawn_reason: null,
+        revision: (checkin.body.revision as number) + 1,
+      });
+      expect(new Date(kept!.admitted_at!).toISOString()).toBe(checkin.body.admittedAt);
+      expect(new Date(kept!.activity_start).toISOString()).toBe(at('2027-01-15', '10:00'));
+      expect(new Date(kept!.activity_end).toISOString()).toBe(at('2027-01-15', '11:00'));
+      const review = (await exceptionsOf(t, 'entry.past_activity_moved')).filter(
+        (e) => e.affected_id === `event:${event.id}`,
+      );
+      expect(review).toHaveLength(1);
+      expect(review[0]).toMatchObject({
+        status: 'open',
+        severity: 'warning',
+        owner_queue: 'program_manager',
+        facility_id: t.facilityId,
+      });
+      expect(review[0]!.details).toMatchObject({
+        activityType: 'event',
+        activityId: event.id,
+        currentStart: at('2027-01-15', '10:00'),
+        checkins: [
+          {
+            checkinId: checkin.body.id,
+            personId: player,
+            status: 'admitted',
+            admittedAt: checkin.body.admittedAt,
+            previousStart: at(TODAY, '10:00'),
+            previousEnd: at(TODAY, '11:00'),
+          },
+        ],
+      });
+
+      // Replay-safe: the follow-up run again changes nothing and raises nothing more.
+      const outcome = await t.app
+        .get(UnitOfWork)
+        .run(({ trx }) =>
+          t.app
+            .get(CheckinsService)
+            .followActivityTimes(
+              trx,
+              t.organizationId,
+              'event',
+              event.id,
+              event.id,
+              'entry.follow_event_changed',
+              null,
+            ),
+        );
+      expect(outcome).toEqual({ moved: 0, withdrawn: 0, keptForReview: 0 });
+      expect(await checkinRows(event.id)).toEqual([kept]);
+      expect(
+        (await exceptionsOf(t, 'entry.past_activity_moved')).filter(
+          (e) => e.affected_id === `event:${event.id}`,
+        ),
+      ).toHaveLength(1);
+      t.clock.set(at(TODAY, '12:30'));
     });
   });
 });

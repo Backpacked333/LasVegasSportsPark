@@ -193,8 +193,17 @@ describe('catalog discovery and publication check (CAT-01)', () => {
     expect(unknown.status).toBe(404);
     expect(draft.body.code).toBe(unknown.body.code);
     expect((await t.http.get(path)).status).toBe(401);
-    // a manager scoped to another facility may not check it
-    expect((await t.http.get(path).set(eastManager)).status).toBe(403);
+    // a manager scoped to another facility may not check it, and cannot tell the draft from an
+    // unknown id either (§4.10, as GET /offerings/{id} answers them; R4-AUTHZ-TARGETS-04 follow-up)
+    const hidden = await t.http.get(path).set(eastManager);
+    const unknownToEast = await t.http
+      .get(`/v1/offerings/${newId()}/publication-check`)
+      .set(eastManager);
+    expect(hidden.status).toBe(404);
+    expect(hidden.body).toMatchObject({
+      code: unknownToEast.body.code,
+      message: unknownToEast.body.message,
+    });
     expect((await t.http.get(`/v1/offerings/${newId()}/publication-check`).set(pm)).status).toBe(
       404,
     );

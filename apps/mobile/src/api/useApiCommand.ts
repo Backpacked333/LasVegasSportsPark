@@ -7,6 +7,11 @@
  * run it again.
  * Pass `expectedRevision` in the body wherever the API takes it; a STALE_REVISION answer is shown
  * with "Reload" and the user's input is kept (SPK-UX-008).
+ *
+ * The hook also remembers the key whose last attempt got no definite answer (`NoAnswerMemory`), so
+ * a refusal before running that answers the re-check under that key is marked
+ * (`refusedAfterNoAnswer`): it proves only that the check did not run, and the screens keep the
+ * outcome open (SPK-PAY-007, SPK-AT-028, R4-CLIENTS-A11Y-COPY-01).
  */
 import type {
   ApiError,
@@ -18,7 +23,7 @@ import type {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../providers/AppProviders';
-import { keepsIntentAfterFailure } from './command-outcome';
+import { NoAnswerMemory, keepsIntentAfterFailure } from './command-outcome';
 
 export type CommandRequest<M extends CommandMethod, P extends PathsWithMethod<M>> = Omit<
   RequestOptions<P, M>,
@@ -38,12 +43,20 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
   const api = useApi();
   const queryClient = useQueryClient();
   const tracker = useRef(api.intentTracker());
+  const noAnswer = useRef(new NoAnswerMemory());
 
   const mutation = useMutation<ResponseBody<P, M>, ApiError, CommandRequest<M, P>>({
-    mutationFn: (request) => {
+    mutationFn: async (request) => {
       const intent = tracker.current.current(request);
       const send = api[method] as (path: P, options: object) => Promise<ResponseBody<P, M>>;
-      return send(path, { ...request, intent });
+      try {
+        const data = await send(path, { ...request, intent });
+        noAnswer.current.settled();
+        return data;
+      } catch (error) {
+        noAnswer.current.failed(intent.key, error);
+        throw error;
+      }
     },
     // A definitive refusal ends the intent: the API replays a stored 4xx for the same key, so the
     // next attempt (after the user fixed the cause) needs a new key. Unknown outcomes keep it, and
@@ -61,6 +74,7 @@ export function useApiCommand<M extends CommandMethod, P extends PathsWithMethod
 
   const reset = useCallback(() => {
     tracker.current.reset();
+    noAnswer.current.settled();
     mutation.reset();
   }, [mutation]);
 

@@ -77,6 +77,62 @@ describe('people endpoints (SPK-IAM-001, SPK-IAM-002, SPK-IAM-007, §4.9, §4.10
     });
   });
 
+  it('§4.5 / DEC-004 (R4-PRIVACY-02): a child record stays editable after its person turns 18; only a changed date of birth is checked against the kind', async () => {
+    const header = await staffHeader(['front_desk']);
+    const child = await createPersonFixture(t, { kind: 'child', dateOfBirth: '2008-12-01' });
+    const url = `/v1/people/${child}`;
+    const start = t.clock.now();
+    try {
+      // the day after the 18th birthday: age moved, the record did not
+      t.clock.set('2026-12-02T12:00:00Z');
+      const renamed = await t.http
+        .patch(url)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ givenName: 'Corrected', expectedRevision: 1 });
+      expect(renamed.status, JSON.stringify(renamed.body)).toBe(200);
+      expect(renamed.body).toMatchObject({
+        givenName: 'Corrected',
+        kind: 'child',
+        dateOfBirth: '2008-12-01',
+        revision: 2,
+      });
+      // the stored date of birth sent back unchanged is not a change
+      const deactivated = await t.http.patch(url).set(header).set('Idempotency-Key', key()).send({
+        status: 'inactive',
+        dateOfBirth: '2008-12-01',
+        reason: 'left the program',
+        expectedRevision: 2,
+      });
+      expect(deactivated.status, JSON.stringify(deactivated.body)).toBe(200);
+      expect(deactivated.body).toMatchObject({ status: 'inactive', kind: 'child', revision: 3 });
+      // a date of birth the command changes is still checked against the kind it cannot change
+      const changed = await t.http
+        .patch(url)
+        .set(header)
+        .set('Idempotency-Key', key())
+        .send({ dateOfBirth: '2008-11-30', expectedRevision: 3 });
+      expect(changed.status).toBe(400);
+      expect(changed.body).toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: { derivedKind: 'adult' },
+      });
+      const stored = await t.db
+        .selectFrom('persons')
+        .select(['given_name', 'status', 'kind', 'revision'])
+        .where('id', '=', child)
+        .executeTakeFirstOrThrow();
+      expect(stored).toEqual({
+        given_name: 'Corrected',
+        status: 'inactive',
+        kind: 'child',
+        revision: 3,
+      });
+    } finally {
+      t.clock.set(start);
+    }
+  });
+
   it('§4.9: POST /v1/people replays on the same idempotency key without creating a second person', async () => {
     const header = await staffHeader(['front_desk']);
     const body = {

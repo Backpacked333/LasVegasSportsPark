@@ -47,7 +47,14 @@ import type {
   SettlementReconciliationsTable,
 } from '@sportspark/db';
 import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
-import type { RequestWithContext, Trx } from '../../kernel';
+import type {
+  ActionDefinition,
+  AuthorizationService,
+  OperationalExceptions,
+  RequestWithContext,
+  Trx,
+} from '../../kernel';
+import { FinanceActions } from './finance.actions';
 
 export type Reader = Db | Trx;
 export type QuoteRow = Selectable<QuotesTable>;
@@ -76,8 +83,84 @@ export function organizationOf(principal: Principal): string {
   return principal.organizationId;
 }
 
-export function isStaffLike(principal: Principal): boolean {
-  return principal.kind === 'staff' || principal.kind === 'system';
+/**
+ * R4-AUTHZ-TARGETS-01 (§2.1, SPK-IAM-001/003, §4.14): whether the principal holds `action` through
+ * a staff role (or is the organization's own system actor). The kernel decides it on a target with
+ * no subject persons and no team entry, so only a staff role that holds the action passes: a
+ * person's own self, guardian or captain authority never counts, and neither does a staff role
+ * that does not hold the action (a coach, official, scheduler or facilities operator acting for
+ * their own family is a customer here). The finance counterpart of competition's
+ * `staffAuthority`; it replaces the principal-kind shortcut, since identity gives kind `staff` to
+ * anyone who holds any staff role.
+ */
+export async function staffAuthority(
+  authorization: Pick<AuthorizationService, 'decide'>,
+  principal: Principal,
+  action: ActionDefinition,
+  target: { type: string; organizationId: string; facilityId?: string | null },
+): Promise<boolean> {
+  if (principal.kind === 'system') return principal.organizationId === target.organizationId;
+  if (principal.kind !== 'staff') return false;
+  const decision = await authorization.decide(principal, action, {
+    type: target.type,
+    organizationId: target.organizationId,
+    facilityId: target.facilityId ?? null,
+  });
+  return decision.allowed;
+}
+
+/**
+ * R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11, SPK-UX-006): once provider evidence settles a lost
+ * or stalled outcome (a payment or refund gone `unknown`, an abandoned challenge, an accounting
+ * batch without an answer), the exception that told the finance operator it was unresolved is
+ * resolved in the same transaction, by the finance system actor with the evidence named as the
+ * resolution, so the queue and Today's financial exceptions list only what is still unresolved.
+ * Matched by category and the affected record; nothing open, nothing done. Returns how many were
+ * resolved.
+ */
+export async function resolveSettledExceptions(
+  exceptions: Pick<OperationalExceptions, 'list' | 'transition'>,
+  trx: Trx,
+  input: {
+    organizationId: string;
+    categories: readonly string[];
+    affectedType: string;
+    affectedId: string;
+    actorLabel: string;
+    reason: string;
+    resolution: Record<string, unknown>;
+    correlationId?: string | null;
+  },
+): Promise<number> {
+  const actor = financeSystem(input.organizationId, input.actorLabel);
+  let resolved = 0;
+  for (const category of input.categories) {
+    const open = await exceptions.list(
+      input.organizationId,
+      {
+        category,
+        affectedType: input.affectedType,
+        affectedId: input.affectedId,
+        statuses: ['open', 'acknowledged'],
+      },
+      trx,
+    );
+    for (const exception of open.items) {
+      try {
+        await exceptions.transition(trx, actor, exception.id, 'resolved', {
+          reason: input.reason,
+          resolution: input.resolution,
+          correlationId: input.correlationId ?? undefined,
+        });
+        resolved += 1;
+      } catch (error) {
+        // Settled meanwhile by its owner (the transition re-reads it under a lock): nothing to do.
+        if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') continue;
+        throw error;
+      }
+    }
+  }
+  return resolved;
 }
 
 /** The system actor finance uses for follow-up work (timers, webhooks, reconciliation). */
@@ -263,15 +346,46 @@ export function toOrder(
   };
 }
 
+/**
+ * R4-PROVIDER-OUTCOMES-02 (SPK-PAY-008, §4.7 invariant 6): the money a payment's refunds actually
+ * returned: what was recorded refunded, less the refunds the provider later reported failed
+ * (their reversal is booked, 0681).
+ */
+export function netRefundedMinor(
+  row: Pick<RefundableRow, 'refunded_minor' | 'reversed_minor'>,
+): number {
+  return Number(row.refunded_minor) - Number(row.reversed_minor);
+}
+
+/**
+ * What can still be refunded from a payment: captured less net refunded, reserved and what a
+ * compensation credit took (MONEY-02). The same arithmetic as the database's
+ * payment_refundables_within_captured check.
+ */
+export function refundableAvailableMinor(
+  row: Pick<
+    RefundableRow,
+    'captured_minor' | 'refunded_minor' | 'reversed_minor' | 'reserved_minor' | 'compensated_minor'
+  >,
+): number {
+  return (
+    Number(row.captured_minor) -
+    netRefundedMinor(row) -
+    Number(row.reserved_minor) -
+    Number(row.compensated_minor)
+  );
+}
+
 export function toRefundable(row: RefundableRow): Refundable {
   return {
     capturedMinor: row.captured_minor,
-    refundedMinor: row.refunded_minor,
+    // R4-PROVIDER-OUTCOMES-02: money actually returned (a reversed refund came back).
+    refundedMinor: netRefundedMinor(row),
     reservedMinor: row.reserved_minor,
     compensatedMinor: row.compensated_minor,
+    reversedMinor: row.reversed_minor,
     // MONEY-02: funds a compensation credit took are no longer refundable.
-    availableMinor:
-      row.captured_minor - row.refunded_minor - row.reserved_minor - row.compensated_minor,
+    availableMinor: refundableAvailableMinor(row),
     currency: row.currency,
   };
 }
@@ -293,6 +407,7 @@ export function toRefund(row: RefundRow, refundable: RefundableRow): Refund {
     refundable: toRefundable(refundable),
     unknownSince: isoOrNull(row.unknown_since),
     resolvedAt: isoOrNull(row.resolved_at),
+    reversedAt: isoOrNull(row.reversed_at),
     createdAt: iso(row.created_at),
   };
 }
@@ -448,18 +563,26 @@ export function toLiveAttempt(row: PaymentAttemptRow): LiveAttempt {
 }
 
 /**
- * The details of a PAYMENT_OUTCOME_UNKNOWN refusal (FIN-01): the attempt's payer and staff learn
- * which attempt is in the way (`attemptId`, with the earlier `paymentAttemptId` kept for
- * existing clients) and its purpose; anyone else learns only that a payment is on its way, never
- * another payer's attempt (§4.10).
+ * The details of a PAYMENT_OUTCOME_UNKNOWN refusal (FIN-01): the attempt's payer and the staff who
+ * read payments (`finance.read_checkout` through a staff role, R4-AUTHZ-TARGETS-01) learn which
+ * attempt is in the way (`attemptId`, with the earlier `paymentAttemptId` kept for existing
+ * clients) and its purpose; anyone else, a staff member without that role included, learns only
+ * that a payment is on its way, never another payer's attempt (§4.10).
  */
-export function outcomeUnknownDetails(
+export async function outcomeUnknownDetails(
+  authorization: Pick<AuthorizationService, 'decide'>,
   principal: Principal,
-  attempt: Pick<PaymentAttemptRow, 'id' | 'purpose' | 'status' | 'payer_person_id'>,
-): Record<string, unknown> {
+  attempt: Pick<
+    PaymentAttemptRow,
+    'id' | 'organization_id' | 'purpose' | 'status' | 'payer_person_id'
+  >,
+): Promise<Record<string, unknown>> {
   const visible =
-    isStaffLike(principal) ||
-    (principal.personId !== null && principal.personId === attempt.payer_person_id);
+    (principal.personId !== null && principal.personId === attempt.payer_person_id) ||
+    (await staffAuthority(authorization, principal, FinanceActions.readCheckout, {
+      type: 'payment_attempt',
+      organizationId: attempt.organization_id,
+    }));
   return visible
     ? {
         attemptId: attempt.id,

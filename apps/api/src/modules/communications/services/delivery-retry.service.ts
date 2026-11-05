@@ -23,6 +23,7 @@ import { CHANNEL_PROVIDERS, type ChannelProviderPort } from '../ports';
 import { AudienceResolver } from './audience-resolver';
 import { DeliveryWorker } from './delivery-worker';
 import { NotificationsService } from './notifications.service';
+import { PreferencesService } from './preferences.service';
 
 /**
  * Retry of one failed delivery (COM-02; SPK-COMMS-004 "failed", SPK-UX-006 "failed urgent
@@ -36,11 +37,16 @@ import { NotificationsService } from './notifications.service';
  * - a recipient who lost authority: failed with RECIPIENT_REVOKED, revoked since, or (protected
  *   notice) no longer authorized when re-checked now exactly as at dispatch (RESOURCE_CONFLICT
  *   `RECIPIENT_REVOKED`, nothing queued);
- * - an obsolete notice (SUPERSEDED, or superseded since: RESOURCE_CONFLICT `NOTICE_SUPERSEDED`);
+ * - an obsolete notice (SUPERSEDED, or superseded since, for everyone or for this recipient
+ *   only: RESOURCE_CONFLICT `NOTICE_SUPERSEDED`);
+ * - a channel the recipient has switched off for the notice's category since it was sent
+ *   (RESOURCE_CONFLICT `CHANNEL_DISABLED`, SPK-COMMS-007; R4-COMMS-AUTOMATION-05);
  * - a second retry of the same attempt (`ALREADY_RETRIED`) or a recipient and channel that already
  *   have a live attempt (`LIVE_ATTEMPT_EXISTS`).
- * The database refuses the same violations (migration 1005). The delivery worker is nudged after
- * commit; its poll loop is the durable path, and its hand-off re-checks authority again.
+ * The database refuses the same violations but the channel preference, which is a current choice
+ * rather than a fact of the attempt (migrations 1005 and 1011). The delivery worker is nudged after
+ * commit; its poll loop is the durable path, and its hand-off re-checks authority and the channel
+ * preference again.
  */
 @Injectable()
 export class DeliveryRetryService {
@@ -54,6 +60,7 @@ export class DeliveryRetryService {
     private readonly resolver: AudienceResolver,
     private readonly notifications: NotificationsService,
     private readonly worker: DeliveryWorker,
+    private readonly preferences: PreferencesService,
   ) {}
 
   async retry(
@@ -89,15 +96,6 @@ export class DeliveryRetryService {
         if (source.channel === 'in_app' || source.status !== 'failed') {
           throw errors.invalidTransition('DeliveryAttempt', source.status, 'retry');
         }
-        if (
-          source.failure_code === 'SUPERSEDED' ||
-          notification.superseded_by_notification_id !== null
-        ) {
-          throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
-            code: 'NOTICE_SUPERSEDED',
-            supersededByNotificationId: notification.superseded_by_notification_id,
-          });
-        }
         const recipient = await trx
           .selectFrom('notification_recipients')
           .selectAll()
@@ -105,6 +103,16 @@ export class DeliveryRetryService {
           .where('id', '=', source.recipient_id)
           .forUpdate()
           .executeTakeFirstOrThrow();
+        // SPK-COMMS-005: replaced for everyone, or for this recipient only (a newer notice reached
+        // them; R4-COMMS-AUTOMATION-03, migration 1011), which is read under the recipient lock.
+        const supersededBy =
+          recipient.superseded_by_notification_id ?? notification.superseded_by_notification_id;
+        if (source.failure_code === 'SUPERSEDED' || supersededBy !== null) {
+          throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
+            code: 'NOTICE_SUPERSEDED',
+            supersededByNotificationId: supersededBy,
+          });
+        }
         const revoked = (): Error =>
           errors.resourceConflict('The recipient no longer holds the authority to receive it.', {
             code: 'RECIPIENT_REVOKED',
@@ -129,6 +137,25 @@ export class DeliveryRetryService {
             trx,
           );
           if (!ok) throw revoked();
+        }
+        // SPK-COMMS-007 (R4-COMMS-AUTOMATION-05): never on a channel the person has switched off
+        // for this category since the original send (the hand-off re-checks it again).
+        const enabled = await this.preferences.enabledChannels(
+          trx,
+          organizationId,
+          recipient.person_id,
+          notification.category,
+        );
+        if (!enabled.includes(source.channel)) {
+          throw errors.resourceConflict(
+            'The recipient has switched this channel off for this kind of notice.',
+            {
+              code: 'CHANNEL_DISABLED',
+              recipientId: recipient.id,
+              channel: source.channel,
+              category: notification.category,
+            },
+          );
         }
         const retried = await trx
           .selectFrom('delivery_attempts')

@@ -61,6 +61,7 @@ import {
   keysetAt,
   keysetPage,
   organizationOf,
+  resolveSettledExceptions,
   type Reader,
 } from '../../finance.shared';
 import {
@@ -776,6 +777,24 @@ export class AccountingExportService {
       .where('organization_id', '=', organizationId)
       .where('id', '=', id)
       .execute();
+    if (row.status === 'unknown') {
+      // R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): the connection's answer settled it.
+      await resolveSettledExceptions(this.exceptions, trx, {
+        organizationId,
+        categories: ['finance.accounting_export_unknown'],
+        affectedType: 'accounting_export_batch',
+        affectedId: id,
+        actorLabel: 'finance.accounting_export',
+        reason: `The accounting connection answered: ${result.outcome}.`,
+        resolution: {
+          batchId: id,
+          from: row.status,
+          to: status,
+          providerReference: result.outcome === 'accepted' ? result.providerReference : null,
+        },
+        correlationId,
+      });
+    }
     if (status === 'rejected') {
       // The entries can be exported again in a new batch (at-most-once applies to live lines).
       await trx

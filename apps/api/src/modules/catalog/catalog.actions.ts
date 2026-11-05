@@ -152,6 +152,9 @@ export const CatalogActions = defineActions({
     description: 'Explain the discounts a basket would receive (no redemption)',
     staffRoles: CATALOG_READERS,
     allowSelf: true,
-    requirements: ['SPK-PAY-002', 'SPK-PAY-003'],
+    // SPK-IAM-003, §4.10: a line's participant is someone the caller may register (as for a
+    // basket line, enrollment.manage_basket); per-person redemption counts are theirs to see.
+    subjectPermission: 'register',
+    requirements: ['SPK-PAY-002', 'SPK-PAY-003', 'SPK-IAM-003'],
   },
 });

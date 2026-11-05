@@ -7,7 +7,7 @@
  */
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { LiveText } from '../../../ui/announce';
+import { LiveText, sentences } from '../../../ui/announce';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../../ui/theme';
 
 export function SectionHeader({ title, detail }: { title: string; detail?: string }) {
@@ -174,13 +174,18 @@ export function ChoiceGroup<V extends string>({
   );
 }
 
-/** One independent yes/no choice (checkbox); no choice implies another (SPK-IAM-003). */
+/**
+ * One independent yes/no choice (checkbox); no choice implies another (SPK-IAM-003). `error` is the
+ * error of a required choice among the rows ("Choose at least one permission to pass on."): it is
+ * read with each row, after its detail (SPK-UX-009).
+ */
 export function CheckboxRow({
   label,
   detail,
   checked,
   onChange,
   disabled = false,
+  error,
   testID,
 }: {
   label: string;
@@ -188,13 +193,14 @@ export function CheckboxRow({
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
+  error?: string | null;
   testID?: string;
 }) {
   return (
     <Pressable
       accessibilityRole="checkbox"
       accessibilityLabel={label}
-      accessibilityHint={detail}
+      accessibilityHint={error ? sentences(detail, `Error: ${error}`) : detail}
       accessibilityState={{ checked, disabled }}
       disabled={disabled}
       onPress={() => onChange(!checked)}

@@ -6,7 +6,8 @@ import type { MaintenanceSeverity } from '@sportspark/contracts';
  * Pending operator decision (§6.6 "Pickup and outage procedure" / "Actual facilities, spaces,
  * subdivisions, hours" — Operations): the specification fixes neither the default due lead time
  * per severity, nor how far ahead preventive maintenance is materialized, nor which severities
- * escalate to the Today workspace when overdue. The mechanism is implemented here with proposed
+ * escalate to the Today workspace when overdue, nor how early an unreleased restriction's end is
+ * flagged. The mechanism is implemented here with proposed
  * defaults; the whole policy can be replaced by providing FACILITIES_POLICY.
  */
 export interface FacilitiesPolicy {
@@ -22,6 +23,12 @@ export interface FacilitiesPolicy {
   maxScheduleOccurrences: number;
   /** How already-booked events are handled when a restriction's closure is applied, unless the command says otherwise. */
   defaultResolutionMode: 'cancel_affected' | 'leave_for_resolution';
+  /**
+   * R4-OPS-MODULES-02 (SPK-FAC-004): how many hours before an active restriction's interval ends
+   * the facilities operator is warned when the task's inspection is still outstanding, so the area
+   * can be inspected and released, or kept closed with a follow-on restriction, before it reopens.
+   */
+  restrictionEndWarningHours: number;
 }
 
 export const FACILITIES_POLICY = Symbol('FACILITIES_POLICY');
@@ -34,4 +41,5 @@ export const DEFAULT_FACILITIES_POLICY: FacilitiesPolicy = {
   maxPreventiveOccurrencesPerRun: 50,
   maxScheduleOccurrences: 366,
   defaultResolutionMode: 'leave_for_resolution',
+  restrictionEndWarningHours: 24,
 };

@@ -1,4 +1,5 @@
 import { newId, systemPrincipal, type DomainEvent, type Principal } from '@sportspark/contracts';
+import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Outbox, UnitOfWork } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
@@ -146,7 +147,11 @@ describe('competition notices and team role holders (COM-03, COM-06)', () => {
     });
     await t.db
       .updateTable('team_roles')
-      .set({ effective_to: t.clock.now() })
+      .set({
+        effective_to: t.clock.now(),
+        ended_by: json({ kind: 'system' }),
+        ended_reason: 'stepped down',
+      })
       .where('team_entry_id', '=', teamEntryId)
       .where('person_id', '=', coCaptain)
       .execute();

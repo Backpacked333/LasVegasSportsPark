@@ -16,6 +16,7 @@
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
@@ -214,6 +215,10 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
     ...(classification === 'forfeit' ? ['forfeitingEntryId'] : []),
   ]);
   const unrenderedApiErrors = Object.keys(apiErrors).some((k) => !rendered.has(k));
+  // R4-LIFECYCLES-REVISIONS-02 (SPK-RESULT-004, §4.9): once a result is official, a change is a
+  // correction of that revision with its reason, made on Results review; a new report from here
+  // would name no base and is refused, so it is not offered.
+  const hasOfficial = (results.data ?? []).some((r) => r.status === 'official');
 
   return (
     <>
@@ -248,164 +253,176 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
           <p className="caption">A new report adds a revision; earlier revisions are kept.</p>
         </section>
       ) : null}
-      <form
-        className="ops-form ops-section"
-        aria-label="Match report"
-        onSubmit={(event) => {
-          event.preventDefault();
-          send();
-        }}
-      >
-        <fieldset
-          className="ops-fieldset"
-          aria-invalid={problems.classification ? true : undefined}
-          aria-describedby={problems.classification ? 'report-classification-error' : undefined}
+      {hasOfficial ? (
+        <section className="ops-section" data-testid="report-official">
+          <p>
+            The result of this match is official. A change is a correction of the official result,
+            with its reason, made on{' '}
+            <Link to={`/leagues/fixtures/${fixtureId}/results`}>Results review</Link>.
+          </p>
+        </section>
+      ) : (
+        <form
+          className="ops-form ops-section"
+          aria-label="Match report"
+          onSubmit={(event) => {
+            event.preventDefault();
+            send();
+          }}
         >
-          <legend>How did the match end?</legend>
-          {CLASSIFICATIONS.map((c) => (
-            <label key={c} className="ops-check">
-              <input
-                type="radio"
-                name="classification"
-                checked={classification === c}
-                onChange={() => setClassification(c)}
+          <fieldset
+            className="ops-fieldset"
+            aria-invalid={problems.classification ? true : undefined}
+            aria-describedby={problems.classification ? 'report-classification-error' : undefined}
+          >
+            <legend>How did the match end?</legend>
+            {CLASSIFICATIONS.map((c) => (
+              <label key={c} className="ops-check">
+                <input
+                  type="radio"
+                  name="classification"
+                  checked={classification === c}
+                  onChange={() => setClassification(c)}
+                />
+                {humanize(c)}
+              </label>
+            ))}
+            {problems.classification ? (
+              <span className="error-text" id="report-classification-error" role="alert">
+                {problems.classification}
+              </span>
+            ) : null}
+          </fieldset>
+          {showsScore ? (
+            <fieldset
+              className="ops-fieldset"
+              aria-invalid={problems.score ? true : undefined}
+              aria-describedby={problems.score ? 'report-score-error' : undefined}
+            >
+              <legend>{needsScore ? 'Score' : 'Score when the match stopped (optional)'}</legend>
+              <TextField
+                label={`${home} score`}
+                value={homeScore}
+                onChange={setHomeScore}
+                inputMode="numeric"
+                error={apiErrors.homeScore}
               />
-              {humanize(c)}
-            </label>
-          ))}
-          {problems.classification ? (
-            <span className="error-text" id="report-classification-error" role="alert">
-              {problems.classification}
-            </span>
+              <TextField
+                label={`${away} score`}
+                value={awayScore}
+                onChange={setAwayScore}
+                inputMode="numeric"
+                error={apiErrors.awayScore}
+              />
+              {problems.score ? (
+                <span className="error-text" id="report-score-error" role="alert">
+                  {problems.score}
+                </span>
+              ) : null}
+            </fieldset>
           ) : null}
-        </fieldset>
-        {showsScore ? (
-          <fieldset
-            className="ops-fieldset"
-            aria-invalid={problems.score ? true : undefined}
-            aria-describedby={problems.score ? 'report-score-error' : undefined}
-          >
-            <legend>{needsScore ? 'Score' : 'Score when the match stopped (optional)'}</legend>
-            <TextField
-              label={`${home} score`}
-              value={homeScore}
-              onChange={setHomeScore}
-              inputMode="numeric"
-              error={apiErrors.homeScore}
+          {classification === 'forfeit' ? (
+            <SelectField
+              label="Team that forfeited"
+              value={forfeiting}
+              onChange={setForfeiting}
+              placeholder="Choose a team"
+              options={teams.map((t) => ({ value: t.teamEntryId as string, label: t.name }))}
+              error={problems.forfeiting ?? apiErrors.forfeitingEntryId}
             />
-            <TextField
-              label={`${away} score`}
-              value={awayScore}
-              onChange={setAwayScore}
-              inputMode="numeric"
-              error={apiErrors.awayScore}
-            />
-            {problems.score ? (
-              <span className="error-text" id="report-score-error" role="alert">
-                {problems.score}
-              </span>
-            ) : null}
+          ) : null}
+          {classification === 'abandoned' ? (
+            <fieldset
+              className="ops-fieldset"
+              aria-invalid={problems.abandonment ? true : undefined}
+              aria-describedby={problems.abandonment ? 'report-abandonment-error' : undefined}
+            >
+              <legend>Abandonment</legend>
+              <TextField
+                label="Minute the match stopped"
+                value={minutePlayed}
+                onChange={setMinutePlayed}
+                inputMode="numeric"
+              />
+              <TextAreaField
+                label="Reason for abandonment"
+                value={abandonReason}
+                onChange={setAbandonReason}
+                rows={2}
+              />
+              {problems.abandonment ? (
+                <span className="error-text" id="report-abandonment-error" role="alert">
+                  {problems.abandonment}
+                </span>
+              ) : null}
+            </fieldset>
+          ) : null}
+          <fieldset className="ops-fieldset">
+            <legend>Incidents</legend>
+            {incidents.map((incident, n) => (
+              <IncidentEditor
+                key={n}
+                index={n}
+                incident={incident}
+                teams={teams.map((t) => ({ value: t.teamEntryId as string, label: t.name }))}
+                error={problems[`incident${n}`]}
+                onChange={(next) =>
+                  setIncidents((prev) => prev.map((x, i) => (i === n ? next : x)))
+                }
+                onRemove={() => setIncidents((prev) => prev.filter((_, i) => i !== n))}
+              />
+            ))}
+            <Button
+              variant="secondary"
+              onClick={() => setIncidents((prev) => [...prev, EMPTY_INCIDENT])}
+            >
+              Add an incident
+            </Button>
           </fieldset>
-        ) : null}
-        {classification === 'forfeit' ? (
-          <SelectField
-            label="Team that forfeited"
-            value={forfeiting}
-            onChange={setForfeiting}
-            placeholder="Choose a team"
-            options={teams.map((t) => ({ value: t.teamEntryId as string, label: t.name }))}
-            error={problems.forfeiting ?? apiErrors.forfeitingEntryId}
+          <CardsEditor
+            sheet={sheet.data}
+            sheetError={sheet.error}
+            onRetrySheet={() => void sheet.refetch()}
+            cards={cards}
+            problems={problems}
+            onChange={setCards}
           />
-        ) : null}
-        {classification === 'abandoned' ? (
-          <fieldset
-            className="ops-fieldset"
-            aria-invalid={problems.abandonment ? true : undefined}
-            aria-describedby={problems.abandonment ? 'report-abandonment-error' : undefined}
-          >
-            <legend>Abandonment</legend>
-            <TextField
-              label="Minute the match stopped"
-              value={minutePlayed}
-              onChange={setMinutePlayed}
-              inputMode="numeric"
-            />
-            <TextAreaField
-              label="Reason for abandonment"
-              value={abandonReason}
-              onChange={setAbandonReason}
-              rows={2}
-            />
-            {problems.abandonment ? (
-              <span className="error-text" id="report-abandonment-error" role="alert">
-                {problems.abandonment}
+          <TextAreaField label="Notes (optional)" value={notes} onChange={setNotes} rows={3} />
+          <StateView
+            variant="pending-decision"
+            subject="Who publishes results"
+            decisions={['DEC-065']}
+            owner="League manager"
+          />
+          <div className="ops-actions">
+            <Button type="submit" busy={submit.isProcessing} disabled={!online}>
+              Submit report
+            </Button>
+            {!online ? (
+              <span className="caption">
+                Submitting needs a connection; your report stays here as entered (queued submission
+                is pending DEC-032).
               </span>
             ) : null}
-          </fieldset>
-        ) : null}
-        <fieldset className="ops-fieldset">
-          <legend>Incidents</legend>
-          {incidents.map((incident, n) => (
-            <IncidentEditor
-              key={n}
-              index={n}
-              incident={incident}
-              teams={teams.map((t) => ({ value: t.teamEntryId as string, label: t.name }))}
-              error={problems[`incident${n}`]}
-              onChange={(next) => setIncidents((prev) => prev.map((x, i) => (i === n ? next : x)))}
-              onRemove={() => setIncidents((prev) => prev.filter((_, i) => i !== n))}
-            />
-          ))}
-          <Button
-            variant="secondary"
-            onClick={() => setIncidents((prev) => [...prev, EMPTY_INCIDENT])}
-          >
-            Add an incident
-          </Button>
-        </fieldset>
-        <CardsEditor
-          sheet={sheet.data}
-          sheetError={sheet.error}
-          onRetrySheet={() => void sheet.refetch()}
-          cards={cards}
-          problems={problems}
-          onChange={setCards}
-        />
-        <TextAreaField label="Notes (optional)" value={notes} onChange={setNotes} rows={3} />
-        <StateView
-          variant="pending-decision"
-          subject="Who publishes results"
-          decisions={['DEC-065']}
-          owner="League manager"
-        />
-        <div className="ops-actions">
-          <Button type="submit" busy={submit.isProcessing} disabled={!online}>
-            Submit report
-          </Button>
-          {!online ? (
-            <span className="caption">
-              Submitting needs a connection; your report stays here as entered (queued submission is
-              pending DEC-032).
-            </span>
+          </div>
+          {submit.error && (Object.keys(apiErrors).length === 0 || unrenderedApiErrors) ? (
+            <CommandError error={submit.error} onRetry={send} subject="This fixture" />
           ) : null}
-        </div>
-        {submit.error && (Object.keys(apiErrors).length === 0 || unrenderedApiErrors) ? (
-          <CommandError error={submit.error} onRetry={send} subject="This fixture" />
-        ) : null}
-        {submit.data ? (
-          <CommandSuccess
-            label={
-              submit.data.status === 'submitted'
-                ? 'Submitted (provisional)'
-                : humanize(submit.data.status)
-            }
-          >
-            <span className="caption">
-              Revision {submit.data.revisionNo}. Publication is separately authorised.
-            </span>
-          </CommandSuccess>
-        ) : null}
-      </form>
+          {submit.data ? (
+            <CommandSuccess
+              label={
+                submit.data.status === 'submitted'
+                  ? 'Submitted (provisional)'
+                  : humanize(submit.data.status)
+              }
+            >
+              <span className="caption">
+                Revision {submit.data.revisionNo}. Publication is separately authorised.
+              </span>
+            </CommandSuccess>
+          ) : null}
+        </form>
+      )}
     </>
   );
 }

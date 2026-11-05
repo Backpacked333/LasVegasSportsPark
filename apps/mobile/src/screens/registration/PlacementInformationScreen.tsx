@@ -156,8 +156,14 @@ function AvailabilityEditor({
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [problem, setProblem] = useState<string | undefined>();
+  /** The day is a required choice: its error belongs to the day group, not to a time field. */
+  const [dayProblem, setDayProblem] = useState<string | null>(null);
   const add = () => {
-    if (weekday === null) return setProblem('Choose a day.');
+    if (weekday === null) {
+      setProblem(undefined);
+      return setDayProblem('Choose a day.');
+    }
+    setDayProblem(null);
     if (!TIME.test(from) || !TIME.test(to))
       return setProblem('Enter times as HH:MM, for example 18:30.');
     if (to <= from) return setProblem('The end time must be after the start time.');
@@ -169,14 +175,24 @@ function AvailabilityEditor({
   return (
     <View style={styles.editor}>
       <Text style={styles.label}>When can the player play?</Text>
-      <View style={styles.days} accessibilityRole="radiogroup" accessibilityLabel="Day">
+      {/* A required choice: its error is the group's and each day's hint (SPK-UX-009). */}
+      <View
+        style={styles.days}
+        accessibilityRole="radiogroup"
+        accessibilityLabel="Day"
+        accessibilityHint={dayProblem ? `Error: ${dayProblem}` : undefined}
+      >
         {WEEKDAYS.map((day, index) => (
           <Pressable
             key={day}
             accessibilityRole="radio"
             accessibilityLabel={day}
+            accessibilityHint={dayProblem ? `Error: ${dayProblem}` : undefined}
             accessibilityState={{ checked: weekday === index }}
-            onPress={() => setWeekday(index)}
+            onPress={() => {
+              setWeekday(index);
+              setDayProblem(null);
+            }}
             style={[styles.day, weekday === index && styles.dayOn]}
           >
             <Text style={[styles.dayText, weekday === index && styles.dayTextOn]}>
@@ -185,6 +201,16 @@ function AvailabilityEditor({
           </Pressable>
         ))}
       </View>
+      {dayProblem ? (
+        <LiveText
+          style={styles.error}
+          announcement={dayProblem}
+          accessibilityRole="alert"
+          testID="availability-day-error"
+        >
+          {`✕ ${dayProblem}`}
+        </LiveText>
+      ) : null}
       <TextField
         label="From (HH:MM)"
         value={from}

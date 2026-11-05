@@ -1,9 +1,12 @@
 import { newId } from '@sportspark/contracts';
 import { json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Inbox } from '../../../kernel';
 import { drainOutboxChecked, type TestApp } from '../../../testing';
 import {
   createCreditFixture,
+  FAKE_PAYMENTS_PROVIDER,
+  FAKE_PAYMENTS_SIGNATURE_HEADER,
   FakePaymentProvider,
   FakePaymentTokens,
   FinanceModule,
@@ -327,5 +330,55 @@ describe('financial reports (SPK-REPORT-002, SPK-PAY-009, SPK-PAY-011)', () => {
     )!;
     expect(definition.numerator).toContain('returns recorded');
     expect(definition.numerator).not.toContain('returns paid by return instant');
+
+    // R4-PROVIDER-OUTCOMES-02: the provider later reports the succeeded card refund failed. Finance
+    // keeps it `succeeded` and records the reversal; the report shows it as reversed, never as
+    // money returned, in the card returns and in the refund attempts.
+    const succeeded = await t.db
+      .selectFrom('refund_attempts')
+      .select('id')
+      .where('organization_id', '=', t.organizationId)
+      .where('status', '=', 'succeeded')
+      .where('submitted_at', '>=', new Date(periodStart))
+      .executeTakeFirstOrThrow();
+    const payments = t.app.get(FakePaymentProvider);
+    payments.settleRefund(succeeded.id, 'failed');
+    const webhook = payments.refundWebhook(succeeded.id);
+    const delivered = await t.http
+      .post(`/v1/webhooks/payments/${FAKE_PAYMENTS_PROVIDER}`)
+      .set(FAKE_PAYMENTS_SIGNATURE_HEADER, webhook.signature)
+      .send(webhook.body as object);
+    expect(delivered.status, JSON.stringify(delivered.body)).toBeLessThan(300);
+    await t.app.get(Inbox).runOnce(200);
+    await drainOutboxChecked(t, { rounds: 25, batchSize: 200 });
+    expect(
+      (
+        await t.db
+          .selectFrom('refund_attempts')
+          .select('reversed_at')
+          .where('id', '=', succeeded.id)
+          .executeTakeFirstOrThrow()
+      ).reversed_at,
+    ).not.toBeNull();
+    const after = await get(t, '/v1/reports/payment-reconciliation', gm, {
+      periodStart,
+      periodEnd: t.clock.now().toISOString(),
+    });
+    expect(after.status, JSON.stringify(after.body)).toBe(200);
+    const afterValues = after.body.values as Value[];
+    expect(
+      Object.fromEntries(
+        afterValues
+          .filter(
+            (v) =>
+              v.metric === 'MET-050' &&
+              v.label === 'Point-of-sale card returns by refund state (included above)',
+          )
+          .map((v) => [v.dimensions.refundState, v.value]),
+      ),
+    ).toEqual({ reversed: 3_000, unknown: 3_000, failed: 3_000 });
+    const refundRows = (after.body.rows as Row[]).filter((r) => r.section === 'refund_attempts');
+    expect(JSON.stringify(refundRows)).toContain('reversed');
+    expect(refundRows.some((r) => Object.values(r).includes('succeeded'))).toBe(false);
   });
 });

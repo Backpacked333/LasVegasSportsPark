@@ -200,11 +200,14 @@ export class FinanceNotices {
       const refund = event.payload.refundAttemptId
         ? await trx
             .selectFrom('refund_attempts')
-            .select(['amount_minor', 'currency'])
+            .select(['amount_minor', 'currency', 'reversed_at'])
             .where('organization_id', '=', organizationId)
             .where('id', '=', event.payload.refundAttemptId)
             .executeTakeFirst()
         : undefined;
+      // R4-PROVIDER-OUTCOMES-02 (§4.11): the provider already reported the refund failed, so it
+      // was not made; `refundReversed` tells the payer that instead.
+      if (refund?.reversed_at) return;
       body = refund
         ? `The refund of ${amount(refund.amount_minor, refund.currency)} for the registration that could not be completed has been made to your payment method.`
         : 'The refund for the registration that could not be completed has been made to your payment method.';
@@ -234,6 +237,57 @@ export class FinanceNotices {
         protected: true,
         title: event.payload.method === 'refund' ? 'Your refund was made' : 'A credit was added',
         body,
+      },
+    );
+  }
+
+  /**
+   * finance.refund_reversed → the payer of a compensation refund (R4-PROVIDER-OUTCOMES-02, §4.11,
+   * SPK-AT-023, SPK-COMMS-002): the checkout was compensated by this refund, so the payer was (or
+   * is about to be) told the refund was made; the provider has since reported it failed, so the
+   * money did not reach them. The notice says so and that the facility will contact them (a
+   * reversed compensation refund is the finance operator's decision, not retried automatically).
+   * Nothing is sent for a customer refund (finance sent no "refund made" notice for it) or when the
+   * checkout was not compensated by this refund.
+   */
+  async refundReversed(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof FinanceEvents.refundReversed>>,
+  ): Promise<void> {
+    const organizationId = event.organizationId;
+    const { purpose, checkoutId, refundAttemptId } = event.payload;
+    if (purpose !== 'compensation' || !checkoutId) return;
+    const checkout = await trx
+      .selectFrom('checkouts')
+      .select(['payer_person_id', 'order_id', 'status', 'recovery'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', checkoutId)
+      .executeTakeFirst();
+    const recovery = (checkout?.recovery ?? null) as {
+      plan?: string;
+      refundAttemptId?: string | null;
+    } | null;
+    if (
+      !checkout ||
+      checkout.status !== 'compensated' ||
+      recovery?.plan !== 'refund' ||
+      recovery.refundAttemptId !== refundAttemptId
+    ) {
+      return;
+    }
+    const facility = await this.facilityOfOrder(trx, organizationId, checkout.order_id);
+    await this.compose(
+      trx,
+      financeSystem(organizationId, 'finance.notify_refund_reversed'),
+      event,
+      {
+        kind: 'payment_attention',
+        facilityId: facility?.facilityId,
+        subject: { type: 'order', id: checkout.order_id },
+        audience: { subjectPersonIds: [checkout.payer_person_id] },
+        protected: true,
+        title: 'Your refund did not go through',
+        body: `The refund of ${amount(event.payload.amountMinor, event.payload.currency)} for the registration that could not be completed did not go through, so the money has not been returned to your payment method. The facility will contact you about it.`,
       },
     );
   }

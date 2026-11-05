@@ -46,6 +46,7 @@ import {
   toTrialParticipation,
   viewerOf,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { ApplicationsService } from './applications.service';
 import { BasketsService } from './baskets.service';
@@ -134,12 +135,14 @@ export class TrialsService {
         input.participantPersonId,
       );
       const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
-      await this.authorization.require(principal, EnrollmentActions.recordTrial, {
-        type: 'trial_participation',
-        organizationId,
-        facilityId,
-        subjectPersonIds: [person.id],
-      });
+      // R4-PRIVACY-03 (§4.10): another household's participant reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.recordTrial,
+        { type: 'trial_participation', organizationId, facilityId, subjectPersonIds: [person.id] },
+        [person.id],
+      );
       const staff = await this.scope.actsAsStaff(
         principal,
         EnrollmentActions.recordTrial,

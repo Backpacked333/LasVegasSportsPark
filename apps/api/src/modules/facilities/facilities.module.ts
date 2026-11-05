@@ -34,7 +34,8 @@ const providers: Provider[] = [
   RestrictionsService,
   PreventiveSchedulesService,
   AssetDirectoryService,
-  // FAC-03 (SPK-UX-006): registers facilities.raise_overdue_task_exceptions with the kernel runner.
+  // FAC-03 (SPK-UX-006) and R4-OPS-MODULES-02 (SPK-FAC-004): registers
+  // facilities.raise_overdue_task_exceptions and facilities.raise_unreleased_restriction_exceptions.
   FacilitiesJobs,
   { provide: MAINTENANCE_REPORT_PORT, useExisting: MaintenanceTasksService },
   { provide: OPERATING_STATUS_PORT, useExisting: RestrictionsService },

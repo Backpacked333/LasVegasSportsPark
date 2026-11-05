@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
+  PUBLIC_PUBLICATION_STATES,
   type CreatePriceRuleInput,
   type PriceRule,
   type Principal,
@@ -186,20 +187,32 @@ export class PriceRulesService {
     });
   }
 
+  /**
+   * Every version of an offering's price rules, for catalog readers at its facility (§4.14).
+   * §4.10 (R4-AUTHZ-TARGETS-04 follow-up): the offering exists for the caller exactly as
+   * GET /offerings/{id} says. An offering they cannot see (an unpublished one at a facility their
+   * reading roles do not cover) is the same NOT_FOUND as an unknown id; a discoverable one they
+   * may not read the rules of is ACCESS_DENIED.
+   */
   async list(principal: Principal, offeringId: string): Promise<PriceRule[]> {
     const organizationId = organizationOf(principal);
     const offering = await this.db
       .selectFrom('offerings')
-      .select(['id', 'facility_id'])
+      .select(['id', 'facility_id', 'publication_state'])
       .where('organization_id', '=', organizationId)
       .where('id', '=', offeringId)
       .executeTakeFirst();
-    if (!offering) throw errors.notFound('offering', offeringId);
-    await this.authorization.require(principal, CatalogActions.readCatalog, {
+    if (!offering) throw errors.protectedNotFound('offering');
+    const target = {
       type: 'price_rule',
       organizationId,
       facilityId: offering.facility_id,
-    });
+    };
+    const reader = await this.authorization.decide(principal, CatalogActions.readCatalog, target);
+    if (!reader.allowed && !PUBLIC_PUBLICATION_STATES.includes(offering.publication_state)) {
+      throw errors.protectedNotFound('offering');
+    }
+    await this.authorization.require(principal, CatalogActions.readCatalog, target);
     const rows = await this.db
       .selectFrom('price_rules')
       .selectAll()

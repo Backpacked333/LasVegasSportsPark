@@ -122,6 +122,30 @@ export class AssetsService {
       let status = current.status;
       if (body.status !== undefined && body.status !== current.status) {
         status = AssetMachine.next(current.status, assetEventFor(body.status));
+        // SPK-FAC-004, R4-OPS-MODULES-05: while an approved or active restriction names the asset,
+        // it returns to service only through that restriction's authorized release (which needs
+        // facilities.release_to_service and the inspection gate), never through an asset edit.
+        // `restricted` itself is never set by an edit (the contract refuses it): only a
+        // restriction sets it, so the status always names a restriction behind it; a person marks
+        // an unusable asset `out_of_service`, which a release leaves as it is.
+        if (status === 'in_service') {
+          const restrictionIds = await this.reader.effectiveAssetRestrictionIds(
+            trx,
+            organizationId,
+            assetId,
+          );
+          if (restrictionIds.length > 0) {
+            throw errors.eligibility(
+              "An operating restriction names this asset: it returns to service only through the restriction's release.",
+              {
+                code: 'restriction_release_required',
+                assetId,
+                restrictionIds,
+                allowedStatuses: ['out_of_service', 'retired'],
+              },
+            );
+          }
+        }
       } else if (current.status === 'retired' && body.status === undefined) {
         throw errors.invalidTransition('Asset', 'retired', 'update');
       }

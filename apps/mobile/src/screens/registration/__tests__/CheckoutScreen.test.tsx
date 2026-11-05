@@ -248,6 +248,160 @@ describe('SCR-C-14 CheckoutScreen', () => {
     expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
   });
 
+  it('SPK-PAY-007 RESPONSE_UNREADABLE (R4-CLIENTS-A11Y-COPY-01): a success status whose answer could not be read is "being confirmed, do not pay again", keeps the remembered quote and "Check now" keeps the key', async () => {
+    let calls = 0;
+    const app = renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () => {
+          calls += 1;
+          // The checkout committed; something in front of the API cut its answer short.
+          return calls === 1
+            ? fakeResponse(201, '{"id":"0192f1a0-tru')
+            : fakeResponse(201, checkout());
+        },
+      }),
+    });
+    await choosePaymentAndPay();
+    expect(
+      await screen.findByLabelText('Payment outcome being confirmed. Do not pay again.'),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'The service answered about this payment, but its answer could not be read. Do not pay again. When the app is back online or opened again, it asks with the same request, which can never charge you twice.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay $226.00' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Succeeds at once' })).toBeNull();
+    // The checkout may exist: the quote that leads back to it is not forgotten.
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check now' }));
+    });
+    await waitFor(() =>
+      expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`),
+    );
+    const [first, second] = checkoutRequests(app);
+    expect(second?.headers['idempotency-key']).toBe(first?.headers['idempotency-key']);
+  });
+
+  it('SPK-AT-028 (R4-CLIENTS-A11Y-COPY-01): payments paused during a restore (503 recovery_mode) are "Not done" with the API message, never "do not pay again", and leave no checkout to look for later', async () => {
+    const announced = () =>
+      (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mock.calls.map(
+        (call) => call[0] as string,
+      );
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    let calls = 0;
+    const app = renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () => {
+          calls += 1;
+          return calls === 1
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', {
+                  message: paused,
+                  nextAction: 'retry_later',
+                  details: { reason: 'recovery_mode' },
+                }),
+              )
+            : fakeResponse(201, checkout());
+        },
+      }),
+    });
+    await choosePaymentAndPay();
+    expect(await screen.findByLabelText('Not done')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Nothing was changed: the service did not run this request, so nothing was paid or recorded.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.queryByLabelText('Payment outcome being confirmed. Do not pay again.'),
+    ).toBeNull();
+    expect(screen.queryByTestId('checkout-outcome-unknown')).toBeNull();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    // Nothing ran: no checkout to look for later, and paying stays possible.
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pay $226.00' })).toBeEnabled();
+    await waitFor(() =>
+      expect(announced()).toContain(
+        `Not done. ${paused} Nothing was changed: the service did not run this request, so nothing was paid or recorded. Try again.`,
+      ),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    });
+    await waitFor(() =>
+      expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`),
+    );
+  });
+
+  it('SPK-AT-028 SPK-PAY-007 (R4-CLIENTS-A11Y-COPY-01): when "Check now" of a checkout that got no answer is refused during a restore, "Do not pay again", the remembered quote and the blocked Pay stay', async () => {
+    const announced = () =>
+      (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mock.calls.map(
+        (call) => call[0] as string,
+      );
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    let calls = 0;
+    const app = renderCheckout({
+      routes: routes({
+        'POST /registration-checkouts': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('Network request failed');
+          return calls === 2
+            ? fakeResponse(
+                503,
+                apiErrorBody('INTEGRATION_UNAVAILABLE', {
+                  message: paused,
+                  nextAction: 'retry_later',
+                  details: { reason: 'recovery_mode' },
+                }),
+              )
+            : fakeResponse(201, checkout());
+        },
+      }),
+    });
+    await choosePaymentAndPay();
+    expect(await screen.findByTestId('checkout-outcome-unknown')).toBeOnTheScreen();
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote);
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check now' }));
+    });
+    expect(await screen.findByTestId('checkout-check-refused')).toBeOnTheScreen();
+    // Only the check did not run: the first attempt may have created the checkout and paid.
+    expect(screen.getByTestId('checkout-outcome-unknown')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Check not run')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'This check could not run now; the earlier payment may still have gone through. Do not pay again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/nothing was paid or recorded/)).toBeNull();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBe(IDS.quote);
+    expect(screen.queryByRole('button', { name: 'Pay $226.00' })).toBeNull();
+    await waitFor(() =>
+      expect(announced()).toContain(
+        `Check not run. ${paused} This check could not run now; the earlier payment may still have gone through. Do not pay again. Check again later.`,
+      ),
+    );
+    // Asked again with the same request and key once payments resume.
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check now' }));
+    });
+    await waitFor(() =>
+      expect(mockRouter.replace).toHaveBeenCalledWith(`/registration/outcome/${IDS.checkout}`),
+    );
+    const keys = checkoutRequests(app).map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
+  });
+
   it('SPK-UX-009 (NA-A01): "Payment outcome being confirmed" is announced with "Check now", again after each unanswered check', async () => {
     const announced = () =>
       (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mock.calls.map(

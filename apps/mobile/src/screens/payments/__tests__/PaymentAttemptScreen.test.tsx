@@ -119,6 +119,22 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
     expect(within(refunds).getByText(/checked by the facility/)).toBeOnTheScreen();
   });
 
+  it('R4-PROVIDER-OUTCOMES-02: a refund the provider reversed after success says it did not go through, never "Refunded"', async () => {
+    renderPayment({
+      status: 200,
+      body: paymentDetail({
+        refunds: [refund({ reversedAt: inDays(-1) })],
+      }),
+    });
+    const refunds = await screen.findByTestId('payment-refunds');
+    expect(
+      within(refunds).getByLabelText(
+        `Refund of $10.00, Requested ${formatInstant(inDays(-2))}, Refund did not go through. The facility will contact you.`,
+      ),
+    ).toBeOnTheScreen();
+    expect(within(refunds).queryByText('Refunded')).toBeNull();
+  });
+
   it('SPK-PAY-004: a contribution payment links to the contribution, never to the team obligation a player may not read', async () => {
     // The API always stores the team obligation on a contribution attempt (0600 check constraint).
     renderPayment({

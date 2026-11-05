@@ -188,7 +188,23 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   assignment for the slot resolves the exception (it stays as history). Escalation and resolution
   take a per-slot advisory lock, so a decline racing an acceptance of the same slot never leaves
   an open exception on a covered slot (tested under PostgreSQL in
-  `__tests__/replacement-target.spec.ts`).
+  `__tests__/replacement-target.spec.ts`). A requirement edit (PATCH) after which a slot is no
+  longer required (the count lowered below it, or `mustBeAccepted` set to false) resolves that
+  slot's open or acknowledged exception in the same transaction (system actor
+  `workforce.coverage`; the resolution names the requirement id, revision, count and
+  `mustBeAccepted`); exceptions of slots still required stay open (R4-OPS-MODULES-08, SPK-UX-006).
+  The edit holds the requirement row `FOR UPDATE`, which an escalation or acceptance of the role
+  waits for, so a withdrawal racing the edit never leaves an open exception on a slot the edit no
+  longer requires (tested under PostgreSQL in `__tests__/requirement-edit-uncovered.spec.ts`).
+  Raising the count again, or setting `mustBeAccepted` back to true, does not re-escalate a slot:
+  escalation follows a decline or withdrawal only (see "Gap — slot required again by an edit").
+  An operator may close or resolve the same card on Today (support's
+  `POST /v1/exceptions/{id}/close|resolve`) without any workforce lock; every settlement by this
+  module (the edit, an acceptance covering the slot, a retirement, a canceled activity) re-reads
+  the exception under its row lock and leaves it alone when it is no longer open or acknowledged,
+  so a card settled meanwhile never fails or rolls back the command (R4-OPS-MODULES-08 rework,
+  `services/exception-settlement.ts`; **Verified** under PostgreSQL concurrency and PGlite for
+  the edit and the acceptance, `__tests__/requirement-edit-uncovered.spec.ts`).
 - **Replacement candidates** (SPK-AT-012): holders of the kind's staff role at the facility plus
   holders of every required qualification; each candidate lists reasons with severity
   `blocking/warning/info/positive` and source ids (qualification held or missing, declared
@@ -224,7 +240,15 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   owner `league_manager` for fixtures and `scheduler` otherwise, deadline = start, one per
   assignment) for every accepted, unfinished assignment in a required slot whose assignee does not
   hold the requirement's qualifications. Nothing is withdrawn automatically: an operator decides
-  (POL-033 pending). Evidence recorded for a merged person counts for the survivor (WRK-05), so
+  (POL-033 pending). A requirement edit after which an accepted assignment is no longer
+  unqualified (its slot above a lowered count, or its assignee holding every qualification the
+  requirement now names, none included) resolves that assignment's open or acknowledged
+  exception in the same transaction (system actor `workforce.coverage`; the resolution names the
+  requirement id, revision, count and qualifications, the assignment, its slot and the ground
+  `slot_not_required` or `qualified`), as readiness stops reporting it; an assignee still lacking a
+  qualification keeps theirs (R4-OPS-MODULES-08 rework, SPK-UX-006; **Verified**,
+  `__tests__/requirement-edit-uncovered.spec.ts`). The edit runs under the requirement row's
+  `FOR UPDATE` lock, which a revocation's flagging waits for (below). Evidence recorded for a merged person counts for the survivor (WRK-05), so
   revoking it raises the survivor's assignments too (`__tests__/person-merge.spec.ts`).
   Overlapping commands (R2-RACES-02):
   - A revocation and an acceptance are serialized on the person: the revocation takes the party
@@ -434,6 +458,21 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
 - **Gap — uncovered-slot sweep:** with an escalation window configured, a slot left uncovered
   earlier than the window is not escalated later when the activity enters the window (no periodic
   job yet; K-06 provides the runner). Without a window it escalates at once.
+- **Gap — slot required again by an edit:** a requirement edit that brings a slot back under the
+  requirement (the count raised, or `mustBeAccepted` set back to true), including a slot whose
+  `workforce.uncovered_assignment` exception an earlier edit resolved, raises no exception and
+  enqueues no `workforce.assignment_uncovered` event for it, even inside the escalation window:
+  escalation follows a decline or withdrawal only. The uncovered slot is still reported where
+  coverage is derived at read time: the requirement's `coverage.uncoveredSlots`, the fixture's
+  readiness (`workforce.required_officials`) and support's derived Today coverage card for the
+  day's activities (`today.service.ts` `coverageItems`).
+- **Gap — unqualified-assignment card after a withdrawal:** withdrawing or replacing an accepted
+  assignee, by the person, by a replacement or by a follow-up (a retirement, a canceled
+  activity), does not settle the assignment's open `workforce.unqualified_assignment` exception;
+  an operator closes it on Today with a reason. Only a requirement edit resolves it (above).
+  Settling it on withdrawal would need the revocation's flagging to lock the assignments it reads,
+  so that a revocation and a withdrawal committing together cannot leave a card on a withdrawn
+  assignment.
 - **Gap — scheduling commitments:** accepted assignments are not written into scheduling's
   `event_commitments` (a session target may have no event, and a commitment moved with its event
   would lose the turnaround). Double-booking between workforce assignments is guaranteed by this

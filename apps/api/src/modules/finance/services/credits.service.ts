@@ -27,10 +27,10 @@ import { FinanceActions } from '../finance.actions';
 import {
   afterKeysetAsc,
   decodeKeyset,
-  isStaffLike,
   keysetAt,
   keysetPage,
   organizationOf,
+  staffAuthority,
   toCredit,
   type CreditRow,
   type Reader,
@@ -334,7 +334,16 @@ export class CreditsService {
         true,
       );
       if (!obligation) throw errors.protectedNotFound('obligation');
-      if (!isStaffLike(principal)) {
+      // R4-AUTHZ-TARGETS-01 (§2.1, SPK-IAM-001/003): only desk staff, through a staff role that
+      // holds finance.redeem_credit, apply a credit to any obligation; an owner who holds some
+      // other staff role (a coach, an official) redeems as the customer they are here.
+      const deskStaff = await staffAuthority(
+        this.authorization,
+        principal,
+        FinanceActions.redeemCredit,
+        { type: 'credit', organizationId },
+      );
+      if (!deskStaff) {
         // The credit's owner must also be entitled to pay this obligation (no paying into
         // another household's debt by guessing an id, §4.10, §4.14). The same subject as
         // ObligationsService.pay: the debtor of an individual obligation, otherwise the

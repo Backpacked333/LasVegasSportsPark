@@ -3103,7 +3103,6 @@
             "type": "string",
             "enum": [
               "in_service",
-              "restricted",
               "out_of_service"
             ]
           },
@@ -3177,7 +3176,6 @@
             "type": "string",
             "enum": [
               "in_service",
-              "restricted",
               "out_of_service",
               "retired"
             ]
@@ -8450,7 +8448,8 @@
           "NO_ADDRESS",
           "PROVIDER_REJECTED",
           "PROVIDER_ERROR",
-          "SUPERSEDED"
+          "SUPERSEDED",
+          "CHANNEL_DISABLED"
         ]
       },
       "PracticalDetails": {
@@ -8964,6 +8963,20 @@
               "null"
             ]
           },
+          "supersededByNotificationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "supersededAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -8982,6 +8995,8 @@
           "authorizedAt",
           "revokedAt",
           "revocationReason",
+          "supersededByNotificationId",
+          "supersededAt",
           "revision"
         ]
       },
@@ -9159,6 +9174,49 @@
         },
         "required": [
           "reason"
+        ]
+      },
+      "ReconcileDeliveryOutcome": {
+        "type": "string",
+        "enum": [
+          "provider_accepted",
+          "delivered",
+          "failed"
+        ]
+      },
+      "ReconcileDeliveryRequest": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/ReconcileDeliveryOutcome"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "outcome",
+          "evidence"
         ]
       },
       "InboxItem": {
@@ -17845,6 +17903,10 @@
               "maxLength": 200
             },
             "maxItems": 20
+          },
+          "correctsRevisionId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
@@ -33160,6 +33222,13 @@
           "requestedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "reversedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         },
         "required": [
@@ -34469,6 +34538,9 @@
           "compensatedMinor": {
             "type": "integer"
           },
+          "reversedMinor": {
+            "type": "integer"
+          },
           "availableMinor": {
             "type": "integer"
           },
@@ -34565,6 +34637,13 @@
             "format": "date-time"
           },
           "resolvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reversedAt": {
             "type": [
               "string",
               "null"
@@ -37090,6 +37169,13 @@
               "unknown",
               null
             ]
+          },
+          "refundReversedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "registerSessionId": {
             "type": [
@@ -55605,6 +55691,121 @@
         },
         "responses": {
           "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryAttempt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (stale revision, invalid transition, idempotency)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/delivery-attempts/{id}/reconcile": {
+      "post": {
+        "summary": "Record the outcome staff established for a push, email or SMS delivery whose outcome is unknown (accepted, delivered, or failed and then retryable)",
+        "description": "Implements SPK-COMMS-004, §4.11, §5.11, SPK-UX-006. Requires an Idempotency-Key header (§4.9).",
+        "tags": [
+          "Communications"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileDeliveryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
             "description": "Success",
             "content": {
               "application/json": {

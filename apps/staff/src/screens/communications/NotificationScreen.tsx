@@ -20,6 +20,13 @@
  * retry action at the notice's facility; the API re-checks the recipient's authority and refuses
  * an unknown outcome (it may have reached the person), a superseded notice, a revoked recipient
  * or a second retry, shown with its code.
+ *
+ * Reconcile (`POST /v1/delivery-attempts/{id}/reconcile`, R4-COMMS-AUTOMATION-07, §4.11, §5.11):
+ * an external delivery whose outcome is unknown is never retried blindly; staff record what the
+ * provider's console or the family confirmed (accepted, delivered or failed) with that evidence and
+ * the attempt's expected revision. Offered only on an unknown push, email or SMS attempt when
+ * `GET /v1/me/permissions` lists the reconcile action at the notice's facility; a reconciled
+ * failure may then be retried. A recipient a newer notice replaced the notice for says so.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -31,7 +38,7 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, COMMUNICATIONS_TABS } from '../../features/operations/AreaTabs';
 import { useFacilityZone } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
-import { TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
+import { SelectField, TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
 import { formatInstant, humanize } from '../../features/operations/format';
 import { useKeyedCommands } from '../../features/operations/commands';
 import {
@@ -54,6 +61,12 @@ type Deliveries = Schema<'NotificationDeliveries'>;
 type Attempt = Schema<'DeliveryAttempt'>;
 
 const RETRY_ACTION = 'communications.retry_delivery';
+const RECONCILE_ACTION = 'communications.reconcile_delivery';
+const RECONCILE_OUTCOMES = [
+  { value: 'provider_accepted', label: 'The provider accepted it' },
+  { value: 'delivered', label: 'It was delivered' },
+  { value: 'failed', label: 'It was not delivered' },
+] as const;
 const DELIVERIES_KEY = ['api', '/notifications/{id}/deliveries'] as const;
 
 export function NotificationScreen() {
@@ -314,6 +327,7 @@ function DeliveryDetail({ data, notification }: { data: Deliveries; notification
   const zone = useFacilityZone(notification.facilityId);
   const permissions = usePermissions();
   const mayRetry = permissions.isPermitted(RETRY_ACTION, notification.facilityId);
+  const mayReconcile = permissions.isPermitted(RECONCILE_ACTION, notification.facilityId);
   const commands = useKeyedCommands({ invalidate: [DELIVERIES_KEY] });
   const counts = useMemo(() => {
     const c = new Map<string, number>();
@@ -342,12 +356,12 @@ function DeliveryDetail({ data, notification }: { data: Deliveries; notification
         </p>
       ) : null}
       {unknown > 0 ? (
-        <StateView
-          variant="pending-decision"
-          subject="When an unknown delivery outcome is escalated"
-          decisions={['DEC-041']}
-          owner="Technical lead/operator"
-        />
+        <p className="caption" data-testid="unknown-deliveries">
+          {unknown} deliver{unknown === 1 ? 'y has' : 'ies have'} an unknown outcome: it may have
+          reached the person, so it is not retried. Record what the provider or the family
+          confirmed.
+          {mayReconcile === false ? ' Recording it is not available to you.' : ''}
+        </p>
       ) : null}
       {failed > 0 && mayRetry === false ? (
         <StateView
@@ -370,6 +384,11 @@ function DeliveryDetail({ data, notification }: { data: Deliveries; notification
                 <span className="row-title">{name}</span>
                 <StatusBadge tone={status.tone} label={status.label} />
                 {r.revocationReason ? <span className="caption">{r.revocationReason}</span> : null}
+                {r.supersededByNotificationId ? (
+                  <span className="caption" data-testid="recipient-superseded">
+                    Replaced for this person by a newer notice
+                  </span>
+                ) : null}
                 {attempts.length === 0 ? (
                   <span className="caption">No delivery attempt.</span>
                 ) : (
@@ -401,6 +420,13 @@ function DeliveryDetail({ data, notification }: { data: Deliveries; notification
                           />
                         ) : null}
                         <RetryOutcome attemptId={a.id} commands={commands} timezone={zone} />
+                        {mayReconcile && a.status === 'unknown' && a.channel !== 'in_app' ? (
+                          <ReconcileDelivery
+                            attempt={a}
+                            label={`${CHANNEL_LABEL[a.channel]} to ${name}`}
+                            commands={commands}
+                          />
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -475,6 +501,108 @@ function RetryDelivery({
           />
           <CommandButton type="submit" busy={outcome.status === 'pending'}>
             Confirm retry
+          </CommandButton>
+        </form>
+      ) : null}
+      {outcome.status === 'error' && outcome.error ? (
+        <CommandError
+          error={outcome.error}
+          onRetry={submit}
+          onReload={reload}
+          subject="This delivery"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Record the outcome established for an unknown external delivery (R4-COMMS-AUTOMATION-07). */
+function ReconcileDelivery({
+  attempt,
+  label,
+  commands,
+}: {
+  attempt: Attempt;
+  label: string;
+  commands: ReturnType<typeof useKeyedCommands>;
+}) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [outcomeChoice, setOutcomeChoice] = useState('');
+  const [evidence, setEvidence] = useState('');
+  const [missing, setMissing] = useState<Record<string, string>>({});
+  const key = `reconcile|${attempt.id}`;
+  const outcome = commands.outcome(key);
+  const apiErrors = fieldErrorsOf(outcome.error);
+  if (outcome.status === 'success') {
+    const recorded = outcome.data as Attempt;
+    return (
+      <CommandSuccess
+        tone="success"
+        label={`Recorded: ${DELIVERY_STATUS[recorded.status].label.toLowerCase()}`}
+      >
+        <span className="caption">
+          The unknown outcome is settled and audited with the evidence.
+        </span>
+      </CommandSuccess>
+    );
+  }
+  const submit = () => {
+    const next: Record<string, string> = {};
+    if (!outcomeChoice) next.outcome = 'Choose what was confirmed.';
+    if (!evidence.trim()) next.evidence = 'Say what was checked.';
+    setMissing(next);
+    if (Object.keys(next).length > 0) return;
+    void commands.run(key, 'post', '/delivery-attempts/{id}/reconcile', {
+      path: { id: attempt.id },
+      body: {
+        outcome: outcomeChoice as (typeof RECONCILE_OUTCOMES)[number]['value'],
+        evidence: evidence.trim(),
+        expectedRevision: attempt.revision,
+      },
+    });
+  };
+  const reload = () => {
+    commands.reset(key);
+    void queryClient.invalidateQueries({ queryKey: DELIVERIES_KEY });
+  };
+  return (
+    <div>
+      <Button
+        variant="secondary"
+        aria-expanded={open}
+        aria-label={`Record the outcome: ${label}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Record the outcome
+      </Button>
+      {open ? (
+        <form
+          className="ops-form"
+          aria-label={`Record the outcome: ${label}`}
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <SelectField
+            label="What was confirmed"
+            value={outcomeChoice}
+            onChange={setOutcomeChoice}
+            options={RECONCILE_OUTCOMES}
+            placeholder="Choose…"
+            error={missing.outcome ?? apiErrors.outcome}
+          />
+          <TextAreaField
+            label="Evidence"
+            value={evidence}
+            onChange={setEvidence}
+            required
+            hint="For example: the provider's console shows it delivered, or the parent says it never arrived. Kept in the audit record."
+            error={missing.evidence ?? apiErrors.evidence}
+          />
+          <CommandButton type="submit" busy={outcome.status === 'pending'}>
+            Record the outcome
           </CommandButton>
         </form>
       ) : null}

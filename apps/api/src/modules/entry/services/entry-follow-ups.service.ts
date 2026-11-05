@@ -15,6 +15,7 @@ import { CheckinsService } from './checkins.service';
 export const MERGED_DUPLICATE_PASS = 'entry.merged_duplicate_pass';
 
 type SessionCanceled = EventPayload<typeof CatalogEvents.sessionCanceled>;
+type SessionRetimed = EventPayload<typeof CatalogEvents.sessionRetimed>;
 type EventChangedPayload = EventPayload<typeof EventChanged>;
 type PersonsMerged = EventPayload<typeof IdentityEvents.personsMerged>;
 
@@ -53,6 +54,40 @@ export class EntryFollowUps {
       'event',
       event.payload.eventId,
       'entry.withdraw_on_event_canceled',
+      event.correlationId ?? null,
+    );
+  }
+
+  /**
+   * R4-OPS-MODULES-07 `entry.follow_event_changed` (scheduling.event_changed other than a
+   * cancellation: moved, resized, resources, a publication): the event's live check-ins follow its
+   * current times and facility (CheckinsService.followActivityTimes).
+   */
+  async eventMoved(trx: Trx, event: DomainEvent<EventChangedPayload>): Promise<void> {
+    if (event.payload.change === 'canceled') return;
+    await this.checkins.followActivityTimes(
+      trx,
+      event.organizationId,
+      'event',
+      event.payload.eventId,
+      event.payload.eventId,
+      'entry.follow_event_changed',
+      event.correlationId ?? null,
+    );
+  }
+
+  /**
+   * R4-OPS-MODULES-07 `entry.follow_session_retimed` (catalog.session_retimed, R2-JOURNEYS-03):
+   * live check-ins of the session follow its current times (CheckinsService.followActivityTimes).
+   */
+  async sessionRetimed(trx: Trx, event: DomainEvent<SessionRetimed>): Promise<void> {
+    await this.checkins.followActivityTimes(
+      trx,
+      event.organizationId,
+      'session',
+      event.payload.sessionId,
+      event.payload.schedulingEventId,
+      'entry.follow_session_retimed',
       event.correlationId ?? null,
     );
   }

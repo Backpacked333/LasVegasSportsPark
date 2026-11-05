@@ -13,6 +13,7 @@ import {
   type Principal,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -79,7 +80,21 @@ export class ImportExceptionsService {
     private readonly operationalExceptions: OperationalExceptions,
   ) {}
 
-  /** Opens (or refreshes the reasons of) the exception of this kind for the row. */
+  /**
+   * Opens (or refreshes the reasons of) the row's live exception of this kind (§5.4).
+   *
+   * A row has at most one live — open or decided — exception per kind (migration 1281). An open
+   * one gets the new reasons; a decided one stays the authority for its kind and is returned
+   * unchanged (`created: false`). A withdrawn exception is history and final (§4.6): a problem
+   * that comes back after re-validation withdrew it — an authority assignment ended again, the
+   * owning module refuses the row at apply — gets a fresh open exception in its owner's queue,
+   * so it is counted open, holds the review back and raises its Today card
+   * (R4-LIFECYCLES-REVISIONS-01, §4.7 invariant 12).
+   *
+   * Only validation and abort withdraw exceptions, under the batch row lock; validation holds it
+   * here and an apply runs only once neither can (`apply_started_at`), so the live exception the
+   * insert conflicted with is still live when it is read back.
+   */
   async open(
     trx: Trx,
     batch: BatchRow,
@@ -109,7 +124,14 @@ export class ImportExceptionsService {
         decided_at: null,
         withdrawn_at: null,
       })
-      .onConflict((oc) => oc.columns(['organization_id', 'row_id', 'kind']).doNothing())
+      // The partial unique index import_exceptions_row_kind_live_unique (its predicate a literal,
+      // so PostgreSQL infers that index for a prepared statement too).
+      .onConflict((oc) =>
+        oc
+          .columns(['organization_id', 'row_id', 'kind'])
+          .where('status', '<>', sql.lit('withdrawn'))
+          .doNothing(),
+      )
       .returning('id')
       .executeTakeFirst();
     if (inserted) {
@@ -133,6 +155,7 @@ export class ImportExceptionsService {
       .where('organization_id', '=', batch.organization_id)
       .where('row_id', '=', row.id)
       .where('kind', '=', kind)
+      .where('status', '<>', 'withdrawn')
       .executeTakeFirstOrThrow();
     if (existing.status === 'open') {
       await trx

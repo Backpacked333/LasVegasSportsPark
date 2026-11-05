@@ -92,7 +92,10 @@ export const DeliveryFailed = defineEvent(
   'communications.delivery_failed',
   z.object({ ...attemptPayload, failureCode: DeliveryFailureCodeSchema, error: z.string() }),
 );
-/** A push notification is not guaranteed delivery: unknown stays unknown until a receipt resolves it. */
+/**
+ * A push notification is not guaranteed delivery: unknown stays unknown until a receipt resolves it
+ * or staff reconcile it (an essential notice's is a front-desk exception meanwhile, §4.11, §5.11).
+ */
 export const DeliveryUnknown = defineEvent(
   'communications.delivery_unknown',
   z.object({ ...attemptPayload, error: z.string().nullable() }),

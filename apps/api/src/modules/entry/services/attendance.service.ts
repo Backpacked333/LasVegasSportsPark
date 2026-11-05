@@ -34,8 +34,10 @@ import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
 import type { AttendancePort, EffectiveAttendance } from '../entry.ports';
 import {
+  activityDateOf,
   activityDetailOf,
   addMinutes,
+  beforeActivityDay,
   contradictedHeads,
   currentHeads,
   effectiveState,
@@ -72,9 +74,46 @@ export interface InsertedObservation {
   conflict: { exceptionId: string; conflictingObservationIds: string[] } | null;
 }
 
+/**
+ * R4-OPS-MODULES-06 (SPK-ENTRY-001, SPK-ENTRY-005, §4.15): an observation is a fact about an
+ * activity that takes place, judged at the moment it was observed. None is recorded for an
+ * activity that was already canceled when observed (the owning module's cancellation time), nor
+ * one observed before the activity's facility-local day (attendance taken as people arrive earlier
+ * that day is fine). An observation made before a later cancellation is a fact about an activity
+ * that was taking place and is recorded (`observedBeforeCancellation`). Corrections of an existing
+ * observation are not limited by this. Shared by online recording and offline sync; offline sync
+ * keeps every item it still refuses for review (`entry.offline_attendance_unrecorded`).
+ */
+export function attendanceWindowIssue(
+  activity: ResolvedActivity,
+  observedAt: Date,
+): 'activity_canceled' | 'activity_not_today' | null {
+  if (activity.canceled && !observedBeforeCancellation(activity, observedAt)) {
+    return 'activity_canceled';
+  }
+  if (beforeActivityDay(activity, observedAt)) return 'activity_not_today';
+  return null;
+}
+
+/**
+ * Whether the activity was canceled after `observedAt` (by the owning module's cancellation time).
+ * A canceled activity without a recorded cancellation time is treated as canceled throughout.
+ */
+export function observedBeforeCancellation(activity: ResolvedActivity, observedAt: Date): boolean {
+  return (
+    activity.canceled &&
+    activity.canceledAt !== null &&
+    observedAt.getTime() < activity.canceledAt.getTime()
+  );
+}
+
 /** The open review exception of one person's attendance in one activity (dedupe and affected id). */
 export const ATTENDANCE_CONFLICT = 'entry.attendance_conflict';
-function conflictSubject(activityType: string, activityId: string, personId: string): string {
+export function conflictSubject(
+  activityType: string,
+  activityId: string,
+  personId: string,
+): string {
   return `${activityType}:${activityId}:${personId}`;
 }
 
@@ -122,6 +161,26 @@ export class AttendanceService implements AttendancePort {
       throw errors.validation('An observation cannot be recorded for a future time.', {
         code: 'observed_in_future',
       });
+    }
+    const outside = attendanceWindowIssue(activity, observedAt);
+    if (outside === 'activity_canceled') {
+      throw errors.resourceConflict(
+        'This activity was canceled before the observed time; no attendance is recorded for it.',
+        {
+          code: 'activity_canceled',
+          canceledAt: activity.canceledAt?.toISOString() ?? null,
+        },
+      );
+    }
+    if (outside === 'activity_not_today') {
+      throw errors.resourceConflict(
+        'Attendance is observed on the day of the activity at its facility.',
+        {
+          code: 'activity_not_today',
+          activityDate: activityDateOf(activity),
+          activityStart: activity.start.toISOString(),
+        },
+      );
     }
     return this.uow.run(async ({ trx }) => {
       const person = await this.people.findPerson(organizationId, body.personId, trx);
@@ -483,6 +542,10 @@ export class AttendanceService implements AttendancePort {
         source: row.source,
         correctsObservationId: row.corrects_observation_id,
         flags: row.flags,
+        // R4-OPS-MODULES-06: observed before the owning module canceled the activity.
+        ...(activity.canceled
+          ? { activityCanceledAt: activity.canceledAt?.toISOString() ?? null }
+          : {}),
       },
     });
     await this.outbox.enqueue(trx, EntryEvents.attendanceObserved, {

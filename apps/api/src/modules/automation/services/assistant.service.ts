@@ -403,7 +403,7 @@ export class AssistantService {
                 payload: c.proposal.payload,
                 command: c.proposal.command,
                 evidence: c.evidence,
-                missing: c.proposal.missing,
+                missing: c.missing,
               })),
               ...result.informational.map((i) => ({
                 kind: i.proposal.kind,

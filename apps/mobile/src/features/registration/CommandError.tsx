@@ -5,8 +5,13 @@
  *
  * - Protected NOT_FOUND, ACCESS_DENIED and PARTICIPANT_AUTHORITY_REQUIRED read as "not available";
  *   nothing says the record exists (§4.10, §4.14).
+ * - Refused before running (`refusedBeforeRunning`: INTEGRATION_UNAVAILABLE `recovery_mode`, payments
+ *   paused while the service recovers from a restore, SPK-AT-028): nothing ran, so it is "Not done"
+ *   with the API's message and "Try again" (`ui/RefusedBeforeRunning`), never "No answer yet" or
+ *   "Do not pay again" although it is a 503.
  * - No definite answer (`mayHaveTakenEffect`: no connection or no answer after sending,
- *   IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx): the command may or may not have taken
+ *   IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx, a success status whose body could not
+ *   be read (RESPONSE_UNREADABLE)): the command may or may not have taken
  *   effect, so it reads "No answer yet: this may already have been recorded" (warning, never
  *   "Something went wrong") and "Check again" repeats the same intent with the same idempotency
  *   key (§4.9), so nothing happens twice. PAYMENT_OUTCOME_UNKNOWN reads "Payment outcome being
@@ -19,11 +24,16 @@
  */
 import { presentationForError, recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text, View } from 'react-native';
-import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import {
+  mayHaveTakenEffect,
+  refusedBeforeRunning,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { OutcomeLost } from '../../ui/OutcomeLost';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
@@ -84,6 +94,13 @@ export function CommandError({
     return (
       <View testID={testID}>
         <OutcomeLost error={error} />
+      </View>
+    );
+  }
+  if (refusedBeforeRunning(error)) {
+    return (
+      <View testID={testID}>
+        <RefusedBeforeRunning error={error} onRetry={onRetry} />
       </View>
     );
   }

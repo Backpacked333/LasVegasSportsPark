@@ -38,10 +38,10 @@ import {
   decodeKeyset,
   iso,
   isoOrNull,
-  isStaffLike,
   keysetAt,
   keysetPage,
   organizationOf,
+  staffAuthority,
   toLiveAttempt,
   toPaymentAttempt,
   toReceipt,
@@ -98,15 +98,33 @@ export class ObligationsService {
     };
   }
 
+  /**
+   * Whether the principal is the obligation's responsible payer (SPK-PAY-004), the stored payer
+   * resolved to its surviving record as `pay` resolves it (SPK-IAM-007). It is the person's own
+   * standing, so it holds whatever staff roles they also have (R4-AUTHZ-TARGETS-05, SPK-IAM-001).
+   */
+  private async isResponsiblePayer(principal: Principal, obligation: ObligationRow) {
+    if (!principal.personId || !obligation.responsible_payer_person_id) return false;
+    if (obligation.responsible_payer_person_id === principal.personId) return true;
+    const payer = await this.scope.subjectOf(
+      obligation.organization_id,
+      obligation.responsible_payer_person_id,
+    );
+    return payer === principal.personId;
+  }
+
+  /** Finance readers through a staff role (R4-AUTHZ-TARGETS-01): never a role label alone. */
+  private financeReader(principal: Principal, obligation: ObligationRow): Promise<boolean> {
+    return staffAuthority(this.authorization, principal, FinanceActions.readObligation, {
+      type: 'obligation',
+      organizationId: obligation.organization_id,
+    });
+  }
+
   /** The debtor (view), the team captain, the responsible payer, or finance readers. */
   private async requireRead(principal: Principal, obligation: ObligationRow): Promise<void> {
-    if (
-      principal.personId &&
-      obligation.responsible_payer_person_id === principal.personId &&
-      principal.kind === 'customer'
-    ) {
-      return;
-    }
+    // R4-AUTHZ-TARGETS-05: the responsible payer reads the debt they pay, whatever roles they hold.
+    if (await this.isResponsiblePayer(principal, obligation)) return;
     await this.authorization.require(
       principal,
       FinanceActions.readObligation,
@@ -120,9 +138,8 @@ export class ObligationsService {
     obligation: ObligationRow,
   ): Promise<boolean> {
     if (obligation.mode !== 'team_with_contributions') return false;
-    if (isStaffLike(principal)) return true;
-    if (principal.personId && principal.personId === obligation.responsible_payer_person_id)
-      return true;
+    if (await this.financeReader(principal, obligation)) return true;
+    if (await this.isResponsiblePayer(principal, obligation)) return true;
     const decision = await this.authorization.decide(
       principal,
       FinanceActions.requestContribution,
@@ -181,9 +198,11 @@ export class ObligationsService {
 
   /**
    * FIN-01 (SPK-PAY-007): the payment on its way toward the obligation that the reader may see,
-   * newest first: staff see any; a customer sees their own, and outside the contributions model
-   * also the debt's own charges (checkout, installment, a household member's payment), since they
-   * share the debt; a contributing player's payment is never shown to anyone else (SPK-PAY-004).
+   * newest first: finance readers (through a staff role, R4-AUTHZ-TARGETS-01) see any; anyone
+   * else sees their own, and outside the contributions model also the debt's own charges
+   * (checkout, installment, a household member's payment), since they share the debt; a
+   * contributing player's payment is never shown to anyone else, a captain who also holds some
+   * other staff role included (SPK-PAY-004).
    */
   private async visibleLiveAttempt(db: Reader, principal: Principal, obligation: ObligationRow) {
     let q = db
@@ -192,7 +211,7 @@ export class ObligationsService {
       .where('organization_id', '=', obligation.organization_id)
       .where('obligation_id', '=', obligation.id)
       .where('status', 'in', [...LIVE_ATTEMPT_STATES]);
-    if (!isStaffLike(principal)) {
+    if (!(await this.financeReader(principal, obligation))) {
       const self = principal.personId;
       if (obligation.mode === 'team_with_contributions') {
         if (!self) return undefined;
@@ -226,13 +245,14 @@ export class ObligationsService {
         teamEntryId: query.teamEntryId,
         protected: true,
       });
-    } else if (!isStaffLike(principal)) {
-      throw errors.validation('debtorPersonId or teamEntryId is required.');
-    } else {
-      await this.authorization.require(principal, FinanceActions.readObligation, {
+    } else if (
+      // R4-AUTHZ-TARGETS-01: the organization-wide list is for finance readers' staff roles only.
+      !(await staffAuthority(this.authorization, principal, FinanceActions.readObligation, {
         type: 'obligation',
         organizationId,
-      });
+      }))
+    ) {
+      throw errors.validation('debtorPersonId or teamEntryId is required.');
     }
     // FIN-02 (§4.5): keyset pages in (due_at, id) order; the cursor names the last row, so rows
     // inserted meanwhile never shift a page.

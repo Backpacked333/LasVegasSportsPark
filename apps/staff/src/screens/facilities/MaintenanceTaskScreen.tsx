@@ -335,7 +335,7 @@ function Inspections({ task, facility }: { task: Task; facility: FacilityContext
       <p>
         {task.requiresInspection
           ? task.latestInspection?.outcome === 'passed'
-            ? 'An inspection is required and the latest one passed.'
+            ? "An inspection is required; the latest one passed. The release checks that it follows the restriction's approval and the end of the task's latest work."
             : 'An inspection is required: the area cannot be released until one passes.'
           : 'No inspection is required for this task.'}
       </p>

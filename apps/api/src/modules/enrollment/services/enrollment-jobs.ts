@@ -32,7 +32,10 @@ export const BOOKING_LIFECYCLE_JOB = 'enrollment.booking_lifecycle';
  * - enrollment.membership_lifecycle (ENR-12): completes memberships whose term ended, ends
  *   elapsed suspensions and composes the one renewal notice a definition asks for.
  * - enrollment.booking_lifecycle (ENR-13): undecided requests expire at their start, an unstaffed
- *   booking that starts raises a critical exception for the scheduler, ended bookings complete.
+ *   booking that starts raises a critical exception for the scheduler, ended bookings complete;
+ *   then each facility's live bookings with equipment are re-checked against facilities
+ *   (`BookingsService.recheckEquipment`: SPK-COND-003, SPK-FAC-003, SPK-FAC-004), one small
+ *   transaction per facility.
  * Expiry and lifecycle work is never capability-gated (DEC-016). A renewal notice is not
  * lifecycle work but an invitation to a new commitment: it waits while `memberships` is off and is
  * composed once the switch is back on (CAPABILITIES-06, `renewalNoticeIfDue`).
@@ -87,7 +90,14 @@ export class EnrollmentJobs implements OnModuleInit {
         processed += 1;
       }
     }
-    return { processed, remaining: processed > 0 && due.length === batchSize ? 1 : 0 };
+    const remaining = processed > 0 && due.length === batchSize ? 1 : 0;
+    // Equipment that became unusable after its bookings were accepted (R4-MODULE-BOUNDARIES-02).
+    for (const facility of await this.bookings.equipmentFacilities(now)) {
+      processed += await this.uow.run(({ trx }) =>
+        this.bookings.recheckEquipment(trx, facility.organization_id, facility.facility_id),
+      );
+    }
+    return { processed, remaining };
   }
 
   async expirePackages({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {

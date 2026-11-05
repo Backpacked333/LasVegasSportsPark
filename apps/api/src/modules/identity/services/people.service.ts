@@ -46,6 +46,7 @@ import { IdentityEvents } from '../identity.events';
 import type { PersonDirectoryPort, PersonDisplayName, PersonSummary } from '../identity.ports';
 import {
   assertKindMatchesDateOfBirth,
+  canonicalPersonIdOf,
   displayNameOf,
   escapeLike,
   isUuid,
@@ -66,6 +67,8 @@ export interface CreatePersonOptions {
 
 /** Bound on the merge chain walked by the directory reads (merges are rare; chains are short). */
 const MAX_MERGE_DEPTH = 32;
+/** The bound of `canonicalPersonIdOf`'s walk up a merge chain. */
+const MAX_CANONICAL_HOPS = 16;
 
 const SearchCursor = z.object({ f: z.string(), g: z.string(), id: z.uuid() });
 
@@ -299,9 +302,16 @@ export class PeopleService implements PersonDirectoryPort {
       if (current.status === 'merged') {
         throw errors.invalidTransition('Person', 'merged', 'update');
       }
-      const dateOfBirth =
-        input.dateOfBirth === undefined ? current.date_of_birth : input.dateOfBirth;
-      assertKindMatchesDateOfBirth(current.kind, dateOfBirth, this.clock.now());
+      // §4.5 (R4-PRIVACY-02): kind is fixed when the record is made, and age moves with the clock,
+      // so only a date of birth this command changes is checked against the kind. A child record
+      // whose person has since reached ADULT_AGE_YEARS stays editable (names, status) and stays a
+      // child record: what happens at majority is pending (DEC-004, README "Policy defaults").
+      const dateOfBirthChanges =
+        input.dateOfBirth !== undefined && input.dateOfBirth !== current.date_of_birth;
+      const dateOfBirth = dateOfBirthChanges ? (input.dateOfBirth ?? null) : current.date_of_birth;
+      if (dateOfBirthChanges) {
+        assertKindMatchesDateOfBirth(current.kind, dateOfBirth, this.clock.now());
+      }
       // A staff role that covers person updates, not staff kind alone (SPK-IAM-001).
       if (
         input.status !== undefined &&
@@ -809,6 +819,60 @@ export class PeopleService implements PersonDirectoryPort {
     return result.rows.map((r) => r.id);
   }
 
+  /**
+   * R4-CARRY-01 (§4.12, SPK-IAM-007): `personIdsResolvingTo` for many people in one recursive
+   * read. Each given id maps to exactly what `personIdsResolvingTo` answers for it: up the merge
+   * chain to its canonical record (the same bounded walk as `canonicalPersonIdOf`), then every
+   * person merged into that record, nearest first. [] for an unknown, malformed or
+   * other-organization id.
+   */
+  async personIdsResolvingToMany(
+    organizationId: string,
+    personIds: readonly string[],
+    trx?: Trx,
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>(personIds.map((id) => [id, []]));
+    const ids = [...new Set(personIds.filter(isUuid).map((id) => id.toLowerCase()))];
+    if (ids.length === 0) return out;
+    const db = trx ?? executorFor(this.db);
+    const result = await sql<{ start_id: string; id: string }>`
+      with recursive input (id) as (values ${sql.join(ids.map((id) => sql`(${id}::uuid)`))}),
+      up (start_id, id, merged_into, hop) as (
+        select p.id, p.id, p.merged_into_person_id, 0 from persons p
+          join input i on i.id = p.id
+         where p.organization_id = ${organizationId}
+        union all
+        select u.start_id, p.id, p.merged_into_person_id, u.hop + 1 from up u
+          join persons p on p.id = u.merged_into
+         where p.organization_id = ${organizationId} and u.hop < ${MAX_CANONICAL_HOPS}
+      ),
+      canon (start_id, canonical) as (
+        select distinct on (start_id) start_id, id from up order by start_id, hop desc
+      ),
+      down (start_id, id, depth) as (
+        select c.start_id, p.id, 0 from canon c
+          join persons p on p.id = c.canonical
+         where p.organization_id = ${organizationId}
+        union all
+        select d.start_id, p.id, d.depth + 1 from down d
+          join persons p on p.merged_into_person_id = d.id
+         where p.organization_id = ${organizationId} and d.depth < ${MAX_MERGE_DEPTH}
+      )
+      select start_id, id from down group by start_id, id order by start_id, min(depth), id
+    `.execute(db);
+    const byStart = new Map<string, string[]>();
+    for (const row of result.rows) {
+      const list = byStart.get(row.start_id) ?? [];
+      list.push(row.id);
+      byStart.set(row.start_id, list);
+    }
+    for (const id of out.keys()) {
+      const resolved = isUuid(id) ? byStart.get(id.toLowerCase()) : undefined;
+      if (resolved) out.set(id, [...resolved]);
+    }
+    return out;
+  }
+
   // -------------------------------------------------------------------------------------------
   async findPerson(
     organizationId: string,
@@ -833,20 +897,8 @@ export class PeopleService implements PersonDirectoryPort {
     personId: string,
     trx?: Trx,
   ): Promise<string> {
-    const db = trx ?? executorFor(this.db);
-    let current = personId;
     // Merges form a chain (A→B, later B→C); follow it with a bounded walk.
-    for (let hop = 0; hop < 16; hop += 1) {
-      const row = await db
-        .selectFrom('persons')
-        .select('merged_into_person_id')
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', current)
-        .executeTakeFirst();
-      if (!row?.merged_into_person_id) return current;
-      current = row.merged_into_person_id;
-    }
-    return current;
+    return canonicalPersonIdOf(trx ?? executorFor(this.db), organizationId, personId);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -967,6 +1019,29 @@ export class PeopleService implements PersonDirectoryPort {
         throw mismatch();
       }
     }
+  }
+
+  /** `loadPerson` for many ids in one read (R4-CARRY-01); unknown and other-organization ids are omitted. */
+  async loadPersons(
+    db: Db | Trx,
+    organizationId: string,
+    ids: readonly string[],
+  ): Promise<Map<string, PersonRow>> {
+    const wanted = [...new Set(ids.filter(isUuid))];
+    const out = new Map<string, PersonRow>();
+    if (wanted.length === 0) return out;
+    const rows = await db
+      .selectFrom('persons')
+      .select(personColumns)
+      .where('persons.organization_id', '=', organizationId)
+      .where('persons.id', 'in', wanted)
+      .execute();
+    const byId = new Map(rows.map((row) => [row.id, row as PersonRow]));
+    for (const id of wanted) {
+      const row = byId.get(id) ?? byId.get(id.toLowerCase());
+      if (row) out.set(id, row);
+    }
+    return out;
   }
 
   async loadPerson(db: Db | Trx, organizationId: string, id: string): Promise<PersonRow | null> {

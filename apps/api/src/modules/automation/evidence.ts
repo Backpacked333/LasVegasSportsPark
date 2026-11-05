@@ -114,6 +114,16 @@ export function missingEvidence(
   };
 }
 
+/** One supporting record as read by one tool (the merge key of `mergeEvidence`). */
+export function evidenceKey(item: AssistantEvidence): string {
+  return `${item.source}|${item.recordType}|${item.recordId}`;
+}
+
+/** One gap of one tool (the merge key of `mergeMissing`). */
+export function missingKey(item: AssistantMissingEvidence): string {
+  return `${item.source ?? ''}|${item.recordType}|${item.recordId ?? ''}|${item.reason}`;
+}
+
 /**
  * One entry per record and source: the first mention of a read is kept (a module may name the
  * same record again inside one answer), and only a strictly later read replaces it.
@@ -121,7 +131,7 @@ export function missingEvidence(
 export function mergeEvidence(items: readonly AssistantEvidence[]): AssistantEvidence[] {
   const byKey = new Map<string, AssistantEvidence>();
   for (const item of items) {
-    const key = `${item.source}|${item.recordType}|${item.recordId}`;
+    const key = evidenceKey(item);
     const existing = byKey.get(key);
     if (!existing) {
       byKey.set(key, item);
@@ -143,16 +153,98 @@ export function mergeMissing(
   items: readonly AssistantMissingEvidence[],
 ): AssistantMissingEvidence[] {
   const byKey = new Map<string, AssistantMissingEvidence>();
-  for (const item of items) {
-    byKey.set(
-      `${item.source ?? ''}|${item.recordType}|${item.recordId ?? ''}|${item.reason}`,
-      item,
-    );
-  }
+  for (const item of items) byKey.set(missingKey(item), item);
   return [...byKey.values()];
 }
 
-/** The description given for a record the caller may not see (or that does not exist). */
+/**
+ * The description given for a record the requester may not see (or that does not exist). It names
+ * the requester, not "you": a command recommendation carries the request's gaps to reviewers, for
+ * whom the record may well be available (R4-COMMS-AUTOMATION-09, SPK-AUTO-002).
+ */
 export function notAvailableDescription(recordType: string): string {
-  return `The requested ${recordType.replace(/_/g, ' ')} is not available to you; nothing about it was used or disclosed.`;
+  return `The requested ${recordType.replace(/_/g, ' ')} is not available to the requester; nothing about it was used or disclosed.`;
+}
+
+/**
+ * The instant the knowledge of a read dates from, as `ageEvidence` ages it: the read of a live
+ * record or evaluation, the as-of instant of a stored result; none when no as-of was stated.
+ */
+function knownAt(item: AssistantEvidence): number | null {
+  if (item.freshness === 'unknown' || item.asOf === null) return null;
+  const at = Date.parse(item.freshness === 'live' ? item.observedAt : item.asOf);
+  return Number.isNaN(at) ? null : at;
+}
+
+/**
+ * What a command recommendation shows of the records the rest of its request read
+ * (R4-COMMS-AUTOMATION-09, SPK-AUTO-002, §4.10, §4.14). A reviewer holds the command's action,
+ * not the reads behind the request, so those records are not named: per tool there is one entry
+ * whose record is the request itself (which names them to its requester) and whose freshness is
+ * that of the tool's read with the oldest knowledge. A live read is stated as of its read, so no
+ * record's last-change instant crosses either; a stored result keeps its own as-of instant.
+ */
+export function requestReadSummaries(
+  assistantRequestId: string,
+  items: readonly AssistantEvidence[],
+): AssistantEvidence[] {
+  const bySource = new Map<string, AssistantEvidence[]>();
+  for (const item of items) {
+    const group = bySource.get(item.source);
+    if (group) group.push(item);
+    else bySource.set(item.source, [item]);
+  }
+  return [...bySource.entries()].map(([source, group]) => {
+    let oldest: AssistantEvidence | null = null;
+    for (const item of group) {
+      const at = knownAt(item);
+      if (at === null) continue;
+      const best = oldest ? knownAt(oldest) : null;
+      if (best === null || at < best) oldest = item;
+    }
+    const base = {
+      recordType: 'assistant_request',
+      recordId: assistantRequestId,
+      source,
+      label: `Records this request read through ${source}; the request names them.`.slice(0, 200),
+      changedSinceClientObservation: null,
+    };
+    if (!oldest) {
+      const observedAt = group
+        .map((g) => g.observedAt)
+        .reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
+      return { ...base, observedAt, asOf: null, ageSeconds: null, freshness: 'unknown' as const };
+    }
+    return oldest.freshness === 'live'
+      ? {
+          ...base,
+          observedAt: oldest.observedAt,
+          asOf: oldest.observedAt,
+          ageSeconds: 0,
+          freshness: 'live' as const,
+        }
+      : {
+          ...base,
+          observedAt: oldest.observedAt,
+          asOf: oldest.asOf,
+          ageSeconds: oldest.ageSeconds,
+          freshness: oldest.freshness,
+        };
+  });
+}
+
+/**
+ * The gaps of the rest of a request as a command recommendation shows them (SPK-AUTO-002 "missing
+ * evidence must remain visible"; §4.10, §4.14): each stays listed with its tool, record type,
+ * reason and description; the record it names is left out, as with the request's other reads.
+ */
+export function requestGapSummaries(
+  items: readonly AssistantMissingEvidence[],
+): AssistantMissingEvidence[] {
+  const byKey = new Map<string, AssistantMissingEvidence>();
+  for (const item of items) {
+    const key = `${item.source ?? ''}|${item.recordType}|${item.reason}|${item.description}`;
+    if (!byKey.has(key)) byKey.set(key, { ...item, recordId: null });
+  }
+  return [...byKey.values()];
 }

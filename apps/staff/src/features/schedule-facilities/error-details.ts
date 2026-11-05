@@ -126,16 +126,50 @@ export function blockingObligations(error: ApiError | null): Obligation[] {
     }));
 }
 
+/** Why the release gate refused (R4-OPS-MODULES-03): the API's `details.cause`. */
+export type InspectionCause =
+  'not_inspected' | 'inspection_failed' | 'work_in_progress' | 'inspection_predates_current_work';
+
+const INSPECTION_CAUSES: readonly InspectionCause[] = [
+  'not_inspected',
+  'inspection_failed',
+  'work_in_progress',
+  'inspection_predates_current_work',
+];
+
 /** ELIGIBILITY_FAILED with `inspection_required` (SPK-FAC-004 release gate). */
-export function inspectionRequired(
-  error: ApiError | null,
-): { latestOutcome: string | null; inspectedAt: string | null } | null {
+export function inspectionRequired(error: ApiError | null): {
+  latestOutcome: string | null;
+  inspectedAt: string | null;
+  cause: InspectionCause | null;
+  inspectionRequiredAfter: string | null;
+} | null {
   if (!error || error.code !== 'ELIGIBILITY_FAILED') return null;
   const details = asRecord(error.details);
   if (details?.code !== 'inspection_required') return null;
   const latest = asRecord(details.latestInspection);
+  const cause = INSPECTION_CAUSES.find((c) => c === details.cause) ?? null;
   return {
     latestOutcome: typeof latest?.outcome === 'string' ? latest.outcome : null,
     inspectedAt: typeof latest?.inspectedAt === 'string' ? latest.inspectedAt : null,
+    cause,
+    inspectionRequiredAfter:
+      typeof details.inspectionRequiredAfter === 'string' ? details.inspectionRequiredAfter : null,
   };
+}
+
+/**
+ * ELIGIBILITY_FAILED `restriction_release_required` from `PATCH /assets/{id}` (R4-OPS-MODULES-05):
+ * an operating restriction names the asset, so only its release returns it to service.
+ */
+export function restrictionReleaseRequired(
+  error: ApiError | null,
+): { restrictionIds: string[] } | null {
+  if (!error || error.code !== 'ELIGIBILITY_FAILED') return null;
+  const details = asRecord(error.details);
+  if (details?.code !== 'restriction_release_required') return null;
+  const ids = Array.isArray(details.restrictionIds)
+    ? details.restrictionIds.filter((id): id is string => typeof id === 'string')
+    : [];
+  return { restrictionIds: ids };
 }

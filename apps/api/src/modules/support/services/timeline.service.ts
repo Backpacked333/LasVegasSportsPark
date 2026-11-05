@@ -680,6 +680,10 @@ export class TimelineService {
       const id = `refund_attempt:${g.record_id}`;
       try {
         const r = await this.refunds.get(ctx.principal, g.record_id);
+        // R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008): the provider reported a refund failed after
+        // it was recorded succeeded; finance keeps the status and records the reversal, so no
+        // money was returned and the timeline never shows it as refunded.
+        const reversed = r.reversedAt !== null && r.reversedAt !== undefined;
         return {
           at: g.at,
           id,
@@ -689,8 +693,8 @@ export class TimelineService {
               id,
               category: 'refund',
               occurredAt: g.at,
-              kind: `refund.${r.status}`,
-              title: `Refund ${r.status.replaceAll('_', ' ')}`,
+              kind: reversed ? 'refund.reversed' : `refund.${r.status}`,
+              title: reversed ? 'Refund reversed' : `Refund ${r.status.replaceAll('_', ' ')}`,
               personId: ctx.scope.of(g.person_id),
               record: { type: 'refund_attempt', id: r.id },
               status: r.status,
@@ -700,6 +704,7 @@ export class TimelineService {
                 paymentAttemptId: r.paymentAttemptId,
                 reservationStatus: r.reservationStatus,
                 operationId: r.operationId,
+                reversedAt: r.reversedAt ?? null,
               },
             }),
           ),

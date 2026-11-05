@@ -244,13 +244,25 @@ export class ReconciliationService {
       .where('resolved_at', '>=', from)
       .where('resolved_at', '<', to)
       .executeTakeFirst();
+    // R4-PROVIDER-OUTCOMES-02: a refund the provider reported failed after success came back to
+    // the processor balance when its reversal was booked (the ledger's reversing journal).
+    const reversedRefunds = await db
+      .selectFrom('refund_attempts')
+      .select((eb) => [eb.fn.coalesce(eb.fn.sum<number>('amount_minor'), zero).as('reversed')])
+      .where('organization_id', '=', organizationId)
+      .where('provider', '=', provider)
+      .where('currency', '=', currency)
+      .where('status', '=', 'succeeded')
+      .where('reversed_at', '>=', from)
+      .where('reversed_at', '<', to)
+      .executeTakeFirst();
     // MONEY-03: point-of-sale card captures go to the processor without a receipt.
     const pos = await this.posCardMoney(db, organizationId, currency, from, to, provider);
     const receiptGross = Number(receipts?.gross ?? 0);
     const receiptFees = Number(receipts?.fees ?? 0);
     const gross = receiptGross + pos.grossMinor;
     const fees = receiptFees + pos.feesMinor;
-    const refunded = Number(refunds?.refunded ?? 0);
+    const refunded = Number(refunds?.refunded ?? 0) - Number(reversedRefunds?.reversed ?? 0);
     return {
       expected: gross - fees - refunded,
       breakdown: {
@@ -417,7 +429,10 @@ export class ReconciliationService {
       .select((eb) => [
         eb.fn
           .coalesce(
-            eb.fn.sum<number>(sql`case when status = 'succeeded' then amount_minor else 0 end`),
+            // R4-PROVIDER-OUTCOMES-02: a reversed refund returned nothing.
+            eb.fn.sum<number>(
+              sql`case when status = 'succeeded' and reversed_at is null then amount_minor else 0 end`,
+            ),
             zero,
           )
           .as('succeeded'),

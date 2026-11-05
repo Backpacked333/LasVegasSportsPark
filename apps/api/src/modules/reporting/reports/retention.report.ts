@@ -396,6 +396,9 @@ export class RetentionReport {
         .where('organization_id', '=', ctx.organizationId)
         .where('order_id', 'in', orderIds)
         .where('status', '=', 'succeeded')
+        // R4-PROVIDER-OUTCOMES-02: a refund the provider reversed by the as-of instant returned
+        // nothing, so the order is not refunded by it.
+        .where((eb) => eb.or([eb('reversed_at', 'is', null), eb('reversed_at', '>', ctx.asOf)]))
         .where('resolved_at', '<=', ctx.asOf)
         .execute();
       for (const r of refunds) {

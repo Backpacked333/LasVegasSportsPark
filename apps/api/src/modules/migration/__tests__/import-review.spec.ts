@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { errors } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { sql } from 'kysely';
 import { AuditWriter } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createProgramFixture } from '../../catalog';
+import { ImportTargets } from '../services/import-targets';
 import { batchChecksum, payloadHash } from '../staging/checksum';
 import { stagedObligation, stagedPerson, stagedRelationship } from '../testing/migration-fixtures';
 import {
@@ -46,11 +48,11 @@ describe('import validation and review queues (§5.4)', () => {
     });
 
   /** The batch's Today cards (`migration.import_review`), oldest first. */
-  const reviewCards = (batchId: string) =>
+  const reviewCards = (batchId: string, organizationId = t.organizationId) =>
     t.db
       .selectFrom('operational_exceptions')
       .select(['category', 'owner_queue', 'status', 'title', 'resolution'])
-      .where('organization_id', '=', t.organizationId)
+      .where('organization_id', '=', organizationId)
       .where('affected_type', '=', 'import_batch')
       .where('affected_id', '=', batchId)
       .orderBy('opened_at')
@@ -904,5 +906,193 @@ describe('import validation and review queues (§5.4)', () => {
     ).toBe(201);
     expect((await get(t, '/v1/import-exceptions', parent)).status).toBe(404);
     expect((await get(t, '/v1/external-mappings', coach)).status).toBe(404);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // R4-LIFECYCLES-REVISIONS-01: a problem that comes back after its exception was withdrawn
+  // -------------------------------------------------------------------------------------------
+
+  /** A second organization with no legacy authority assignment: SportsPark is authoritative. */
+  async function organizationWithoutLegacyAuthority() {
+    const other = await seedOrganization(t.db);
+    const gm = await staff(t, ['general_manager'], { organizationId: other.organizationId });
+    const legacy = async (recordCategory: string) => {
+      const created = await post(t, '/v1/authority-assignments', gm, {
+        recordCategory,
+        authoritativeSystem: 'legacy',
+        reason: 'legacy stays authoritative until cutover',
+      });
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      return created.body as { id: string; revision: number };
+    };
+    return { organizationId: other.organizationId, gm, legacy };
+  }
+
+  /** Validates (or re-validates) the batch, then completes its review. */
+  async function revalidateAndReview(gm: Actor, batchId: string) {
+    const validated = await post(t, `/v1/import-batches/${batchId}/validate`, gm, {});
+    expect(validated.status, JSON.stringify(validated.body)).toBe(200);
+    const reviewed = await post(t, `/v1/import-batches/${batchId}/review`, gm, {
+      expectedRevision: validated.body.revision,
+    });
+    expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+    return validated.body as {
+      plannedCounts: Record<string, number>;
+      exceptions: { open: number; decided: number; withdrawn: number };
+    };
+  }
+
+  it('§5.4 / §4.6 / §4.7 invariant 12 R4-LIFECYCLES-REVISIONS-01: a problem that comes back after re-validation withdrew its exception gets a fresh open exception — counted open, the review refused, its owner queue and a new Today card hold it', async () => {
+    const org = await organizationWithoutLegacyAuthority();
+    const first = await stageAndValidate(t, org.gm, [
+      stagedPerson('RR-P', { dateOfBirth: '1980-01-01' }),
+    ]);
+    expect(first.exceptions).toEqual({ open: 1, decided: 0, withdrawn: 0 });
+
+    // The legacy system becomes authoritative for persons: re-validation withdraws the conflict,
+    // and the review completes (it settles the validation's Today card).
+    const legacy = await org.legacy('person');
+    const second = await revalidateAndReview(org.gm, first.id);
+    expect(second).toMatchObject({
+      plannedCounts: { created: 1, exception: 0 },
+      exceptions: { open: 0, decided: 0, withdrawn: 1 },
+    });
+
+    // The cutover moves back: the assignment ends and SportsPark is authoritative again.
+    t.clock.advance(60 * 60_000);
+    const ended = await post(t, `/v1/authority-assignments/${legacy.id}/end`, org.gm, {
+      reason: 'the cutover moved back',
+      expectedRevision: legacy.revision,
+    });
+    expect(ended.status, JSON.stringify(ended.body)).toBe(200);
+    t.clock.advance(60 * 60_000);
+    const third = await post(t, `/v1/import-batches/${first.id}/validate`, org.gm, {});
+    expect(third.status, JSON.stringify(third.body)).toBe(200);
+    expect(third.body).toMatchObject({
+      status: 'validated',
+      plannedCounts: { created: 0, exception: 1 },
+      exceptions: { open: 1, decided: 0, withdrawn: 1 },
+    });
+    const exceptions = await exceptionsOf(t, org.gm, first.id);
+    expect(
+      exceptions
+        .map((e) => [e.kind, e.status, e.reviewOwnerRole, e.reasons.map((r) => r.code)])
+        .sort(),
+    ).toEqual([
+      ['conflict', 'open', 'system_administrator', ['sportspark_authoritative']],
+      ['conflict', 'withdrawn', 'system_administrator', ['sportspark_authoritative']],
+    ]);
+    const reraised = exceptions.find((e) => e.status === 'open')!;
+    // The review owner's queue lists it.
+    const queue = await get(
+      t,
+      '/v1/import-exceptions?status=open&reviewOwnerRole=system_administrator&limit=200',
+      org.gm,
+    );
+    expect(queue.body.items.map((e: { id: string }) => e.id)).toEqual([reraised.id]);
+    // The review is refused while it is open.
+    const refused = await post(t, `/v1/import-batches/${first.id}/review`, org.gm, {
+      expectedRevision: third.body.revision,
+    });
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.details).toMatchObject({ code: 'OPEN_EXCEPTIONS', open: 1 });
+    // The review settled the first card, so the recurring problem raised a card of its own.
+    expect(await reviewCards(first.id, org.organizationId)).toMatchObject([
+      { status: 'resolved', resolution: { settlement: 'review_completed' } },
+      {
+        status: 'open',
+        title: 'Import batch from legacy-registration has 1 rows awaiting review',
+        resolution: null,
+      },
+    ]);
+
+    // It is decided like any other exception; the review then completes and settles the card.
+    expect((await decide(org.gm, reraised, { decision: 'reject' })).status).toBe(200);
+    const current = await get(t, `/v1/import-batches/${first.id}`, org.gm);
+    const reviewed = await post(t, `/v1/import-batches/${first.id}/review`, org.gm, {
+      expectedRevision: current.body.revision,
+    });
+    expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+    expect((await reviewCards(first.id, org.organizationId)).map((c) => c.status)).toEqual([
+      'resolved',
+      'resolved',
+    ]);
+  });
+
+  it('§5.4 / §4.7 invariant 12 R4-LIFECYCLES-REVISIONS-01: at apply, a conflict re-validation had withdrawn for the row — re-planned or refused by the owning module — opens a fresh exception and the apply raises its Today card', async () => {
+    const org = await organizationWithoutLegacyAuthority();
+    const first = await stageAndValidate(t, org.gm, [
+      stagedPerson('RA-P', { dateOfBirth: '1981-01-01' }),
+      {
+        entityType: 'program' as const,
+        externalId: 'RA-PRG',
+        payload: { name: 'Recurring Conflict League', activityType: 'soccer' },
+      },
+    ]);
+    expect(first.exceptions).toEqual({ open: 2, decided: 0, withdrawn: 0 });
+    await org.legacy('person');
+    await org.legacy('program');
+    const second = await revalidateAndReview(org.gm, first.id);
+    expect(second).toMatchObject({
+      plannedCounts: { created: 2, exception: 0 },
+      exceptions: { open: 0, decided: 0, withdrawn: 2 },
+    });
+
+    // Between review and apply, staff create a program with the same name natively (the apply's
+    // re-plan finds the clash), and the owning module refuses the person (as scheduling refuses
+    // a clashing event: a conflict only it can see at that moment).
+    await createProgramFixture(t, {
+      name: 'Recurring Conflict League',
+      organizationId: org.organizationId,
+    });
+    const targets = t.app.get(ImportTargets);
+    const importRecord = targets.importRecord.bind(targets);
+    const refusal = vi.spyOn(targets, 'importRecord').mockImplementation(async (ctx, p, values) => {
+      if (values.entityType === 'person') {
+        throw errors.resourceConflict('The owning module refused the record.', {
+          code: 'IMPORT_CONTENT_MISMATCH',
+        });
+      }
+      return importRecord(ctx, p, values);
+    });
+    try {
+      t.clock.advance(60_000);
+      const applied = await post(t, `/v1/import-batches/${first.id}/apply`, org.gm, {});
+      expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+      expect(applied.body).toMatchObject({
+        status: 'applied',
+        outcomeCounts: { created: 0, exception: 2 },
+        exceptions: { open: 2, decided: 0, withdrawn: 2 },
+      });
+    } finally {
+      refusal.mockRestore();
+    }
+    const exceptions = await exceptionsOf(t, org.gm, first.id);
+    expect(
+      exceptions
+        .map((e) => [e.externalId, e.kind, e.phase, e.status, e.reasons.map((r) => r.code)])
+        .sort(),
+    ).toEqual([
+      ['RA-P', 'conflict', 'apply', 'open', ['owning_module_refused']],
+      ['RA-P', 'conflict', 'validation', 'withdrawn', ['sportspark_authoritative']],
+      ['RA-PRG', 'conflict', 'apply', 'open', ['program_name_exists']],
+      ['RA-PRG', 'conflict', 'validation', 'withdrawn', ['sportspark_authoritative']],
+    ]);
+    expect(await reviewCards(first.id, org.organizationId)).toMatchObject([
+      { status: 'resolved', resolution: { settlement: 'review_completed' } },
+      {
+        status: 'open',
+        title: 'Applied import batch from legacy-registration left 2 rows for review',
+        resolution: null,
+      },
+    ]);
+    // The decisions on them settle the apply's card.
+    for (const open of exceptions.filter((e) => e.status === 'open')) {
+      expect((await decide(org.gm, open, { decision: 'defer' })).status).toBe(200);
+    }
+    expect((await reviewCards(first.id, org.organizationId))[1]).toMatchObject({
+      status: 'resolved',
+      resolution: { settlement: 'apply_exceptions_decided', batchId: first.id },
+    });
   });
 });

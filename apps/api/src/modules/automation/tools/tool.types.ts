@@ -99,12 +99,23 @@ export interface CommandTool<A = unknown> {
   argumentsDoc: Readonly<Record<string, string>>;
   argsSchema: z.ZodType<A>;
   /**
+   * The stored command input (`RecommendationCommand.input`) as this build's `apply` accepts it
+   * (R4-REPLAY-IDEMPOTENCY-03, §4.11). An input it refuses — stored by an earlier build — is
+   * refused before the apply is claimed: a command that never ran is never held as an unknown
+   * outcome.
+   */
+  inputSchema: z.ZodType<unknown>;
+  /**
    * Authorizes the proposal exactly like a direct call: reads the target through the owning
    * module with the requester's principal and checks the command's own action on the real target.
    * Throws the owning module's error when the requester could not run the command themselves.
    */
   propose(principal: Principal, args: A, rationale: string | null): Promise<CommandProposal>;
-  /** Runs the owning module's normal command with the reviewer's principal (outside transactions). */
+  /**
+   * Runs the owning module's normal command with the reviewer's principal (outside transactions).
+   * Whatever it refuses before the owning module is called (its own parsing of the stored input)
+   * is an `ApplyFailure` with outcome `failed`: nothing ran.
+   */
   apply(
     reviewer: Principal,
     input: Record<string, unknown>,

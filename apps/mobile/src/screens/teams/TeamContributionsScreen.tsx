@@ -38,6 +38,7 @@ import {
   Body,
   CommandFailure,
   Detail,
+  FieldError,
   OfflineNotice,
   RadioGroup,
   RadioRow,
@@ -108,7 +109,7 @@ function RequestContribution({
         to the team debt and gives you no access to the player&apos;s account: each player pays
         their own contribution.
       </Body>
-      <RadioGroup label="Player">
+      <RadioGroup label="Player" error={playerError}>
         {players.map((p) => (
           <RadioRow
             key={p.personId}
@@ -118,7 +119,8 @@ function RequestContribution({
           />
         ))}
       </RadioGroup>
-      {playerError ? <Body>{`▲ ${playerError}`}</Body> : null}
+      {/* Announced when it appears, like every field error (SPK-UX-009). */}
+      <FieldError error={playerError} testID="contribution-player-error" />
       <TextField
         label={`Amount (${currency})`}
         value={amount}

@@ -11,7 +11,7 @@ Preference, Acknowledgment), §4.5 "Messages must represent actual delivery stat
 SPK-UX-003/006 (inbox, failed urgent communications).
 
 **Migration range:** `packages/db/migrations/1000_communications_*.sql` … `1099` (this module uses
-`1000` to `1008`; stage 3 added `1004` to `1008`).
+`1000` to `1011`; stage 3 added `1004` to `1008`, review rounds `1009` to `1011`).
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` incl. `displayNames` and `personIdsResolvingTo`
 (IF-09), `AUTHORITY_LOOKUP_PORT`, `STAFF_DIRECTORY_PORT`, `PeopleService` for contact points;
@@ -40,7 +40,8 @@ when the follow-up dispatches, and — for protected content — re-checked once
 an external provider is called (SPK-COMMS-003). Every hand-off to a channel is a **delivery attempt**
 whose state is exactly what the platform knows (SPK-COMMS-004): `queued`, `provider_accepted`,
 `delivered` (confirmed by the platform for in-app, by a receipt for external channels), `failed`,
-`unknown` (kept explicit until a receipt resolves it), `read`, `acknowledged`. A push is never marked
+`unknown` (kept explicit until a receipt resolves it or staff record what they established, with an
+owned front-desk exception meanwhile), `read`, `acknowledged`. A push is never marked
 delivered without a receipt.
 
 Lifecycles (`communications.machines.ts`; the database check constraints list exactly these states):
@@ -48,14 +49,18 @@ Lifecycles (`communications.machines.ts`; the database check constraints list ex
 - Notification: `composed → queued → dispatched`; `composed | queued → suppressed` (obsolete,
   no recipients, authority revoked).
 - Recipient: `pending → authorized | revoked`; `authorized → revoked` while nothing external has
-  been handed over.
+  been handed over. A recipient a newer notice replaced for them (`superseded_by_notification_id`,
+  migration 1011) keeps its state; a `pending` one is never authorized, so a queued notice is not
+  dispatched to them.
 - DeliveryAttempt: `queued → provider_accepted | delivered | failed | unknown`;
   `provider_accepted → delivered | failed | unknown`; `unknown → provider_accepted | delivered | failed`;
   `delivered → read | acknowledged`; `read → acknowledged`. A retry of a `failed` attempt is a new
-  attempt row naming it (`retry_of_attempt_id`, COM-02); the failed fact is never rewritten.
+  attempt row naming it (`retry_of_attempt_id`, COM-02); the failed fact is never rewritten. An
+  `unknown` attempt leaves that state only by a provider receipt or a staff reconciliation
+  (`POST /delivery-attempts/{id}/reconcile`).
 - PushDevice (COM-01): `active → revoked`; a revoked registration is never reactivated.
 
-## Tables (migrations `1000` to `1008`)
+## Tables (migrations `1000` to `1011`)
 
 | Table                                                                         | Purpose                                                                                                                                                                                                                                                                                                                                  |
 | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -72,6 +77,8 @@ Lifecycles (`communications.machines.ts`; the database check constraints list ex
 | `reminder_marks` (1007)                                                       | append-only, one row per (scheduling event, event revision) reminded; `notifications.kind` gains `availability_request`, `activity_reminder`                                                                                                                                                                                             |
 | `communication_merge_follow_ups` (1008)                                       | append-only, one row per person merge followed: survivor, merged person, the survivor's stored preference revisions at that moment, the conflicts found                                                                                                                                                                                  |
 | `reminder_marks`, `communication_merge_follow_ups` (1009)                     | the mark names its event and the follow-up its merge by organization-scoped foreign key (`reminder_marks_event_fk`, `communication_merge_follow_ups_merge_fk`; INTEGRITY-07, §4.3)                                                                                                                                                       |
+| `delivery_attempts.failure_code` (1010)                                       | gains `CHANNEL_DISABLED`: an attempt on a channel the person switched off before its hand-off (R4-COMMS-AUTOMATION-05, SPK-COMMS-007)                                                                                                                                                                                                    |
+| `notification_recipients.superseded_by_notification_id`, `_at` (1011)         | the newer notice that replaced this notice for this recipient only (SPK-COMMS-005, R4-COMMS-AUTOMATION-03), set once (trigger `notification_recipients_supersession_fixed`); trigger `delivery_attempts_supersession_guard` refuses any new attempt (a dispatch, a retry) for such a recipient or for a notice replaced as a whole       |
 
 Database-enforced invariants (tests in `__tests__/schema-invariants.spec.ts`): organization scope
 and composite `(organization_id, id)` foreign keys everywhere (an attempt or acknowledgment names a
@@ -86,30 +93,33 @@ named below): one active push registration per device token, `token` present exa
 revocation timestamped and explained; one retry per failed attempt and only of a retryable failure of
 the same recipient and channel; preference sources limited to `person`/`import`; one reminder mark
 per event revision; import records, reminder marks and merge follow-ups append-only
-(`forbid_mutation`).
+(`forbid_mutation`). Review rounds: no delivery attempt for a recipient whose notice a newer one
+replaced for them, or for a notice replaced as a whole, and that per-recipient fact is never
+rewritten (migration 1011, `__tests__/supersede-coverage.spec.ts`).
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/communications.ts`)
 
-| Method | Path                                    | Who (action)                                                                                                                                                                                                                                                                                                              |
-| ------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/notifications`                        | composer roles (`communications.compose`): compose against an audience; `protected` marks participant-private content; `scheduledFor` makes a reminder                                                                                                                                                                    |
-| GET    | `/notifications`, `/notifications/{id}` | reader roles (`communications.read_notification`), newest first, filters status/kind/facility, cursor paging (the cursor keeps the database's microsecond instant, so pages are complete and disjoint; `__tests__/keyset-paging.spec.ts`)                                                                                 |
-| GET    | `/notifications/{id}/recipients`        | composer roles (`communications.preview_recipients`): names, basis and a count from CURRENT permissions; never contact details (SPK-COMMS-006)                                                                                                                                                                            |
-| POST   | `/notifications/{id}/send`              | composer roles (`communications.send`): resolves recipients now, suppresses obsolete unsent notices about the same subject, creates an operation, requests delivery                                                                                                                                                       |
-| GET    | `/notifications/{id}/deliveries`        | reader roles: recipients (with `displayName`, COM-02) and attempts (with `retryOfAttemptId`) with their actual states (SPK-COMMS-004, SPK-UX-006)                                                                                                                                                                         |
-| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging with a microsecond cursor (SPK-UX-003, §4.5); each item carries `revision` and `subjectPersonIds` (COM-02); after a merge, also the merged person's notices (COM-05)                                                                                     |
-| POST   | `/me/inbox/{id}/read`, `/acknowledge`   | self (`communications.acknowledge`); `expectedRevision` honoured (STALE_REVISION); another person's notice is NOT_FOUND; acknowledgment recorded once                                                                                                                                                                     |
-| GET    | `/me/communication-preferences`         | self: the effective 4 × 2 matrix with `stored` and `locked` flags                                                                                                                                                                                                                                                         |
-| PATCH  | `/me/communication-preferences`         | self (`communications.manage_preferences`); disabling operational in-app is refused by the service and the database                                                                                                                                                                                                       |
-| GET    | `/me/calendar-feeds`                    | self: feeds without tokens                                                                                                                                                                                                                                                                                                |
-| POST   | `/me/calendar-feeds`                    | self (`communications.manage_calendar_feeds`); including another person requires `view` over them (`communications.include_in_calendar_feed`, otherwise NOT_FOUND)                                                                                                                                                        |
-| POST   | `/me/calendar-feeds/{id}/revoke`        | owner only; future fetches answer 404 (SPK-COMMS-008, SPK-IAM-006)                                                                                                                                                                                                                                                        |
-| GET    | `/calendar-feeds/{token}.ics`           | public, token-authorized `text/calendar`; unknown, malformed or revoked tokens are NOT_FOUND; scope re-checked on every fetch                                                                                                                                                                                             |
-| POST   | `/delivery-attempts/{id}/retry`         | general manager, system administrator, support (`communications.retry_delivery`, COM-02): one failed push/email/SMS attempt as a new queued attempt; `unknown` → INVALID_TRANSITION, revoked recipient → RESOURCE_CONFLICT `RECIPIENT_REVOKED`, second retry → `ALREADY_RETRIED`, obsolete notice → `NOTICE_SUPERSEDED`   |
-| POST   | `/me/push-devices`                      | self (`communications.register_push_device`, COM-01): register `{ platform, token, appVersion? }`; same token and account refreshes the row; a token active for another account is moved (the older row revoked `reregistered`); the token is never returned (`tokenHint`)                                                |
-| GET    | `/me/push-devices`                      | self: the signed-in account's devices, token hints only                                                                                                                                                                                                                                                                   |
-| POST   | `/me/push-devices/{id}/revoke`          | self, own account's device only (another's is NOT_FOUND): `{ reason }`; erases the token, nothing more is pushed to it                                                                                                                                                                                                    |
-| POST   | `/webhooks/messaging/{provider}`        | public, signed receipt from the (fake) messaging provider; recorded once in the kernel inbox (202 with `duplicate`), applied by the inbox worker. The fake provider's secret is a published test constant, so the endpoint answers NOT_FOUND in production; a receipt resolves only attempts of the provider that sent it |
+| Method | Path                                    | Who (action)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| POST   | `/notifications`                        | composer roles (`communications.compose`): compose against an audience; `protected` marks participant-private content; `scheduledFor` makes a reminder                                                                                                                                                                                                                                                                                                                                                                                                 |
+| GET    | `/notifications`, `/notifications/{id}` | reader roles (`communications.read_notification`), newest first, filters status/kind/facility, cursor paging (the cursor keeps the database's microsecond instant, so pages are complete and disjoint; `__tests__/keyset-paging.spec.ts`)                                                                                                                                                                                                                                                                                                              |
+| GET    | `/notifications/{id}/recipients`        | composer roles (`communications.preview_recipients`): names, basis and a count from CURRENT permissions; never contact details (SPK-COMMS-006)                                                                                                                                                                                                                                                                                                                                                                                                         |
+| POST   | `/notifications/{id}/send`              | composer roles (`communications.send`): resolves recipients now, suppresses obsolete unsent notices about the same subject, creates an operation, requests delivery                                                                                                                                                                                                                                                                                                                                                                                    |
+| GET    | `/notifications/{id}/deliveries`        | reader roles: recipients (with `displayName`, COM-02, and `supersededByNotificationId` when a newer notice replaced it for that recipient only) and attempts (with `retryOfAttemptId`) with their actual states (SPK-COMMS-004, SPK-UX-006)                                                                                                                                                                                                                                                                                                            |
+| GET    | `/me/inbox`                             | self: in-app attempts newest first (`unreadOnly`), cursor paging with a microsecond cursor (SPK-UX-003, §4.5); each item carries `revision` and `subjectPersonIds` (COM-02); after a merge, also the merged person's notices (COM-05)                                                                                                                                                                                                                                                                                                                  |
+| POST   | `/me/inbox/{id}/read`, `/acknowledge`   | self (`communications.acknowledge`); `expectedRevision` honoured (STALE_REVISION); another person's notice is NOT_FOUND; acknowledgment recorded once                                                                                                                                                                                                                                                                                                                                                                                                  |
+| GET    | `/me/communication-preferences`         | self: the effective 4 × 2 matrix with `stored` and `locked` flags                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| PATCH  | `/me/communication-preferences`         | self (`communications.manage_preferences`); disabling operational in-app is refused by the service and the database                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| GET    | `/me/calendar-feeds`                    | self: feeds without tokens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| POST   | `/me/calendar-feeds`                    | self (`communications.manage_calendar_feeds`); including another person requires `view` over them (`communications.include_in_calendar_feed`, otherwise NOT_FOUND)                                                                                                                                                                                                                                                                                                                                                                                     |
+| POST   | `/me/calendar-feeds/{id}/revoke`        | owner only; future fetches answer 404 (SPK-COMMS-008, SPK-IAM-006)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| GET    | `/calendar-feeds/{token}.ics`           | public, token-authorized `text/calendar`; unknown, malformed or revoked tokens are NOT_FOUND; scope re-checked on every fetch                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| POST   | `/delivery-attempts/{id}/retry`         | general manager, system administrator, support (`communications.retry_delivery`, COM-02): one failed push/email/SMS attempt as a new queued attempt; `unknown` → INVALID_TRANSITION, revoked recipient → RESOURCE_CONFLICT `RECIPIENT_REVOKED`, second retry → `ALREADY_RETRIED`, obsolete notice (for everyone, or for this recipient) → `NOTICE_SUPERSEDED`, channel switched off since → `CHANNEL_DISABLED`                                                                                                                                         |
+| POST   | `/delivery-attempts/{id}/reconcile`     | front desk, general manager, system administrator, support (`communications.reconcile_delivery`; §4.11, §5.11, R4-COMMS-AUTOMATION-07): `{ outcome: provider_accepted \| delivered \| failed, evidence, expectedRevision?, reason? }` records what staff established for one `unknown` push/email/SMS attempt, recorded like a receipt (same events; `failed` is `PROVIDER_ERROR`, which a retry may then repeat); resolves its `communications.delivery_unknown` exception; audited with the evidence; any other state or in-app → INVALID_TRANSITION |
+| POST   | `/me/push-devices`                      | self (`communications.register_push_device`, COM-01): register `{ platform, token, appVersion? }`; same token and account refreshes the row; a token active for another account is moved (the older row revoked `reregistered`); the token is never returned (`tokenHint`)                                                                                                                                                                                                                                                                             |
+| GET    | `/me/push-devices`                      | self: the signed-in account's devices, token hints only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| POST   | `/me/push-devices/{id}/revoke`          | self, own account's device only (another's is NOT_FOUND): `{ reason }`; erases the token, nothing more is pushed to it                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| POST   | `/webhooks/messaging/{provider}`        | public, signed receipt from the (fake) messaging provider; recorded once in the kernel inbox (202 with `duplicate`), applied by the inbox worker. The fake provider's secret is a published test constant, so the endpoint answers NOT_FOUND in production; a receipt resolves only attempts of the provider that sent it                                                                                                                                                                                                                              |
 
 Every consequential POST/PATCH is `@Idempotent()` and zod-validated; the stage-3 write routes carry
 `@NoRecordAuthority('Not a §5.3 record category')` (IF-41); every write runs in
@@ -147,21 +157,43 @@ dispatch creates the attempts or suppresses the notice.
   lock lease (`FOR UPDATE SKIP LOCKED`), resolves the addresses — email and SMS through identity's
   `PeopleService` (contact points are never copied), push to every active registered device of the
   person (COM-01) — then in one transaction locks the recipient and the attempt,
-  re-checks a protected recipient (invariant 10) and marks `attempted_at` only if the attempt is
+  re-checks a protected recipient (invariant 10) and the person's current channel preference for
+  the notice's category (SPK-COMMS-007, R4-COMMS-AUTOMATION-05: a channel switched off after
+  dispatch, a retry or a recovery pause fails the attempt `CHANNEL_DISABLED`, never handed over and
+  not raised as an exception), and marks `attempted_at` only if the attempt is
   still queued, unmarked and held under this worker's lease (renewing it for the call); after that
   commits it calls the provider OUTSIDE any transaction and records exactly its answer:
   `provider_accepted`, `failed` (`PROVIDER_REJECTED`, `NO_ADDRESS`, `PROVIDER_ERROR`,
-  `RECIPIENT_REVOKED`, `SUPERSEDED`) or `unknown`. An attempt of a notice found superseded inside
+  `RECIPIENT_REVOKED`, `SUPERSEDED`, `CHANNEL_DISABLED`) or `unknown`. An attempt of a notice found superseded inside
   that transaction fails `SUPERSEDED` and is never handed over. A revocation that commits first fails the attempt and nothing is
   sent; one processed later finds the hand-off committed and leaves it alone, so the record matches
   what the provider received. An attempt another poller re-claimed after the lease expired is
   skipped, so it reaches the provider once; an interrupted hand-off is recorded `unknown` and never
   retried blindly (§4.12). A failed essential notice raises a `front_desk` operational exception
   (SPK-UX-006); a revocation, a superseded (obsolete) notice, or a push to a person with no
-  registered device (`NO_ADDRESS` on push, COM-01) is not raised.
+  registered device (`NO_ADDRESS` on push, COM-01) is not raised. An essential notice whose
+  hand-off ends `unknown` (a timeout, an adapter error, an interrupted hand-off) raises a
+  `front_desk` exception `communications.delivery_unknown` (§4.11, §5.11; R4-COMMS-AUTOMATION-07,
+  R4-PROVIDER-OUTCOMES-07: the channel port has no status lookup, so a provider that never got the
+  request sends no receipt); it is resolved when a receipt arrives or when staff reconcile the
+  attempt, and the attempt is still never retried while `unknown`. **Verified**:
+  `__tests__/delivery-unknown.spec.ts`. When an unknown outcome is escalated is **Proposed**: the
+  exception is raised at once, the conservative default while the unknown-delivery threshold is a
+  **pending decision** (DEC-015; reporting's MET-062 counts every unknown at once for the same
+  reason). The front desk's resolution action in the Today queue and on the staff delivery screen
+  (`POST /delivery-attempts/{id}/reconcile`) belongs to the support and staff owners (deferred in
+  the stage-8 report).
+- **Hand-off of a notice replaced for its recipient** (SPK-COMMS-005, R4-COMMS-AUTOMATION-03): the
+  hand-off reads the recipient's own `superseded_by_notification_id` under the recipient lock as
+  well as the notification's, so an attempt left queued by a supersede that committed first fails
+  `SUPERSEDED` and is never handed over. **Verified**: `__tests__/supersede-coverage.spec.ts`.
 - **Receipts** (`DeliveryWorker.applyReceipt`, inbox provider `fake-messaging`): resolve
   `queued/provider_accepted/unknown` into `provider_accepted/delivered/failed`; duplicates and
-  out-of-order receipts are ignored rather than rewriting a later fact.
+  out-of-order receipts are ignored rather than rewriting a later fact. An outcome staff reconciled
+  as `delivered` or `failed` is final; one reconciled as `provider_accepted` is an acceptance and a
+  later receipt still moves it to `delivered` or `failed`, as for any accepted attempt
+  (`__tests__/delivery-unknown.spec.ts`). A receipt that resolves an `unknown` attempt resolves its
+  exception.
 - **Revocation** (SPK-IAM-006, SPK-AT-017): `identity.access_grant_revoked` (for `receive_messages`)
   and `identity.access_restricted` re-evaluate every pending or authorized recipient of a protected
   notice that is still queued or whose external attempts have not been handed over; those lose
@@ -185,9 +217,27 @@ dispatch creates the attempts or suppresses the notice.
   (`obsolete`, `supersedes_notification_id`) and points dispatched ones at the newer notice
   (`superseded_by_notification_id`, shown in the inbox); their push/email/SMS attempts not yet
   handed to a provider are failed with `SUPERSEDED` in the same transaction (migration 1001), so
-  a stale "moved" never arrives after the cancellation. Delivered in-app items stay.
+  a stale "moved" never arrives after the cancellation. Delivered in-app items stay. **Only for
+  the people the newer notice reaches** (R4-COMMS-AUTOMATION-03): an older notice is obsolete as a
+  whole when the newer one addresses at least its parties (the same or more subject persons, team
+  entries, persons and staff roles) or reaches every one of its recipients (a composed notice's
+  audience is resolved now for that comparison; recipients already replaced for themselves are
+  not counted). A narrower notice (one team of a fixture, the one family support resends to)
+  neither suppresses nor points at anything other people were told, and nothing stale reaches the
+  people it does reach: each recipient of the older notice it covers carries its id
+  (`notification_recipients.superseded_by_notification_id`, migration 1011; audit
+  `communications.notification_superseded_for_recipients` names them). A queued older notice (a
+  scheduled reminder) is dispatched to the others only: the covered people get no in-app, push,
+  email or SMS copy. Of a dispatched one, their unsent external attempts fail `SUPERSEDED`, a staff
+  retry of their earlier failed attempt is refused (`NOTICE_SUPERSEDED`), the hand-off refuses an
+  attempt still queued, the database refuses any new attempt for them, and their inbox item shows
+  the notice that replaced it. A composed staff draft covered only in part is left alone (it has
+  no recipients yet). **Verified**: `__tests__/supersede-coverage.spec.ts`.
 - **Preferences** (SPK-COMMS-007): operational and promotional choices are separate rows; defaults
-  come from `COMMUNICATIONS_POLICY`; the operational in-app notice is locked on.
+  come from `COMMUNICATIONS_POLICY`; the operational in-app notice is locked on. They are read
+  before every send, not only at dispatch (R4-COMMS-AUTOMATION-05): a staff retry on a channel
+  switched off since is refused (`CHANNEL_DISABLED`), and the worker's hand-off fails such an
+  attempt `CHANNEL_DISABLED`. **Verified**: `__tests__/preference-recheck.spec.ts`.
 - **Calendar feeds** (SPK-COMMS-008): 32 random bytes, hash stored; the ICS uses the scheduling
   event id as UID and `SEQUENCE` per change; every fetch re-checks `view` over each person in scope
   and includes the team entries each person is on; revocation stops future access (404) and cannot
@@ -219,7 +269,10 @@ dispatch creates the attempts or suppresses the notice.
   (`receipt()`) for the webhook. The push fake fans out per device (`deviceSends`). No vendor SDK
   (§5.2, DEC-020). All three are in the kernel integration register as
   `communications.{push,email,sms}_provider` (gate `messaging`, `productionAllowed: false`,
-  reconciliation owner `front_desk`; COM-01, K-09).
+  reconciliation owner `front_desk`; COM-01, K-09): the front desk receives the
+  `communications.delivery_unknown` exceptions and reconciles them. The port has no status lookup
+  (a provider's is unselected, DEC-020); a selected adapter's lookup could feed a periodic
+  reconciliation job (**Proposed**).
 - `TEAM_MEMBERSHIP_PORT` (`TeamMembershipPort`): `membersOf`, `isMember`, `teamEntriesOf`,
   implemented by `CompetitionTeamMembership` over competition's `ROSTER_PORT` and
   `TEAM_ENTRY_QUERY_PORT` at the clock: the effective roster plus the captain and co-captain role
@@ -232,10 +285,25 @@ dispatch creates the attempts or suppresses the notice.
   supersedable/superseding kinds, feed window, iCalendar product id.
 - `CHANGE_NOTICE_CHECK_IMPL` (competition's `ChangeNoticeCheckPort`, `ChangeNoticeCheck`): fixture
   readiness "material change notifications" (SPK-READY-001) from this module's own evidence — the
-  schedule-change notice of the fixture's scheduling event that describes its current time, and its
-  delivery attempts: satisfied when every authorized recipient has a provider-accepted (or better)
-  attempt, unsatisfied when nobody could be told or all attempts of a recipient failed, otherwise
-  `unknown`. **Verified** (`apps/api/src/__tests__/cross-module-ports.spec.ts`).
+  schedule-change notices of the fixture's scheduling event that describe its current time,
+  composed since the last notice that went out describing another time or the cancellation (a
+  fixture moved 14:00 → 16:00 → back to 14:00 is evidenced only by the move back), and their
+  delivery attempts. A resend to one family is one of them, never a stand-in for the rest, and
+  while any of them is still composed or queued the check is `unknown` (not sent yet). A person
+  counts as told when a push/email/SMS attempt was provider-accepted (or better) or they read or
+  acknowledged the in-app notice; the in-app copy dispatch delivers to every inbox is not evidence
+  (R4-COMMS-AUTOMATION-06, §4.5). Satisfied when every authorized recipient was told; unsatisfied
+  when nobody could be told, or every external attempt of each recipient not told failed;
+  otherwise `unknown` (external attempts queued or `unknown`, or only an unread in-app notice;
+  SPK-READY-002). An attempt that never was a way to reach the person is not a failure: a channel
+  they switched off before the hand-off (`CHANNEL_DISABLED`, so the result does not depend on
+  when they switched it off), push without a registered device (`NO_ADDRESS`, COM-01), or an
+  attempt withdrawn as `SUPERSEDED` or `RECIPIENT_REVOKED`. The required action of a failed
+  notice names what clears it (a retry once the contact details are fixed, or the person opening
+  the in-app notice). **Verified** (`__tests__/change-notice-check.spec.ts`;
+  the assembled-application test `apps/api/src/__tests__/cross-module-ports.spec.ts` needs its
+  players given an email the provider accepts and every queued attempt handed over
+  (`deliverQueued`: its 26 attempts exceed one worker batch), deferred to its owner).
 - For other modules: `NotificationsService.compose / composeAndQueue / composeAndQueueIn(trx, …)`
   (the `ComposeInput` carries `sourceEventId` so a replayed handler never composes twice),
   `PreferencesService.enabledChannels`, `InboxService`, `CalendarFeedsService`,

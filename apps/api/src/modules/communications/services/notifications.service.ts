@@ -68,7 +68,7 @@ import {
   type RecipientRow,
 } from '../communications.shared';
 import { CHANNEL_PROVIDERS, type ChannelProviderPort } from '../ports';
-import { AudienceResolver } from './audience-resolver';
+import { AudienceResolver, type ResolvedRecipient } from './audience-resolver';
 import { PreferencesService } from './preferences.service';
 
 /**
@@ -89,6 +89,26 @@ export interface QueueOptions {
 }
 
 type SuppressionReason = z.infer<typeof SuppressionReasonSchema>;
+
+const within = (values: readonly string[], of: readonly string[]): boolean =>
+  values.every((value) => of.includes(value));
+
+/**
+ * Does the newer audience address at least every party the older one does (SPK-COMMS-005,
+ * R4-COMMS-AUTOMATION-03)? The same or more subject persons, team entries, explicit persons and
+ * staff roles, the roles in a scope that contains the older one's (every facility, or the same).
+ */
+export function audienceIncludes(newer: Audience, older: Audience): boolean {
+  return (
+    within(older.subjectPersonIds, newer.subjectPersonIds) &&
+    within(older.teamEntryIds, newer.teamEntryIds) &&
+    within(older.personIds, newer.personIds) &&
+    within(older.staffRoles, newer.staffRoles) &&
+    (older.staffRoles.length === 0 ||
+      newer.facilityId === null ||
+      newer.facilityId === older.facilityId)
+  );
+}
 
 /**
  * Notifications (SPK-COMMS-002/003/005/006). Lifecycle: composed → queued (recipients resolved
@@ -305,8 +325,9 @@ export class NotificationsService {
       return this.loadOrThrow(trx, organizationId, row.id);
     }
 
-    // SPK-COMMS-005: a newer schedule notice makes unsent notices about the same subject obsolete.
-    const supersedes = await this.supersedeObsolete(trx, principal, row, correlationId);
+    // SPK-COMMS-005: a newer schedule notice makes unsent notices about the same subject obsolete,
+    // for the people it reaches (R4-COMMS-AUTOMATION-03).
+    const supersedes = await this.supersedeObsolete(trx, principal, row, recipients, correlationId);
 
     const operationId = await this.operations.create(trx, {
       organizationId,
@@ -398,13 +419,24 @@ export class NotificationsService {
     if (!row || row.status !== 'queued') return; // suppressed meanwhile, or a replay
     const actor = systemPrincipal(organizationId, 'communications.dispatch');
     const now = this.clock.now();
+    // SPK-COMMS-005 (R4-COMMS-AUTOMATION-03): a recipient a newer notice reached before this one
+    // went out is not sent it at all, on any channel (migration 1011 refuses the attempt too).
     const recipients = await trx
       .selectFrom('notification_recipients')
       .selectAll()
       .where('organization_id', '=', organizationId)
       .where('notification_id', '=', row.id)
       .where('status', '=', 'pending')
+      .where('superseded_by_notification_id', 'is', null)
       .orderBy('person_id')
+      .execute();
+    const replaced = await trx
+      .selectFrom('notification_recipients')
+      .select('superseded_by_notification_id')
+      .where('organization_id', '=', organizationId)
+      .where('notification_id', '=', row.id)
+      .where('status', '=', 'pending')
+      .where('superseded_by_notification_id', 'is not', null)
       .execute();
     let authorized = 0;
     let revoked = 0;
@@ -530,12 +562,13 @@ export class NotificationsService {
       }
     }
     if (authorized === 0) {
+      // Nobody left to tell: everyone lost the authority, or a newer notice reached the rest.
       await this.suppress(
         trx,
         actor,
         row,
-        revoked > 0 ? 'authority_revoked' : 'no_recipients',
-        null,
+        revoked > 0 ? 'authority_revoked' : replaced.length > 0 ? 'obsolete' : 'no_recipients',
+        revoked > 0 ? null : (replaced[0]?.superseded_by_notification_id ?? null),
         correlationId,
       );
       return;
@@ -560,7 +593,7 @@ export class NotificationsService {
       afterRevision: row.revision + 1,
       correlationId,
       operationId: row.operation_id,
-      details: { authorized, revoked, attempts },
+      details: { authorized, revoked, superseded: replaced.length, attempts },
     });
     await this.outbox.enqueue(trx, NotificationDispatched, {
       organizationId,
@@ -928,16 +961,39 @@ export class NotificationsService {
     return failed;
   }
 
+  /**
+   * SPK-COMMS-005 "suppress obsolete unsent reminders", for the people the newer notice reaches
+   * (R4-COMMS-AUTOMATION-03). An older schedule notice about the same subject is obsolete as a
+   * whole only when the newer notice covers it (`coverageOf`): it addresses at least the same
+   * parties, or it reaches every one of the older notice's remaining recipients. Then an unsent
+   * (composed or queued) older notice is suppressed, and a dispatched one points at the newer
+   * notice and loses its push/email/SMS attempts not yet handed to a provider.
+   *
+   * A narrower notice (one team of a fixture, the one family a support operator resends to) never
+   * suppresses or marks replaced what other people were told, but nothing stale reaches the
+   * people it does reach: each of the older notice's recipients it covers carries the newer
+   * notice's id from now on (`notification_recipients.superseded_by_notification_id`, migration
+   * 1011). A queued older notice is then never dispatched to them (no in-app, push, email or SMS
+   * copy); a dispatched one loses their unsent external attempts, and no hand-off or retry sends
+   * it to them later. A composed staff draft covered only in part is left alone (it has no
+   * recipients yet; it is resolved when staff send it).
+   */
   private async supersedeObsolete(
     trx: Trx,
     principal: Principal,
     row: NotificationRow,
+    recipients: readonly ResolvedRecipient[],
     correlationId: string | null,
   ): Promise<string | null> {
     if (row.subject_type === null || row.subject_id === null) return null;
     if (!this.policy.supersedingKinds.includes(row.kind)) return null;
     const supersedable = [...this.policy.supersedableKinds];
     if (supersedable.length === 0) return null;
+    const audience = audienceOf(row);
+    const reached = new Set(recipients.map((r) => r.personId));
+    const now = this.clock.now();
+    // Locked, so a dispatch running meanwhile is either finished first (the notice is then handled
+    // as dispatched below) or waits for this transaction.
     const obsolete = await trx
       .selectFrom('notifications')
       .selectAll()
@@ -948,11 +1004,20 @@ export class NotificationsService {
       .where('kind', 'in', supersedable)
       .where('status', 'in', ['composed', 'queued'])
       .orderBy('created_at')
+      .orderBy('id')
+      .forUpdate()
       .execute();
     let supersedes: string | null = null;
+    /** Older notices covered only in part: the recipients the newer notice reaches. */
+    const partly = new Map<string, { status: string; recipientIds: string[] }>();
     for (const old of obsolete) {
-      await this.suppress(trx, principal, old, 'obsolete', row.id, correlationId);
-      supersedes = old.id;
+      const coverage = await this.coverageOf(trx, audience, reached, old);
+      if (coverage.full) {
+        await this.suppress(trx, principal, old, 'obsolete', row.id, correlationId);
+        supersedes = old.id;
+      } else if (coverage.coveredRecipientIds.length > 0) {
+        partly.set(old.id, { status: old.status, recipientIds: coverage.coveredRecipientIds });
+      }
     }
     // Already dispatched notices about the subject point at the newer one so inboxes can show it,
     // and their push/email/SMS attempts not yet handed to a provider are never sent: the stale
@@ -961,7 +1026,7 @@ export class NotificationsService {
     // worker's (fenced in failUnsent; the worker re-checks the pointer under its own lock).
     const dispatched = await trx
       .selectFrom('notifications')
-      .select('id')
+      .selectAll()
       .where('organization_id', '=', row.organization_id)
       .where('subject_type', '=', row.subject_type)
       .where('subject_id', '=', row.subject_id)
@@ -973,19 +1038,48 @@ export class NotificationsService {
       .orderBy('id')
       .forUpdate()
       .execute();
-    if (dispatched.length === 0) return supersedes;
-    const ids = dispatched.map((d) => d.id);
-    await trx
-      .updateTable('notifications')
-      .set({ superseded_by_notification_id: row.id })
-      .where('organization_id', '=', row.organization_id)
-      .where('id', 'in', ids)
-      .execute();
+    const ids: string[] = [];
+    for (const old of dispatched) {
+      const coverage = await this.coverageOf(trx, audience, reached, old);
+      if (coverage.full) ids.push(old.id);
+      else if (coverage.coveredRecipientIds.length > 0) {
+        partly.set(old.id, { status: old.status, recipientIds: coverage.coveredRecipientIds });
+      }
+    }
+    if (ids.length > 0) {
+      await trx
+        .updateTable('notifications')
+        .set({ superseded_by_notification_id: row.id })
+        .where('organization_id', '=', row.organization_id)
+        .where('id', 'in', ids)
+        .execute();
+    }
+    const coveredRecipientIds = [...partly.values()].flatMap((p) => p.recipientIds);
+    if (coveredRecipientIds.length > 0) {
+      // The durable per-recipient fact, written before the unsent attempts are read: a retry that
+      // holds the recipient's lock commits first and its new attempt is failed below, or it reads
+      // the pointer and is refused (migration 1011 refuses the attempt either way).
+      await trx
+        .updateTable('notification_recipients')
+        .set({ superseded_by_notification_id: row.id, superseded_at: now })
+        .where('organization_id', '=', row.organization_id)
+        .where('id', 'in', coveredRecipientIds)
+        .where('superseded_by_notification_id', 'is', null)
+        .execute();
+    }
+    if (ids.length === 0 && coveredRecipientIds.length === 0) return supersedes;
     const unsent = await trx
       .selectFrom('delivery_attempts')
       .selectAll()
       .where('organization_id', '=', row.organization_id)
-      .where('notification_id', 'in', ids)
+      .where((eb) =>
+        eb.or([
+          ...(ids.length > 0 ? [eb('notification_id', 'in', ids)] : []),
+          ...(coveredRecipientIds.length > 0
+            ? [eb('recipient_id', 'in', coveredRecipientIds)]
+            : []),
+        ]),
+      )
       .where('channel', '<>', 'in_app')
       .where('status', '=', 'queued')
       .where('attempted_at', 'is', null)
@@ -996,9 +1090,11 @@ export class NotificationsService {
       failureCode: 'SUPERSEDED',
       error: `superseded by notification ${row.id} before hand-off`,
       eventError: `superseded by notification ${row.id}`,
-      at: this.clock.now(),
+      at: now,
       correlationId,
     });
+    const failedOf = (notificationId: string): string[] =>
+      failed.filter((a) => unsent.find((u) => u.id === a)?.notification_id === notificationId);
     for (const id of ids) {
       await this.audit.record(trx, {
         organizationId: row.organization_id,
@@ -1008,15 +1104,62 @@ export class NotificationsService {
         targetId: id,
         reason: 'obsolete',
         correlationId,
+        details: { supersededBy: row.id, failedAttemptIds: failedOf(id) },
+      });
+    }
+    for (const [id, { status, recipientIds }] of partly) {
+      // The older notice stands for everyone else: no notification pointer. The covered people
+      // are named; a queued notice is never sent to them, a dispatched one sends them nothing more.
+      await this.audit.record(trx, {
+        organizationId: row.organization_id,
+        actor: principal,
+        action: 'communications.notification_superseded_for_recipients',
+        targetType: 'notification',
+        targetId: id,
+        reason: 'obsolete',
+        correlationId,
         details: {
           supersededBy: row.id,
-          failedAttemptIds: failed.filter(
-            (a) => unsent.find((u) => u.id === a)?.notification_id === id,
-          ),
+          notificationStatus: status,
+          recipientIds,
+          failedAttemptIds: failedOf(id),
         },
       });
     }
     return supersedes;
+  }
+
+  /**
+   * Does the newer notice (its audience and the people it resolved to now) cover an older one?
+   * Fully when it addresses at least the older notice's parties (`audienceIncludes`: a person who
+   * left the roster since is no longer one of them), or when it reaches every person the older
+   * notice is still to tell (still unresolved for a composed notice: resolved now, from current
+   * permissions; for a queued or dispatched one, its recipients neither revoked nor already
+   * replaced by another notice). Otherwise only the recipients it reaches are covered (none for a
+   * composed notice, which has no recipients yet).
+   */
+  private async coverageOf(
+    trx: Trx,
+    newer: Audience,
+    reached: ReadonlySet<string>,
+    old: NotificationRow,
+  ): Promise<{ full: boolean; coveredRecipientIds: string[] }> {
+    if (audienceIncludes(newer, audienceOf(old))) return { full: true, coveredRecipientIds: [] };
+    if (old.status === 'composed') {
+      const resolved = await this.resolver.resolve(old.organization_id, audienceOf(old), trx);
+      return { full: resolved.every((r) => reached.has(r.personId)), coveredRecipientIds: [] };
+    }
+    const rows = await trx
+      .selectFrom('notification_recipients')
+      .select(['id', 'person_id'])
+      .where('organization_id', '=', old.organization_id)
+      .where('notification_id', '=', old.id)
+      .where('status', '<>', 'revoked')
+      .where('superseded_by_notification_id', 'is', null)
+      .orderBy('id')
+      .execute();
+    const covered = rows.filter((r) => reached.has(r.person_id)).map((r) => r.id);
+    return { full: covered.length === rows.length, coveredRecipientIds: covered };
   }
 
   private async suppress(

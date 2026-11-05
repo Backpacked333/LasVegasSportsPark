@@ -278,6 +278,59 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
     ).toBeGreaterThan(1);
   });
 
+  it('SPK-AT-028 (R4-CLIENTS-A11Y-COPY-01): "Check again" of a payment retry with no answer refused during a restore keeps "being confirmed" and says the check did not run', async () => {
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    let posts = 0;
+    renderOutcome({
+      routes: routes({
+        'GET /registration-checkouts/{id}': {
+          status: 200,
+          body: checkout({
+            status: 'awaiting_payment',
+            payment: payment({ status: 'failed', failureReason: 'The card was declined.' }),
+            receipt: null,
+            nextAction: 'retry_payment',
+          }),
+        },
+        'POST /registration-checkouts/{id}/payments': () => {
+          posts += 1;
+          if (posts === 1) throw new TypeError('Network request failed');
+          return fakeResponse(
+            503,
+            apiErrorBody('INTEGRATION_UNAVAILABLE', {
+              message: paused,
+              nextAction: 'retry_later',
+              details: { reason: 'recovery_mode' },
+            }),
+          );
+        },
+      }),
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Succeeds at once' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try this payment method' }));
+    });
+    await act(async () => {
+      fireEvent.press(await screen.findByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByTestId('retry-check-refused')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Check not run')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'This check could not run now; the earlier payment may still have gone through. Do not pay again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/nothing was paid or recorded/)).toBeNull();
+    expect(
+      screen.getAllByLabelText('Payment outcome being confirmed. Do not pay again.').length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Try this payment method' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeOnTheScreen();
+    expect(posts).toBe(2);
+  });
+
   it.each([
     ['INTEGRATION_UNAVAILABLE', 503, 'retry_later'],
     ['IDEMPOTENCY_OUTCOME_UNAVAILABLE', 409, 'reload_current_state'],

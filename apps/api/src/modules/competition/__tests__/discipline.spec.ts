@@ -416,6 +416,78 @@ describe('discipline and disputes (SPK-DISC-001..005, SPK-RESULT-005, SPK-AT-013
     ).toBe('issued');
   });
 
+  it('§4.10 (R4-PRIVACY-03): overturn, suspension update and appeal decision answer a caller who may not read the record exactly as for an unknown id; a reader without management authority gets the honest 403', async () => {
+    const subject = await adultCustomer(t);
+    const stranger = await adultCustomer(t);
+    const decision = await post('/disciplinary-decisions', leagueManager, {
+      subjectPersonId: subject.personId,
+      basis: 'dissent',
+      decision: 'suspension',
+      suspension: {
+        scope: 'competitions',
+        competitionIds: [season.competitionId],
+        matchCount: 1,
+        completionCriteria: 'one match served',
+      },
+    });
+    expect(decision.status, JSON.stringify(decision.body)).toBe(201);
+    const suspensionId = decision.body.suspensionId as string;
+    const appeal = await post('/appeals', subject, {
+      decisionId: decision.body.id,
+      grounds: 'The report names another player.',
+    });
+    expect(appeal.status, JSON.stringify(appeal.body)).toBe(201);
+    const unknown = '01890000-0000-7000-8000-0000000000ff';
+    const commands = (id: { decision: string; suspension: string; appeal: string }) => [
+      (actor: Actor) =>
+        post(`/disciplinary-decisions/${id.decision}/overturn`, actor, {
+          expectedRevision: 1,
+          reason: 'Wrong player.',
+        }),
+      (actor: Actor) =>
+        patch(`/suspensions/${id.suspension}`, actor, { action: 'approve', expectedRevision: 1 }),
+      (actor: Actor) =>
+        post(`/appeals/${id.appeal}/decide`, actor, {
+          action: 'deny',
+          expectedRevision: 1,
+          reason: 'The report stands.',
+        }),
+    ];
+    const real = commands({
+      decision: decision.body.id,
+      suspension: suspensionId,
+      appeal: appeal.body.id,
+    });
+    const absent = commands({ decision: unknown, suspension: unknown, appeal: unknown });
+    const answer = (res: { status: number; body: { code?: string; message?: string } }) => ({
+      status: res.status,
+      code: res.body.code,
+      message: res.body.message,
+    });
+    for (const [i, command] of real.entries()) {
+      const forUnknown = answer(await absent[i]!(leagueManager));
+      expect(forUnknown.status).toBe(404);
+      // A stranger and a staff member who reads no discipline learn nothing about the record.
+      for (const outsider of [stranger, frontDesk]) {
+        expect(answer(await command(outsider))).toEqual(forUnknown);
+      }
+      // The subject may read the record, so the refusal is the kernel's honest one.
+      const own = await command(subject);
+      expect(own.status, JSON.stringify(own.body)).toBe(403);
+      expect(own.body.code).toBe('PARTICIPANT_AUTHORITY_REQUIRED');
+    }
+    // Nothing changed: the decision is still issued, the suspension proposed, the appeal submitted.
+    expect(
+      (await get(`/disciplinary-decisions/${decision.body.id}`, leagueManager)).body,
+    ).toMatchObject({ status: 'issued' });
+    expect((await get(`/suspensions/${suspensionId}`, leagueManager)).body).toMatchObject({
+      status: 'proposed',
+    });
+    expect((await get(`/appeals/${appeal.body.id}`, leagueManager)).body).toMatchObject({
+      status: 'submitted',
+    });
+  });
+
   it("§4.9 / SPK-DISC-002: league management withdrawing a subject's appeal names its reason; a reasonless or blank one changes neither the appeal nor the suspension's appeal status", async () => {
     const subject = await adultCustomer(t);
     const decision = await post('/disciplinary-decisions', leagueManager, {

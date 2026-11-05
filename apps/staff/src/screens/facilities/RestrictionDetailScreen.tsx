@@ -76,7 +76,15 @@ function OperationLine({ id }: { id: string }) {
   );
 }
 
-function InspectionGate({ taskId, facility }: { taskId: string; facility: FacilityContext }) {
+function InspectionGate({
+  taskId,
+  facility,
+  approvedAt,
+}: {
+  taskId: string;
+  facility: FacilityContext;
+  approvedAt: string | null;
+}) {
   const task = useApiQuery({ path: '/maintenance-tasks/{id}', request: { path: { id: taskId } } });
   if (task.error) {
     return (
@@ -95,10 +103,30 @@ function InspectionGate({ taskId, facility }: { taskId: string; facility: Facili
       </p>
       {t.requiresInspection ? (
         latest?.outcome === 'passed' ? (
-          <StatusBadge
-            tone="success"
-            label={`Inspection passed ${formatInstant(latest.inspectedAt, facility.timezone)}`}
-          />
+          // R4-OPS-MODULES-03: a pass is not by itself the gate being met; the release also needs
+          // it to follow the restriction's approval and the end of the task's latest work.
+          t.status === 'in_progress' ? (
+            <StatusBadge
+              tone="warning"
+              label="The task is back at work: the latest pass does not release the area"
+            />
+          ) : approvedAt && Date.parse(latest.inspectedAt) < Date.parse(approvedAt) ? (
+            <StatusBadge
+              tone="warning"
+              label="The latest pass predates this restriction's approval"
+            />
+          ) : (
+            <>
+              <StatusBadge
+                tone="success"
+                label={`Latest inspection passed ${formatInstant(latest.inspectedAt, facility.timezone)}`}
+              />
+              <p className="caption">
+                The release also needs the pass to follow the end of the task&apos;s latest work; a
+                refused release names the cause.
+              </p>
+            </>
+          )
         ) : (
           <>
             <StatusBadge
@@ -122,6 +150,25 @@ function InspectionGate({ taskId, facility }: { taskId: string; facility: Facili
       ) : null}
     </section>
   );
+}
+
+/** The refused release, worded by the API's cause (R4-OPS-MODULES-03, SPK-FAC-004). */
+function gateCauseText(
+  gate: NonNullable<ReturnType<typeof inspectionRequired>>,
+  timezone: string,
+): string {
+  switch (gate.cause) {
+    case 'not_inspected':
+      return 'No inspection has been recorded for the task. Record a passed inspection on the task, then release.';
+    case 'inspection_failed':
+      return 'The latest inspection failed. Record a passed inspection on the task, then release.';
+    case 'work_in_progress':
+      return 'The task is back at work; resolve or close it, then record a passed inspection.';
+    case 'inspection_predates_current_work':
+      return `The latest pass${gate.inspectedAt ? ` (${formatInstant(gate.inspectedAt, timezone)})` : ''} predates this restriction's approval or the end of the task's latest work; record a passed inspection${gate.inspectionRequiredAfter ? ` after ${formatInstant(gate.inspectionRequiredAfter, timezone)}` : ''}.`;
+    default:
+      return `${gate.latestOutcome ? `The latest inspection ${gate.latestOutcome}.` : 'No inspection has been recorded for the task.'} Record a passed inspection on the task, then release.`;
+  }
 }
 
 function ClosureFollowUp({ closureId }: { closureId: string }) {
@@ -298,7 +345,7 @@ function WithdrawRestriction({
   );
 }
 
-function Actions({ restriction }: { restriction: Restriction }) {
+function Actions({ restriction, timezone }: { restriction: Restriction; timezone: string }) {
   const { online } = useApp();
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'' | ResolutionMode>('');
@@ -431,12 +478,7 @@ function Actions({ restriction }: { restriction: Restriction }) {
       {gate ? (
         <div role="alert" className="banner" data-testid="inspection-required">
           <StatusBadge tone="danger" label="Release refused: a passed inspection is required" />
-          <span>
-            {gate.latestOutcome
-              ? `The latest inspection ${gate.latestOutcome}.`
-              : 'No inspection has been recorded for the task.'}{' '}
-            Record a passed inspection on the task, then release.
-          </span>
+          <span data-testid="inspection-cause">{gateCauseText(gate, timezone)}</span>
           {restriction.taskId ? (
             <Link to={`/facilities/maintenance/tasks/${restriction.taskId}`}>Open the task</Link>
           ) : null}
@@ -529,7 +571,11 @@ function RestrictionView({
       </dl>
       {restriction.operationId ? <OperationLine id={restriction.operationId} /> : null}
       {restriction.taskId ? (
-        <InspectionGate taskId={restriction.taskId} facility={facility} />
+        <InspectionGate
+          taskId={restriction.taskId}
+          facility={facility}
+          approvedAt={restriction.approvedAt}
+        />
       ) : null}
       {restriction.schedulingClosureId ? (
         <ClosureFollowUp closureId={restriction.schedulingClosureId} />
@@ -540,7 +586,7 @@ function RestrictionView({
           facilityId={restriction.facilityId}
           what="Approving or withdrawing restrictions"
         >
-          <Actions key={restriction.revision} restriction={restriction} />
+          <Actions key={restriction.revision} restriction={restriction} timezone={tz} />
         </ActionGate>
       ) : restriction.status === 'active' ? (
         <ActionGate
@@ -548,10 +594,10 @@ function RestrictionView({
           facilityId={restriction.facilityId}
           what="Releasing areas to service"
         >
-          <Actions key={restriction.revision} restriction={restriction} />
+          <Actions key={restriction.revision} restriction={restriction} timezone={tz} />
         </ActionGate>
       ) : (
-        <Actions key={restriction.revision} restriction={restriction} />
+        <Actions key={restriction.revision} restriction={restriction} timezone={tz} />
       )}
     </div>
   );

@@ -40,14 +40,22 @@ makeups. Those screens, their states and what stays open are in
   committed and must be acknowledged again (SPK-REG-010, SPK-UX-008 stale version).
 - Commands send `expectedRevision` where the API takes it and one idempotency key per intent: a
   retry after no answer reuses the key; a re-preview or a new payment is a new intent (§4.9).
-- A command without a definite answer (`mayHaveTakenEffect`: a lost connection or a timeout after
-  sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx) reads "No answer yet" with
-  "Check again" under the same key, never "Something went wrong" (`CommandFailure.tsx`; bookings,
+- A command without a definite answer (`mayHaveTakenEffect`, the shared api-client predicate: a
+  lost connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another
+  5xx, a success status whose answer could not be read) reads "No answer yet" with "Check again"
+  under the same key, never "Something went wrong" (`CommandFailure.tsx`; bookings,
   cancellations, renewals, transfers, session bookings, makeup redemptions). One that committed with
   its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) reads "This may already have been done" with
   "Reload", and the key is kept, so booking the same time again is not a second booking. A failed
   read passed as `read` (the transfer preview, the re-read before canceling) is a read that did not
-  load, never "may already have been made".
+  load, never "may already have been made". A refusal before running (503 INTEGRATION_UNAVAILABLE
+  `recovery_mode`: payments paused while the service recovers from a restore, SPK-AT-028) reads
+  "Not done" with the API's message and that nothing was changed (`ui/RefusedBeforeRunning.tsx`),
+  never "No answer yet" or "Do not pay again"; on SCR-C-34 paying stays possible. The same refusal
+  of "Check again" after no answer (`refusedAfterNoAnswer`, marked by `useApiCommand`) proves only
+  that the check did not run: it reads "Check not run" with the API's message and that the earlier
+  attempt may still have gone through, never "Nothing was changed", and on SCR-C-34 "Do not pay
+  again" and the blocked Pay stay (R4-CLIENTS-A11Y-COPY-01).
 - A payment whose outcome is unknown, or still processing, reads "Payment outcome being confirmed.
   Do not pay again." or "Payment processing", never success or failure; paying is blocked and
   "Check again" asks about the same payment (SPK-PAY-007, SPK-UX-004). PAYMENT_OUTCOME_UNKNOWN from

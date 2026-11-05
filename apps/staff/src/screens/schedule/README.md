@@ -82,7 +82,11 @@ approval. **Pending decision** = needs an operator answer; the screen shows the 
   instead. The resolution (relocate, reschedule, cancel) becomes one schedule draft.
 - **Restrictions (SPK-FAC-003, SPK-FAC-004, SPK-AT-021).** The affected area is chosen from the
   inventory; release requires a reason and is refused by the API without a passed inspection when
-  one is required; the screen explains the gate. A proposed restriction, or an approved one whose
+  one is required; the screen explains the gate by the API's cause (no inspection, a failed one, the
+  task back at work, or a pass from before the approval or the end of the latest work), and the gate
+  panel never presents a pass as the gate being met while the task is at work or the pass predates
+  the approval (R4-OPS-MODULES-03). An asset edit back to service that an operating restriction
+  refuses links that restriction (R4-OPS-MODULES-05). A proposed restriction, or an approved one whose
   closure is still pending, is withdrawn with a reason (with its closure, in one command). An
   approved restriction whose closure is already applied (a stalled activation) offers no
   withdrawal and says to resume activation, then release it. A withdrawal the API refuses with

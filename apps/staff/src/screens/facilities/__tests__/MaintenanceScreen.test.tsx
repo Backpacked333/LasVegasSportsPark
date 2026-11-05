@@ -253,6 +253,45 @@ describe('SCR-S-41 MaintenanceScreen', () => {
     expect(del?.body).toEqual({ expectedRevision: 3 });
   });
 
+  it('R4-OPS-MODULES-05 / SPK-FAC-004: an asset an operating restriction names returns to service only through the release; the refusal links the restriction', async () => {
+    const user = userEvent.setup();
+    const outOfService = { ...GOAL, status: 'out_of_service' as const };
+    const app = createTestApp({
+      routes: routes({
+        'GET /assets': { status: 200, body: [outOfService] },
+        'PATCH /assets/{id}': () =>
+          fakeResponse(
+            422,
+            apiErrorBody('ELIGIBILITY_FAILED', {
+              nextAction: 'review_eligibility_reasons',
+              message:
+                "An operating restriction names this asset: it returns to service only through the restriction's release.",
+              details: {
+                code: 'restriction_release_required',
+                assetId: 'as-1',
+                restrictionIds: ['r-1'],
+                allowedStatuses: ['out_of_service', 'retired'],
+              },
+            }),
+          ),
+      }),
+    });
+    render(app.at('/facilities/maintenance'));
+    const assets = await screen.findByRole('list', { name: 'Assets' });
+    await user.click(within(assets).getByRole('button', { name: 'Edit North goal' }));
+    const form = within(assets).getByRole('form', { name: 'Edit North goal' });
+    await user.selectOptions(within(form).getByLabelText('Status'), 'in_service');
+    await user.click(within(form).getByRole('button', { name: 'Save' }));
+    const banner = await screen.findByTestId('asset-release-required');
+    expect(banner).toHaveTextContent(
+      "This asset returns to service only through its restriction's release.",
+    );
+    expect(within(banner).getByRole('link', { name: 'Open the restriction' })).toHaveAttribute(
+      'href',
+      '/facilities/restrictions/r-1',
+    );
+  });
+
   it('SPK-FAC-005: generating preventive occurrences reports what was created', async () => {
     const user = userEvent.setup();
     const schedule = {

@@ -243,6 +243,27 @@ export interface SuspensionCheckPort {
     scope: SuspensionScope,
     trx?: Trx,
   ): Promise<ActiveSuspension[]>;
+  /**
+   * R4-CARRY-01 (§4.12): the same answer for many people at once, keyed by person id (every
+   * subject present, [] when none applies), read in a bounded number of queries. Each subject
+   * names the ids its records may be held under (the person and everyone merged into them, as
+   * identity's `personIdsResolvingTo` answers), so a suspension recorded against a merged person
+   * binds the survivor exactly as `activeSuspensions` does. Optional for an external
+   * implementation: without it the eligibility engine asks person by person.
+   */
+  activeSuspensionsOfMany?(
+    organizationId: string,
+    subjects: ReadonlyArray<SuspensionSubject>,
+    at: Date,
+    scope: SuspensionScope,
+    trx?: Trx,
+  ): Promise<Map<string, ActiveSuspension[]>>;
+}
+
+/** A person whose suspensions are read, with the ids their records may be held under. */
+export interface SuspensionSubject {
+  personId: string;
+  personIds: readonly string[];
 }
 export const SUSPENSION_CHECK_PORT = Symbol('SUSPENSION_CHECK_PORT');
 export const SUSPENSION_CHECK_IMPL = Symbol('SUSPENSION_CHECK_IMPL');

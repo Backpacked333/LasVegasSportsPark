@@ -257,6 +257,7 @@ export class FinanceReports {
         )
         .select([
           'r.status',
+          'r.reversed_at',
           'r.currency',
           'r.purpose',
           'r.amount_minor',
@@ -319,6 +320,7 @@ export class FinanceReports {
           'm.currency',
           'm.amount_minor',
           'ra.status as refund_status',
+          'ra.reversed_at as refund_reversed_at',
         ])
         .where('m.organization_id', '=', org)
         .where('m.occurred_at', '>=', start)
@@ -375,7 +377,9 @@ export class FinanceReports {
       grouped(
         'refund_attempts',
         refunds,
-        (r) => [r.status, r.currency, r.purpose],
+        // R4-PROVIDER-OUTCOMES-02: a refund the provider reversed after success returned nothing,
+        // so it is its own state, never counted with the succeeded ones.
+        (r) => [refundState(r.status, r.reversed_at), r.currency, r.purpose],
         (r) => r.amount_minor,
       );
       // R3-REPORTING-02 (§5.5, MET-049): one row per reconciliation with its own signed
@@ -635,7 +639,9 @@ export class FinanceReports {
       const cardReturns = new Map<string, { currency: string; state: string; amount: number }>();
       for (const m of pos) {
         if (m.movement !== 'return' || m.tender_kind !== 'card') continue;
-        const state = m.refund_status ?? 'unrecorded';
+        const state = m.refund_status
+          ? refundState(m.refund_status, m.refund_reversed_at)
+          : 'unrecorded';
         const k = JSON.stringify([m.currency, state]);
         const g = cardReturns.get(k) ?? { currency: m.currency, state, amount: 0 };
         g.amount += Number(m.amount_minor);
@@ -689,7 +695,7 @@ export class FinanceReports {
         rows,
         disclosures: [
           'Receipts and sales are shown side by side and never combined; receipts are not revenue (SPK-PAY-011, rule G6).',
-          'Point-of-sale money creates no receipt, so it is reported in its own series beside customer receipts and never added to them: card captures (settled card tenders by when they settled, and captures reported after a failed tender by when they were posted), drawer tenders (cash and external) and returns recorded, by when they were recorded (MET-050). A recorded return is not necessarily paid: cash and external returns are paid at the return, while a card return is paid back only when its refund attempt succeeds, so card returns are shown by the current state of that attempt (requested, processing, unknown, succeeded, failed or canceled) and an unknown refund stays unknown (SPK-PAY-007). Point-of-sale card payments are payment attempts (purpose pos_sale) shown separately inside MET-045; refunds of them (card returns, and late card captures given back) are refund attempts shown separately inside MET-047. Point-of-sale product sales are not order lines and are not in the sales series.',
+          'Point-of-sale money creates no receipt, so it is reported in its own series beside customer receipts and never added to them: card captures (settled card tenders by when they settled, and captures reported after a failed tender by when they were posted), drawer tenders (cash and external) and returns recorded, by when they were recorded (MET-050). A recorded return is not necessarily paid: cash and external returns are paid at the return, while a card return is paid back only when its refund attempt succeeds, so card returns are shown by the current state of that attempt (requested, processing, unknown, succeeded, failed or canceled, or reversed when the provider reported a succeeded refund failed: nothing went back) and an unknown refund stays unknown (SPK-PAY-007). Point-of-sale card payments are payment attempts (purpose pos_sale) shown separately inside MET-045; refunds of them (card returns, and late card captures given back) are refund attempts shown separately inside MET-047. Point-of-sale product sales are not order lines and are not in the sales series.',
           'An unknown outcome is never resolved by age (SPK-PAY-007).',
           'Payment attempts by state are those submitted to a provider in the period. Attempts never submitted have no submission instant: they are counted over all time at the request instant (section payment_attempts_never_submitted), not as part of the period (MET-045).',
           'Settlement differences are listed one row per reconciliation, with its kind and scope (the provider, or the facility of a cash drawer), period, expected and reported amounts. Totals are unnetted per currency, kind and scope: shortages, overages and their absolute sum are separate figures, so a shortage never cancels an overage (§5.5).',
@@ -697,4 +703,13 @@ export class FinanceReports {
       };
     },
   };
+}
+
+/**
+ * R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008): the state a refund is reported in. Finance keeps a
+ * refund the provider reported failed after success `succeeded` and records `reversed_at`; no money
+ * was returned, so it is reported as `reversed`.
+ */
+function refundState(status: string, reversedAt: Date | string | null): string {
+  return status === 'succeeded' && reversedAt !== null ? 'reversed' : status;
 }

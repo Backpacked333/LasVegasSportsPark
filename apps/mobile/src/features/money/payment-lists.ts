@@ -177,8 +177,18 @@ export function checkoutRecoveryStatus(checkout: Checkout): Status {
   return { tone: 'pending', label: 'Registration being completed' };
 }
 
-/** A refund of a payment (SPK-PAY-008): an unknown refund outcome is never "refunded". */
-export function refundStatus(status: PaymentRefundSummary['status']): Status {
+/**
+ * A refund of a payment (SPK-PAY-008): an unknown refund outcome is never "refunded", and neither
+ * is a refund the provider reported failed after it was recorded as made (`reversedAt`,
+ * R4-PROVIDER-OUTCOMES-02): no money came back.
+ */
+export function refundStatus(
+  status: PaymentRefundSummary['status'],
+  reversedAt?: string | null,
+): Status {
+  if (reversedAt) {
+    return { tone: 'danger', label: 'Refund did not go through. The facility will contact you.' };
+  }
   switch (status) {
     case 'requested':
     case 'processing':

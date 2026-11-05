@@ -134,7 +134,11 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
         fetch: services.fetch,
         generateKey: services.generateKey,
         now: services.now,
-        onUpdateRequired: (error) => setUpdateRequired(error),
+        // The first answer is kept: the gate never lifts in this session, and the app under it
+        // keeps reading (polls, foreground refetches), so every later 426 would otherwise replace
+        // the error and the update screen would be announced again with a new reference
+        // (SPK-UX-009, R4-CLIENTS-A11Y-COPY-04: announced once).
+        onUpdateRequired: (error) => setUpdateRequired((current) => current ?? error),
         onAuthenticationRequired: () => {
           // Session expiry and recovery (§4.13): drop the secret and keep nothing cached for the
           // user. Link secrets are no longer offered, but wait for the same account to sign in

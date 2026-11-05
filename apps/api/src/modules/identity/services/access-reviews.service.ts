@@ -35,7 +35,15 @@ import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { AccessReviewMachine, allowedReviewDecisions } from '../identity.machines';
-import { displayNamesOf, iso, isoOrNull, isSuspendedAt, toAccessReview } from '../identity.shared';
+import {
+  displayNamesOf,
+  iso,
+  isoOrNull,
+  isSuspendedAt,
+  lockPersonsForShare,
+  refuseMergedPerson,
+  toAccessReview,
+} from '../identity.shared';
 
 /** ID-08: the system actor that records the end of a restriction window. */
 export const RESTRICTION_WINDOW_ACTOR = 'identity.restriction_window';
@@ -81,6 +89,10 @@ export class AccessReviewsService {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9, SPK-IAM-007: the subject is share-locked before its status is read, as the other
+      // person-scoped creates do, so an open racing a merge of the subject waits for the merge
+      // (which then moves this review, committed first, to the survivor) or is refused below.
+      await lockPersonsForShare(trx, organizationId, [input.subjectPersonId]);
       const subject = await trx
         .selectFrom('persons')
         .select('id')
@@ -95,6 +107,9 @@ export class AccessReviewsService {
         subjectPersonIds: [input.subjectPersonId],
         protected: true,
       });
+      // A review about a merged record would restrict nothing (its grants moved to the survivor)
+      // and no merge would ever move it: the caller names the survivor instead.
+      await refuseMergedPerson(trx, organizationId, input.subjectPersonId, 'subjectPersonId');
       const now = this.clock.now();
       const id = newId();
       await trx
@@ -182,7 +197,14 @@ export class AccessReviewsService {
   ): Promise<AccessReview> {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
+    // The actor whose grants a restrict or lift selects (restrict uses it when no grantIds are given).
+    const namedActor =
+      input.kind === 'restrict' || input.kind === 'lift' ? input.actorPersonId : undefined;
     return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9, SPK-IAM-007: a named actor is share-locked first, in the merge's order (persons, then
+      // reviews, then grants), so a decision racing a merge of that actor waits for the merge and
+      // is then refused below rather than matching none of the grants the merge re-pointed.
+      if (namedActor) await lockPersonsForShare(trx, organizationId, [namedActor]);
       // §4.9: decisions on one review are serialized, so the decision sequence is exact and a
       // concurrent decision made against the same revision fails with STALE_REVISION.
       const review = await trx
@@ -205,6 +227,11 @@ export class AccessReviewsService {
       if (review.status === 'closed' && input.kind !== 'lift') {
         throw errors.invalidTransition('AccessReview', 'closed', input.kind);
       }
+      // SPK-IAM-005, SPK-IAM-007: a merge re-points the merged person's grants to the survivor, so
+      // a restrict or lift naming the merged record (a screen read before the merge) would match
+      // none of them and still record a decision, while the same person keeps the authority
+      // through the survivor. Refused, naming the survivor (R4-LIFECYCLES-REVISIONS-03 follow-up).
+      if (namedActor) await refuseMergedPerson(trx, organizationId, namedActor, 'actorPersonId');
       const now = this.clock.now();
       let status: AccessReviewStatus = review.status;
       let affectedGrantIds: string[] = [];

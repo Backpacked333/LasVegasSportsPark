@@ -87,13 +87,19 @@ describe('SCR-S-47 ProviderEventsScreen', () => {
     );
   });
 
-  it('validates the received period before sending', async () => {
+  it('validates the received period before sending; each end names its time zone (SPK-SCHED-008)', async () => {
     const user = userEvent.setup();
     const test = app();
     render(test.at('/admin/provider-events'));
     const form = await screen.findByRole('form', { name: 'Filter provider events' });
     await user.type(within(form).getByLabelText('Received from'), '2026-10-24T10:00');
     await user.type(within(form).getByLabelText('Received before'), '2026-10-24T09:00');
+    // SPK-SCHED-008: both ends of the period name the device zone they are read in.
+    for (const label of ['Received from', 'Received before']) {
+      expect(within(form).getByLabelText(label)).toHaveAccessibleDescription(
+        /^Your device's time zone \(.+\)\.$/,
+      );
+    }
     await user.click(within(form).getByRole('button', { name: 'Show events' }));
     expect(within(form).getByText('The end must be after the start.')).toBeInTheDocument();
     expect(test.fake.requests.some((r) => r.route === '/provider-events' && r.query.from)).toBe(

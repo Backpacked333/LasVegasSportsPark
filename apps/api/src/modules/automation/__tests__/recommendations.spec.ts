@@ -1,5 +1,6 @@
-import { newId, systemPrincipal } from '@sportspark/contracts';
+import { newId, systemPrincipal, z } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
+import { sql, type SqlBool } from 'kysely';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { NotificationsService } from '../../communications';
@@ -13,6 +14,8 @@ import {
 } from '../../scheduling';
 import type { FakeAssistantProvider } from '../providers/fake-assistant.provider';
 import { RecommendationsService } from '../services/recommendations.service';
+import { ToolRegistry } from '../tools/tool-registry';
+import type { AnyCommandTool } from '../tools/tool.types';
 import {
   CLOCK_START,
   adultCustomer,
@@ -899,6 +902,523 @@ describe('recommendations (SPK-AUTO-003, SPK-AUTO-004)', () => {
       code: 'INVALID_TRANSITION',
       details: { kind: 'issue_summary' },
     });
+  });
+
+  /** A published event on Pitch R north and a scripted repair that moves it (R4-COMMS-AUTOMATION-01). */
+  async function proposeMove(
+    name: string,
+    eventId: string,
+    date: string,
+    start: string,
+    end: string,
+  ): Promise<Rec & { payload: Record<string, unknown>; evidence: unknown[] }> {
+    fake.script(`repair ${name}`, [
+      {
+        type: 'tool_calls',
+        calls: [
+          {
+            tool: 'scheduling.publish_schedule',
+            arguments: {
+              repair: {
+                facilityId: t.facilityId,
+                name,
+                changes: [
+                  {
+                    kind: 'move',
+                    targetEventId: eventId,
+                    proposed: { scheduledStart: at(date, start), scheduledEnd: at(date, end) },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      { type: 'answer', text: 'A repair is ready.' },
+    ]);
+    const res = await ask(t, schedulerA, { prompt: `repair ${name}` });
+    expect(res.body.recommendations, JSON.stringify(res.body)).toHaveLength(1);
+    return res.body.recommendations[0];
+  }
+
+  const eventStart = async (id: string) =>
+    new Date(
+      (
+        await t.db
+          .selectFrom('events')
+          .select('scheduled_start')
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow()
+      ).scheduled_start,
+    ).toISOString();
+
+  it('SPK-SCHED-005 / §4.9 (R4-COMMS-AUTOMATION-01): a schedule repair records the revision of each event it changes; an event changed after the proposal refuses the apply and nothing is published over it', async () => {
+    const events = t.app.get(EventsService);
+    const system = systemPrincipal(t.organizationId, 'tests');
+    const date = '2027-04-03';
+    const event = await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.northHalfId],
+      start: at(date, '17:00'),
+      end: at(date, '18:00'),
+      title: 'Saturday final',
+    });
+
+    // The proposal reads the event through scheduling and records its revision.
+    const proposed = await proposeMove('Stale repair', event.id, date, '18:00', '19:00');
+    expect(proposed.payload).toMatchObject({ baseRevisions: { [event.id]: event.revision } });
+    expect(proposed).toMatchObject({
+      command: { input: { baseRevisions: { [event.id]: event.revision } } },
+    });
+    expect(proposed.evidence).toContainEqual(
+      expect.objectContaining({
+        recordType: 'event',
+        recordId: event.id,
+        source: 'scheduling.publish_schedule',
+        freshness: 'live',
+      }),
+    );
+    const rec = (await approve(schedulerB, proposed)).body as Rec;
+
+    // Another scheduler moves the event before the repair is applied.
+    t.clock.advance(60_000);
+    const moved = await events.moveEvent(system, event.id, {
+      scheduledStart: at(date, '20:00'),
+      scheduledEnd: at(date, '21:00'),
+      reason: 'Floodlights',
+    });
+    expect(moved.revision).toBeGreaterThan(event.revision);
+
+    const refused = await apply(schedulerB, rec);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'STALE_REVISION',
+      details: {
+        code: 'REPAIR_TARGET_CHANGED',
+        eventId: event.id,
+        expectedRevision: event.revision,
+        currentRevision: moved.revision,
+      },
+    });
+    // Nothing was opened or published; the newer time stands.
+    expect(
+      await t.db
+        .selectFrom('schedule_drafts')
+        .select('id')
+        .where('name', '=', 'Stale repair')
+        .execute(),
+    ).toEqual([]);
+    expect(await eventStart(event.id)).toBe(at(date, '20:00'));
+    // A failed apply: the claim is released and its operation failed.
+    const view = (await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body;
+    expect(view).toMatchObject({
+      status: 'approved',
+      apply: {
+        state: 'pending',
+        operationId: null,
+        lastError: { code: 'STALE_REVISION', details: { outcome: 'failed' } },
+      },
+    });
+    const operationId = (view.apply.lastError.details as { operationId: string }).operationId;
+    expect(
+      (
+        await t.db
+          .selectFrom('operations')
+          .select('status')
+          .where('id', '=', operationId)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe('failed');
+
+    // A repair proposed on the current revision is applied and moves the event.
+    const fresh = await proposeMove('Fresh repair', event.id, date, '18:00', '19:00');
+    expect(fresh.payload).toMatchObject({ baseRevisions: { [event.id]: moved.revision } });
+    const approvedFresh = (await approve(schedulerB, fresh)).body as Rec;
+    const applied = await apply(schedulerB, approvedFresh);
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    expect(applied.body.status).toBe('applied');
+    expect(await eventStart(event.id)).toBe(at(date, '18:00'));
+  });
+
+  it('SPK-SCHED-005 (R4-COMMS-AUTOMATION-01): a repair draft that captured a later revision than the proposal is discarded, never published, and never carried to a retry', async () => {
+    const events = t.app.get(EventsService);
+    const system = systemPrincipal(t.organizationId, 'tests');
+    const date = '2027-04-10';
+    const event = await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [pitch.northHalfId],
+      start: at(date, '17:00'),
+      end: at(date, '18:00'),
+    });
+    const proposed = await proposeMove('Raced repair', event.id, date, '18:00', '19:00');
+    const rec = (await approve(schedulerB, proposed)).body as Rec;
+    t.clock.advance(60_000);
+    await events.moveEvent(system, event.id, {
+      scheduledStart: at(date, '20:00'),
+      scheduledEnd: at(date, '21:00'),
+      reason: 'Floodlights',
+    });
+    // The event changes between the apply's own read and the draft it opens: the read still
+    // reports the proposal's revision, the draft captures the newer one.
+    const original = events.getEvent.bind(events);
+    const spy = vi.spyOn(events, 'getEvent').mockImplementationOnce(async (principal, id) => ({
+      ...(await original(principal, id)),
+      revision: event.revision,
+    }));
+    let refused: Awaited<ReturnType<typeof apply>>;
+    try {
+      refused = await apply(schedulerB, rec);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'STALE_REVISION',
+      details: { code: 'REPAIR_TARGET_CHANGED', eventId: event.id },
+    });
+    const opened = await t.db
+      .selectFrom('schedule_drafts')
+      .select(['id', 'status'])
+      .where('name', '=', 'Raced repair')
+      .execute();
+    expect(opened).toEqual([{ id: expect.any(String), status: 'discarded' }]);
+    expect(await eventStart(event.id)).toBe(at(date, '20:00'));
+    const view = (await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body;
+    expect(view.apply.lastError.details).toMatchObject({
+      outcome: 'failed',
+      record: { type: 'schedule_draft', id: opened[0]!.id },
+    });
+    expect(view.apply.lastError.details.carried).toBeUndefined();
+    // A retry neither publishes the discarded draft nor opens another.
+    const retry = await apply(schedulerB, view);
+    expect(retry.status).toBe(409);
+    expect(retry.body.details).toMatchObject({ code: 'REPAIR_TARGET_CHANGED' });
+    expect(
+      await t.db
+        .selectFrom('schedule_drafts')
+        .select(['id', 'status'])
+        .where('name', '=', 'Raced repair')
+        .execute(),
+    ).toEqual(opened);
+  });
+
+  it('§4.7 invariant 5 / §4.11 (R4-REPLAY-IDEMPOTENCY-03): a command the assistant no longer offers is refused before the apply is claimed; the recommendation stays unclaimed and expires on its timer', async () => {
+    const { draftId, rec: proposed } = await proposePublish(schedulerA);
+    const rec = (await approve(schedulerB, proposed)).body as Rec;
+    const registry = t.app.get(ToolRegistry);
+    const spy = vi.spyOn(registry, 'command').mockReturnValue(undefined);
+    let refused: Awaited<ReturnType<typeof apply>>;
+    try {
+      refused = await apply(schedulerB, rec);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'INVALID_TRANSITION',
+      details: { code: 'COMMAND_UNAVAILABLE', commandActionId: 'scheduling.publish_schedule' },
+    });
+    // Nothing was claimed or started: no apply operation, no log entry, the revision unchanged.
+    const row = await t.db
+      .selectFrom('recommendations')
+      .select(['apply_operation_id', 'apply_started_at', 'revision', 'status'])
+      .where('id', '=', rec.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({
+      apply_operation_id: null,
+      apply_started_at: null,
+      revision: rec.revision,
+      status: 'approved',
+    });
+    const operations = await t.db
+      .selectFrom('operations')
+      .select('id')
+      .where('kind', '=', 'automation.apply_recommendation')
+      .where(sql<SqlBool>`input->>'recommendationId' = ${rec.id}`)
+      .execute();
+    expect(operations).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('tool_invocations')
+        .select('id')
+        .where('recommendation_id', '=', rec.id)
+        .execute(),
+    ).toEqual([]);
+    expect(await draftStatus(draftId)).toBe('editing');
+    // Unclaimed, it expires on its durable timer like any approved proposal.
+    t.clock.advance(25 * 3600_000);
+    await drainOutbox(t);
+    expect((await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body).toMatchObject({
+      status: 'expired',
+      apply: { operationId: null },
+    });
+  });
+
+  /**
+   * A publication recommendation stored the way an earlier build stored it: its draft named by a
+   * reference this build's command input no longer accepts (build drift, R4-REPLAY-IDEMPOTENCY-03).
+   */
+  async function proposeDrifted(): Promise<{ draftId: string; rec: Rec }> {
+    const registry = t.app.get(ToolRegistry);
+    const real = registry.command('scheduling.publish_schedule') as AnyCommandTool;
+    const original = registry.get.bind(registry);
+    const spy = vi.spyOn(registry, 'get').mockImplementation((name: string) =>
+      name === real.name
+        ? {
+            ...real,
+            propose: async (...call: Parameters<AnyCommandTool['propose']>) => {
+              const proposal = await real.propose(...call);
+              return {
+                ...proposal,
+                command: {
+                  ...proposal.command,
+                  input: { draftId: 'draft-of-an-earlier-build', draftRevision: 1 },
+                },
+              };
+            },
+          }
+        : original(name),
+    );
+    try {
+      const { draftId, rec } = await proposePublish(schedulerA);
+      return { draftId, rec: (await approve(schedulerB, rec)).body as Rec };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  /** Nothing of an apply remains: no claim, no apply operation, no log entry, no exception. */
+  async function expectNothingClaimed(rec: Rec): Promise<void> {
+    const row = await t.db
+      .selectFrom('recommendations')
+      .select(['apply_operation_id', 'apply_started_at', 'status'])
+      .where('id', '=', rec.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ apply_operation_id: null, apply_started_at: null, status: 'approved' });
+    expect(
+      await t.db
+        .selectFrom('operations')
+        .select('id')
+        .where('kind', '=', 'automation.apply_recommendation')
+        .where('status', 'in', ['running', 'recovery_required'])
+        .where(sql<SqlBool>`input->>'recommendationId' = ${rec.id}`)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('operational_exceptions')
+        .select('id')
+        .where('affected_id', '=', rec.id)
+        .execute(),
+    ).toEqual([]);
+  }
+
+  it('§4.7 invariant 5 / §4.11 (R4-REPLAY-IDEMPOTENCY-03): a stored command input this build no longer accepts is refused before the apply is claimed; the recommendation stays unclaimed and expires on its timer', async () => {
+    const { draftId, rec } = await proposeDrifted();
+    expect(rec.status).toBe('approved');
+    const refused = await apply(schedulerB, rec);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'INVALID_TRANSITION',
+      details: {
+        code: 'INPUT_NO_LONGER_VALID',
+        commandActionId: 'scheduling.publish_schedule',
+        issues: ['draftId'],
+      },
+    });
+    await expectNothingClaimed(rec);
+    const row = await t.db
+      .selectFrom('recommendations')
+      .select('revision')
+      .where('id', '=', rec.id)
+      .executeTakeFirstOrThrow();
+    expect(row.revision).toBe(rec.revision);
+    expect(
+      await t.db
+        .selectFrom('operations')
+        .select('id')
+        .where('kind', '=', 'automation.apply_recommendation')
+        .where(sql<SqlBool>`input->>'recommendationId' = ${rec.id}`)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('tool_invocations')
+        .select('id')
+        .where('recommendation_id', '=', rec.id)
+        .execute(),
+    ).toEqual([]);
+    expect(await draftStatus(draftId)).toBe('editing');
+    t.clock.advance(25 * 3600_000);
+    await drainOutbox(t);
+    expect((await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body).toMatchObject({
+      status: 'expired',
+      apply: { operationId: null },
+    });
+  });
+
+  it('§4.11 (R4-REPLAY-IDEMPOTENCY-03): a stored input the command tool itself refuses is a failed apply, never an unknown outcome — the claim is released, nothing is left to settle by hand, and the recommendation still expires', async () => {
+    const { draftId, rec } = await proposeDrifted();
+    const registry = t.app.get(ToolRegistry);
+    const real = registry.command('scheduling.publish_schedule') as AnyCommandTool;
+    // The claim-time check lets it through (as a check that drifted from the tool would) …
+    const spy = vi
+      .spyOn(registry, 'command')
+      .mockReturnValue({ ...real, inputSchema: z.unknown() });
+    let refused: Awaited<ReturnType<typeof apply>>;
+    try {
+      refused = await apply(schedulerB, rec);
+    } finally {
+      spy.mockRestore();
+    }
+    // … and the tool's own parsing refuses it before scheduling is called.
+    expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+    expect(refused.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'INPUT_NO_LONGER_VALID', commandActionId: 'scheduling.publish_schedule' },
+    });
+    await expectNothingClaimed(rec);
+    const after = await get(t, `/v1/recommendations/${rec.id}`, schedulerB);
+    expect(after.body).toMatchObject({
+      status: 'approved',
+      apply: {
+        state: 'pending',
+        operationId: null,
+        lastError: { code: 'VALIDATION_FAILED', details: { outcome: 'failed' } },
+      },
+    });
+    const operationId = (after.body.apply.lastError.details as { operationId: string }).operationId;
+    const op = await t.db
+      .selectFrom('operations')
+      .select('status')
+      .where('id', '=', operationId)
+      .executeTakeFirstOrThrow();
+    expect(op.status).toBe('failed');
+    expect(
+      await t.db
+        .selectFrom('tool_invocations')
+        .select(['phase', 'outcome', 'error_code'])
+        .where('recommendation_id', '=', rec.id)
+        .execute(),
+    ).toEqual([{ phase: 'apply', outcome: 'failed', error_code: 'VALIDATION_FAILED' }]);
+    expect(await draftStatus(draftId)).toBe('editing');
+    t.clock.advance(25 * 3600_000);
+    await drainOutbox(t);
+    expect((await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body).toMatchObject({
+      status: 'expired',
+      apply: { operationId: null },
+    });
+  });
+
+  it('SPK-AUTO-004 / SPK-COMMS-006 (R4-COMMS-AUTOMATION-10): a drafted notice is proposed only when the requester could send it directly, and reviewers are scoped by its audience’s facility too', async () => {
+    const annex = await t.db
+      .insertInto('facilities')
+      .values({
+        id: newId(),
+        organization_id: t.organizationId,
+        slug: `annex-${newId().slice(0, 8)}`,
+        name: 'Annex B',
+        timezone: 'America/Los_Angeles',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    const deskA = await staffMember(t, ['front_desk'], { facilityIds: [t.facilityId] });
+    const deskAnnex = await staffMember(t, ['front_desk'], { facilityIds: [annex.id] });
+    const coach = await staffMember(t, ['coach']);
+    const generalManager = await staffMember(t, ['general_manager']);
+    const notice = (audience: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+      kind: 'staff_broadcast',
+      category: 'operational',
+      audience,
+      title: 'Field change',
+      body: 'Games move to the north half.',
+      ...extra,
+    });
+    const refusedCases = [
+      // Staff roles across every facility, from a composer scoped to one facility.
+      { args: notice({ staffRoles: ['general_manager'] }), code: 'ACCESS_DENIED', status: 403 },
+      // Another facility's staff, through a notice tagged with the composer's own facility.
+      {
+        args: notice({ staffRoles: ['coach'], facilityId: annex.id }, { facilityId: t.facilityId }),
+        code: 'ACCESS_DENIED',
+        status: 403,
+      },
+      // Protected content addressed to explicit person ids.
+      {
+        args: notice(
+          { personIds: [coach.personId] },
+          { facilityId: t.facilityId, protected: true },
+        ),
+        code: 'VALIDATION_FAILED',
+        status: 400,
+      },
+      // A kind the communication policy leaves open, without its category.
+      {
+        args: notice(
+          { personIds: [coach.personId] },
+          { facilityId: t.facilityId, category: undefined },
+        ),
+        code: 'VALIDATION_FAILED',
+        status: 400,
+      },
+    ];
+    const before = await countRows(t, 'notifications');
+    for (const [index, refusedCase] of refusedCases.entries()) {
+      // The same notice composed directly is refused the same way …
+      const direct = await post(t, '/v1/notifications', deskA, refusedCase.args);
+      expect(direct.status, JSON.stringify(direct.body)).toBe(refusedCase.status);
+      expect(direct.body.code).toBe(refusedCase.code);
+      // … and proposing it creates no recommendation.
+      fake.script(`refused notice ${index}`, [
+        {
+          type: 'tool_calls',
+          calls: [{ tool: 'communications.send', arguments: refusedCase.args }],
+        },
+        { type: 'answer', text: 'Drafted.' },
+      ]);
+      const res = await ask(t, deskA, { prompt: `refused notice ${index}` });
+      expect(res.body.recommendations, `case ${index}`).toEqual([]);
+      expect(res.body.toolInvocations, `case ${index}`).toEqual([
+        expect.objectContaining({
+          tool: 'communications.send',
+          outcome: refusedCase.code === 'ACCESS_DENIED' ? 'denied' : 'failed',
+          errorCode: refusedCase.code,
+        }),
+      ]);
+    }
+    expect(await countRows(t, 'notifications')).toBe(before);
+
+    // An organization-wide composer may propose both; reviewers are those who could send them.
+    const propose = async (label: string, args: Record<string, unknown>): Promise<Rec> => {
+      fake.script(label, [
+        { type: 'tool_calls', calls: [{ tool: 'communications.send', arguments: args }] },
+        { type: 'answer', text: 'Drafted.' },
+      ]);
+      const res = await ask(t, leagueManager, { prompt: label });
+      expect(res.body.recommendations, JSON.stringify(res.body)).toHaveLength(1);
+      return res.body.recommendations[0] as Rec;
+    };
+    const crossFacility = await propose(
+      'annex coaches notice',
+      notice({ staffRoles: ['coach'], facilityId: annex.id }, { facilityId: t.facilityId }),
+    );
+    const everywhere = await propose(
+      'all managers notice',
+      notice({ staffRoles: ['general_manager'] }),
+    );
+    const visible = async (actor: Actor, rec: Rec) =>
+      (await get(t, `/v1/recommendations/${rec.id}`, actor)).status;
+    for (const rec of [crossFacility, everywhere]) {
+      expect(await visible(deskA, rec)).toBe(404);
+      expect(await visible(deskAnnex, rec)).toBe(404);
+      expect(await visible(generalManager, rec)).toBe(200);
+      expect((await approve(deskA, rec)).status).toBe(404);
+    }
+    const listed = (await get(t, '/v1/recommendations', deskA)).body.items.map((r: Rec) => r.id);
+    expect(listed).not.toContain(crossFacility.id);
+    expect(listed).not.toContain(everywhere.id);
   });
 
   it('expiry: an unreviewed recommendation expires on its timer; a review arriving after the deadline expires it and is refused', async () => {

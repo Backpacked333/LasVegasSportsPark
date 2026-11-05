@@ -40,7 +40,9 @@ import {
   outcomeUnknownDetails,
   financeSystem,
   minutesFrom,
+  netRefundedMinor,
   organizationOf,
+  refundableAvailableMinor,
   withSavepoint,
   type Reader,
 } from '../finance.shared';
@@ -422,11 +424,7 @@ export class CheckoutFinalizer {
       checkout.organization_id,
       checkout.payment_attempt_id,
     );
-    const available =
-      refundable.captured_minor -
-      refundable.refunded_minor -
-      refundable.reserved_minor -
-      refundable.compensated_minor;
+    const available = refundableAvailableMinor(refundable);
     if (available <= 0) throw errors.refundPending({ checkoutId: checkout.id });
     const refund = await this.refunds.reserveInTrx(trx, {
       organizationId: checkout.organization_id,
@@ -499,7 +497,9 @@ export class CheckoutFinalizer {
         amount += receipt.amount_minor;
         continue;
       }
-      const left = funds.captured_minor - funds.refunded_minor - funds.compensated_minor;
+      // R4-PROVIDER-OUTCOMES-02: a refund the provider reported failed after success returned
+      // nothing, so its amount counts as received again.
+      const left = funds.captured_minor - netRefundedMinor(funds) - funds.compensated_minor;
       if (left <= 0) continue;
       amount += left;
       consumed.push({ paymentAttemptId: funds.payment_attempt_id, amountMinor: left });
@@ -806,7 +806,16 @@ export class CheckoutFinalizer {
     const checkout = await this.load(trx, organizationId, payload.checkoutId, true);
     if (!checkout || checkout.status !== 'recovery_required') return;
     const actor = financeSystem(organizationId, 'finance.compensation');
-    if (payload.status === 'succeeded') {
+    // R4-PROVIDER-OUTCOMES-02 (§4.11): the provider may report the refund failed before this
+    // event is handled; a reversed refund returned nothing, so it does not compensate the checkout
+    // (and its payer is never told it was made): the checkout stays in recovery for the operator.
+    const refund = await trx
+      .selectFrom('refund_attempts')
+      .select('reversed_at')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', payload.refundAttemptId)
+      .executeTakeFirst();
+    if (payload.status === 'succeeded' && !refund?.reversed_at) {
       await this.completeCompensationInTrx(
         trx,
         checkout,
@@ -829,7 +838,11 @@ export class CheckoutFinalizer {
       affectedId: checkout.id,
       ownerQueue: 'finance_operator',
       dedupeKey: `compensation-failed:${payload.refundAttemptId}`,
-      details: { refundAttemptId: payload.refundAttemptId },
+      details: {
+        refundAttemptId: payload.refundAttemptId,
+        // Recorded succeeded, then reported failed (its reversal is booked).
+        reversed: !!refund?.reversed_at,
+      },
     });
   }
 
@@ -1017,7 +1030,9 @@ export class CheckoutFinalizer {
       // lossy failover can roll back while the provider keeps the charge, so only provider
       // evidence resolves it (the stranded-attempt sweep in PaymentsService.reconcileStale looks
       // it up by its idempotency key and cancels it on "no record"), never an assumption here.
-      throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(actor, pending));
+      throw errors.paymentOutcomeUnknown(
+        await outcomeUnknownDetails(this.authorization, actor, pending),
+      );
     }
     const order = await trx
       .selectFrom('orders')

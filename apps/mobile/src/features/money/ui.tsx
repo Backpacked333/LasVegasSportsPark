@@ -4,7 +4,7 @@
  * checkbox to acknowledge a money consequence, and a labelled text field with its own error.
  * Every interactive element has a role, a label and its state; text scales with the OS setting.
  */
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LiveText } from '../../ui/announce';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
@@ -63,7 +63,43 @@ function ChoiceMark({ checked, round }: { checked: boolean; round: boolean }) {
   );
 }
 
-/** One radio or checkbox row; the label is the whole row and the state is announced. */
+/** The error of the choice a `ChoiceRow` belongs to (`ChoiceGroup error`), read with each row. */
+const ChoiceErrorContext = createContext<string | null>(null);
+
+/**
+ * A group of radio (or checkbox) rows. `error` (a required choice not made) is the group's and
+ * each row's hint, so it is read with the choice; show it under the group with `FieldError`, which
+ * announces it when it appears (SPK-UX-009, NA-A01).
+ */
+export function ChoiceGroup({
+  label,
+  role = 'radiogroup',
+  error,
+  children,
+  testID,
+}: {
+  label: string;
+  role?: 'radiogroup' | 'list';
+  error?: string | null;
+  children: ReactNode;
+  testID?: string;
+}) {
+  return (
+    <View
+      accessibilityRole={role}
+      accessibilityLabel={label}
+      accessibilityHint={error ? `Error: ${error}` : undefined}
+      testID={testID}
+    >
+      <ChoiceErrorContext.Provider value={error ?? null}>{children}</ChoiceErrorContext.Provider>
+    </View>
+  );
+}
+
+/**
+ * One radio or checkbox row; the label is the whole row and the state is announced. While its
+ * `ChoiceGroup` shows an error, the error is the row's hint.
+ */
 export function ChoiceRow({
   label,
   detail,
@@ -81,10 +117,12 @@ export function ChoiceRow({
   disabled?: boolean;
   testID?: string;
 }) {
+  const groupError = useContext(ChoiceErrorContext);
   return (
     <Pressable
       accessibilityRole={mode}
       accessibilityLabel={detail ? `${label}, ${detail}` : label}
+      accessibilityHint={groupError ? `Error: ${groupError}` : undefined}
       accessibilityState={{ checked, disabled }}
       disabled={disabled}
       onPress={onPress}
