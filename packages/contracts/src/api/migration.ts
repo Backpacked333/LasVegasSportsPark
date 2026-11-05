@@ -590,7 +590,9 @@ export const ImportExceptionSchema = z
     reviewOwnerRole: StaffRole,
     /**
      * §4.6: `decided` once its review owner decides it (final); `withdrawn` when re-validation no
-     * longer raises it or its batch is aborted (R2-LIFECYCLES-07), also final.
+     * longer raises it or its batch is aborted (R2-LIFECYCLES-07), also final. A row has at most
+     * one open or decided exception per kind; a problem that comes back after its exception was
+     * withdrawn is a new exception (R4-LIFECYCLES-REVISIONS-01).
      */
     status: z.enum(['open', 'decided', 'withdrawn']),
     decision: ImportExceptionDecisionSchema.nullable(),

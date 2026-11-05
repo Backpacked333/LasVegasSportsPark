@@ -1,6 +1,6 @@
 import { newId } from '@sportspark/contracts';
 import { json, seedOrganization } from '@sportspark/db';
-import { afterAll, beforeAll, describe, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createProgramFixture } from '../../catalog';
 import { createSeasonFixture } from '../../competition';
@@ -553,7 +553,7 @@ describe('migration schema invariants (migration 1200)', () => {
     );
   });
 
-  it('§5.4: only ambiguity is accepted, a decision is final, and one exception exists per row and kind', async () => {
+  it('§5.4: only ambiguity is accepted, a decision is final, and one live exception exists per row and kind', async () => {
     const { batchId, rowIds } = await createImportBatchFixture(t, { rows: [stagedPerson('E-1')] });
     const exception = (overrides: Record<string, unknown> = {}) => ({
       id: newId(),
@@ -627,6 +627,97 @@ describe('migration schema invariants (migration 1200)', () => {
       t.db.deleteFrom('import_exceptions').where('id', '=', id).execute(),
       RESTRICT,
     );
+  });
+
+  it('§5.4 / §4.6 R4-LIFECYCLES-REVISIONS-01: one live exception per row and kind (migration 1281) — a second open one, or one beside a decision, is refused; a withdrawn one stays final history and a recurring problem gets a fresh open exception', async () => {
+    const { batchId, rowIds } = await createImportBatchFixture(t, {
+      rows: [stagedPerson('RR-1'), stagedPerson('RR-2')],
+    });
+    const exception = (rowId: string, overrides: Record<string, unknown> = {}) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      batch_id: batchId,
+      row_id: rowId,
+      kind: 'conflict' as const,
+      phase: 'validation' as const,
+      reasons: json([{ code: 'sportspark_authoritative', message: 'x' }]),
+      review_owner_role: 'system_administrator',
+      decision: null,
+      resolution: null,
+      decision_reason: null,
+      decided_by: null,
+      decided_by_person_id: null,
+      decided_at: null,
+      withdrawn_at: null,
+      ...overrides,
+    });
+    const insert = (rowId: string, id = newId()) =>
+      t.db.insertInto('import_exceptions').values(exception(rowId, { id })).execute();
+    const withdraw = (id: string) =>
+      t.db
+        .updateTable('import_exceptions')
+        .set({ status: 'withdrawn', withdrawn_at: t.clock.now() })
+        .where('id', '=', id)
+        .execute();
+    const [first, second] = rowIds as [string, string];
+
+    // Row 1: open → withdrawn → a fresh open exception of the same kind → decided.
+    const withdrawnId = newId();
+    await insert(first, withdrawnId);
+    await expectPgError(insert(first), UNIQUE);
+    await withdraw(withdrawnId);
+    const reraisedId = newId();
+    await insert(first, reraisedId);
+    await expectPgError(insert(first), UNIQUE);
+    // The withdrawn exception is final: it is never reopened beside the live one.
+    await expectPgError(
+      t.db
+        .updateTable('import_exceptions')
+        .set({ status: 'open', withdrawn_at: null })
+        .where('id', '=', withdrawnId)
+        .execute(),
+      CHECK,
+    );
+    await t.db
+      .updateTable('import_exceptions')
+      .set({
+        status: 'decided',
+        decision: 'reject',
+        decision_reason: 'x',
+        decided_by: json(ACTOR),
+        decided_at: t.clock.now(),
+      })
+      .where('id', '=', reraisedId)
+      .execute();
+    // A decided exception stays the single authority for its kind.
+    await expectPgError(insert(first), UNIQUE);
+    // Another kind for the same row is its own exception.
+    await t.db
+      .insertInto('import_exceptions')
+      .values(exception(first, { kind: 'validation' }))
+      .execute();
+
+    // Row 2: withdrawn twice, so two withdrawn exceptions and one live one of the same kind.
+    for (let i = 0; i < 2; i += 1) {
+      const id = newId();
+      await insert(second, id);
+      await withdraw(id);
+    }
+    await insert(second);
+    const statuses = await t.db
+      .selectFrom('import_exceptions')
+      .select(['row_id', 'kind', 'status'])
+      .where('organization_id', '=', t.organizationId)
+      .where('batch_id', '=', batchId)
+      .execute();
+    const of = (rowId: string, kind: string) =>
+      statuses
+        .filter((s) => s.row_id === rowId && s.kind === kind)
+        .map((s) => s.status)
+        .sort();
+    expect(of(first, 'conflict')).toEqual(['decided', 'withdrawn']);
+    expect(of(first, 'validation')).toEqual(['open']);
+    expect(of(second, 'conflict')).toEqual(['open', 'withdrawn', 'withdrawn']);
   });
 
   it('§5.5: discrepancies are append-only facts that always carry their currency; approvals are one per area and need a reason to accept discrepancies', async () => {

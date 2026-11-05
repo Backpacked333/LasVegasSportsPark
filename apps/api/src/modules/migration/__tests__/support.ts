@@ -176,6 +176,7 @@ export async function exceptionsOf(t: TestApp, operator: Actor, batchId: string)
     rowId: string;
     externalId: string;
     kind: string;
+    phase: string;
     status: string;
     reviewOwnerRole: string;
     revision: number;
