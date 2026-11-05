@@ -34,6 +34,11 @@ export const FakePaymentTokens = {
   timeout: 'pm_fake_timeout',
   /** The call times out and the provider declined (outcome unknown to us). */
   timeoutDeclined: 'pm_fake_timeout_decline',
+  /**
+   * The call times out AFTER the provider opened a challenge (requires action): the payer never
+   * saw it, and the provider keeps it open until it is canceled (R4-PROVIDER-OUTCOMES-01).
+   */
+  timeoutRequiresAction: 'pm_fake_timeout_action',
   /** The request never reaches the provider (outcome unknown to us; lookup finds nothing). */
   unreachable: 'pm_fake_unreachable',
 } as const;
@@ -78,7 +83,7 @@ export function fakeFeeFor(amountMinor: number): number {
 /**
  * Deterministic fake payment processor (specification §5.2: no processor is selected, DEC-019).
  * Supports success, required action, decline, asynchronous processing, timeout with an unknown
- * outcome, unreachable provider, refunds (scriptable), and signed webhooks including duplicates
+ * outcome (after a capture, a decline or an opened challenge), unreachable provider, refunds (scriptable), and signed webhooks including duplicates
  * and out-of-order deliveries. A repeated call with the same idempotency key returns the original
  * outcome and never charges again (the property a real processor must also provide).
  */
@@ -164,6 +169,7 @@ export class FakePaymentProvider implements PaymentProviderPort {
         charge.failureReason = 'card_declined';
         break;
       case FakePaymentTokens.requireAction:
+      case FakePaymentTokens.timeoutRequiresAction:
         charge.status = 'requires_action';
         charge.actionPayload = {
           type: 'challenge',
@@ -178,7 +184,11 @@ export class FakePaymentProvider implements PaymentProviderPort {
         charge.feeMinor = fakeFeeFor(request.amountMinor);
     }
     this.charges.set(request.idempotencyKey, charge);
-    if (token === FakePaymentTokens.timeout || token === FakePaymentTokens.timeoutDeclined) {
+    if (
+      token === FakePaymentTokens.timeout ||
+      token === FakePaymentTokens.timeoutDeclined ||
+      token === FakePaymentTokens.timeoutRequiresAction
+    ) {
       throw new PaymentOutcomeUnknownError('fake provider timed out (scenario)');
     }
     return this.paymentResult(charge);

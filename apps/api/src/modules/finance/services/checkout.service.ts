@@ -48,9 +48,9 @@ import {
   daysFrom,
   iso,
   isoOrNull,
-  isStaffLike,
   minutesFrom,
   organizationOf,
+  staffAuthority,
   toOrder,
   toPaymentAttempt,
   toReceipt,
@@ -275,7 +275,16 @@ export class CheckoutService {
         { details: { permission: 'pay', participantPersonIds: lacking } },
       );
     }
-    if (!isStaffLike(principal) && principal.personId !== quote.payer_person_id) {
+    // R4-AUTHZ-TARGETS-01 (§2.1, SPK-IAM-001/003): only the quote's payer, or desk staff through a
+    // staff role that holds finance.checkout, checks it out; another adult with pay over a shared
+    // child, whatever other staff role they hold, learns nothing about it (§4.10).
+    if (
+      principal.personId !== quote.payer_person_id &&
+      !(await staffAuthority(this.authorization, principal, FinanceActions.checkout, {
+        type: 'quote',
+        organizationId,
+      }))
+    ) {
       throw errors.protectedNotFound('quote');
     }
     // One checkout per quote: a repeat returns it and never charges again (invariant 5).
@@ -1055,7 +1064,14 @@ export class CheckoutService {
         subjectPersonIds: [checkout.payer_person_id],
         protected: true,
       });
-      if (!isStaffLike(principal) && principal.personId !== checkout.payer_person_id) {
+      // R4-AUTHZ-TARGETS-01: the checkout's payer, or desk staff through a role holding the action.
+      if (
+        principal.personId !== checkout.payer_person_id &&
+        !(await staffAuthority(this.authorization, principal, FinanceActions.checkout, {
+          type: 'checkout',
+          organizationId,
+        }))
+      ) {
         throw errors.protectedNotFound('checkout');
       }
       if (checkout.status !== 'awaiting_payment' && checkout.status !== 'prepared') {
@@ -1067,7 +1083,9 @@ export class CheckoutService {
       const live = await this.payments.liveAttempt(trx, organizationId, { checkoutId: id });
       if (live) {
         // SPK-PAY-007: no second charge while an outcome is pending or unknown.
-        throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(principal, live));
+        throw errors.paymentOutcomeUnknown(
+          await outcomeUnknownDetails(this.authorization, principal, live),
+        );
       }
       const basket = await this.basketPort.getBasket(organizationId, checkout.basket_id, trx);
       if (basket?.holdExpiresAt && new Date(basket.holdExpiresAt) <= this.clock.now()) {

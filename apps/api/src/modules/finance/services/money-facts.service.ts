@@ -17,6 +17,7 @@ import {
 } from '@sportspark/db';
 import { sql, type Selectable } from 'kysely';
 import {
+  AuthorizationService,
   CLOCK,
   OperationalExceptions,
   Outbox,
@@ -114,6 +115,7 @@ export class MoneyFacts {
     private readonly outbox: Outbox,
     private readonly exceptions: OperationalExceptions,
     private readonly policy: FinancePolicyResolver,
+    private readonly authorization: AuthorizationService,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -156,13 +158,17 @@ export class MoneyFacts {
   ): Promise<void> {
     const charging = await trx
       .selectFrom('payment_attempts')
-      .select(['id', 'status', 'purpose', 'payer_person_id'])
+      .select(['id', 'organization_id', 'status', 'purpose', 'payer_person_id'])
       .where('organization_id', '=', obligation.organization_id)
       .where('obligation_id', '=', obligation.id)
       .where('purpose', 'in', ['checkout', 'installment', 'obligation'])
       .where('status', 'in', [...LIVE_ATTEMPT_STATES])
       .executeTakeFirst();
-    if (charging) throw errors.paymentOutcomeUnknown(outcomeUnknownDetails(principal, charging));
+    if (charging) {
+      throw errors.paymentOutcomeUnknown(
+        await outcomeUnknownDetails(this.authorization, principal, charging),
+      );
+    }
     if (!obligation.order_id) return;
     const order = await trx
       .selectFrom('orders')

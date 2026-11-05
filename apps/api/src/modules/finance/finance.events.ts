@@ -143,6 +143,24 @@ export const RefundSettled = defineEvent(
   }),
 );
 
+/**
+ * R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008, SPK-PAY-010): the provider reported a refund
+ * recorded `succeeded` failed and its reversal was booked (the refund keeps its status with
+ * `reversed_at`; the amount is refundable again). Emitted once per refund.
+ */
+export const RefundReversed = defineEvent(
+  'finance.refund_reversed',
+  z.object({
+    ...Org,
+    refundAttemptId: z.uuid(),
+    paymentAttemptId: z.uuid(),
+    amountMinor: z.number().int(),
+    currency: z.string(),
+    purpose: z.enum(['customer_refund', 'compensation']),
+    checkoutId: z.uuid().nullable(),
+  }),
+);
+
 export const CreditIssued = defineEvent(
   'finance.credit_issued',
   z.object({
@@ -336,6 +354,7 @@ export const FinanceEvents = {
   checkoutAborted: CheckoutAborted,
   refundRequested: RefundRequested,
   refundSettled: RefundSettled,
+  refundReversed: RefundReversed,
   creditIssued: CreditIssued,
   creditRedeemed: CreditRedeemed,
   overpaymentRecorded: OverpaymentRecorded,

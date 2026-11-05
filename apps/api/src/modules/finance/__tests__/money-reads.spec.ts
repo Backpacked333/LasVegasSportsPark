@@ -274,6 +274,8 @@ describe('money read models (FIN-01, FIN-02; SPK-PAY-004/005/007/008, §4.5)', (
         amountMinor: 4_000,
         currency: 'USD',
         requestedAt: expect.any(String),
+        // R4-PROVIDER-OUTCOMES-02: not reversed (the provider has not contradicted it).
+        reversedAt: null,
       },
     ]);
     // Staff list refunds of the payment and payments by state; customers are refused.

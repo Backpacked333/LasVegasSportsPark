@@ -38,7 +38,9 @@ import {
   POS_LATE_CAPTURE_PURPOSE,
   financeSystem,
   minutesFrom,
+  netRefundedMinor,
   organizationOf,
+  resolveSettledExceptions,
   toRefund,
   type Reader,
   type RefundRow,
@@ -239,7 +241,8 @@ export class RefundsService {
       .where('organization_id', '=', input.organizationId)
       .where('payment_attempt_id', '=', input.paymentAttemptId)
       .where(
-        sql<boolean>`refunded_minor + reserved_minor + compensated_minor + ${input.amountMinor} <= captured_minor`,
+        // R4-PROVIDER-OUTCOMES-02 (0681): a reversed refund returned nothing (net refunded).
+        sql<boolean>`refunded_minor - reversed_minor + reserved_minor + compensated_minor + ${input.amountMinor} <= captured_minor`,
       )
       .returningAll()
       .executeTakeFirst();
@@ -247,7 +250,7 @@ export class RefundsService {
       const current = await this.refundable(trx, input.organizationId, input.paymentAttemptId);
       // MONEY-02: what a compensation credit took is neither refundable nor pending.
       const unreserved =
-        current.captured_minor - current.refunded_minor - current.compensated_minor;
+        current.captured_minor - netRefundedMinor(current) - current.compensated_minor;
       if (current.reserved_minor > 0 && input.amountMinor <= unreserved) {
         // The funds exist but a pending (possibly unknown) refund holds them (SPK-PAY-008).
         throw errors.refundPending({
@@ -262,7 +265,7 @@ export class RefundsService {
         code: 'REFUND_EXCEEDS_REFUNDABLE',
         availableMinor: unreserved - current.reserved_minor,
         capturedMinor: current.captured_minor,
-        refundedMinor: current.refunded_minor,
+        refundedMinor: netRefundedMinor(current),
         reservedMinor: current.reserved_minor,
         compensatedMinor: current.compensated_minor,
       });
@@ -521,6 +524,17 @@ export class RefundsService {
     if (evidence.status === 'processing') return row; // still pending: nothing changes
     const event: RefundEvent = evidence.status === 'succeeded' ? 'succeed' : 'fail';
     const target: RefundState = evidence.status;
+    if (row.reversed_at) {
+      // R4-PROVIDER-OUTCOMES-02: the reversal is booked once; a repeated failure changes nothing,
+      // and a later success contradicts it again (finance decides, nothing is booked from it).
+      if (target === 'succeeded') {
+        await this.evidenceConflict(trx, organizationId, row, 'succeeded after reversal', evidence);
+      }
+      return row;
+    }
+    if (row.status === 'succeeded' && target === 'failed') {
+      return this.reverseSucceeded(trx, organizationId, row, evidence, correlationId);
+    }
     if (row.status === target) return row; // duplicate delivery
     if (RefundMachine.isTerminal(row.status) || !RefundMachine.can(row.status, event)) {
       await this.exceptions.raise(trx, {
@@ -595,6 +609,25 @@ export class RefundsService {
       .where('id', '=', refundId)
       .where('revision', '=', row.revision)
       .execute();
+    if (row.status === 'unknown') {
+      // R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): the lost outcome is settled.
+      await resolveSettledExceptions(this.exceptions, trx, {
+        organizationId,
+        categories: ['finance.unknown_refund_outcome'],
+        affectedType: 'refund_attempt',
+        affectedId: refundId,
+        actorLabel: `finance.refund.${evidence.source}`,
+        reason: `The refund is now ${target} (${evidence.source}).`,
+        resolution: {
+          refundAttemptId: refundId,
+          from: row.status,
+          to: target,
+          source: evidence.source,
+          inboxEventId: evidence.inboxEventId ?? null,
+        },
+        correlationId,
+      });
+    }
     await this.audit.record(trx, {
       organizationId,
       actor,
@@ -634,6 +667,144 @@ export class RefundsService {
       },
     });
     return (await this.load(trx, organizationId, refundId)) as RefundRow;
+  }
+
+  private async evidenceConflict(
+    trx: Trx,
+    organizationId: string,
+    row: RefundRow,
+    reason: string,
+    evidence: RefundEvidence,
+  ): Promise<void> {
+    await this.exceptions.raise(trx, {
+      organizationId,
+      category: 'finance.refund_evidence_conflict',
+      severity: 'critical',
+      title: `Conflicting refund evidence (${reason}); nothing was changed`,
+      affectedType: 'refund_attempt',
+      affectedId: row.id,
+      ownerQueue: 'finance_operator',
+      dedupeKey: `refund-conflict:${row.id}:${reason}`,
+      details: {
+        recordedStatus: row.status,
+        reportedStatus: evidence.status,
+        source: evidence.source,
+      },
+    });
+  }
+
+  /**
+   * R4-PROVIDER-OUTCOMES-02 (§4.11 "provider money facts stay visible", SPK-PAY-008 / §4.7
+   * invariant 6, SPK-PAY-010): the provider reports a refund recorded as succeeded failed, so the
+   * money never left (or came back). The recorded state is not flipped (the Refund machine and
+   * refund_attempts_guard forbid succeeded -> failed) and the critical conflict stays open for the
+   * finance operator, but the reversal is booked once (0681): the refund's `reversed_at`, the
+   * payment's `reversed_minor` (its amount is refundable again) and the reversing journal of the
+   * refund's `refund_settled` posting (a late point-of-sale capture's overpayment liability is
+   * restored the same way). A reversed compensation refund is not retried automatically: its
+   * checkout's compensation is the operator's decision from the open exception.
+   */
+  private async reverseSucceeded(
+    trx: Trx,
+    organizationId: string,
+    row: RefundRow,
+    evidence: RefundEvidence,
+    correlationId: string | null,
+  ): Promise<RefundRow> {
+    const now = this.clock.now();
+    const actor = financeSystem(organizationId, `finance.refund.${evidence.source}`);
+    await this.exceptions.raise(trx, {
+      organizationId,
+      category: 'finance.refund_evidence_conflict',
+      severity: 'critical',
+      title:
+        'A refund recorded as succeeded was reported failed; its reversal was booked and the amount is refundable again',
+      affectedType: 'refund_attempt',
+      affectedId: row.id,
+      ownerQueue: 'finance_operator',
+      dedupeKey: `refund-conflict:${row.id}:failed`,
+      details: {
+        recordedStatus: row.status,
+        reportedStatus: 'failed',
+        reversed: true,
+        paymentAttemptId: row.payment_attempt_id,
+        purpose: row.purpose,
+        checkoutId: row.checkout_id,
+        amountMinor: row.amount_minor,
+        currency: row.currency,
+        failureReason: evidence.failureReason ?? null,
+        source: evidence.source,
+        inboxEventId: evidence.inboxEventId ?? null,
+        correlationId,
+      },
+    });
+    await trx
+      .updateTable('payment_refundables')
+      .set((eb) => ({
+        reversed_minor: eb('reversed_minor', '+', row.amount_minor),
+        revision: eb('revision', '+', 1),
+      }))
+      .where('organization_id', '=', organizationId)
+      .where('payment_attempt_id', '=', row.payment_attempt_id)
+      .executeTakeFirstOrThrow();
+    const updated = await trx
+      .updateTable('refund_attempts')
+      .set({ reversed_at: now, revision: row.revision + 1 })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', row.id)
+      .where('revision', '=', row.revision)
+      .executeTakeFirst();
+    if (Number(updated.numUpdatedRows) !== 1) {
+      throw errors.staleRevision(row.revision, row.revision + 1);
+    }
+    await this.ledger.reverse(trx, {
+      organizationId,
+      sourceType: 'refund',
+      sourceId: row.id,
+      purpose: 'refund_settled',
+      reversalPurpose: 'refund_reversed',
+      description: 'Refund reported failed after it was recorded as succeeded',
+      actor,
+      correlationId,
+    });
+    await this.audit.record(trx, {
+      organizationId,
+      actor,
+      action: 'finance.refund_reversed',
+      targetType: 'refund_attempt',
+      targetId: row.id,
+      beforeRevision: row.revision,
+      afterRevision: row.revision + 1,
+      correlationId,
+      operationId: row.operation_id,
+      details: {
+        recordedStatus: row.status,
+        reportedStatus: 'failed',
+        amountMinor: row.amount_minor,
+        failureReason: evidence.failureReason ?? null,
+        source: evidence.source,
+        inboxEventId: evidence.inboxEventId ?? null,
+      },
+    });
+    // The payer of a compensation refund was told the refund was made; finance's notice handler
+    // corrects that (finance.notify_refund_reversed), and other modules may follow the fact.
+    await this.outbox.enqueue(trx, FinanceEvents.refundReversed, {
+      organizationId,
+      aggregateType: 'refund_attempt',
+      aggregateId: row.id,
+      correlationId,
+      operationId: row.operation_id,
+      payload: {
+        organizationId,
+        refundAttemptId: row.id,
+        paymentAttemptId: row.payment_attempt_id,
+        amountMinor: Number(row.amount_minor),
+        currency: row.currency,
+        purpose: row.purpose,
+        checkoutId: row.checkout_id,
+      },
+    });
+    return (await this.load(trx, organizationId, row.id)) as RefundRow;
   }
 
   private async releaseReservation(trx: Trx, row: RefundRow): Promise<void> {

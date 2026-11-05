@@ -56157,6 +56157,8 @@ export type components = {
             id: string;
             /** Format: date-time */
             requestedAt: string;
+            /** Format: date-time */
+            reversedAt?: string | null;
             /** @enum {string} */
             status: "requested" | "processing" | "succeeded" | "failed" | "canceled" | "unknown";
         };
@@ -56577,6 +56579,8 @@ export type components = {
             reason: string;
             /** Format: uuid */
             refundAttemptId: string | null;
+            /** Format: date-time */
+            refundReversedAt?: string | null;
             /** @enum {string|null} */
             refundStatus: "requested" | "processing" | "succeeded" | "failed" | "canceled" | "unknown" | null;
             /** Format: uuid */
@@ -57624,6 +57628,8 @@ export type components = {
             reservationStatus: "reserved" | "settled" | "released";
             /** Format: date-time */
             resolvedAt: string | null;
+            /** Format: date-time */
+            reversedAt?: string | null;
             status: components["schemas"]["RefundStatus"];
             /** Format: date-time */
             unknownSince: string | null;
@@ -57635,6 +57641,7 @@ export type components = {
             currency: string;
             refundedMinor: number;
             reservedMinor: number;
+            reversedMinor?: number;
         };
         /** @enum {string} */
         RefundStatus: "requested" | "processing" | "succeeded" | "failed" | "canceled" | "unknown";

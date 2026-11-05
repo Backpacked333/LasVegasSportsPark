@@ -72,7 +72,9 @@ carry `revision` and `touch_updated_at`.
   per obligation (`0601`: the checkout charge names the obligation it pays, so the installment
   worker can never charge the same debt beside it; `0611`: one live checkout, installment or
   direct-payment charge per obligation, so a collection and a payer's own payment of the same
-  installment cannot both charge, MONEY-07); one succeeded attempt per checkout; one
+  installment cannot both charge, MONEY-07); one succeeded attempt per checkout
+  (`payment_attempts_one_success_idx`) and one live or succeeded compensation refund per checkout
+  (`refund_attempts_live_compensation_idx`; both proven refused, R4-DB-INVARIANTS-11); one
   credit per source fact (an in-process caller may name the source of an adjustment credit —
   migration passes the imported balance's mapping id — and a second credit for it is refused with
   `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
@@ -87,11 +89,17 @@ carry `revision` and `touch_updated_at`.
   `__tests__/credits-installments.spec.ts`). `0617` also gave every earlier plan the sum of its
   installments as total.
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
-  (`refunded + reserved + compensated <= captured`, `0612`); captured is fixed, refunded and
-  compensated (what a compensation credit took, MONEY-02) only accumulate.
+  (`refunded - reversed + reserved + compensated <= captured`, `0612`, `0681`); captured is
+  fixed, refunded, compensated (what a compensation credit took, MONEY-02) and reversed (refunds
+  the provider reported failed after success, R4-PROVIDER-OUTCOMES-02) only accumulate; reversed
+  never exceeds refunded and always equals the payment's refunds marked reversed (checked at
+  commit on every insert, update and delete of either side: `0681` for updates, `0684` for
+  inserts and deletes), and a refund is reversed once and only when it succeeded.
 - **§4.7 invariant 7 / SPK-PAY-009:** `remaining_minor >= 0`, `remaining <= original`, and a
   deferred constraint trigger keeps `remaining = original - redeemed + reversed`, so a balance is
-  never overwritten.
+  never overwritten. A reversal gives back only a `redeem` row of the same credit (composite key
+  `credit_redemptions_reversal_same_credit_fk`), the same reference, currency and amount
+  (`credit_redemptions_reversal_matches`, `0683`, R4-DB-INVARIANTS-02).
 - **SPK-PAY-010:** journals, entries, receipts, allocations, redemptions, quote lines, order lines
   and settlement reconciliations are append-only (`forbid_mutation`); a deferred constraint trigger
   refuses a journal that does not balance in one currency with at least two lines; an entry is a
@@ -99,7 +107,10 @@ carry `revision` and `touch_updated_at`.
 - **SPK-PAY-004:** `allocated <= amount`, a deferred trigger keeps `allocated` equal to the
   allocation rows, allocations only accumulate, a settled obligation is fully allocated; a
   receipt's allocations always equal its allocated part in its currency (checked on every
-  allocation that names it, migration 0602, so received money is never allocated twice); a
+  allocation that names it, migration 0602, so received money is never allocated twice); an
+  allocation funded by a credit redemption names an unreversed `redeem` row in its currency and a
+  redemption's allocations never exceed what it consumed (checked under a lock on the redemption,
+  `payment_allocations_credit_redemption_consistent`, `0682`, R4-DB-INVARIANTS-01); a
   contribution request can only reference a `team_with_contributions` obligation.
 - **SPK-PAY-001 (`0603`):** a quote or order line, installment, contribution request, credit
   redemption or refund attempt names its quote, order, plan, obligation, credit or payment attempt
@@ -143,6 +154,19 @@ are authorized before the record is read, so a caller without the role gets `ACC
 whether or not the record exists. A captain sees a team obligation's totals and each requested
 contribution's amount and status, never a player's payment or method.
 
+Staff powers come from the kernel, never from the principal's kind (R4-AUTHZ-TARGETS-01, §2.1,
+SPK-IAM-001/003): `staffAuthority` (`finance.shared.ts`) asks the kernel for the action on a target
+with no subject persons, so it passes only for a staff role that holds the action (or the
+system actor). Quoting or checking out another payer's basket (`finance.create_quote`,
+`finance.checkout`), redeeming a credit into any obligation (`finance.redeem_credit`), the
+organization-wide obligation list, seeing every live payment on an obligation
+(`finance.read_obligation`) and the attempt named in a `PAYMENT_OUTCOME_UNKNOWN` refusal
+(`finance.read_checkout`) all go through it. A coach, official, scheduler or facilities operator
+acting for their own family is a customer there: a co-guardian with that role gets `NOT_FOUND` for
+another payer's quote or checkout, as a customer co-guardian does
+(`__tests__/checkout.spec.ts`, `__tests__/obligations.spec.ts`). A responsible payer reads the
+obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
+
 ## Ports
 
 - `PAYMENT_PROVIDER_PORT` (`PaymentProviderPort`, `finance.ports.ts`): `createPayment`,
@@ -150,7 +174,8 @@ contribution's amount and status, never a player's payment or method.
   `verifyWebhook`; every call carries the
   attempt id as idempotency key; a thrown error is an unknown outcome. Only
   `FakePaymentProvider` exists (deterministic by payment-method token: succeed, require action,
-  decline, asynchronous processing, timeout after capture, timeout after decline, unreachable;
+  decline, asynchronous processing, timeout after capture, timeout after decline, timeout after
+  opening a challenge, unreachable;
   scriptable payments, cancels and refunds; signed webhooks for duplicates and reordering). An
   adapter must bound `createRefund` below the reconciliation threshold. The port refuses
   to start in production (DEC-019 pending).
@@ -163,7 +188,7 @@ contribution's amount and status, never a player's payment or method.
 
 ## Durable work
 
-- Outbox handlers (all twelve registered in `finance.module.ts`; the cross-module consumer
+- Outbox handlers (all thirteen registered in `finance.module.ts`; the cross-module consumer
   inventory is `docs/architecture/overview.md` §7.1; R3-DOCS-TRUTH-3-08):
   - `finance.finalize_checkout` on `finance.checkout_payment_received` (§4.11 step 8, SPK-AT-023);
   - `finance.abort_expired_checkout` on its timer `finance.checkout_expiry_due`;
@@ -176,7 +201,10 @@ contribution's amount and status, never a player's payment or method.
     `finance.checkout_recovery_required`, `finance.notify_checkout_compensated` on
     `finance.checkout_compensated`, `finance.notify_payment_failed` on `finance.payment_failed`,
     `finance.notify_installment_failed` on `finance.installment_failed`,
-    `finance.notify_installment_due` on `finance.installment_notice`;
+    `finance.notify_installment_due` on `finance.installment_notice`,
+    `finance.notify_refund_reversed` on `finance.refund_reversed` (R4-PROVIDER-OUTCOMES-02: the
+    payer of a compensation refund the provider reported failed after success is told it did not
+    go through);
   - `finance.follow_person_merge` on `identity.persons_merged` (R2-LIFECYCLES-02, below).
 
   All are idempotent under replay. A change to the payload of `finance.refund_settled` reaches two
@@ -193,7 +221,7 @@ contribution's amount and status, never a player's payment or method.
 `finance.quote_created`, `checkout_started`, `checkout_expiry_due`, `checkout_payment_received`,
 `payment_received`, `payment_failed`, `payment_outcome_unknown`, `order_paid`,
 `enrollment_fulfilled`, `checkout_recovery_required`, `checkout_compensated`, `checkout_aborted`,
-`refund_requested`, `refund_settled`, `credit_issued`, `credit_redeemed`, `overpayment_recorded`,
+`refund_requested`, `refund_settled`, `refund_reversed`, `credit_issued`, `credit_redeemed`, `overpayment_recorded`,
 `obligation_created`, `obligation_settled`, `contribution_requested`, `installment_paid`,
 `installment_failed`, `installment_notice_due`, `installment_notice`, `cash_tender_recorded`,
 `settlement_reconciled`. Payloads carry identifiers and amounts only (§4.14).
@@ -250,7 +278,19 @@ contribution's amount and status, never a player's payment or method.
   up), so a restored database never cancels a capture by assumption (SPK-AT-028). A payment
   challenge still open an hour after submission is treated as abandoned and canceled at the
   provider (proposed, DEC-019 pending); a cancel without an answer keeps the attempt live with an
-  exception `finance.payment_action_abandoned`.
+  exception `finance.payment_action_abandoned`. The same applies to a challenge the payer never
+  saw because the call that opened it timed out (R4-PROVIDER-OUTCOMES-01): non-terminal evidence
+  never moves an `unknown` attempt, so when reconciliation (the sweep, or staff forcing it) finds
+  the provider holding it in `requires_action` an hour after submission, it asks the provider to
+  cancel it and applies the answer (canceled, or a capture that won the race), and the checkout,
+  holds and payer are released (`__tests__/payment-evidence.spec.ts`; the fake's
+  `timeoutRequiresAction` token reproduces it). Once evidence settles such an outcome its
+  exception is resolved in the same transaction by the finance system actor, with the evidence as
+  resolution (R4-PROVIDER-OUTCOMES-04, §5.11): `finance.unknown_payment_outcome` when the attempt
+  leaves `unknown`, `finance.payment_action_abandoned` when it leaves `action_required` (or
+  `unknown`), `finance.unknown_refund_outcome` when a refund leaves `unknown`; the finance
+  operator's queue keeps only outcomes still unresolved. Conflict exceptions
+  (`*_evidence_conflict`) stay open for review.
 - **Webhooks (§4.11):** authenticated, recorded once in the inbox, applied through the state
   machine: duplicates do nothing, an older non-terminal event never moves a resolved attempt back,
   and a contradiction raises `finance.payment_evidence_conflict` without changing the recorded
@@ -281,7 +321,27 @@ contribution's amount and status, never a player's payment or method.
   record" releases it only once the refund was submitted at least the reconciliation threshold
   ago. Refund evidence (synchronous answer, webhook, reconciliation) is compared with the refund
   attempt: another amount, currency or provider reference changes nothing and raises the critical
-  exception `finance.refund_evidence_conflict` (MONEY-09).
+  exception `finance.refund_evidence_conflict` (MONEY-09). A refund recorded `succeeded` that the
+  provider later reports `failed` returned no money (R4-PROVIDER-OUTCOMES-02, §4.11, SPK-PAY-010):
+  the refund keeps its recorded state (the Refund machine forbids the flip) with `reversedAt`,
+  the reversal is booked once (the reversing journal of its `refund_settled` posting, purpose
+  `refund_reversed`), its amount is refundable again (`reversedMinor` on the refundable funds,
+  `refundedMinor` is what was actually returned), settlement reconciliation counts it back in
+  the period it was reversed, and the critical `finance.refund_evidence_conflict` stays open for
+  the finance operator; a reversed compensation refund is not retried automatically. A later
+  success report of a reversed refund books nothing and raises the conflict again. The reversal
+  is read where the refund is: `reversedAt` on the refund, on each refund listed on
+  `GET /payments/{id}` (the payer's and staff's payment detail) and as `refundReversedAt` on a
+  point-of-sale return, so a reversed refund (status still `succeeded`) is never shown as money
+  returned; event `finance.refund_reversed` names it once. The payer of a compensation refund
+  whose checkout it compensated (and who was told "Your refund was made") is told it did not go
+  through and that the facility will contact them (`finance.notify_refund_reversed`, once per
+  reversal); a compensation refund already reversed when its `finance.refund_settled` is handled
+  does not compensate the checkout (it stays `recovery_required`, plan `manual`, with the
+  critical `finance.compensation_failed`), and the "refund made" notice is not sent for a refund
+  reversed by then (`__tests__/finalization.spec.ts`, `__tests__/refunds.spec.ts`). Nothing is
+  sent for a reversed customer refund: finance sent no "refund made" notice for it, and the
+  finance operator owns the open conflict.
 - **Team billing (SPK-PAY-004/005, SPK-AT-022):** contribution payments that together exceed the
   remaining balance allocate exactly the remaining amount; the excess stays visible on the receipt
   and the obligation (`excessMinor`), sits in `overpayment_liability`, and is held as a credit
@@ -575,7 +635,8 @@ outcome recording and reconciliation are never gated.
   the same key when the connection has no record; it renews its lease (`renewJobLease`, K-06)
   before each connection call and asks about nothing more once another runner holds the job
   (ASYNC-06). Exceptions:
-  `finance.accounting_export_unknown`, `_rejected`, `_conflict`. Every batch transition is
+  `finance.accounting_export_unknown` (resolved by the finance system actor when the answer
+  arrives, R4-PROVIDER-OUTCOMES-04), `_rejected`, `_conflict`. Every batch transition is
   audited, the move to `unknown` included (`finance.accounting_batch_unknown` with the error).
 - `ACCOUNTING_EXPORT_PORT` has only `FakeAccountingProvider` (success, rejection, timeout/unknown,
   duplicate submission), refused in production; registered as integration
@@ -606,7 +667,8 @@ outcome recording and reconciliation are never gated.
 - A refund released after the reconciliation threshold ("no provider record") that the provider
   later reports as succeeded is not re-reserved or re-booked: it stays visible as the critical
   exception `finance.refund_evidence_conflict` (a design decision against the refundable check is
-  pending).
+  pending). The opposite contradiction, `failed` after `succeeded`, is booked as a reversal
+  (R4-PROVIDER-OUTCOMES-02, above).
 - Compensation does not yet release the order's discount redemptions (per-person discount limits),
   and an open future installment obligation partly paid before compensation is canceled for its
   full amount (the same as abort).
@@ -614,6 +676,14 @@ outcome recording and reconciliation are never gated.
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
 - Revenue recognition (deferred → earned) is not implemented (DEC-022); the accounting export
   (FIN-07) exports journal entries as booked, behind the `accounting` capability.
+- A refund reversal (R4-PROVIDER-OUTCOMES-02) is netted out by finance's own figures (refundable
+  funds, `refundedMinor`, settlement reconciliation in the period it was reversed, the ledger's
+  `refund_reversed` journal), but the reporting module's read view `reporting_refund_attempts_v`
+  does not expose `reversed_at` yet, so its payment reconciliation report, economics refund
+  adjustments, the retention "fully refunded" exclusion (MET-082) and the point-of-sale money
+  series still count a reversed refund as money returned. For a period with a reversal, finance's
+  reconciliation report is the authoritative figure until reporting reads the reversal (recorded
+  as a reporting follow-up).
 - Refunds go through the provider only; refunding a cash tender is not supported. Returning an
   overpayment by refund (instead of approving the held credit) has no dedicated command.
 - Finalization is all-or-nothing per checkout: one refused line sends the whole checkout to

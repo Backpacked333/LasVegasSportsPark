@@ -43,9 +43,12 @@ import {
   financeSystem,
   hoursFrom,
   iso,
+  isoOrNull,
   minutesFrom,
   organizationOf,
   outcomeUnknownDetails,
+  refundableAvailableMinor,
+  resolveSettledExceptions,
   toPaymentAttempt,
   type PaymentAttemptRow,
   type Reader,
@@ -174,13 +177,19 @@ export class PaymentsService {
   async detail(db: Reader, row: PaymentAttemptRow): Promise<PaymentDetail> {
     const refundable = await db
       .selectFrom('payment_refundables')
-      .select(['captured_minor', 'refunded_minor', 'reserved_minor', 'compensated_minor'])
+      .select([
+        'captured_minor',
+        'refunded_minor',
+        'reversed_minor',
+        'reserved_minor',
+        'compensated_minor',
+      ])
       .where('organization_id', '=', row.organization_id)
       .where('payment_attempt_id', '=', row.id)
       .executeTakeFirst();
     const refunds = await db
       .selectFrom('refund_attempts')
-      .select(['id', 'status', 'amount_minor', 'currency', 'created_at'])
+      .select(['id', 'status', 'amount_minor', 'currency', 'created_at', 'reversed_at'])
       .where('organization_id', '=', row.organization_id)
       .where('payment_attempt_id', '=', row.id)
       .orderBy('created_at')
@@ -188,12 +197,7 @@ export class PaymentsService {
       .execute();
     return {
       ...toPaymentAttempt(row),
-      refundableMinor: refundable
-        ? Number(refundable.captured_minor) -
-          Number(refundable.refunded_minor) -
-          Number(refundable.reserved_minor) -
-          Number(refundable.compensated_minor)
-        : 0,
+      refundableMinor: refundable ? refundableAvailableMinor(refundable) : 0,
       compensatedMinor: refundable ? Number(refundable.compensated_minor) : 0,
       refunds: refunds.map((r) => ({
         id: r.id,
@@ -201,6 +205,9 @@ export class PaymentsService {
         amountMinor: Number(r.amount_minor),
         currency: r.currency,
         requestedAt: iso(r.created_at),
+        // R4-PROVIDER-OUTCOMES-02 (§4.11): a succeeded refund the provider reported failed
+        // returned nothing; the payer and staff see that, not "refunded".
+        reversedAt: isoOrNull(r.reversed_at),
       })),
     };
   }
@@ -235,7 +242,7 @@ export class PaymentsService {
       throw errors.paymentOutcomeUnknown({
         code: 'PAYMENT_IN_PROGRESS',
         message: 'A payment for this is already in progress or awaiting reconciliation.',
-        ...outcomeUnknownDetails(input.actor, live),
+        ...(await outcomeUnknownDetails(this.authorization, input.actor, live)),
       });
     }
     const id = newId();
@@ -601,6 +608,33 @@ export class PaymentsService {
         inboxEventId: evidence.inboxEventId ?? null,
       },
     });
+    // R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): evidence settled what the open exception
+    // said was unresolved: a lost outcome once the attempt leaves `unknown`, an abandoned
+    // challenge once it leaves `action_required`.
+    const settled = [
+      ...(attempt.status === 'unknown' ? ['finance.unknown_payment_outcome'] : []),
+      ...(attempt.status === 'action_required' || attempt.status === 'unknown'
+        ? ['finance.payment_action_abandoned']
+        : []),
+    ];
+    if (settled.length > 0) {
+      await resolveSettledExceptions(this.exceptions, trx, {
+        organizationId,
+        categories: settled,
+        affectedType: 'payment_attempt',
+        affectedId: attemptId,
+        actorLabel: `finance.evidence.${evidence.source}`,
+        reason: `The payment is now ${next} (${evidence.source}).`,
+        resolution: {
+          paymentAttemptId: attemptId,
+          from: attempt.status,
+          to: next,
+          source: evidence.source,
+          inboxEventId: evidence.inboxEventId ?? null,
+        },
+        correlationId,
+      });
+    }
     let receipt: ReceiptRow | null = null;
     let overpaymentCreditId: string | null = null;
     if (next === 'succeeded') {
@@ -1067,7 +1101,15 @@ export class PaymentsService {
       const since = new Date(row.unknown_since ?? row.submitted_at ?? this.clock.now());
       if (since > threshold) return unchanged;
     }
-    const found = await this.provider.retrievePayment(row.id);
+    let found = await this.provider.retrievePayment(row.id);
+    if (found?.status === 'requires_action' && row.status === 'unknown') {
+      // R4-PROVIDER-OUTCOMES-01 (SPK-PAY-007, §4.11 rule 4): the provider opened a challenge but
+      // the answer that carried it was lost, so the payer never saw it. Non-terminal evidence
+      // never moves an unknown attempt, and only `action_required` attempts reach
+      // cancelAbandoned, so the challenge is canceled here once it is as old as an abandoned one;
+      // the provider's answer (canceled, or a capture that won the race) then resolves it.
+      found = (await this.cancelUnseenChallenge(row)) ?? found;
+    }
     return this.uow.run(async ({ trx }) => {
       if (!found) {
         const current = await this.load(trx, organizationId, id, true);
@@ -1102,6 +1144,36 @@ export class PaymentsService {
         correlationId,
       );
     });
+  }
+
+  /**
+   * R4-PROVIDER-OUTCOMES-01 (SPK-PAY-007; DEC-019 pending, as for cancelAbandoned): asks the
+   * provider, outside any transaction, to cancel the challenge it holds for an `unknown` attempt
+   * submitted at least `actionRequiredCancelAfterMinutes` ago (the window after which a challenge
+   * the payer did see is abandoned too). Returns the provider's answer, or null when it is too
+   * early, the provider has no record, or the call gave no answer (the attempt stays unknown, its
+   * open exception says so, and the next pass asks again: cancel is idempotent).
+   */
+  private async cancelUnseenChallenge(
+    row: PaymentAttemptRow,
+  ): Promise<ProviderPaymentResult | null> {
+    if (this.uow.current()) {
+      throw errors.internal('a provider call must never run inside a database transaction (§4.11)');
+    }
+    const handedOver = row.submitted_at ?? row.unknown_since;
+    const abandonedBefore = minutesFrom(
+      this.clock.now(),
+      -this.policy.configuration.actionRequiredCancelAfterMinutes,
+    );
+    if (!handedOver || new Date(handedOver) > abandonedBefore) return null;
+    try {
+      return await this.provider.cancelPayment(row.id);
+    } catch (error) {
+      this.logger.warn(
+        `payment ${row.id}: cancel of an unseen challenge unanswered (${String(error)})`,
+      );
+      return null;
+    }
   }
 
   /**

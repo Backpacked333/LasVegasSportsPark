@@ -139,6 +139,8 @@ export interface PosSaleParts {
   returns: PosReturnRow[];
   attemptStatus: Map<string, string>;
   refundStatus: Map<string, string>;
+  /** R4-PROVIDER-OUTCOMES-02: when a succeeded card refund was reported failed (reversed). */
+  refundReversedAt: Map<string, Date>;
 }
 
 export async function loadSaleParts(db: Reader, sale: PosSaleRow): Promise<PosSaleParts> {
@@ -182,7 +184,7 @@ export async function loadSaleParts(db: Reader, sale: PosSaleRow): Promise<PosSa
       ? []
       : await db
           .selectFrom('refund_attempts')
-          .select(['id', 'status'])
+          .select(['id', 'status', 'reversed_at'])
           .where('organization_id', '=', organizationId)
           .where('id', 'in', refundIds)
           .execute();
@@ -192,6 +194,9 @@ export async function loadSaleParts(db: Reader, sale: PosSaleRow): Promise<PosSa
     returns,
     attemptStatus: new Map(attempts.map((a) => [a.id, a.status])),
     refundStatus: new Map(refunds.map((r) => [r.id, r.status])),
+    refundReversedAt: new Map(
+      refunds.flatMap((r) => (r.reversed_at ? [[r.id, r.reversed_at] as const] : [])),
+    ),
   };
 }
 
@@ -233,7 +238,11 @@ function toTender(row: PosTenderRow, attemptStatus: Map<string, string>): PosTen
   };
 }
 
-function toReturn(row: PosReturnRow, refundStatus: Map<string, string>): PosReturn {
+function toReturn(
+  row: PosReturnRow,
+  refundStatus: Map<string, string>,
+  refundReversedAt: Map<string, Date>,
+): PosReturn {
   return {
     id: row.id,
     amountMinor: Number(row.amount_minor),
@@ -242,6 +251,9 @@ function toReturn(row: PosReturnRow, refundStatus: Map<string, string>): PosRetu
     refundAttemptId: row.refund_attempt_id,
     refundStatus: row.refund_attempt_id
       ? ((refundStatus.get(row.refund_attempt_id) ?? null) as PosReturn['refundStatus'])
+      : null,
+    refundReversedAt: row.refund_attempt_id
+      ? isoOrNull(refundReversedAt.get(row.refund_attempt_id) ?? null)
       : null,
     registerSessionId: row.register_session_id,
     reason: row.reason,
@@ -277,7 +289,7 @@ export function toPosSale(sale: PosSaleRow, parts: PosSaleParts): PosSale {
     returnedMinor: returned,
     lines: parts.lines.map((l) => toLine(l, units.get(l.id) ?? 0)),
     tenders: parts.tenders.map((t) => toTender(t, parts.attemptStatus)),
-    returns: parts.returns.map((r) => toReturn(r, parts.refundStatus)),
+    returns: parts.returns.map((r) => toReturn(r, parts.refundStatus, parts.refundReversedAt)),
     paidAt: isoOrNull(sale.paid_at),
     voidReason: sale.void_reason,
     voidedAt: isoOrNull(sale.voided_at),
