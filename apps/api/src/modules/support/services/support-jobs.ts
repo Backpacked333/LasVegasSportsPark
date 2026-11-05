@@ -13,7 +13,9 @@ import { BACKFILL_TIMELINE_JOB, TimelineBackfillService } from './timeline-backf
  *   history into the timeline index (TimelineBackfillService).
  * - `support.settle_stale_case_actions` (SUP-04, every 300 s): helper requests still `requested`
  *   `SUPPORT_STALE_ACTION_SECONDS` after their intent get the owning module's outcome recorded, or
- *   one `support.case_action_stale` exception (CaseActionsService.settleStale).
+ *   one `support.case_action_stale` exception (CaseActionsService.settleStale); refund helpers
+ *   already `unknown` get finance's outcome recorded once finance settled the refund
+ *   (R4-PROVIDER-OUTCOMES-03).
  */
 @Injectable()
 export class SupportJobs implements OnModuleInit {
