@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-demo
 pnpm-lock.yaml
 docs/api/openapi.json
 # Generated from docs/api/openapi.json (pnpm --filter @sportspark/api-client generate)

@@ -5,9 +5,10 @@
  * navigation collapses behind a menu button so the workspace works on a phone beside a field. A
  * skip link and visible focus serve keyboard users (SPK-UX-009).
  */
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
+import { DemoBar, TourPanel } from '../demo';
 import { OfflineQueueProvider } from '../features/operations/offline/OfflineQueueProvider';
 import { WORKSPACE_PATH } from '../navigation/areas';
 import { useApp } from '../providers/AppProviders';
@@ -31,6 +32,11 @@ export function Shell() {
         <a className="skip-link" href="#main">
           Skip to main content
         </a>
+        {DemoBar ? (
+          <Suspense fallback={null}>
+            <DemoBar />
+          </Suspense>
+        ) : null}
         <header className="shell-header">
           <Button
             variant="secondary"
@@ -61,6 +67,11 @@ export function Shell() {
           <ConnectivityBanner />
           <Outlet />
         </main>
+        {TourPanel ? (
+          <Suspense fallback={null}>
+            <TourPanel />
+          </Suspense>
+        ) : null}
       </div>
     </OfflineQueueProvider>
   );

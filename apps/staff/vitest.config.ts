@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  define: { __APP_VERSION__: JSON.stringify('0.1.0') },
+  define: { __APP_VERSION__: JSON.stringify('0.1.0'), __DEMO__: 'false' },
   oxc: { jsx: { runtime: 'automatic' } },
   test: {
     name: 'staff',

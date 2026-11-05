@@ -144,6 +144,30 @@ UTC) and six local accounts: `dev-admin` (system administrator), `dev-desk` (fro
 worker on the same directory (previous section); use `DATABASE_URL` for the seed, the API and the
 worker when follow-ups matter.
 
+### Real and demo modes
+
+The staff dashboard and the customer app run in one of two modes.
+
+- **Real mode** (default) is the software as it ships: the real sign-in and whatever data the API
+  holds. Use it for testing against a real or staging API. `pnpm --filter @sportspark/staff build`
+  and the mobile `export:*` scripts produce real-mode bundles only, and their release-bundle checks
+  fail if any demo code is present.
+- **Demo mode** is for walking people through the software. `pnpm demo` seeds a separate demo
+  database (`.pglite-demo/`, every optional module on), starts the API with its local identity
+  provider, and starts the staff dashboard in demo mode at http://localhost:5173. The sign-in screen
+  becomes a role picker (front desk, league manager, administrator, coach, referee). Each role signs
+  in to the real screens, a banner says the data is sample data, and a tour panel walks through
+  that role's screens with Back and Next. `pnpm demo --mobile` also starts the customer app's
+  development server in demo mode, with a parent sign-in and a family tour. `pnpm demo --fresh`
+  starts from an empty demo database. Mobile demo mode exists in development builds only.
+
+| Item                                                                           | Status                                                               |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| Staff role picker, demo banner and tours; real builds contain no demo code     | **Verified**: `apps/staff/src/demo/__tests__`, release-bundle check  |
+| Mobile parent sign-in and family tour, development builds only                 | **Verified**: `apps/mobile/src/demo/__tests__`                       |
+| `pnpm demo` seeds, starts the API and the dashboard; every staff role signs in | **Verified** by hand in Chromium against the seeded API              |
+| Sample data beyond the seeded accounts (programs, leagues, registrations)      | **Proposed**: the seed creates accounts only, so screens start empty |
+
 ## Working in this repository
 
 Read [CLAUDE.md](CLAUDE.md) for the engineering conventions every change must follow and

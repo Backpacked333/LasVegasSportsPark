@@ -278,3 +278,108 @@ body {
 .error-text {
   color: var(--tone-danger);
 }
+
+/* Demo mode (src/demo): the sample-data banner, the role picker and the guided tour panel. */
+.shell:has(> .demo-bar) {
+  grid-template-rows: auto auto 1fr;
+}
+.demo-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 2px solid var(--tone-pending);
+}
+.demo-bar p {
+  margin: 0;
+}
+.demo-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.demo-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 960px;
+}
+.demo-picker h2,
+.demo-picker p {
+  margin: 0;
+}
+.demo-roles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4);
+}
+.demo-role {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+.demo-role h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.demo-role p {
+  margin: 0;
+  flex: 1;
+}
+.demo-elsewhere {
+  color: var(--color-muted);
+}
+.demo-tour {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 20;
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px -8px rgba(16, 24, 20, 0.25);
+}
+.demo-tour h2,
+.demo-tour h3,
+.demo-tour p,
+.demo-tour ul {
+  margin: 0;
+}
+.demo-tour h2 {
+  font-size: 1.125rem;
+}
+.demo-tour h3 {
+  font-size: 0.875rem;
+}
+.demo-tour ul {
+  padding-left: 1.25rem;
+}
+.demo-tour-count {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+}
+.demo-tour-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-self: stretch;
+  justify-content: flex-end;
+}

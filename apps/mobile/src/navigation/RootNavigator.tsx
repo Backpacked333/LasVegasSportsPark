@@ -7,6 +7,7 @@
  */
 import { Stack } from 'expo-router';
 import { ConnectivityAnnouncer } from '../connectivity/ConnectivityBanner';
+import { DemoOverlay } from '../demo';
 import { UpdateGate } from './UpdateGate';
 
 export function RootNavigator() {
@@ -39,6 +40,7 @@ export function RootNavigator() {
           <Stack.Screen name="pos-receipts/index" options={{ title: 'Point-of-sale receipts' }} />
           <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
         </Stack>
+        {DemoOverlay ? <DemoOverlay /> : null}
       </UpdateGate>
     </>
   );
