@@ -59,8 +59,9 @@ Every table carries `organization_id`; references use composite `(organization_i
 | POST            | `/schedule-drafts/{id}/publish`               | `scheduling.publish_schedule`                                                              |
 
 Every POST/PATCH/DELETE is `@Idempotent()` and validated with zod; every write runs in
-`UnitOfWork.run` with an audit record and outbox follow-ups. Publication creates an operation
-(`scheduling.publish_schedule`) readable at `GET /v1/operations/{id}`.
+`UnitOfWork.run` with an audit record and outbox follow-ups. Publication records its outcome as an
+operation (`scheduling.publish_schedule`) readable at `GET /v1/operations/{id}`; it is created in
+the publication transaction itself, so it never stays `running` (R4-REPLAY-IDEMPOTENCY-02).
 
 ## Ports (`ports.ts`, provided by `SchedulingModule`)
 
@@ -162,9 +163,19 @@ Draft events and drafts themselves never produce customer notices (SPK-SCHED-005
   change is refused with `RESOURCE_CONFLICT`. Units a resource loses stay on its existing holds
   (they over-conflict, which is safe), and ancestors keep units of a former mapping.
 - Publication (`ScheduleDraftsService.publish`) performs the seven SPK-SCHED-006 steps inside one
-  transaction after creating the operation; a stale base revision (`STALE_REVISION`), any conflict
-  or blocking obligation rolls everything back, the draft is marked `failed` with the reasons, and
-  nothing is partially published.
+  transaction; a stale base revision (`STALE_REVISION`), any conflict or blocking obligation rolls
+  everything back, the draft is marked `failed` with the reasons, and nothing is partially
+  published.
+- The publication's operation is created inside that same transaction (R4-REPLAY-IDEMPOTENCY-02,
+  §4.8, §4.9, §4.12, verified: `__tests__/publication-interruption.spec.ts`). It commits only as
+  `succeeded`, with the publication. A refusal after the publication started is recorded in a
+  new transaction as one `failed` operation, which the request's idempotency key and its replays
+  name (an unexpected error leaves the draft as it was). A process that stops mid-publication
+  leaves neither a publication nor an operation stuck `running`, and the key records no committed
+  work, so a retry with the same key publishes. An error that surfaces after the publication
+  committed (a lost commit acknowledgement) records no failure: the stored error names the
+  `succeeded` operation. A refusal by a precondition (draft not found, authorization, the
+  draft's `expectedRevision`, a draft state that cannot publish) records nothing.
 - Series store local time + zone; nonexistent local times shift forward (or skip) and ambiguous ones
   take the first occurrence (or second) per the series, recorded as `dst_resolution` on the event.
   SPK-SCHED-008 "require resolution": when the rule's local start time falls in a gap or an overlap
