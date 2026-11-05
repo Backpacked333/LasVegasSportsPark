@@ -58,6 +58,7 @@ import {
   withSavepoint,
   type BasketLineRow,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
 import {
@@ -246,13 +247,17 @@ export class BasketsService implements BasketPort {
       throw errors.validation('ownerPersonId is required when staff open a basket.');
     return this.uow.run(async ({ trx }) => {
       const owner = await this.evaluator.participant(trx, organizationId, ownerPersonId);
+      // R4-PRIVACY-03 (§4.10): another household's person reads as not found, and only an
+      // authorized caller learns whether the owner is an adult.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.manageBasket,
+        { type: 'basket', organizationId, subjectPersonIds: [owner.id] },
+        [owner.id],
+      );
       if (owner.kind !== 'adult')
         throw errors.validation('A basket belongs to an adult household member.');
-      await this.authorization.require(principal, EnrollmentActions.manageBasket, {
-        type: 'basket',
-        organizationId,
-        subjectPersonIds: [owner.id],
-      });
       // §4.7 (1), SPK-REG-009: a customer names only themselves or the owner as payer.
       const payerPersonId =
         resolveCustomerPayer(staff, input.payerPersonId, [principal.personId, owner.id]) ??
@@ -321,21 +326,38 @@ export class BasketsService implements BasketPort {
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
+      const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
+      // Authority over the household the basket belongs to and over the participant: an adult who
+      // may register a child still cannot add lines to another household's basket (§4.7 (1)).
+      // The basket first, so the participant check below never tells a caller about a basket
+      // that is not theirs; then the participant, where another household's person reads as an
+      // unknown one (R4-PRIVACY-03, §4.10).
+      await this.authorization.require(principal, EnrollmentActions.manageBasket, {
+        type: 'basket',
+        id: basketId,
+        organizationId,
+        facilityId,
+        subjectPersonIds: [basket.owner_person_id],
+        protected: true,
+      });
       const person = await this.evaluator.participant(
         trx,
         organizationId,
         input.participantPersonId,
       );
-      // Authority over the household the basket belongs to and over the participant: an adult who
-      // may register a child still cannot add lines to another household's basket (§4.7 (1)).
-      await this.authorization.require(principal, EnrollmentActions.manageBasket, {
-        type: 'basket',
-        id: basketId,
-        organizationId,
-        facilityId: await this.scope.facilityOf(organizationId, input.offeringId, trx),
-        subjectPersonIds: [...new Set([basket.owner_person_id, person.id])],
-        protected: true,
-      });
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.manageBasket,
+        {
+          type: 'basket',
+          id: basketId,
+          organizationId,
+          facilityId,
+          subjectPersonIds: [...new Set([basket.owner_person_id, person.id])],
+        },
+        [person.id],
+      );
       assertExpectedRevision(input.expectedRevision, basket.revision);
       if (basket.status !== 'open')
         throw errors.invalidTransition('Basket', basket.status, 'add_line');

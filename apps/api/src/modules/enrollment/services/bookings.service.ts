@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   errors,
   newId,
   type ApproveBookingInput,
@@ -18,6 +19,7 @@ import {
   type PartyCommitment,
   type PolicyVersion,
   type Principal,
+  type Restriction,
   type StaffRole,
 } from '@sportspark/contracts';
 import { json, type BookingsTable, type Db } from '@sportspark/db';
@@ -44,7 +46,13 @@ import {
   type OfferingSnapshot,
   type PolicyPort,
 } from '../../catalog';
-import { ASSET_DIRECTORY_PORT, type AssetDirectoryPort } from '../../facilities';
+import {
+  ASSET_DIRECTORY_PORT,
+  OPERATING_STATUS_PORT,
+  type AssetDirectoryEntry,
+  type AssetDirectoryPort,
+  type OperatingStatusPort,
+} from '../../facilities';
 import type { PersonSummary } from '../../identity';
 import {
   AVAILABILITY_PORT,
@@ -77,6 +85,7 @@ import {
   organizationOf,
   registrantSnapshot,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { BookingMachine, type BookingEvent } from '../enrollment.state-machines';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
@@ -122,6 +131,37 @@ interface BookingPlan {
 }
 
 const SOURCE_TYPE = 'enrollment.booking';
+/** The far end of the window asked for when every active restriction of a facility is needed. */
+const OPEN_END = '9999-12-31T00:00:00.000Z';
+
+/** What facilities says now about the assets a booking commits (SPK-COND-003, SPK-FAC-003). */
+interface EquipmentFacts {
+  described: Map<string, AssetDirectoryEntry>;
+  /** The facility's active restrictions that name one of the assets. */
+  restrictions: Restriction[];
+}
+
+/**
+ * One reason an asset cannot serve a booking's occurrences: an active restriction (its id), or the
+ * asset's own state (`unknown`, `other_facility`, `out_of_service`, `retired`, or `restricted`
+ * with no restriction naming it).
+ */
+type EquipmentCause = { assetId: string; occurrences: Array<{ start: Date; end: Date }> } & (
+  | { restrictionId: string; state: null; restriction: Restriction }
+  | { restrictionId: null; state: string; restriction: null }
+);
+
+/** The booking states whose equipment is still to be used (re-checked by the lifecycle job). */
+const EQUIPMENT_LIVE: ReadonlyArray<BookingRow['status']> = ['held', 'awaiting_staff', 'confirmed'];
+const EQUIPMENT_UNAVAILABLE = 'enrollment.booking_equipment_unavailable';
+/** The resolution the lifecycle job records when the cause is gone (not a person's decision). */
+const EQUIPMENT_USABLE_AGAIN = 'equipment_usable_again';
+
+function equipmentKey(bookingId: string, cause: EquipmentCause): string {
+  return cause.restrictionId
+    ? `booking_equipment_unavailable:${bookingId}:restriction:${cause.restrictionId}`
+    : `booking_equipment_unavailable:${bookingId}:asset:${cause.assetId}:${cause.state}`;
+}
 
 function capabilityOf(kind: BookingKind): CapabilityId {
   return kind === 'rental' ? 'rentals' : 'parties';
@@ -170,6 +210,7 @@ export class BookingsService implements BookingQueryPort {
     @Inject(WORKFORCE_STAFFING_PORT) private readonly staffing: WorkforceStaffingPort,
     @Inject(ASSIGNMENT_COVERAGE_PORT) private readonly coverage: AssignmentCoveragePort,
     @Inject(ASSET_DIRECTORY_PORT) private readonly assets: AssetDirectoryPort,
+    @Inject(OPERATING_STATUS_PORT) private readonly operatingStatus: OperatingStatusPort,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
@@ -342,11 +383,13 @@ export class BookingsService implements BookingQueryPort {
       throw errors.validation('The recurrence has no occurrence.', { path: 'recurrence' });
     }
     if (equipmentAssetIds.length > 0) {
-      const described = await this.assets.describe(organizationId, equipmentAssetIds, trx);
-      const unusable = equipmentAssetIds.filter((id) => {
-        const asset = described.get(id);
-        return !asset || !asset.usable || asset.facilityId !== snapshot.offering.facilityId;
-      });
+      const unusable = await this.unusableEquipment(
+        trx,
+        organizationId,
+        snapshot.offering.facilityId,
+        equipmentAssetIds,
+        occurrences,
+      );
       if (unusable.length > 0) {
         throw errors.resourceConflict('Equipment this booking needs is not available.', {
           code: 'EQUIPMENT_UNAVAILABLE',
@@ -370,6 +413,128 @@ export class BookingsService implements BookingQueryPort {
     };
   }
 
+  /**
+   * The equipment the booking cannot use at its occurrences (SPK-COND-003, SPK-FAC-003,
+   * SPK-FAC-004; R4-MODULE-BOUNDARIES-02). ASSET_DIRECTORY_PORT answers for the clock instant:
+   * its `usable` (and the asset's `restricted` status) is set when a restriction is approved,
+   * whatever the restriction's window, so it cannot decide an occurrence weeks away. The asset's
+   * status rules out what is retired, out of service, unknown or at another facility; the
+   * restrictions themselves (OPERATING_STATUS_PORT, active restrictions of the facility naming the
+   * asset) decide the occurrences:
+   *
+   * - a restriction blocks every occurrence that overlaps its window;
+   * - one whose window has already ended without an authorized release keeps the asset out of
+   *   service (SPK-FAC-004), so it blocks every occurrence after its start;
+   * - an asset in `restricted` that no active restriction names was restricted without a window
+   *   and stays unusable until it is returned to service.
+   *
+   * A restriction whose window lies entirely before or after the occurrences no longer refuses the
+   * booking (a preventive schedule's future windows refused every date before). A booking accepted
+   * this way is re-checked by the lifecycle job (`recheckEquipment`) once facilities says otherwise.
+   */
+  private async unusableEquipment(
+    trx: Trx,
+    organizationId: string,
+    facilityId: string,
+    assetIds: string[],
+    occurrences: Array<{ start: Date; end: Date }>,
+  ): Promise<string[]> {
+    const facts = await this.equipmentFacts(trx, organizationId, facilityId, assetIds);
+    const blocked = new Set(
+      this.equipmentCauses(
+        facts,
+        facilityId,
+        assetIds,
+        occurrences,
+        this.clock.now().getTime(),
+      ).map((c) => c.assetId),
+    );
+    return assetIds.filter((id) => blocked.has(id));
+  }
+
+  /** The assets as facilities describes them and the active restrictions naming them. */
+  private async equipmentFacts(
+    trx: Trx,
+    organizationId: string,
+    facilityId: string,
+    assetIds: readonly string[],
+  ): Promise<EquipmentFacts> {
+    const described = await this.assets.describe(organizationId, assetIds, trx);
+    const candidates = new Set(
+      assetIds.filter((id) => {
+        const asset = described.get(id);
+        return (
+          !!asset &&
+          asset.facilityId === facilityId &&
+          (asset.status === 'in_service' || asset.status === 'restricted')
+        );
+      }),
+    );
+    if (candidates.size === 0) return { described, restrictions: [] };
+    const restrictions = (
+      await this.operatingStatus.activeRestrictions(this.system(organizationId), facilityId, {
+        start: new Date(0).toISOString(),
+        end: OPEN_END,
+      })
+    ).filter((r) => r.assetId !== null && candidates.has(r.assetId));
+    return { described, restrictions };
+  }
+
+  /** Why each asset cannot serve the occurrences (the rules of `unusableEquipment`), at `now`. */
+  private equipmentCauses(
+    facts: EquipmentFacts,
+    facilityId: string,
+    assetIds: readonly string[],
+    occurrences: ReadonlyArray<{ start: Date; end: Date }>,
+    now: number,
+  ): EquipmentCause[] {
+    const causes: EquipmentCause[] = [];
+    const ownState = (assetId: string, state: string): EquipmentCause => ({
+      assetId,
+      occurrences: [...occurrences],
+      restrictionId: null,
+      state,
+      restriction: null,
+    });
+    for (const assetId of new Set(assetIds)) {
+      const asset = facts.described.get(assetId);
+      if (!asset) {
+        causes.push(ownState(assetId, 'unknown'));
+        continue;
+      }
+      if (asset.facilityId !== facilityId) {
+        causes.push(ownState(assetId, 'other_facility'));
+        continue;
+      }
+      if (asset.status !== 'in_service' && asset.status !== 'restricted') {
+        causes.push(ownState(assetId, asset.status));
+        continue;
+      }
+      const own = facts.restrictions.filter((r) => r.assetId === assetId);
+      if (own.length === 0) {
+        if (asset.status === 'restricted') causes.push(ownState(assetId, 'restricted'));
+        continue;
+      }
+      for (const restriction of own) {
+        const from = Date.parse(restriction.interval.start);
+        const to = Date.parse(restriction.interval.end);
+        const met = occurrences.filter(
+          (o) => from < o.end.getTime() && (to <= now || o.start.getTime() < to),
+        );
+        if (met.length > 0) {
+          causes.push({
+            assetId,
+            occurrences: met,
+            restrictionId: restriction.id,
+            state: null,
+            restriction,
+          });
+        }
+      }
+    }
+    return causes;
+  }
+
   private assertBookable(result: EligibilityResult, personId: string): void {
     if (!result.eligible) {
       throw errors.eligibility('The booker is not eligible for this offering.', {
@@ -391,24 +556,32 @@ export class BookingsService implements BookingQueryPort {
     return kind === 'rental' ? ('rental_request' as const) : ('party_request' as const);
   }
 
-  /** Read-only conflict detection for request mode: every resource free at every occurrence. */
+  /**
+   * Read-only conflict detection for request mode: every resource free at every occurrence.
+   *
+   * R4-MODULE-BOUNDARIES-01 (DEC-029/POL-005, SPK-SCHED-003): the port is asked about the
+   * occurrence itself. AVAILABILITY_PORT answers scheduled intervals (buffers excluded) and adds the
+   * setup and cleanup buffers outside the window it is given, the way `bookingAvailability` calls
+   * it; its candidate starts lie on the facility's step grid from the window start, so a window
+   * widened by the buffers missed the occurrence start whenever setup was not a multiple of the
+   * step. With the window equal to the occurrence the only candidate is the occurrence itself,
+   * whatever the step, and its elapsed length is the duration asked for.
+   */
   private async conflictsOf(
     organizationId: string,
     plan: BookingPlan,
   ): Promise<Array<{ occurrenceStart: string; resourceId: string }>> {
     const system = this.system(organizationId);
     const conflicts: Array<{ occurrenceStart: string; resourceId: string }> = [];
-    const setup = plan.content.setupMinutes ?? 0;
-    const cleanup = plan.content.cleanupMinutes ?? 0;
     for (const occurrence of plan.occurrences) {
+      const elapsedMinutes = Math.round(
+        (occurrence.end.getTime() - occurrence.start.getTime()) / 60_000,
+      );
       for (const resourceId of plan.resourceIds) {
         const free = await this.availability.findAvailableSlots(system, {
           resourceId,
-          interval: {
-            start: new Date(occurrence.start.getTime() - setup * 60_000).toISOString(),
-            end: new Date(occurrence.end.getTime() + cleanup * 60_000).toISOString(),
-          },
-          durationMinutes: plan.durationMinutes,
+          interval: { start: occurrence.start.toISOString(), end: occurrence.end.toISOString() },
+          durationMinutes: elapsedMinutes,
           setupMinutes: plan.content.setupMinutes,
           cleanupMinutes: plan.content.cleanupMinutes,
         });
@@ -578,12 +751,19 @@ export class BookingsService implements BookingQueryPort {
       const bookerId = input.bookerPersonId ?? principal.personId;
       if (!bookerId) throw errors.validation('bookerPersonId is required.');
       const booker = await this.evaluator.participant(trx, organizationId, bookerId);
-      await this.authorization.require(principal, EnrollmentActions.requestBooking, {
-        type: 'booking',
-        organizationId,
-        facilityId: snapshot.offering.facilityId,
-        subjectPersonIds: [booker.id],
-      });
+      // R4-PRIVACY-03 (§4.10): another household's booker reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.requestBooking,
+        {
+          type: 'booking',
+          organizationId,
+          facilityId: snapshot.offering.facilityId,
+          subjectPersonIds: [booker.id],
+        },
+        [booker.id],
+      );
       // DEC-016, DEC-076, DEC-077: a new rental or party needs its switch.
       await this.capabilities.require(organizationId, capabilityOf(kind), trx);
       // R3-TRACE-A-02 (SPK-REG-009): staff-assisted only on a staff role at the facility; a staff
@@ -1072,6 +1252,10 @@ export class BookingsService implements BookingQueryPort {
   }
 
   private async changed(trx: Trx, row: BookingRow, correlationId: string | null): Promise<void> {
+    if (BookingMachine.isTerminal(row.status) && row.equipment_asset_ids.length > 0) {
+      // Every status change passes here: an ended booking no longer waits for its equipment.
+      await this.settle(trx, row.organization_id, EQUIPMENT_UNAVAILABLE, row.id, row.status);
+    }
     const covered = row.status === 'held' ? await this.covered(trx, row) : null;
     await this.outbox.enqueue(trx, EnrollmentPackageGEvents.bookingChanged, {
       organizationId: row.organization_id,
@@ -1379,6 +1563,186 @@ export class BookingsService implements BookingQueryPort {
       return true;
     }
     return false;
+  }
+
+  /**
+   * The facilities that hold a live booking (held, awaiting staff or confirmed) committing
+   * equipment and not yet ended: the work list of the equipment re-check.
+   */
+  async equipmentFacilities(
+    now: Date,
+  ): Promise<Array<{ organization_id: string; facility_id: string }>> {
+    return this.db
+      .selectFrom('bookings')
+      .select(['organization_id', 'facility_id'])
+      .distinct()
+      .where('status', 'in', [...EQUIPMENT_LIVE])
+      .where('last_end', '>', now)
+      .where(sql<boolean>`cardinality(equipment_asset_ids) > 0`)
+      .orderBy('organization_id')
+      .orderBy('facility_id')
+      .execute();
+  }
+
+  /**
+   * Equipment re-check of one facility's live bookings (job `enrollment.booking_lifecycle`;
+   * SPK-COND-003 "equipment reserved with the booking", SPK-FAC-003, SPK-FAC-004). A booking is
+   * accepted for the equipment as facilities describes it then; afterwards a restriction can be
+   * approved whose window meets one of its occurrences, a restriction's window can pass without an
+   * authorized release (the asset stays out of service until it is released, so a booking accepted
+   * for a date after that window now meets it), or the asset can be taken out of service or
+   * retired. The booking keeps its reservation either way (what happens to it is the scheduler's
+   * call), but each cause raises `enrollment.booking_equipment_unavailable` (owner `scheduler`)
+   * once, decided by the rules of `unusableEquipment` for the occurrences that have not ended.
+   * When the cause is gone (the restriction released, the asset back in service) the job settles
+   * the exception itself; one a person resolved is not raised again for the same cause. An ended
+   * booking's exceptions are settled by its own status change (`changed`). Returns how many
+   * exceptions were raised or settled.
+   */
+  async recheckEquipment(trx: Trx, organizationId: string, facilityId: string): Promise<number> {
+    const now = this.clock.now();
+    const rows = await trx
+      .selectFrom('bookings')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('facility_id', '=', facilityId)
+      .where('status', 'in', [...EQUIPMENT_LIVE])
+      .where('last_end', '>', now)
+      .where(sql<boolean>`cardinality(equipment_asset_ids) > 0`)
+      .orderBy('first_start')
+      .orderBy('id')
+      .execute();
+    const open = new Map<string, Array<{ id: string; dedupe_key: string | null }>>();
+    let cursor: string | undefined;
+    do {
+      const page = await this.exceptions.list(
+        organizationId,
+        {
+          category: EQUIPMENT_UNAVAILABLE,
+          facilityId,
+          affectedType: 'booking',
+          statuses: ['open', 'acknowledged'],
+          limit: 200,
+          cursor,
+        },
+        trx,
+      );
+      for (const item of page.items) {
+        const list = open.get(item.affected_id ?? '') ?? [];
+        list.push(item);
+        open.set(item.affected_id ?? '', list);
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    const system = this.system(organizationId);
+    let changed = 0;
+    const settleAll = async (
+      items: Array<{ id: string }>,
+      reason: string,
+      outcome: string,
+    ): Promise<void> => {
+      for (const item of items) {
+        try {
+          await this.exceptions.transition(trx, system, item.id, 'resolved', {
+            reason,
+            resolution: { outcome },
+          });
+          changed += 1;
+        } catch (error) {
+          // a person settled it since it was listed: nothing left to do
+          if (!(DomainError.is(error) && error.code === 'INVALID_TRANSITION')) throw error;
+        }
+      }
+    };
+    const facts =
+      rows.length > 0
+        ? await this.equipmentFacts(trx, organizationId, facilityId, [
+            ...new Set(rows.flatMap((r) => r.equipment_asset_ids)),
+          ])
+        : null;
+    const live = new Set<string>();
+    for (const row of rows) {
+      live.add(row.id);
+      const ahead = (row.occurrences as unknown as StoredOccurrence[])
+        .filter((o) => Date.parse(o.end) > now.getTime())
+        .map((o) => ({ start: new Date(o.start), end: new Date(o.end) }));
+      const causes = new Map(
+        this.equipmentCauses(facts!, facilityId, row.equipment_asset_ids, ahead, now.getTime()).map(
+          (c) => [equipmentKey(row.id, c), c] as const,
+        ),
+      );
+      const current = open.get(row.id) ?? [];
+      await settleAll(
+        current.filter((e) => !causes.has(e.dedupe_key ?? '')),
+        'The equipment can serve the booking again.',
+        EQUIPMENT_USABLE_AGAIN,
+      );
+      const flagged = new Set(current.map((e) => e.dedupe_key));
+      const missing = [...causes].filter(([key]) => !flagged.has(key));
+      if (missing.length === 0) continue;
+      // A cause a person already resolved or closed is theirs; one the job settled because the
+      // cause was gone is raised again when the cause returns.
+      const handled = new Set(
+        (
+          await this.exceptions.list(
+            organizationId,
+            {
+              category: EQUIPMENT_UNAVAILABLE,
+              affectedType: 'booking',
+              affectedId: row.id,
+              statuses: ['resolved', 'closed'],
+              limit: 200,
+            },
+            trx,
+          )
+        ).items
+          .filter(
+            (e) =>
+              (e.resolution as { outcome?: string } | null)?.outcome !== EQUIPMENT_USABLE_AGAIN,
+          )
+          .map((e) => e.dedupe_key),
+      );
+      const raise = missing.filter(([key]) => !handled.has(key));
+      if (raise.length === 0) continue;
+      // Raised only while the booking is still live: one that ended since it was read settles its
+      // own exceptions, and the lock keeps that change from passing this one.
+      const locked = await this.load(trx, organizationId, row.id, true);
+      if (!locked || !EQUIPMENT_LIVE.includes(locked.status)) continue;
+      for (const [dedupeKey, cause] of raise) {
+        const restriction = cause.restriction;
+        await this.exceptions.raise(trx, {
+          organizationId,
+          facilityId,
+          category: EQUIPMENT_UNAVAILABLE,
+          severity: 'high',
+          title: `Equipment a ${row.kind} needs cannot be used`,
+          affectedType: 'booking',
+          affectedId: row.id,
+          ownerQueue: 'scheduler',
+          deadlineAt: cause.occurrences[0]?.start ?? null,
+          dedupeKey,
+          details: {
+            bookingId: row.id,
+            assetId: cause.assetId,
+            restrictionId: cause.restrictionId,
+            assetState: cause.state,
+            restrictionInterval: restriction?.interval ?? null,
+            restrictionElapsedUnreleased: restriction
+              ? Date.parse(restriction.interval.end) <= now.getTime()
+              : null,
+            affectedOccurrenceStarts: cause.occurrences.map((o) => o.start.toISOString()),
+          },
+        });
+        changed += 1;
+      }
+    }
+    // An open exception whose booking is no longer live and ahead (ended, or past its last end).
+    for (const [bookingId, items] of open) {
+      if (!live.has(bookingId)) {
+        await settleAll(items, 'The booking no longer awaits its equipment.', 'booking_ended');
+      }
+    }
+    return changed;
   }
 
   // -------------------------------------------------------------------------------------------

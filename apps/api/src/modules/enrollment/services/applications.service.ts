@@ -47,6 +47,7 @@ import {
   resolveCustomerPayer,
   toApplication,
   type Reader,
+  requireOverNamedPersons,
 } from '../enrollment.shared';
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
@@ -221,12 +222,14 @@ export class ApplicationsService {
         input.participantPersonId,
       );
       const facilityId = await this.scope.facilityOf(organizationId, input.offeringId, trx);
-      await this.authorization.require(principal, EnrollmentActions.apply, {
-        type: 'application',
-        organizationId,
-        facilityId,
-        subjectPersonIds: [person.id],
-      });
+      // R4-PRIVACY-03 (§4.10): another household's participant reads as not found.
+      await requireOverNamedPersons(
+        this.authorization,
+        principal,
+        EnrollmentActions.apply,
+        { type: 'application', organizationId, facilityId, subjectPersonIds: [person.id] },
+        [person.id],
+      );
       const staff = await this.scope.actsAsStaff(
         principal,
         EnrollmentActions.apply,

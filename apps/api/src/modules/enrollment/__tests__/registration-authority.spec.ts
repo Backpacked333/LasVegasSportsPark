@@ -1,3 +1,4 @@
+import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import { createOfferingSessionFixture, createProgramFixture } from '../../catalog';
@@ -87,9 +88,21 @@ describe('registration authority: owner, payer and current participant authority
       ownerPersonId: stranger.personId,
       payerPersonId: stranger.personId,
     });
-    // The same authority POST /baskets requires over the owner's household.
-    expect(foreignOwner.status).toBe(403);
-    expect(foreignOwner.body.code).toBe('PARTICIPANT_AUTHORITY_REQUIRED');
+    // The same authority POST /baskets requires over the owner's household; an adult of another
+    // household reads as an unknown person (R4-PRIVACY-03, §4.10).
+    expect(foreignOwner.status).toBe(404);
+    expect(foreignOwner.body).toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'The requested person was not found.',
+    });
+    const unknownOwner = await post(t, `/v1/waitlist-offers/${offerId}/accept`, guardian.header, {
+      ownerPersonId: newId(),
+    });
+    expect({ status: unknownOwner.status, code: unknownOwner.body.code }).toEqual({
+      status: 404,
+      code: 'NOT_FOUND',
+    });
+    expect(unknownOwner.body.message).toBe(foreignOwner.body.message);
     const foreignPayer = await post(t, `/v1/waitlist-offers/${offerId}/accept`, guardian.header, {
       payerPersonId: stranger.personId,
     });

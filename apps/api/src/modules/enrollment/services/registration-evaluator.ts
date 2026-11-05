@@ -88,7 +88,11 @@ export class RegistrationEvaluator {
     return snapshot;
   }
 
-  /** The participant; merged persons resolve to their survivor so an old id never splits a household's records. */
+  /**
+   * The participant; merged persons resolve to their survivor so an old id never splits a
+   * household's records. An unknown id answers `protectedNotFound('person')`, the answer a caller
+   * gets for another household's person (`requireOverNamedPersons`, R4-PRIVACY-03, §4.10).
+   */
   async participant(
     trx: Trx | undefined,
     organizationId: string,
@@ -96,7 +100,7 @@ export class RegistrationEvaluator {
   ): Promise<PersonSummary> {
     const canonical = await this.persons.resolveCanonicalPersonId(organizationId, personId, trx);
     const person = await this.persons.findPerson(organizationId, canonical, trx);
-    if (!person) throw errors.notFound('person', personId);
+    if (!person) throw errors.protectedNotFound('person');
     return person;
   }
 
