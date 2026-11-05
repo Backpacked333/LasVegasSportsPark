@@ -313,7 +313,47 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
       awayScore: 2,
       cards: [card],
       reason: 'Score sheet showed 2-2.',
+      // R4-LIFECYCLES-REVISIONS-02: the correction names the official revision it starts from
+      correctsRevisionId: ID.result1,
+      expectedRevision: withCards.revision,
     });
+  });
+
+  it('R4-LIFECYCLES-REVISIONS-02 / §4.9: a correction whose official base was replaced meanwhile says so and reloads the results', async () => {
+    const user = userEvent.setup();
+    let resultReads = 0;
+    const app = createTestApp({
+      routes: {
+        ...routes([official]),
+        'GET /fixtures/{id}/results': () => {
+          resultReads += 1;
+          return new Response(JSON.stringify([official]), { status: 200 });
+        },
+        'POST /fixtures/{id}/results': fail(409, 'STALE_REVISION', 'reload_and_retry', {
+          details: {
+            code: 'CORRECTION_BASE_STALE',
+            correctsRevisionId: ID.result1,
+            officialRevisionId: ID.result2,
+          },
+        }),
+      },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    await user.click(await screen.findByRole('button', { name: 'Start a correction' }));
+    const form = screen.getByRole('form', { name: 'Submit a correction' });
+    await user.type(within(form).getByLabelText(/^Reason for the correction/), 'Wrong score.');
+    const readsBefore = resultReads;
+    await user.click(
+      within(form).getByRole('button', { name: 'Submit the correction for review' }),
+    );
+    expect(await screen.findByTestId('correction-base-changed')).toHaveTextContent(
+      /official result changed since this correction was started/,
+    );
+    expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toMatchObject({
+      correctsRevisionId: ID.result1,
+      expectedRevision: official.revision,
+    });
+    await waitFor(() => expect(resultReads).toBeGreaterThan(readsBefore));
   });
 
   it('SPK-RESULT-005: a correction opened from a decided dispute names the dispute it answers', async () => {

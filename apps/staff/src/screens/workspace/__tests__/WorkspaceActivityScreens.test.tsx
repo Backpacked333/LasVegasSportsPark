@@ -235,6 +235,42 @@ describe('SCR-W-05 MatchReportScreen', () => {
     });
   });
 
+  it('R4-LIFECYCLES-REVISIONS-02 / SPK-RESULT-004: once the result is official, no new report is offered; a change is a correction on Results review', async () => {
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': {
+          status: 200,
+          body: [
+            {
+              id: '0192f1a0-0000-7000-8000-0000000005a2',
+              fixtureId: FIXTURE_1,
+              revisionNo: 1,
+              status: 'official',
+              classification: 'completed',
+              homeScore: 2,
+              awayScore: 1,
+              submittedBy: {
+                kind: 'staff',
+                accountId: null,
+                personId: null,
+                actorLabel: 'Referee',
+              },
+              submittedAt: '2026-10-24T12:00:00.000Z',
+            },
+          ],
+        },
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const note = await screen.findByTestId('report-official');
+    expect(note).toHaveTextContent(/result of this match is official/);
+    expect(within(note).getByRole('link', { name: 'Results review' })).toHaveAttribute(
+      'href',
+      `/leagues/fixtures/${FIXTURE_1}/results`,
+    );
+    expect(screen.queryByRole('form', { name: 'Match report' })).not.toBeInTheDocument();
+  });
+
   it('keeps the report offline and disables submitting', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

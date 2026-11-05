@@ -97,6 +97,21 @@ function isShootoutRefusal(error: ApiError | null): boolean {
   );
 }
 
+/**
+ * R4-LIFECYCLES-REVISIONS-02 (§4.9, SPK-RESULT-004): the API refused a correction because the
+ * official result it was drafted from is no longer the official one (a newer correction replaced
+ * it, or its revision moved on), or because it named no base.
+ */
+export function isCorrectionBaseRefusal(error: ApiError | null): boolean {
+  if (!error) return false;
+  const code = (error.details as { code?: unknown } | undefined)?.code;
+  return (
+    (error.code === 'STALE_REVISION' &&
+      (code === 'CORRECTION_BASE_STALE' || code === undefined || code === null)) ||
+    (error.code === 'VALIDATION_FAILED' && code === 'correction_base_required')
+  );
+}
+
 function sideName(fixture: Fixture, entryId: string): string {
   return entryId === fixture.home.entryId
     ? fixture.home.teamName
@@ -358,6 +373,8 @@ function ResultForm({
   const submitResult = useApiCommand('post', '/fixtures/{id}/results', { invalidate: RESULT_KEYS });
   const resubmit = useApiCommand('post', '/results/{id}/submit', { invalidate: RESULT_KEYS });
   const command = mode === 'resubmit' ? resubmit : submitResult;
+  const reloadResults = useRefetch(['/fixtures/{id}/results', '/results/{id}']);
+  const baseChanged = mode === 'correction' && isCorrectionBaseRefusal(command.error);
   const [classification, setClassification] = useState<string>(base?.classification ?? '');
   const [home, setHome] = useState(base?.homeScore !== null && base ? String(base.homeScore) : '');
   const [away, setAway] = useState(base?.awayScore !== null && base ? String(base.awayScore) : '');
@@ -431,6 +448,11 @@ function ResultForm({
       ...(notes.trim() ? { notes: notes.trim() } : {}),
       ...(reason.trim() ? { reason: reason.trim() } : {}),
       ...(answersDispute && disputeId ? { disputeId } : {}),
+      // A correction names the official revision it was drafted from, so the API refuses it once
+      // a newer correction has replaced that one (R4-LIFECYCLES-REVISIONS-02, §4.9).
+      ...(mode === 'correction' && base
+        ? { correctsRevisionId: base.id, expectedRevision: base.revision }
+        : {}),
     };
     const sent =
       mode === 'resubmit' && base
@@ -439,7 +461,12 @@ function ResultForm({
             body: { ...body, expectedRevision: base.revision },
           })
         : submitResult.submit({ path: { id: fixture.id }, body });
-    void sent.then(() => onDone?.()).catch(() => undefined);
+    void sent
+      .then(() => onDone?.())
+      .catch((error: unknown) => {
+        // The official result changed under the form: show the current one to correct again.
+        if (mode === 'correction' && isCorrectionBaseRefusal(error as ApiError)) reloadResults();
+      });
   };
 
   const sides = [
@@ -594,7 +621,15 @@ function ResultForm({
       {command.status === 'success' && command.data ? (
         <SuccessNote>{`Revision ${command.data.revisionNo} ${command.data.status}`}</SuccessNote>
       ) : null}
-      <CommandError error={command.error} onRetry={submit} />
+      {baseChanged ? (
+        <p className="error-text" role="alert" data-testid="correction-base-changed">
+          The official result changed since this correction was started: another correction was
+          published. The results were reloaded; start the correction again from the current official
+          result.
+        </p>
+      ) : (
+        <CommandError error={command.error} onRetry={submit} />
+      )}
     </form>
   );
 }
