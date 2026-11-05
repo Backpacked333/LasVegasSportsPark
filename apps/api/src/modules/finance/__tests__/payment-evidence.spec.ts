@@ -121,6 +121,43 @@ describe('payment evidence: uncertainty, webhooks, reordering and recovery (SPK-
     expect(provider(t).chargeCount()).toBeGreaterThan(0);
   });
 
+  it('R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): the exception of a lost payment outcome is resolved once evidence settles it, by webhook or by reconciliation', async () => {
+    const byWebhook = (await checkout(t, parent, FakePaymentTokens.timeout)).checkout;
+    const webhookPayment = (byWebhook['payment'] as { id: string }).id;
+    const ofAttempt = async (id: string) =>
+      (await openExceptions(t, 'finance.unknown_payment_outcome')).filter(
+        (e) => e.affected_id === id,
+      );
+    expect(await ofAttempt(webhookPayment)).toEqual([
+      expect.objectContaining({ severity: 'critical', status: 'open' }),
+    ]);
+    await deliver(t, provider(t).paymentWebhook(webhookPayment));
+    await processInbox(t);
+    expect(
+      (await t.http.get(`/v1/registration-checkouts/${byWebhook.id}`).set(parent.header)).body
+        .status,
+    ).toBe('completed');
+    const settled = await ofAttempt(webhookPayment);
+    expect(settled).toEqual([expect.objectContaining({ status: 'resolved' })]);
+    expect(settled[0]?.resolution).toMatchObject({
+      from: 'unknown',
+      to: 'succeeded',
+      source: 'webhook',
+    });
+    // A timed-out decline is settled by the reconciliation sweep the same way.
+    const byLookup = (await checkout(t, parent, FakePaymentTokens.timeoutDeclined)).checkout;
+    const lookupPayment = (byLookup['payment'] as { id: string }).id;
+    t.clock.advance(16 * MINUTE);
+    await worker(t).runOnce();
+    await drain(t);
+    expect((await t.http.get(`/v1/payments/${lookupPayment}`).set(parent.header)).body.status).toBe(
+      'failed',
+    );
+    const reconciled = await ofAttempt(lookupPayment);
+    expect(reconciled).toEqual([expect.objectContaining({ status: 'resolved' })]);
+    expect(reconciled[0]?.resolution).toMatchObject({ to: 'failed', source: 'reconciliation' });
+  });
+
   it('§4.11: webhooks are authenticated; a tampered event is refused and records nothing', async () => {
     const { checkout: started } = await checkout(t, parent, FakePaymentTokens.processing);
     const paymentId = (started['payment'] as { id: string }).id;
@@ -1030,7 +1067,7 @@ describe('abandoned payment challenges are canceled at the provider (SPK-PAY-007
     expect(receipts).toHaveLength(1);
   });
 
-  it('SPK-PAY-007 / §4.12: a cancel without an answer keeps the attempt live with one owned exception; the next pass resolves it', async () => {
+  it('SPK-PAY-007 / §4.12, R4-PROVIDER-OUTCOMES-04: a cancel without an answer keeps the attempt live with one owned exception; the next pass resolves the attempt and its exception', async () => {
     const { started, paymentId } = await challenge();
     provider(t).scriptCancels('timeout', 'timeout');
     t.clock.advance(61 * MINUTE);
@@ -1049,6 +1086,14 @@ describe('abandoned payment challenges are canceled at the provider (SPK-PAY-007
     await worker(t).runOnce();
     const canceled = await t.http.get(`/v1/payments/${paymentId}`).set(parent.header);
     expect(canceled.body.status).toBe('canceled');
+    // R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): the answered cancel settles its exception.
+    const settled = await openExceptions(t, 'finance.payment_action_abandoned');
+    expect(settled.filter((e) => e.affected_id === paymentId)).toEqual([
+      expect.objectContaining({
+        status: 'resolved',
+        resolution: expect.objectContaining({ from: 'action_required', to: 'canceled' }),
+      }),
+    ]);
     t.clock.advance(5 * MINUTE);
     await drain(t);
     const aborted = await t.http.get(`/v1/registration-checkouts/${started.id}`).set(parent.header);

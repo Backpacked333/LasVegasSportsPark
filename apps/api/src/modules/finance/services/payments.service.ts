@@ -47,6 +47,7 @@ import {
   organizationOf,
   outcomeUnknownDetails,
   refundableAvailableMinor,
+  resolveSettledExceptions,
   toPaymentAttempt,
   type PaymentAttemptRow,
   type Reader,
@@ -603,6 +604,33 @@ export class PaymentsService {
         inboxEventId: evidence.inboxEventId ?? null,
       },
     });
+    // R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): evidence settled what the open exception
+    // said was unresolved: a lost outcome once the attempt leaves `unknown`, an abandoned
+    // challenge once it leaves `action_required`.
+    const settled = [
+      ...(attempt.status === 'unknown' ? ['finance.unknown_payment_outcome'] : []),
+      ...(attempt.status === 'action_required' || attempt.status === 'unknown'
+        ? ['finance.payment_action_abandoned']
+        : []),
+    ];
+    if (settled.length > 0) {
+      await resolveSettledExceptions(this.exceptions, trx, {
+        organizationId,
+        categories: settled,
+        affectedType: 'payment_attempt',
+        affectedId: attemptId,
+        actorLabel: `finance.evidence.${evidence.source}`,
+        reason: `The payment is now ${next} (${evidence.source}).`,
+        resolution: {
+          paymentAttemptId: attemptId,
+          from: attempt.status,
+          to: next,
+          source: evidence.source,
+          inboxEventId: evidence.inboxEventId ?? null,
+        },
+        correlationId,
+      });
+    }
     let receipt: ReceiptRow | null = null;
     let overpaymentCreditId: string | null = null;
     if (next === 'succeeded') {

@@ -280,7 +280,13 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
   the provider holding it in `requires_action` an hour after submission, it asks the provider to
   cancel it and applies the answer (canceled, or a capture that won the race), and the checkout,
   holds and payer are released (`__tests__/payment-evidence.spec.ts`; the fake's
-  `timeoutRequiresAction` token reproduces it).
+  `timeoutRequiresAction` token reproduces it). Once evidence settles such an outcome its
+  exception is resolved in the same transaction by the finance system actor, with the evidence as
+  resolution (R4-PROVIDER-OUTCOMES-04, §5.11): `finance.unknown_payment_outcome` when the attempt
+  leaves `unknown`, `finance.payment_action_abandoned` when it leaves `action_required` (or
+  `unknown`), `finance.unknown_refund_outcome` when a refund leaves `unknown`; the finance
+  operator's queue keeps only outcomes still unresolved. Conflict exceptions
+  (`*_evidence_conflict`) stay open for review.
 - **Webhooks (§4.11):** authenticated, recorded once in the inbox, applied through the state
   machine: duplicates do nothing, an older non-terminal event never moves a resolved attempt back,
   and a contradiction raises `finance.payment_evidence_conflict` without changing the recorded
@@ -613,7 +619,8 @@ outcome recording and reconciliation are never gated.
   the same key when the connection has no record; it renews its lease (`renewJobLease`, K-06)
   before each connection call and asks about nothing more once another runner holds the job
   (ASYNC-06). Exceptions:
-  `finance.accounting_export_unknown`, `_rejected`, `_conflict`. Every batch transition is
+  `finance.accounting_export_unknown` (resolved by the finance system actor when the answer
+  arrives, R4-PROVIDER-OUTCOMES-04), `_rejected`, `_conflict`. Every batch transition is
   audited, the move to `unknown` included (`finance.accounting_batch_unknown` with the error).
 - `ACCOUNTING_EXPORT_PORT` has only `FakeAccountingProvider` (success, rejection, timeout/unknown,
   duplicate submission), refused in production; registered as integration

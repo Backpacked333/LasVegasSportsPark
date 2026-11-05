@@ -47,7 +47,13 @@ import type {
   SettlementReconciliationsTable,
 } from '@sportspark/db';
 import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
-import type { ActionDefinition, AuthorizationService, RequestWithContext, Trx } from '../../kernel';
+import type {
+  ActionDefinition,
+  AuthorizationService,
+  OperationalExceptions,
+  RequestWithContext,
+  Trx,
+} from '../../kernel';
 import { FinanceActions } from './finance.actions';
 
 export type Reader = Db | Trx;
@@ -101,6 +107,60 @@ export async function staffAuthority(
     facilityId: target.facilityId ?? null,
   });
   return decision.allowed;
+}
+
+/**
+ * R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11, SPK-UX-006): once provider evidence settles a lost
+ * or stalled outcome (a payment or refund gone `unknown`, an abandoned challenge, an accounting
+ * batch without an answer), the exception that told the finance operator it was unresolved is
+ * resolved in the same transaction, by the finance system actor with the evidence named as the
+ * resolution, so the queue and Today's financial exceptions list only what is still unresolved.
+ * Matched by category and the affected record; nothing open, nothing done. Returns how many were
+ * resolved.
+ */
+export async function resolveSettledExceptions(
+  exceptions: Pick<OperationalExceptions, 'list' | 'transition'>,
+  trx: Trx,
+  input: {
+    organizationId: string;
+    categories: readonly string[];
+    affectedType: string;
+    affectedId: string;
+    actorLabel: string;
+    reason: string;
+    resolution: Record<string, unknown>;
+    correlationId?: string | null;
+  },
+): Promise<number> {
+  const actor = financeSystem(input.organizationId, input.actorLabel);
+  let resolved = 0;
+  for (const category of input.categories) {
+    const open = await exceptions.list(
+      input.organizationId,
+      {
+        category,
+        affectedType: input.affectedType,
+        affectedId: input.affectedId,
+        statuses: ['open', 'acknowledged'],
+      },
+      trx,
+    );
+    for (const exception of open.items) {
+      try {
+        await exceptions.transition(trx, actor, exception.id, 'resolved', {
+          reason: input.reason,
+          resolution: input.resolution,
+          correlationId: input.correlationId ?? undefined,
+        });
+        resolved += 1;
+      } catch (error) {
+        // Settled meanwhile by its owner (the transition re-reads it under a lock): nothing to do.
+        if (error instanceof DomainError && error.code === 'INVALID_TRANSITION') continue;
+        throw error;
+      }
+    }
+  }
+  return resolved;
 }
 
 /** The system actor finance uses for follow-up work (timers, webhooks, reconciliation). */

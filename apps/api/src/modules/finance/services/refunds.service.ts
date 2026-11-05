@@ -40,6 +40,7 @@ import {
   minutesFrom,
   netRefundedMinor,
   organizationOf,
+  resolveSettledExceptions,
   toRefund,
   type Reader,
   type RefundRow,
@@ -608,6 +609,25 @@ export class RefundsService {
       .where('id', '=', refundId)
       .where('revision', '=', row.revision)
       .execute();
+    if (row.status === 'unknown') {
+      // R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): the lost outcome is settled.
+      await resolveSettledExceptions(this.exceptions, trx, {
+        organizationId,
+        categories: ['finance.unknown_refund_outcome'],
+        affectedType: 'refund_attempt',
+        affectedId: refundId,
+        actorLabel: `finance.refund.${evidence.source}`,
+        reason: `The refund is now ${target} (${evidence.source}).`,
+        resolution: {
+          refundAttemptId: refundId,
+          from: row.status,
+          to: target,
+          source: evidence.source,
+          inboxEventId: evidence.inboxEventId ?? null,
+        },
+        correlationId,
+      });
+    }
     await this.audit.record(trx, {
       organizationId,
       actor,

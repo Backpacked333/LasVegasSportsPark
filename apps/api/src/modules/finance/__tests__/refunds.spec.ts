@@ -172,6 +172,50 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
     expect(postings).toHaveLength(1);
   });
 
+  it('R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): the exception of a lost refund outcome is resolved once evidence settles it', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 10_000,
+    });
+    provider(t).scriptRefunds('timeout');
+    const uncertain = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 2_500,
+      reason: 'Refund whose answer is lost',
+    });
+    expect(uncertain.body.status).toBe('unknown');
+    const refundId = uncertain.body.id as string;
+    const ofRefund = () =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .select(['id', 'status', 'resolution'])
+        .where('category', '=', 'finance.unknown_refund_outcome')
+        .where('affected_id', '=', refundId)
+        .execute();
+    expect(await ofRefund()).toEqual([expect.objectContaining({ status: 'open' })]);
+    await deliver(t, provider(t).refundWebhook(refundId));
+    await processInbox(t);
+    const settled = await ofRefund();
+    expect(settled).toEqual([expect.objectContaining({ status: 'resolved' })]);
+    expect(settled[0]?.resolution).toMatchObject({
+      from: 'unknown',
+      to: 'succeeded',
+      source: 'webhook',
+    });
+    // The resolution is audited under the finance system actor.
+    const trail = await t.db
+      .selectFrom('audit_records')
+      .select(['action', 'actor'])
+      .where('target_type', '=', 'operational_exception')
+      .where('target_id', '=', settled[0]?.id as string)
+      .execute();
+    expect(trail).toEqual([
+      expect.objectContaining({
+        action: 'exceptions.resolved',
+        actor: expect.objectContaining({ kind: 'system' }),
+      }),
+    ]);
+  });
+
   it('§4.11 step 6, SPK-PAY-001 (MONEY-09): refund evidence naming another amount or currency changes nothing and is put in front of finance', async () => {
     const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
       payerPersonId: payer.personId,

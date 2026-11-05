@@ -304,7 +304,7 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     expect(accepted.body.status).toBe('accepted');
   });
 
-  it('§4.11, §4.12, §4.4 (COMMANDS-05): a lost answer is unknown and audited, and the job reconciles it without a second batch', async () => {
+  it('§4.11, §4.12, §4.4 (COMMANDS-05), R4-PROVIDER-OUTCOMES-04: a lost answer is unknown and audited, and the job reconciles it without a second batch and resolves its exception', async () => {
     // The connection kept the batch but its answer was lost.
     const kept = await prepared((await dayWithEntries(2_000)).period);
     fake.scriptSubmissions('timeout_accepted');
@@ -343,6 +343,20 @@ describe('accounting export (FIN-07; §3.16 Accounting, SPK-PAY-010/011, DEC-016
     const keys = fake.submissions.map((s) => s.idempotencyKey);
     const lostKey = fake.submissions.find((s) => s.batchId === lost.id)?.idempotencyKey;
     expect(keys.filter((k) => k === lostKey)).toHaveLength(2);
+    // R4-PROVIDER-OUTCOMES-04 (§4.11 rule 4, §5.11): the answers settle the batches' exceptions.
+    const exceptions = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['affected_id', 'status', 'resolution'])
+      .where('category', '=', 'finance.accounting_export_unknown')
+      .where('affected_id', 'in', [kept.id, lost.id])
+      .execute();
+    expect(exceptions).toHaveLength(2);
+    for (const exception of exceptions) {
+      expect(exception).toMatchObject({
+        status: 'resolved',
+        resolution: { from: 'unknown', to: 'accepted' },
+      });
+    }
   });
 
   it('§4.12: a batch left submitted by a stopped process is asked about once it is stale, never before', async () => {
