@@ -7,11 +7,12 @@ import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { onlineManager } from '@tanstack/react-query';
 import { act, renderHook, render, screen, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Text } from 'react-native';
+import { AccessibilityInfo, Pressable, Text } from 'react-native';
 import { UpdateGate } from '../../navigation/UpdateGate';
 import { AppProviders, MUTATION_DEFAULTS, createQueryClient } from '../../providers/AppProviders';
 import { createTestApp } from '../../testing/test-app';
 import { InboxScreen } from '../../screens/inbox/InboxScreen';
+import { UPDATE_REQUIRED_ANNOUNCEMENT } from '../../screens/update-required/UpdateRequiredScreen';
 import { useApiCommand } from '../useApiCommand';
 import { useApiQuery } from '../useApiQuery';
 
@@ -269,5 +270,69 @@ describe('session expiry and update required', () => {
     expect(
       screen.getByText(/You have version 0\.1\.0; version 0\.3\.0 or later is required/),
     ).toBeOnTheScreen();
+  });
+
+  it('SPK-UX-009 (R4-CLIENTS-A11Y-COPY-04): the covered app is hidden from TalkBack and VoiceOver, and "Update required" is announced', async () => {
+    let answer = 200;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () =>
+          answer === 426
+            ? fakeResponse(
+                426,
+                apiErrorBody('CLIENT_UPDATE_REQUIRED', {
+                  nextAction: 'update_app',
+                  details: { minimumVersion: '0.3.0' },
+                }),
+              )
+            : fakeResponse(200, { person: null }),
+      },
+    });
+    const pay = jest.fn();
+    function Content() {
+      const me = useApiQuery({ path: '/me' });
+      return (
+        <Pressable accessibilityRole="button" accessibilityLabel="Pay" onPress={pay}>
+          <Text>{me.status}</Text>
+        </Pressable>
+      );
+    }
+    render(
+      <UpdateGate>
+        <Content />
+      </UpdateGate>,
+      { wrapper: app.wrapper },
+    );
+    // Before: the app is in the accessibility tree as usual.
+    expect(await screen.findByRole('button', { name: 'Pay' })).toBeOnTheScreen();
+    expect(screen.getByTestId('update-gate-content')).toHaveProp(
+      'importantForAccessibility',
+      'auto',
+    );
+    expect(screen.getByTestId('update-gate-content')).toHaveProp(
+      'accessibilityElementsHidden',
+      false,
+    );
+    answer = 426;
+    await act(async () => {
+      await app.queryClient.refetchQueries({ queryKey: ['api', '/me'] });
+    });
+    const overlay = await screen.findByTestId('update-required');
+    // The app underneath stays mounted but is removed from the accessibility tree on both
+    // platforms: a screen reader can no longer reach or activate its controls.
+    const content = screen.getByTestId('update-gate-content', { includeHiddenElements: true });
+    expect(content).toHaveProp('importantForAccessibility', 'no-hide-descendants');
+    expect(content).toHaveProp('accessibilityElementsHidden', true);
+    expect(screen.queryByRole('button', { name: 'Pay' })).toBeNull();
+    // The update screen is a live region (TalkBack) and is announced to VoiceOver.
+    expect(overlay).toHaveProp('accessibilityLiveRegion', 'polite');
+    expect(overlay).toHaveProp('accessibilityViewIsModal', true);
+    expect(UPDATE_REQUIRED_ANNOUNCEMENT).toBe(
+      "Update required. This version of the app is no longer supported. Update the app from your device's app store.",
+    );
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      UPDATE_REQUIRED_ANNOUNCEMENT,
+      { queue: true },
+    );
   });
 });

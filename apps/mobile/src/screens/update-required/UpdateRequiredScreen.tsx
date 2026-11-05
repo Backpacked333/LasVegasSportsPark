@@ -3,11 +3,23 @@
  * this build is below the minimum supported version. The answer itself (CLIENT_UPDATE_REQUIRED,
  * HTTP 426) is proposed in DEC-092, and the minimum version and update behaviour are DEC-061
  * (Technical lead/operator); the store links depend on store accounts that do not exist yet.
+ *
+ * It is announced to screen readers when it appears, like every other state view (`ui/announce`:
+ * a live region on Android, an announcement on iOS; SPK-UX-009, NA-A01), and the app it covers is
+ * hidden from them while it shows (`navigation/UpdateGate`).
  */
 import type { UpdateRequiredError } from '@sportspark/api-client';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
+
+/** What a screen reader hears when the update screen appears, with the next action. */
+export const UPDATE_REQUIRED_ANNOUNCEMENT = sentences(
+  'Update required',
+  'This version of the app is no longer supported',
+  "Update the app from your device's app store",
+);
 
 export function UpdateRequiredScreen({
   error,
@@ -17,7 +29,13 @@ export function UpdateRequiredScreen({
   appVersion: string;
 }) {
   return (
-    <View style={styles.overlay} accessibilityViewIsModal testID="update-required">
+    <LiveRegion
+      style={styles.overlay}
+      accessibilityViewIsModal
+      announcement={UPDATE_REQUIRED_ANNOUNCEMENT}
+      occurrence={error}
+      testID="update-required"
+    >
       <StatusBadge tone="danger" label="Update required" />
       <Text style={styles.title} accessibilityRole="header">
         This version of the app is no longer supported
@@ -32,7 +50,7 @@ export function UpdateRequiredScreen({
           Reference: {error.correlationId}
         </Text>
       ) : null}
-    </View>
+    </LiveRegion>
   );
 }
 
