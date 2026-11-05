@@ -349,6 +349,9 @@ export class EconomicsReport {
             .where('organization_id', '=', ctx.organizationId)
             .where('order_id', 'in', orderIds)
             .where('status', '=', 'succeeded')
+            // R4-PROVIDER-OUTCOMES-02: a refund the provider reversed by the as-of instant
+            // returned nothing, so it is no adjustment.
+            .where((eb) => eb.or([eb('reversed_at', 'is', null), eb('reversed_at', '>', ctx.asOf)]))
             .where('resolved_at', '>=', spanStart)
             .where('resolved_at', '<', spanEnd)
             .where('resolved_at', '<=', ctx.asOf)

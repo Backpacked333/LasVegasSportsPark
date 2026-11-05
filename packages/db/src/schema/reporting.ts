@@ -596,6 +596,8 @@ export interface ReportingRefundAttemptsView {
   submitted_at: V<Date | null>;
   unknown_since: V<Date | null>;
   resolved_at: V<Date | null>;
+  /** R4-PROVIDER-OUTCOMES-02 (migration 1308): the provider reported a succeeded refund failed. */
+  reversed_at: V<Date | null>;
 }
 
 export interface ReportingReceiptsView {

@@ -676,14 +676,6 @@ outcome recording and reconciliation are never gated.
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
 - Revenue recognition (deferred → earned) is not implemented (DEC-022); the accounting export
   (FIN-07) exports journal entries as booked, behind the `accounting` capability.
-- A refund reversal (R4-PROVIDER-OUTCOMES-02) is netted out by finance's own figures (refundable
-  funds, `refundedMinor`, settlement reconciliation in the period it was reversed, the ledger's
-  `refund_reversed` journal), but the reporting module's read view `reporting_refund_attempts_v`
-  does not expose `reversed_at` yet, so its payment reconciliation report, economics refund
-  adjustments, the retention "fully refunded" exclusion (MET-082) and the point-of-sale money
-  series still count a reversed refund as money returned. For a period with a reversal, finance's
-  reconciliation report is the authoritative figure until reporting reads the reversal (recorded
-  as a reporting follow-up).
 - Refunds go through the provider only; refunding a cash tender is not supported. Returning an
   overpayment by refund (instead of approving the held credit) has no dedicated command.
 - Finalization is all-or-nothing per checkout: one refused line sends the whole checkout to
