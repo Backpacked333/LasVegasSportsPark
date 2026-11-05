@@ -4,9 +4,12 @@
  * HTTP 426) is proposed in DEC-092, and the minimum version and update behaviour are DEC-061
  * (Technical lead/operator); the store links depend on store accounts that do not exist yet.
  *
- * It is announced to screen readers when it appears, like every other state view (`ui/announce`:
- * a live region on Android, an announcement on iOS; SPK-UX-009, NA-A01), and the app it covers is
- * hidden from them while it shows (`navigation/UpdateGate`).
+ * It is announced to screen readers once, when it appears, like every other state view
+ * (`ui/announce`: a live region on Android, an announcement on iOS; SPK-UX-009, NA-A01), and the app
+ * it covers is hidden from them while it shows (`navigation/UpdateGate`). The app underneath keeps
+ * reading while covered, and each read answers 426 again: the words never change, so a later answer
+ * is not announced again, and the providers keep the first answer (its reference with it), so the
+ * Android live region's content does not change either (R4-CLIENTS-A11Y-COPY-04).
  */
 import type { UpdateRequiredError } from '@sportspark/api-client';
 import { StyleSheet, Text } from 'react-native';
@@ -33,7 +36,6 @@ export function UpdateRequiredScreen({
       style={styles.overlay}
       accessibilityViewIsModal
       announcement={UPDATE_REQUIRED_ANNOUNCEMENT}
-      occurrence={error}
       testID="update-required"
     >
       <StatusBadge tone="danger" label="Update required" />

@@ -335,4 +335,47 @@ describe('session expiry and update required', () => {
       { queue: true },
     );
   });
+
+  it('SPK-UX-009 (R4-CLIENTS-A11Y-COPY-04): "Update required" is announced once, however many later reads answer 426', async () => {
+    let reads = 0;
+    const app = createTestApp({
+      routes: {
+        'GET /me': () => {
+          reads += 1;
+          return fakeResponse(
+            426,
+            apiErrorBody('CLIENT_UPDATE_REQUIRED', {
+              nextAction: 'update_app',
+              details: { minimumVersion: '0.3.0' },
+              correlationId: `c-update-${reads}`,
+            }),
+          );
+        },
+      },
+    });
+    function Content() {
+      const me = useApiQuery({ path: '/me' });
+      return <Text>{me.status}</Text>;
+    }
+    render(
+      <UpdateGate>
+        <Content />
+      </UpdateGate>,
+      { wrapper: app.wrapper },
+    );
+    await screen.findByTestId('update-required');
+    // The app under the gate keeps reading (polls, foreground refetches): each answer is a 426.
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        await app.queryClient.refetchQueries({ queryKey: ['api', '/me'] });
+      });
+    }
+    expect(reads).toBeGreaterThanOrEqual(4);
+    const announcements = (
+      AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock
+    ).mock.calls.filter((call) => call[0] === UPDATE_REQUIRED_ANNOUNCEMENT);
+    expect(announcements).toHaveLength(1);
+    // The first answer is kept, so the live region's words (its reference) do not change either.
+    expect(screen.getByText('Reference: c-update-1')).toBeOnTheScreen();
+  });
 });
