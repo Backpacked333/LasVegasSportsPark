@@ -361,8 +361,17 @@ describe('SCR-S-42 RestrictionDetailScreen', () => {
             requiresInspection: true,
             latestInspection: {
               id: 'i-1',
+              taskId: 't-1',
               outcome: 'passed',
+              notes: null,
+              inspector: {
+                kind: 'staff',
+                accountId: null,
+                personId: null,
+                actorLabel: 'Inspector',
+              },
               inspectedAt: '2026-10-24T11:00:00.000Z',
+              createdAt: '2026-10-24T11:00:00.000Z',
             },
           }),
         },
