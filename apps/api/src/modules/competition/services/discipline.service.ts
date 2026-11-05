@@ -1107,13 +1107,13 @@ export class DisciplineService implements SuspensionCheckPort {
         .where('id', '=', id)
         .forUpdate()
         .executeTakeFirst();
-      if (!row) throw errors.notFound('disciplinary_decision', id);
-      await this.authorization.require(principal, MatchActions.manageDiscipline, {
-        type: 'disciplinary_decision',
+      if (!row) throw errors.protectedNotFound('disciplinary_decision');
+      await this.requireManageDiscipline(
+        principal,
+        'disciplinary_decision',
         id,
-        organizationId,
-        subjectPersonIds: [row.subject_person_id],
-      });
+        row.subject_person_id,
+      );
       assertExpectedRevision(input.expectedRevision, row.revision);
       const updated = await this.overturnDecisionRow(
         trx,
@@ -1338,13 +1338,8 @@ export class DisciplineService implements SuspensionCheckPort {
     const organizationId = organizationOf(principal);
     return this.uow.run(async ({ trx }) => {
       const row = await this.loadSuspension(trx, organizationId, id, { forUpdate: true });
-      if (!row) throw errors.notFound('suspension', id);
-      await this.authorization.require(principal, MatchActions.manageDiscipline, {
-        type: 'suspension',
-        id,
-        organizationId,
-        subjectPersonIds: [row.subject_person_id],
-      });
+      if (!row) throw errors.protectedNotFound('suspension');
+      await this.requireManageDiscipline(principal, 'suspension', id, row.subject_person_id);
       assertExpectedRevision(input.expectedRevision, row.revision);
       if (input.action === 'overturn') {
         const updated = await this.overturnSuspensionRow(
@@ -1679,13 +1674,8 @@ export class DisciplineService implements SuspensionCheckPort {
         .where('id', '=', id)
         .forUpdate()
         .executeTakeFirst();
-      if (!row) throw errors.notFound('appeal', id);
-      await this.authorization.require(principal, MatchActions.manageDiscipline, {
-        type: 'appeal',
-        id,
-        organizationId,
-        subjectPersonIds: [row.subject_person_id],
-      });
+      if (!row) throw errors.protectedNotFound('appeal');
+      await this.requireManageDiscipline(principal, 'appeal', id, row.subject_person_id);
       assertExpectedRevision(input.expectedRevision, row.revision);
       const next = AppealMachine.next(row.status, input.action);
       const now = this.clock.now();
@@ -1863,6 +1853,33 @@ export class DisciplineService implements SuspensionCheckPort {
       .where('id', '=', id);
     if (options.forUpdate) q = q.forUpdate();
     return (await q.executeTakeFirst()) ?? null;
+  }
+
+  /**
+   * §4.10 (R4-PRIVACY-03): a command on a restricted discipline record answers a caller who may
+   * not even read it exactly as for an unknown id (protectedNotFound, the same answer as the
+   * GETs give); a caller who may read it but not manage it gets the honest ACCESS_DENIED.
+   */
+  private async requireManageDiscipline(
+    principal: Principal,
+    type: 'disciplinary_decision' | 'suspension' | 'appeal',
+    id: string,
+    subjectPersonId: string,
+  ): Promise<void> {
+    const target = {
+      type,
+      id,
+      organizationId: organizationOf(principal),
+      subjectPersonIds: [subjectPersonId],
+    };
+    const decision = await this.authorization.decide(
+      principal,
+      MatchActions.manageDiscipline,
+      target,
+    );
+    if (decision.allowed) return;
+    await this.authorizeSubjectRead(principal, type, id, subjectPersonId);
+    await this.authorization.require(principal, MatchActions.manageDiscipline, target);
   }
 
   /** League management reads everything; the subject (or a guardian with view) reads records about them; others NOT_FOUND. */
