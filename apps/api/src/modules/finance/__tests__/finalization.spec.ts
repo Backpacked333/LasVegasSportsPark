@@ -226,6 +226,9 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
     flaky.failures = 1;
     const checkout = await paidCheckout(4_500);
     expect(checkout.status).toBe('recovery_required');
+    // The payer is told the registration could not be completed before staff compensate: wait for
+    // that notice, so its event is not dispatched after the compensation's under load.
+    await drain(t);
     const compensated = await post(
       t,
       `/v1/registration-checkouts/${checkout.id}/compensate`,
