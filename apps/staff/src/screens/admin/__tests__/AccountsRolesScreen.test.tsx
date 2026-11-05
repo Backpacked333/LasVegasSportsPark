@@ -12,7 +12,7 @@
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MEMBERSHIP_1,
   NOW_ISO,
@@ -644,6 +644,34 @@ describe('SCR-S-46 AccountsRolesScreen', () => {
     expect(await within(form).findByRole('checkbox', { name: 'North Park 1' })).toBeInTheDocument();
     await waitFor(() =>
       expect(within(form).getByRole('button', { name: 'Assign roles' })).toBeEnabled(),
+    );
+  });
+});
+
+/** SPK-SCHED-008: every date-and-time field of a role assignment names the device zone it is read in. */
+describe('SPK-SCHED-008 role assignment times name the device time zone', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('SPK-SCHED-008: "Effective from", "Effective until" and "New end" name the device zone', async () => {
+    vi.stubEnv('TZ', 'America/New_York');
+    const user = userEvent.setup();
+    render(app({ 'GET /staff-memberships': page([staffMembershipView()]) }).at('/admin/accounts'));
+    const assignForm = await screen.findByRole('form', { name: 'Assign staff roles' });
+    expect(within(assignForm).getByLabelText('Effective from')).toHaveAccessibleDescription(
+      'Leave empty to start now. Your time zone (America/New_York).',
+    );
+    expect(within(assignForm).getByLabelText('Effective until')).toHaveAccessibleDescription(
+      'Leave empty for no end date; set one for a time-bounded assignment. Your time zone (America/New_York).',
+    );
+    const row = await listedMembership();
+    await user.click(within(row).getByRole('button', { name: 'Change roles or scope' }));
+    const form = within(row).getByRole('form', {
+      name: `Change membership ${MEMBERSHIP_1.slice(0, 8)}`,
+    });
+    expect(within(form).getByLabelText('New end')).toHaveAccessibleDescription(
+      'Leave empty to keep the current end. Your time zone (America/New_York).',
     );
   });
 });

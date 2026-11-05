@@ -216,7 +216,7 @@ describe('SCR-S-46 AuditRecordsScreen', () => {
     );
   });
 
-  it('validates ids and the period before sending', async () => {
+  it('validates ids and the period before sending; each end names its time zone (SPK-SCHED-008)', async () => {
     const user = userEvent.setup();
     const test = app();
     render(test.at('/admin/audit'));
@@ -224,6 +224,12 @@ describe('SCR-S-46 AuditRecordsScreen', () => {
     await user.type(within(form).getByLabelText('Operation id'), 'abc');
     await user.type(within(form).getByLabelText('Occurred from'), '2026-10-24T10:00');
     await user.type(within(form).getByLabelText('Occurred before'), '2026-10-24T09:00');
+    // SPK-SCHED-008: both ends of the period name the device zone they are read in.
+    for (const label of ['Occurred from', 'Occurred before']) {
+      expect(within(form).getByLabelText(label)).toHaveAccessibleDescription(
+        /^Your time zone \(.+\)\.$/,
+      );
+    }
     await user.click(within(form).getByRole('button', { name: 'Show records' }));
     expect(within(form).getByText('Enter a full id.')).toBeInTheDocument();
     expect(within(form).getByText('The end must be after the start.')).toBeInTheDocument();

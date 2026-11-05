@@ -168,6 +168,7 @@ export function AuditRecordsScreen() {
             type="datetime-local"
             value={draft.to}
             onChange={(to) => set({ to })}
+            hint={`Your time zone (${deviceTimeZone()}).`}
             error={errors.to}
           />
         </div>

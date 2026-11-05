@@ -170,7 +170,7 @@ describe('SCR-S-12 DisciplineScreen (SPK-DISC-001 to SPK-DISC-004)', () => {
     );
   });
 
-  it('refuses a proposed suspension without scope or completion criteria (validation failure)', async () => {
+  it('refuses a proposed suspension without scope or completion criteria (validation failure); its period names the time zone (SPK-SCHED-008)', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: { ...disciplineRoutes, 'POST /suspensions': created(suspension()) },
@@ -188,6 +188,12 @@ describe('SCR-S-12 DisciplineScreen (SPK-DISC-001 to SPK-DISC-004)', () => {
     expect(
       within(form).getByText('State an effective period or a match count.'),
     ).toBeInTheDocument();
+    // SPK-SCHED-008: a suspension names no facility; both ends of its period name the device zone.
+    for (const label of ['Effective from', 'Effective until']) {
+      expect(within(form).getByLabelText(label)).toHaveAccessibleDescription(
+        /^Your device's time zone \(.+\)\.$/,
+      );
+    }
     // Without identity.lookup_person the person is entered by reference (ID-02).
     await user.type(within(form).getByLabelText(/^Suspended person: person reference/), ID.person);
     expect(await within(form).findByText('Sam Player')).toBeInTheDocument();

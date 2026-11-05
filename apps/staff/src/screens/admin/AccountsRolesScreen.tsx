@@ -363,7 +363,7 @@ function AssignRoles() {
         type="datetime-local"
         value={draft.effectiveTo}
         onChange={(effectiveTo) => set({ effectiveTo })}
-        hint="Leave empty for no end date; set one for a time-bounded assignment."
+        hint={`Leave empty for no end date; set one for a time-bounded assignment. Your time zone (${deviceTimeZone()}).`}
         error={errors.effectiveTo ?? apiFields.effectiveTo}
       />
       <TextField
@@ -473,7 +473,7 @@ function ChangeMembership({
         type="datetime-local"
         value={until}
         onChange={setUntil}
-        hint="Leave empty to keep the current end."
+        hint={`Leave empty to keep the current end. Your time zone (${deviceTimeZone()}).`}
         error={errors.until}
       />
       <div>

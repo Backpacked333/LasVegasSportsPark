@@ -5,10 +5,16 @@
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
-import { createTestApp, mePermissions } from '../../../testing/test-app';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  FACILITY_A,
+  createTestApp,
+  facilityDirectoryOf,
+  mePermissions,
+} from '../../../testing/test-app';
 import {
   ID,
+  division,
   eligibilityReason,
   fail,
   ok,
@@ -435,6 +441,145 @@ describe('SCR-S-17 adding a player found by person search (ID-02, SPK-IAM-002, Â
     await user.type(within(form).getByLabelText(/^Player: person reference/), ID.child);
     expect(await within(form).findByTestId('reference-preview')).toHaveTextContent(
       'Person not available to you',
+    );
+  });
+});
+
+/**
+ * SPK-SCHED-008: a roster time is read and shown in the time zone of the division's facility when
+ * it is known, otherwise in the device's zone; every date-and-time field names its clock. The
+ * device here is in America/New_York and the facility in America/Los_Angeles, so reading a facility
+ * time on the device clock would store an instant three hours early.
+ */
+describe('SPK-SCHED-008 roster times in the facility time zone, with the clock named', () => {
+  beforeEach(() => {
+    vi.stubEnv('TZ', 'America/New_York');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const facilityRoutes = {
+    ...routes,
+    'GET /divisions/{id}': ok(division({ facilityId: FACILITY_A })),
+    'GET /facilities': facilityDirectoryOf([FACILITY_A], { timezone: 'America/Los_Angeles' }),
+  };
+
+  it('SPK-SCHED-008: reads "Effective until" of a removal in the facility zone and names it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { ...facilityRoutes, 'POST /team-entries/{id}/roster': ok(roster([member()])) },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await user.click(
+      await screen.findByRole('button', { name: 'Remove Alex Keeper from the roster' }),
+    );
+    const form = screen.getByRole('form', { name: 'Remove Alex Keeper' });
+    const until = within(form).getByLabelText('Effective until');
+    await waitFor(() =>
+      expect(until).toHaveAccessibleDescription(
+        'Leave empty for now. Past matches keep the player on their record. Facility time (America/Los_Angeles).',
+      ),
+    );
+    await user.type(within(form).getByLabelText(/^Reason/), 'Moved away.');
+    await user.type(until, '2026-11-07T18:00');
+    await user.click(within(form).getByRole('button', { name: 'Remove from the roster' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+        expectedRevision: workspace.entry.revision,
+        changes: [
+          {
+            action: 'remove',
+            personId: ID.person,
+            reason: 'Moved away.',
+            // 18:00 Pacific standard time, not 18:00 on the New York device (23:00Z).
+            effectiveTo: '2026-11-08T02:00:00.000Z',
+          },
+        ],
+      }),
+    );
+  });
+
+  it('SPK-SCHED-008: reads "Roster as of" and "Effective from" in the facility zone and names it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: { ...facilityRoutes, 'POST /team-entries/{id}/roster': ok(roster([member()])) },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await screen.findByRole('list', { name: 'Roster' });
+    const asOf = screen.getByLabelText('Roster as of');
+    // "Now" (12:00Z) is 05:00 at the facility, in daylight time on 24 October.
+    await waitFor(() =>
+      expect(asOf).toHaveAccessibleDescription(
+        'Leave empty for now (2026-10-24 05:00). Facility time (America/Los_Angeles).',
+      ),
+    );
+    await user.type(asOf, '2026-10-17T19:00');
+    await waitFor(() =>
+      expect(
+        app.fake.requests.some(
+          (r) =>
+            r.route === '/team-entries/{id}/roster' &&
+            r.method === 'GET' &&
+            r.query.at === '2026-10-18T02:00:00.000Z',
+        ),
+      ).toBe(true),
+    );
+    await user.click(screen.getByRole('button', { name: 'Add a player' }));
+    const form = screen.getByRole('form', { name: 'Add a player' });
+    const from = within(form).getByLabelText('Effective from');
+    expect(from).toHaveAccessibleDescription(
+      'Leave empty for now. Facility time (America/Los_Angeles).',
+    );
+    await user.type(within(form).getByLabelText(/^Player: person reference/), ID.child);
+    await user.selectOptions(within(form).getByLabelText(/^Playing status/), 'active');
+    await user.type(from, '2026-11-07T18:00');
+    await user.click(within(form).getByRole('button', { name: 'Add to the roster' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+        expectedRevision: workspace.entry.revision,
+        changes: [
+          {
+            action: 'add',
+            personId: ID.child,
+            status: 'active',
+            effectiveFrom: '2026-11-08T02:00:00.000Z',
+          },
+        ],
+      }),
+    );
+  });
+
+  it('SPK-SCHED-008: without a facility zone reads the device zone and names it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        // The division has no facility: the device's zone is the clock, and the hint says which.
+        'GET /divisions/{id}': ok(division({ facilityId: null })),
+        'POST /team-entries/{id}/roster': ok(roster([member()])),
+      },
+    });
+    render(app.at(`/teams/entries/${ID.entryRed}/roster`));
+    await screen.findByRole('list', { name: 'Roster' });
+    await waitFor(() =>
+      expect(screen.getByLabelText('Roster as of')).toHaveAccessibleDescription(
+        "Leave empty for now (2026-10-24 08:00). Your device's time zone (America/New_York).",
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Remove Alex Keeper from the roster' }));
+    const form = screen.getByRole('form', { name: 'Remove Alex Keeper' });
+    const until = within(form).getByLabelText('Effective until');
+    expect(until).toHaveAccessibleDescription(
+      "Leave empty for now. Past matches keep the player on their record. Your device's time zone (America/New_York).",
+    );
+    await user.type(within(form).getByLabelText(/^Reason/), 'Moved away.');
+    await user.type(until, '2026-11-07T18:00');
+    await user.click(within(form).getByRole('button', { name: 'Remove from the roster' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toMatchObject({
+        changes: [{ action: 'remove', effectiveTo: '2026-11-07T23:00:00.000Z' }],
+      }),
     );
   });
 });

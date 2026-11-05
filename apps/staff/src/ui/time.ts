@@ -45,6 +45,24 @@ export function formatMinutes(minutes: number): string {
   return hours < 24 ? `${hours} h ${minutes % 60} min` : `${Math.floor(hours / 24)} d`;
 }
 
+/** The device's IANA time zone (for example America/New_York), or null when the platform does not say. */
+export function deviceTimeZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The hint of a `datetime-local` field read with `localInputToIso` (SPK-SCHED-008): the device's
+ * zone, named, so a time typed on a device in another zone is never mistaken for facility time.
+ */
+export function deviceZoneHint(): string {
+  const zone = deviceTimeZone();
+  return zone ? `Your device's time zone (${zone}).` : "Your device's time zone.";
+}
+
 /** A `datetime-local` input value (device zone) as an ISO instant, or null when empty or invalid. */
 export function localInputToIso(value: string): string | null {
   if (!value) return null;

@@ -156,6 +156,7 @@ export function ProviderEventsScreen() {
             type="datetime-local"
             value={to}
             onChange={setTo}
+            hint={`Your time zone (${deviceTimeZone()}).`}
             error={errors.to}
           />
         </div>

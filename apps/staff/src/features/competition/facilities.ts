@@ -6,9 +6,10 @@
  * with the zone named (format.ts).
  */
 import { useMemo } from 'react';
+import { hasAnswered, useFacilitySummary } from '../../api/facility-directory';
 import { useApiQuery } from '../../api/useApiQuery';
 import type { Option } from './fields';
-import { shortRef } from './format';
+import { knownTimeZone, shortRef } from './format';
 
 const DIRECTORY_STALE_MS = 5 * 60_000;
 
@@ -56,4 +57,37 @@ export function useDivisionZones(
     );
     return (divisionId) => (divisionId ? (zones.get(divisionId) ?? null) : null);
   }, [divisions, directory]);
+}
+
+/** The clock a screen's date-and-time fields are read and shown in (SPK-SCHED-008). */
+export interface FacilityClock {
+  /** The facility's IANA time zone, or null: the device's zone is used, and named. */
+  zone: string | null;
+  /** False until the reads that decide the zone have answered; a typed time is not read before. */
+  settled: boolean;
+}
+
+/**
+ * The clock of a division's records (SPK-SCHED-008): the time zone of the division's facility
+ * (`GET /v1/divisions/{id}`, then the facility directory, K-04) when known; otherwise the device's
+ * zone, named (no division, a division without a facility, or a read that failed). `settled` stays
+ * false until those reads have answered, so a time typed meanwhile is never read in a guessed zone.
+ * `enabled` is false until the caller knows whether there is a division.
+ */
+export function useDivisionClock(
+  divisionId: string | null | undefined,
+  enabled = true,
+): FacilityClock {
+  const division = useApiQuery({
+    path: '/divisions/{id}',
+    request: { path: { id: divisionId ?? '' } },
+    enabled: enabled && !!divisionId,
+    staleTime: DIRECTORY_STALE_MS,
+  });
+  const divisionSettled = !divisionId || hasAnswered(division);
+  const facilityId = division.data?.facilityId ?? null;
+  const facility = useFacilitySummary(facilityId, enabled && divisionSettled && !!facilityId);
+  if (!enabled || !divisionSettled) return { zone: null, settled: false };
+  if (!facilityId) return { zone: null, settled: true };
+  return { zone: knownTimeZone(facility.summary?.timezone), settled: facility.settled };
 }
