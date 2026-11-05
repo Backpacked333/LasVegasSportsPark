@@ -37,13 +37,14 @@ import { PreferencesService } from './preferences.service';
  * - a recipient who lost authority: failed with RECIPIENT_REVOKED, revoked since, or (protected
  *   notice) no longer authorized when re-checked now exactly as at dispatch (RESOURCE_CONFLICT
  *   `RECIPIENT_REVOKED`, nothing queued);
- * - an obsolete notice (SUPERSEDED, or superseded since: RESOURCE_CONFLICT `NOTICE_SUPERSEDED`);
+ * - an obsolete notice (SUPERSEDED, or superseded since, for everyone or for this recipient
+ *   only: RESOURCE_CONFLICT `NOTICE_SUPERSEDED`);
  * - a channel the recipient has switched off for the notice's category since it was sent
  *   (RESOURCE_CONFLICT `CHANNEL_DISABLED`, SPK-COMMS-007; R4-COMMS-AUTOMATION-05);
  * - a second retry of the same attempt (`ALREADY_RETRIED`) or a recipient and channel that already
  *   have a live attempt (`LIVE_ATTEMPT_EXISTS`).
  * The database refuses the same violations but the channel preference, which is a current choice
- * rather than a fact of the attempt (migration 1005). The delivery worker is nudged after
+ * rather than a fact of the attempt (migrations 1005 and 1011). The delivery worker is nudged after
  * commit; its poll loop is the durable path, and its hand-off re-checks authority and the channel
  * preference again.
  */
@@ -95,15 +96,6 @@ export class DeliveryRetryService {
         if (source.channel === 'in_app' || source.status !== 'failed') {
           throw errors.invalidTransition('DeliveryAttempt', source.status, 'retry');
         }
-        if (
-          source.failure_code === 'SUPERSEDED' ||
-          notification.superseded_by_notification_id !== null
-        ) {
-          throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
-            code: 'NOTICE_SUPERSEDED',
-            supersededByNotificationId: notification.superseded_by_notification_id,
-          });
-        }
         const recipient = await trx
           .selectFrom('notification_recipients')
           .selectAll()
@@ -111,6 +103,16 @@ export class DeliveryRetryService {
           .where('id', '=', source.recipient_id)
           .forUpdate()
           .executeTakeFirstOrThrow();
+        // SPK-COMMS-005: replaced for everyone, or for this recipient only (a newer notice reached
+        // them; R4-COMMS-AUTOMATION-03, migration 1011), which is read under the recipient lock.
+        const supersededBy =
+          recipient.superseded_by_notification_id ?? notification.superseded_by_notification_id;
+        if (source.failure_code === 'SUPERSEDED' || supersededBy !== null) {
+          throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
+            code: 'NOTICE_SUPERSEDED',
+            supersededByNotificationId: supersededBy,
+          });
+        }
         const revoked = (): Error =>
           errors.resourceConflict('The recipient no longer holds the authority to receive it.', {
             code: 'RECIPIENT_REVOKED',

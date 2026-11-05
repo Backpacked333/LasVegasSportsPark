@@ -8965,6 +8965,20 @@
               "null"
             ]
           },
+          "supersededByNotificationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "supersededAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -8983,6 +8997,8 @@
           "authorizedAt",
           "revokedAt",
           "revocationReason",
+          "supersededByNotificationId",
+          "supersededAt",
           "revision"
         ]
       },

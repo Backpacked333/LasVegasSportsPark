@@ -392,8 +392,9 @@ export class DeliveryWorker {
       });
       return { kind: 'unknown' };
     }
-    // SPK-COMMS-005: a notice superseded by a newer change or cancellation is never handed over;
-    // the pointer is read inside this transaction, after the attempt lock (a supersede that
+    // SPK-COMMS-005: a notice superseded by a newer change or cancellation, for everyone or for
+    // this recipient only (R4-COMMS-AUTOMATION-03, migration 1011), is never handed over; both
+    // pointers are read inside this transaction, the recipient's under its lock (a supersede that
     // committed first has usually failed the attempt already; this covers one that did not).
     const superseded = await trx
       .selectFrom('notifications')
@@ -401,11 +402,10 @@ export class DeliveryWorker {
       .where('organization_id', '=', organizationId)
       .where('id', '=', notification.id)
       .executeTakeFirst();
-    if (superseded?.superseded_by_notification_id) {
-      await fail(
-        'SUPERSEDED',
-        `superseded by notification ${superseded.superseded_by_notification_id} before hand-off`,
-      );
+    const supersededBy =
+      recipient.superseded_by_notification_id ?? superseded?.superseded_by_notification_id ?? null;
+    if (supersededBy) {
+      await fail('SUPERSEDED', `superseded by notification ${supersededBy} before hand-off`);
       return { kind: 'skipped' };
     }
     // SPK-COMMS-007 (R4-COMMS-AUTOMATION-05): the person's channel choice is read again right
@@ -692,6 +692,8 @@ export class DeliveryWorker {
         // is the front desk's to reconcile (the integration register's reconciliation owner of
         // the messaging adapters). A receipt resolves it; otherwise staff record what they
         // established (POST /delivery-attempts/{id}/reconcile). Never retried blindly (§4.12).
+        // Raised at once: proposed, the conservative default while the unknown-delivery
+        // threshold is a pending decision (DEC-015, MET-062).
         if (input.notification.category === 'operational') {
           await this.exceptions.raise(trx, {
             organizationId,

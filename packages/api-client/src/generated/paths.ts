@@ -55462,6 +55462,10 @@ export type components = {
             revokedAt: string | null;
             status: components["schemas"]["RecipientStatus"];
             subjectPersonIds: string[];
+            /** Format: date-time */
+            supersededAt: string | null;
+            /** Format: uuid */
+            supersededByNotificationId: string | null;
         };
         /** @enum {string} */
         NotificationStatus: "composed" | "queued" | "dispatched" | "suppressed";

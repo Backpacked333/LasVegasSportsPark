@@ -1,4 +1,4 @@
-import type { Generated } from 'kysely';
+import type { ColumnType, Generated } from 'kysely';
 import type {
   GeneratedJson,
   GeneratedTimestamp,
@@ -9,7 +9,7 @@ import type {
 } from './core';
 
 /**
- * Communications module tables (migrations 1000-1008, specification §3.18 SPK-COMMS-001..008,
+ * Communications module tables (migrations 1000-1011, specification §3.18 SPK-COMMS-001..008,
  * §4.4 Communications, §4.5 "Messages must represent actual delivery states", §4.7 invariant 10).
  */
 
@@ -82,6 +82,13 @@ export interface NotificationRecipientsTable {
   authorized_at: NullableTimestamp;
   revoked_at: NullableTimestamp;
   revocation_reason: string | null;
+  /**
+   * Migration 1011 (SPK-COMMS-005, R4-COMMS-AUTOMATION-03): the newer notice that replaced this
+   * notice for this recipient only (it reached them, not everyone the older one did). Set once;
+   * no attempt is created for the recipient afterwards.
+   */
+  superseded_by_notification_id: Generated<string | null>;
+  superseded_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

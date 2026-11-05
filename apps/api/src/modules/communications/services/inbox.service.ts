@@ -14,6 +14,7 @@ import {
   type RecipientBasisValue,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
+import { sql } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -320,7 +321,12 @@ export class InboxService {
           'n.subject_id',
           'n.details_before',
           'n.details_after',
-          'n.superseded_by_notification_id',
+          // SPK-COMMS-005: replaced for this reader only (the recipient's pointer), or for everyone.
+          sql<
+            string | null
+          >`coalesce(r.superseded_by_notification_id, n.superseded_by_notification_id)`.as(
+            'superseded_by_notification_id',
+          ),
           'n.protected',
           'n.audience',
           'r.person_id as recipient_person_id',

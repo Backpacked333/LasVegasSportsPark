@@ -220,4 +220,34 @@ describe('unknown delivery outcomes have an owner and a resolution action (§4.1
     });
     expect(await exceptionsOf(promotional.id)).toEqual([]);
   });
+
+  it('§4.11: a reconciled provider_accepted is an acceptance, so a later receipt still moves it to delivered; a reconciled delivered is final', async () => {
+    const email = await unknownEmail({ title: 'Canceled: U16 practice' });
+    const accepted = await reconcile(email.id, {
+      outcome: 'provider_accepted',
+      evidence: 'The provider console lists the message as accepted.',
+    });
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    expect(accepted.body).toMatchObject({ status: 'provider_accepted', failureCode: null });
+    await recordReceipt(
+      t.app,
+      fakes.email,
+      { attemptId: email.id, organizationId: org },
+      'delivered',
+    );
+    const current = async (id: string) =>
+      (await attemptsOf(t.db, org, email.notification_id)).find((a) => a.id === id);
+    expect(await current(email.id)).toMatchObject({ status: 'delivered', failure_code: null });
+
+    const other = await unknownEmail({ title: 'Canceled: U18 practice' });
+    const delivered = await reconcile(other.id, {
+      outcome: 'delivered',
+      evidence: 'The parent confirmed by phone that the email arrived.',
+    });
+    expect(delivered.status, JSON.stringify(delivered.body)).toBe(200);
+    await recordReceipt(t.app, fakes.email, { attemptId: other.id, organizationId: org }, 'failed');
+    expect(
+      (await attemptsOf(t.db, org, other.notification_id)).find((a) => a.id === other.id),
+    ).toMatchObject({ status: 'delivered', failure_code: null });
+  });
 });

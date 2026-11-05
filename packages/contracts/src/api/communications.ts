@@ -340,6 +340,14 @@ export const NotificationRecipientSchema = z
     authorizedAt: Instant.nullable(),
     revokedAt: Instant.nullable(),
     revocationReason: z.string().nullable(),
+    /**
+     * Set when a newer notice about the same subject replaced this one for this recipient only
+     * (SPK-COMMS-005): nothing more is sent to them from this notice; one not yet dispatched is
+     * never sent to them at all. A notice replaced for everyone carries the notification's own
+     * `supersededByNotificationId` instead.
+     */
+    supersededByNotificationId: z.uuid().nullable(),
+    supersededAt: Instant.nullable(),
     revision: Revision,
   })
   .openapi('NotificationRecipient');
@@ -393,7 +401,10 @@ export type RetryDeliveryInput = z.infer<typeof RetryDeliveryBody>;
  * (R4-COMMS-AUTOMATION-07): record what staff established about a push, email or SMS hand-off whose
  * outcome is `unknown` — the provider accepted it, it was delivered, or it never reached the person
  * (`failed`, which a retry may then repeat) — with the evidence they checked. Only an `unknown`
- * attempt is reconciled; a later provider receipt cannot overwrite the recorded outcome.
+ * attempt is reconciled. A reconciled `delivered` or `failed` is final: a later provider receipt
+ * cannot overwrite it. A reconciled `provider_accepted` is what it says, an acceptance, and still
+ * moves to `delivered` or `failed` when the provider's receipt arrives, as any accepted attempt
+ * does (SPK-COMMS-004).
  */
 export const ReconcileDeliveryOutcomeSchema = z
   .enum(['provider_accepted', 'delivered', 'failed'])
@@ -424,7 +435,10 @@ export const InboxItemSchema = z
     deliveredAt: Instant.nullable(),
     readAt: Instant.nullable(),
     acknowledgedAt: Instant.nullable(),
-    /** Set when a newer notice about the same subject replaced this one (SPK-COMMS-005). */
+    /**
+     * Set when a newer notice about the same subject replaced this one for the reader, or for
+     * everyone (SPK-COMMS-005).
+     */
     supersededByNotificationId: z.uuid().nullable(),
     /**
      * The participants this notice concerns for the reader (SPK-UX-003 "each action must identify
