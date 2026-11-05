@@ -21,6 +21,12 @@ export interface ResolvedActivity {
   start: Date;
   end: Date;
   canceled: boolean;
+  /**
+   * When the owning module canceled the activity (its own clock), null while it is not canceled.
+   * Attendance observed before this moment is a fact about an activity that was taking place
+   * (R4-OPS-MODULES-06 rework, §4.15).
+   */
+  canceledAt: Date | null;
   /** Catalog offering of a session activity. */
   offeringId: string | null;
   /** The scheduling event behind the activity (the event itself, or the session's event). */
@@ -159,6 +165,7 @@ export class ActivityResolver {
         start: new Date(session.scheduledStart),
         end: new Date(session.scheduledEnd),
         canceled: false,
+        canceledAt: null,
         offeringId,
         schedulingEventId: session.schedulingEventId,
         requiredFormPolicyVersionIds: [...offering.requiredFormPolicyVersionIds],
@@ -197,6 +204,7 @@ export class ActivityResolver {
       start: new Date(session.scheduledStart),
       end: new Date(session.scheduledEnd),
       canceled: session.status === 'canceled',
+      canceledAt: session.canceledAt ? new Date(session.canceledAt) : null,
       offeringId,
       schedulingEventId: session.schedulingEventId,
       requiredFormPolicyVersionIds: [...offering.requiredFormPolicyVersionIds],
@@ -223,6 +231,7 @@ export class ActivityResolver {
       start: new Date(event.scheduledStart),
       end: new Date(event.scheduledEnd),
       canceled: event.status === 'canceled',
+      canceledAt: event.canceledAt ? new Date(event.canceledAt) : null,
       offeringId: null,
       schedulingEventId: event.id,
       requiredFormPolicyVersionIds: [],

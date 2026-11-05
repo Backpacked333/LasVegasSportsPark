@@ -13,6 +13,7 @@ import {
   seedResource,
 } from '../../scheduling';
 import { ActivityResolver } from '../services/activity-resolver';
+import { CheckinsService } from '../services/checkins.service';
 import { createVisitFixture } from '../testing/entry-fixtures';
 import {
   adultCustomer,
@@ -674,6 +675,105 @@ describe('entry follow-ups (ENT-03, ENT-04)', () => {
       expect(await checkinRows(event.id)).toEqual([
         expect.objectContaining({ status: 'withdrawn', withdrawn_reason: 'activity_moved' }),
       ]);
+      t.clock.set(at(TODAY, '12:30'));
+    });
+
+    it('§4.12 / SPK-ENTRY-001: correcting the date of an activity that already took place never withdraws its admissions — the stored times follow and one review exception lists the check-ins kept', async () => {
+      t.clock.set(at(TODAY, '09:30'));
+      const field = await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Field R4-07 past',
+      });
+      const player = await createPersonFixture(t, { kind: 'adult' });
+      const events = t.app.get(EventsService);
+      const event = await createScheduledEvent(events, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        resourceIds: [field.resourceId],
+        start: at(TODAY, '10:00'),
+        end: at(TODAY, '11:00'),
+        kind: 'practice',
+        sourceType: 'program',
+        commitments: [personCommitment(player, 'participant')],
+      });
+      await arrive(player);
+      const checkin = await post(t, '/v1/session-checkins', desk, {
+        personId: player,
+        activity: { type: 'event', eventId: event.id },
+      });
+      expect(checkin.status, JSON.stringify(checkin.body)).toBe(201);
+      expect(checkin.body.status).toBe('admitted');
+      await drainOutbox(t);
+
+      // Three days later the schedule is corrected: the practice took place the day before.
+      t.clock.set(at('2027-01-19', '09:00'));
+      await events.moveEvent(systemPrincipal(t.organizationId, 'tests'), event.id, {
+        scheduledStart: at('2027-01-15', '10:00'),
+        scheduledEnd: at('2027-01-15', '11:00'),
+        reason: 'Record correction',
+      });
+      await drainOutbox(t);
+      const [kept] = await checkinRows(event.id);
+      expect(kept).toMatchObject({
+        id: checkin.body.id,
+        status: 'admitted',
+        withdrawn_at: null,
+        withdrawn_reason: null,
+        revision: (checkin.body.revision as number) + 1,
+      });
+      expect(new Date(kept!.admitted_at!).toISOString()).toBe(checkin.body.admittedAt);
+      expect(new Date(kept!.activity_start).toISOString()).toBe(at('2027-01-15', '10:00'));
+      expect(new Date(kept!.activity_end).toISOString()).toBe(at('2027-01-15', '11:00'));
+      const review = (await exceptionsOf(t, 'entry.past_activity_moved')).filter(
+        (e) => e.affected_id === `event:${event.id}`,
+      );
+      expect(review).toHaveLength(1);
+      expect(review[0]).toMatchObject({
+        status: 'open',
+        severity: 'warning',
+        owner_queue: 'program_manager',
+        facility_id: t.facilityId,
+      });
+      expect(review[0]!.details).toMatchObject({
+        activityType: 'event',
+        activityId: event.id,
+        currentStart: at('2027-01-15', '10:00'),
+        checkins: [
+          {
+            checkinId: checkin.body.id,
+            personId: player,
+            status: 'admitted',
+            admittedAt: checkin.body.admittedAt,
+            previousStart: at(TODAY, '10:00'),
+            previousEnd: at(TODAY, '11:00'),
+          },
+        ],
+      });
+
+      // Replay-safe: the follow-up run again changes nothing and raises nothing more.
+      const outcome = await t.app
+        .get(UnitOfWork)
+        .run(({ trx }) =>
+          t.app
+            .get(CheckinsService)
+            .followActivityTimes(
+              trx,
+              t.organizationId,
+              'event',
+              event.id,
+              event.id,
+              'entry.follow_event_changed',
+              null,
+            ),
+        );
+      expect(outcome).toEqual({ moved: 0, withdrawn: 0, keptForReview: 0 });
+      expect(await checkinRows(event.id)).toEqual([kept]);
+      expect(
+        (await exceptionsOf(t, 'entry.past_activity_moved')).filter(
+          (e) => e.affected_id === `event:${event.id}`,
+        ),
+      ).toHaveLength(1);
       t.clock.set(at(TODAY, '12:30'));
     });
   });

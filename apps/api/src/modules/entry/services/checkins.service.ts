@@ -17,6 +17,7 @@ import {
   AuthorizationService,
   CLOCK,
   ensureUpdated,
+  OperationalExceptions,
   Outbox,
   snapshotActor,
   UnitOfWork,
@@ -40,7 +41,12 @@ import {
   type CheckinRow,
 } from '../entry.shared';
 import { SessionCheckinMachine } from '../entry.state-machines';
-import { ActivityResolver, refOf, type ResolvedActivity } from './activity-resolver';
+import {
+  ActivityResolver,
+  refOf,
+  type FacilityFacts,
+  type ResolvedActivity,
+} from './activity-resolver';
 import { ArrivalChecks, hasBlocking, type ParticipationBasis } from './arrival-checks';
 import { StaffScope, type ActivityAuthority } from './staff-scope';
 import { lockActivity, lockEntrySubjects, presenceLockKey } from './subject-locks';
@@ -59,6 +65,12 @@ function audienceOfAuthority(authority: ActivityAuthority): CheckinAudience {
 export const ACTIVITY_CANCELED = 'activity_canceled';
 /** The withdrawal reason of a check-in whose activity moved to another day or facility (R4-OPS-MODULES-07). */
 export const ACTIVITY_MOVED = 'activity_moved';
+/**
+ * The review exception of an activity that had already ended, as its check-ins recorded it, when
+ * its owning module moved it to another day or facility (a schedule correction). The admissions
+ * are kept; staff confirm them or withdraw them (R4-OPS-MODULES-07).
+ */
+export const PAST_ACTIVITY_MOVED = 'entry.past_activity_moved';
 
 /** An activity's current times as its owning module holds them now (read in the caller's transaction). */
 interface CurrentActivityTimes {
@@ -95,6 +107,7 @@ export class CheckinsService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly exceptions: OperationalExceptions,
     private readonly resolver: ActivityResolver,
     private readonly checks: ArrivalChecks,
     private readonly scope: StaffScope,
@@ -423,9 +436,15 @@ export class CheckinsService {
    * payload — follows it:
    *   - moved within the same facility-local day: the stored times are updated (the admission
    *     still stands for that day's activity);
-   *   - moved to another day or (an event) another facility: withdrawn through
-   *     SessionCheckinMachine with the reason `activity_moved`, so the person can be checked in on
-   *     the new day and today's visit no longer counts a session that is not today.
+   *   - moved to another day or (an event) another facility while the activity, as the check-in
+   *     recorded it, has not ended yet: withdrawn through SessionCheckinMachine with the reason
+   *     `activity_moved`, so the person can be checked in on the new day and today's visit no
+   *     longer counts a session that is not today;
+   *   - moved to another day or facility after it had ended (a correction of a past activity's
+   *     date): the activity took place and the admission is a fact about it, so the check-in is
+   *     never withdrawn. Its stored times follow the activity and one `entry.past_activity_moved`
+   *     review exception per activity and correction lists the check-ins kept with their previous
+   *     times, for staff to confirm or withdraw (POST /v1/session-checkins/{id}/withdraw).
    * Audited as the system and announced (entry.session_checkin_changed). Replay-safe: a check-in
    * already at the current times, or no longer live, is left alone. A canceled activity is left to
    * the cancellation follow-up. Serialized with in-flight check-ins on the activity's exclusive
@@ -439,7 +458,7 @@ export class CheckinsService {
     schedulingEventId: string | null,
     source: string,
     correlationId: string | null,
-  ): Promise<{ moved: number; withdrawn: number }> {
+  ): Promise<{ moved: number; withdrawn: number; keptForReview: number }> {
     await lockActivity(trx, organizationId, activityType, activityId, 'exclusive');
     const live = await trx
       .selectFrom('session_checkins')
@@ -451,7 +470,7 @@ export class CheckinsService {
       .orderBy('id')
       .forUpdate()
       .execute();
-    const outcome = { moved: 0, withdrawn: 0 };
+    const outcome = { moved: 0, withdrawn: 0, keptForReview: 0 };
     if (live.length === 0) return outcome;
     const current = await this.currentTimes(
       trx,
@@ -462,33 +481,42 @@ export class CheckinsService {
     );
     if (!current || current.canceled) return outcome;
     const system = systemPrincipal(organizationId, source);
-    const timezones = new Map<string, string>();
+    const now = this.clock.now();
+    const facilities = new Map<string, FacilityFacts>();
+    const kept: Array<{ row: CheckinRow; previousStart: Date; previousEnd: Date }> = [];
     for (const row of live) {
       const facilityId = current.facilityId ?? row.facility_id;
+      const previousStart = new Date(row.activity_start);
+      const previousEnd = new Date(row.activity_end);
       const sameTimes =
-        new Date(row.activity_start).getTime() === current.start.getTime() &&
-        new Date(row.activity_end).getTime() === current.end.getTime();
-      if (sameTimes && facilityId === row.facility_id) continue;
-      let timezone = timezones.get(row.facility_id);
-      if (!timezone) {
-        timezone = (await this.resolver.facility(organizationId, row.facility_id, trx)).timezone;
-        timezones.set(row.facility_id, timezone);
+        previousStart.getTime() === current.start.getTime() &&
+        previousEnd.getTime() === current.end.getTime();
+      // The activity as this check-in recorded it has ended: it took place.
+      const ended = previousEnd.getTime() <= now.getTime();
+      // A check-in's facility never changes, so a past activity whose times it already follows
+      // has nothing left to follow (and was raised for review when its times followed).
+      if (sameTimes && (ended || facilityId === row.facility_id)) continue;
+      let facility = facilities.get(row.facility_id);
+      if (!facility) {
+        facility = await this.resolver.facility(organizationId, row.facility_id, trx);
+        facilities.set(row.facility_id, facility);
       }
       const sameDay =
         facilityId === row.facility_id &&
-        localDateOf(timezone, new Date(row.activity_start)) ===
-          localDateOf(timezone, current.start);
+        localDateOf(facility.timezone, previousStart) ===
+          localDateOf(facility.timezone, current.start);
+      const withdraw = !sameDay && !ended;
       const previousStatus = row.status === 'withdrawn' ? null : row.status;
       const result = await trx
         .updateTable('session_checkins')
         .set(
-          sameDay
-            ? { activity_start: current.start, activity_end: current.end }
-            : {
+          withdraw
+            ? {
                 status: SessionCheckinMachine.next(row.status, 'withdraw'),
-                withdrawn_at: this.clock.now(),
+                withdrawn_at: now,
                 withdrawn_reason: ACTIVITY_MOVED,
-              },
+              }
+            : { activity_start: current.start, activity_end: current.end },
         )
         .set({ revision: row.revision + 1 })
         .where('organization_id', '=', organizationId)
@@ -508,10 +536,43 @@ export class CheckinsService {
         updated,
         previousStatus,
         correlationId,
-        sameDay ? 'activity_retimed' : ACTIVITY_MOVED,
+        withdraw ? ACTIVITY_MOVED : sameDay ? 'activity_retimed' : 'past_activity_moved',
       );
-      if (sameDay) outcome.moved += 1;
-      else outcome.withdrawn += 1;
+      if (withdraw) outcome.withdrawn += 1;
+      else if (sameDay) outcome.moved += 1;
+      else kept.push({ row: updated, previousStart, previousEnd });
+    }
+    if (kept.length > 0) {
+      outcome.keptForReview = kept.length;
+      const facility = facilities.get(kept[0]!.row.facility_id)!;
+      const policy = policyForFacility(this.policy, facility.settings);
+      await this.exceptions.raise(trx, {
+        organizationId,
+        facilityId: kept[0]!.row.facility_id,
+        category: PAST_ACTIVITY_MOVED,
+        severity: 'warning',
+        title: 'An activity that already took place was moved; its check-ins were kept for review',
+        affectedType: 'activity',
+        affectedId: `${activityType}:${activityId}`,
+        ownerQueue: policy.attendanceReviewQueue,
+        dedupeKey: `${PAST_ACTIVITY_MOVED}:${activityType}:${activityId}:${current.start.toISOString()}`,
+        details: {
+          activityType,
+          activityId,
+          currentStart: current.start.toISOString(),
+          currentEnd: current.end.toISOString(),
+          currentFacilityId: current.facilityId ?? kept[0]!.row.facility_id,
+          checkins: kept.map(({ row, previousStart, previousEnd }) => ({
+            checkinId: row.id,
+            personId: row.person_id,
+            status: row.status,
+            admittedAt: row.admitted_at ? new Date(row.admitted_at).toISOString() : null,
+            previousStart: previousStart.toISOString(),
+            previousEnd: previousEnd.toISOString(),
+          })),
+          nextAction: 'confirm_the_admissions_or_withdraw_the_check_ins',
+        },
+      });
     }
     return outcome;
   }

@@ -13,6 +13,7 @@ import {
 import { createAssignmentFixture } from '../../workforce';
 import {
   adultCustomer,
+  drainOutbox,
   enroll,
   entryTestApp,
   exceptionsOf,
@@ -480,5 +481,183 @@ describe('attendance observations and corrections (§4.8, SPK-ENTRY-005, §4.5)'
       .where('activity_id', 'in', [nextWeek, canceled])
       .execute();
     expect(recorded).toEqual([]);
+  });
+  it('R4-OPS-MODULES-06 / §4.15: attendance is judged against the activity at the observed time — observed before a later cancellation it is recorded, online (backdated) and offline; an offline item still refused is kept for review with what the device observed', async () => {
+    const restore = t.clock.now();
+    const later = await createOfferingSessionFixture(t, {
+      offeringId: p.offering.offeringId,
+      scheduledStart: new Date(at(TODAY, '15:00')),
+      scheduledEnd: new Date(at(TODAY, '16:00')),
+    });
+    const elsewhere = await createOfferingSessionFixture(t, {
+      offeringId: p.offering.offeringId,
+      scheduledStart: new Date(at('2027-01-24', '15:00')),
+      scheduledEnd: new Date(at('2027-01-24', '16:00')),
+    });
+    const laterRef = { type: 'session', offeringId: p.offering.offeringId, sessionId: later };
+    const elsewhereRef = {
+      type: 'session',
+      offeringId: p.offering.offeringId,
+      sessionId: elsewhere,
+    };
+    // 15:30: the session is canceled while it is taking place (the device is offline).
+    t.clock.set(at(TODAY, '15:30'));
+    const cancel = await post(t, `/v1/sessions/${later}/cancel`, manager, { reason: 'Lightning' });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
+    await drainOutbox(t);
+
+    // Online, backdated: observed at 15:10, before the cancellation, it is recorded.
+    t.clock.set(at(TODAY, '15:40'));
+    const backdated = await observe(desk, {
+      personId: fam.childB,
+      activity: laterRef,
+      observedState: 'present',
+      observedAt: at(TODAY, '15:10'),
+    });
+    expect(backdated.status, JSON.stringify(backdated.body)).toBe(201);
+    expect(backdated.body.observation).toMatchObject({
+      observedState: 'present',
+      observedAt: at(TODAY, '15:10'),
+    });
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('details')
+      .where('target_id', '=', backdated.body.observation.id as string)
+      .executeTakeFirstOrThrow();
+    expect(audit.details).toMatchObject({ activityCanceledAt: at(TODAY, '15:30') });
+    // Observed after the cancellation, it is refused.
+    const afterCancel = await observe(desk, {
+      personId: fam.childB,
+      activity: laterRef,
+      observedState: 'present',
+      observedAt: at(TODAY, '15:35'),
+    });
+    expect(afterCancel.status, JSON.stringify(afterCancel.body)).toBe(409);
+    expect(afterCancel.body.details).toMatchObject({
+      code: 'activity_canceled',
+      canceledAt: at(TODAY, '15:30'),
+    });
+
+    // Offline (snapshot 14:50, synchronized 16:30): the 15:05 observation is recorded and
+    // flagged; the 15:45 one (after the cancellation) and one for an activity on another day
+    // (e.g. moved after the device observed it) are refused and kept for review, never dropped.
+    t.clock.set(at(TODAY, '16:30'));
+    const beforeCancel = newId();
+    const afterCancelItem = newId();
+    const otherDay = newId();
+    const sync = (clientBatchId: string, items: object[]) =>
+      post(t, '/v1/offline-sync', desk, {
+        deviceId: 'tablet-observed-at',
+        clientBatchId,
+        facilityId: t.facilityId,
+        snapshot: { reference: 'roster-observed-at', takenAt: at(TODAY, '14:50') },
+        items,
+      });
+    const items = [
+      {
+        kind: 'attendance',
+        clientObservationId: beforeCancel,
+        observedAt: at(TODAY, '15:05'),
+        personId: fam.childA,
+        activity: laterRef,
+        observedState: 'present',
+      },
+      {
+        kind: 'attendance',
+        clientObservationId: afterCancelItem,
+        observedAt: at(TODAY, '15:45'),
+        personId: fam.childA,
+        activity: laterRef,
+        observedState: 'left_early',
+      },
+      {
+        kind: 'attendance',
+        clientObservationId: otherDay,
+        observedAt: at(TODAY, '15:50'),
+        personId: fam.childB,
+        activity: elsewhereRef,
+        observedState: 'present',
+      },
+    ];
+    const batch = await sync(newId(), items);
+    expect(batch.status, JSON.stringify(batch.body)).toBe(201);
+    expect(
+      batch.body.items.map((i: { outcome: string; reason: string | null; flags: string[] }) => [
+        i.outcome,
+        i.reason,
+        i.flags,
+      ]),
+    ).toEqual([
+      ['accepted', null, ['canceled_after_observation']],
+      ['rejected', 'activity_canceled', []],
+      ['rejected', 'activity_not_today', []],
+    ]);
+    const recorded = await t.db
+      .selectFrom('attendance_observations')
+      .select(['person_id', 'observed_state', 'observed_at', 'source', 'client_observation_id'])
+      .where('activity_id', 'in', [later, elsewhere])
+      .orderBy('observed_at')
+      .execute();
+    expect(
+      recorded.map((r) => [
+        r.person_id,
+        r.observed_state,
+        new Date(r.observed_at).toISOString(),
+        r.source,
+      ]),
+    ).toEqual([
+      [fam.childA, 'present', at(TODAY, '15:05'), 'offline_sync'],
+      [fam.childB, 'present', at(TODAY, '15:10'), 'online'],
+    ]);
+    const reviewOfDevice = async () =>
+      (await exceptionsOf(t, 'entry.offline_attendance_unrecorded'))
+        .filter((e) => (e.details as { deviceId: string }).deviceId === 'tablet-observed-at')
+        .sort((a, b) =>
+          (a.details as { observedAt: string }).observedAt <
+          (b.details as { observedAt: string }).observedAt
+            ? -1
+            : 1,
+        );
+    const review = await reviewOfDevice();
+    expect(review.map((e) => e.details)).toEqual([
+      expect.objectContaining({
+        batchId: batch.body.id,
+        deviceId: 'tablet-observed-at',
+        clientObservationId: afterCancelItem,
+        personId: fam.childA,
+        observedState: 'left_early',
+        observedAt: at(TODAY, '15:45'),
+        activityType: 'session',
+        activityId: later,
+        activityCanceledAt: at(TODAY, '15:30'),
+        snapshotReference: 'roster-observed-at',
+        reason: 'activity_canceled',
+      }),
+      expect.objectContaining({
+        clientObservationId: otherDay,
+        personId: fam.childB,
+        observedState: 'present',
+        observedAt: at(TODAY, '15:50'),
+        activityId: elsewhere,
+        activityStart: at('2027-01-24', '15:00'),
+        reason: 'activity_not_today',
+      }),
+    ]);
+    expect(review.every((e) => e.owner_queue === 'program_manager' && e.status === 'open')).toBe(
+      true,
+    );
+    expect([...batch.body.exceptionIds].sort()).toEqual(review.map((e) => e.id).sort());
+
+    // Re-sent in another batch: the recorded item is a duplicate, the refused ones keep their one
+    // review exception each.
+    const again = await sync(newId(), items);
+    expect(again.status, JSON.stringify(again.body)).toBe(201);
+    expect(again.body.items.map((i: { outcome: string }) => i.outcome)).toEqual([
+      'duplicate',
+      'rejected',
+      'rejected',
+    ]);
+    expect((await reviewOfDevice()).map((e) => e.id)).toEqual(review.map((e) => e.id));
+    t.clock.set(restore);
   });
 });

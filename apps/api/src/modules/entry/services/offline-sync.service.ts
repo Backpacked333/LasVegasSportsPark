@@ -38,7 +38,12 @@ import {
   type FacilityFacts,
   type ResolvedActivity,
 } from './activity-resolver';
-import { AttendanceService, attendanceWindowIssue } from './attendance.service';
+import {
+  AttendanceService,
+  attendanceWindowIssue,
+  conflictSubject,
+  observedBeforeCancellation,
+} from './attendance.service';
 import { denialReasonFor, ReleasesService } from './releases.service';
 import { StaffScope } from './staff-scope';
 import { attendanceLockKey, lockEntrySubjects, presenceLockKey } from './subject-locks';
@@ -48,6 +53,12 @@ import { VisitsService } from './visits.service';
 const UNMATCHED_DEPARTURE = 'entry.offline_departure_unmatched';
 /** A queued release or child departure that could not be recorded as a verified release. */
 const UNRECORDED_RELEASE = 'entry.offline_release_unrecorded';
+/**
+ * A queued attendance observation the server refuses for its activity as it stands now (canceled
+ * before the observed time, or the observed time is before the activity's day, e.g. it was moved
+ * after the device observed it), kept for review with everything the device observed (§4.15).
+ */
+const UNRECORDED_ATTENDANCE = 'entry.offline_attendance_unrecorded';
 
 interface UnmatchedDepartureDetails {
   personId: string;
@@ -114,6 +125,12 @@ const result = (
  *   - an item observed against a roster older than the maximum roster age (DEC-033, proposed two
  *     hours) is accepted but flagged `stale_snapshot`, and the batch is raised for review;
  *   - a conflicting observation is kept and raised for review (`accepted_with_conflict`);
+ *   - an attendance observation is judged against its activity at the observed time
+ *     (R4-OPS-MODULES-06): one made before the owning module canceled the activity is recorded
+ *     (flag `canceled_after_observation` on the item); one made after the cancellation, or before
+ *     the activity's facility-local day (it may have been moved since), is rejected and kept for
+ *     review (`entry.offline_attendance_unrecorded`: person, observed state and time, device,
+ *     client observation id, batch), never dropped;
  *   - a departure synchronized before the arrival it closes is kept for review
  *     (`entry.offline_departure_unmatched`), and closes the visit once that arrival synchronizes;
  *     an arrival synchronized after a release of the child closes through that release;
@@ -594,9 +611,32 @@ export class OfflineSyncService {
     if (!resolved || 'rejected' in resolved) {
       return result(item, 'rejected', resolved ? resolved.rejected : 'activity_not_found', null);
     }
-    // R4-OPS-MODULES-06: as online, nothing is observed for a canceled activity or ahead of its day.
+    // An item already recorded stays a duplicate, whatever happened to its activity since.
+    const recorded = await this.attendance.byClientId(
+      trx,
+      ctx.organizationId,
+      ctx.deviceId,
+      item.clientObservationId,
+    );
+    if (recorded) {
+      return result(item, 'duplicate', 'already_recorded', recorded.id, recorded.flags);
+    }
+    // R4-OPS-MODULES-06: as online, judged at the observed time. An item still refused is kept
+    // for review, with everything the device observed (§4.15), never dropped.
     const outside = attendanceWindowIssue(resolved.activity, observedAt);
-    if (outside) return result(item, 'rejected', outside, null);
+    if (outside) {
+      if (await this.personActive(ctx, trx, item.personId)) {
+        await this.raiseUnrecordedAttendance(
+          trx,
+          ctx,
+          item,
+          resolved.activity,
+          observedAt,
+          outside,
+        );
+      }
+      return result(item, 'rejected', outside, null);
+    }
     if (!(await this.personActive(ctx, trx, item.personId))) {
       return result(item, 'rejected', 'person_not_found', null);
     }
@@ -623,6 +663,10 @@ export class OfflineSyncService {
     if (inserted.duplicate) {
       return result(item, 'duplicate', 'already_recorded', inserted.row.id, inserted.row.flags);
     }
+    // Observed while the activity was taking place; the owning module canceled it afterwards.
+    const flags = observedBeforeCancellation(resolved.activity, observedAt)
+      ? [...inserted.row.flags, 'canceled_after_observation']
+      : inserted.row.flags;
     if (inserted.conflict) {
       ctx.exceptionIds.add(inserted.conflict.exceptionId);
       return result(
@@ -630,10 +674,59 @@ export class OfflineSyncService {
         'accepted_with_conflict',
         'conflicting_observation',
         inserted.row.id,
-        inserted.row.flags,
+        flags,
       );
     }
-    return result(item, 'accepted', null, inserted.row.id, inserted.row.flags);
+    return result(item, 'accepted', null, inserted.row.id, flags);
+  }
+
+  /**
+   * R4-OPS-MODULES-06 / §4.15 "Reconnection must preserve conflicting observations for review": an
+   * attendance item refused for its activity as it stands now (canceled before the observed time,
+   * or observed before the activity's facility-local day — it may have been moved after the device
+   * observed it) is not recorded as an observation, but everything the device observed is kept in
+   * a review exception for the attendance queue: person, observed state and time, device, client
+   * observation id, batch and snapshot. One exception per queued item (device and client
+   * observation id), so re-sending the item does not open a second one.
+   */
+  private async raiseUnrecordedAttendance(
+    trx: Trx,
+    ctx: BatchContext,
+    item: Extract<OfflineItem, { kind: 'attendance' }>,
+    activity: ResolvedActivity,
+    observedAt: Date,
+    reason: 'activity_canceled' | 'activity_not_today',
+  ): Promise<void> {
+    const raised = await this.exceptions.raise(trx, {
+      organizationId: ctx.organizationId,
+      facilityId: ctx.facility.id,
+      category: UNRECORDED_ATTENDANCE,
+      severity: 'warning',
+      title:
+        'An offline attendance observation could not be recorded for its activity as it is now',
+      affectedType: 'attendance',
+      affectedId: conflictSubject(activity.detail.type, activity.detail.id, item.personId),
+      ownerQueue: ctx.policy.attendanceReviewQueue,
+      dedupeKey: `${UNRECORDED_ATTENDANCE}:${ctx.deviceId}:${item.clientObservationId}`,
+      details: {
+        batchId: ctx.batchId,
+        deviceId: ctx.deviceId,
+        clientObservationId: item.clientObservationId,
+        personId: item.personId,
+        observedState: item.observedState,
+        observedAt: observedAt.toISOString(),
+        activityType: activity.detail.type,
+        activityId: activity.detail.id,
+        offeringId: activity.offeringId,
+        activityStart: activity.start.toISOString(),
+        activityCanceledAt: activity.canceledAt?.toISOString() ?? null,
+        snapshotReference: ctx.snapshotReference,
+        snapshotTakenAt: ctx.snapshotTakenAt.toISOString(),
+        reason,
+        nextAction: 'confirm_the_attendance_and_record_it_or_dismiss_the_observation',
+      },
+    });
+    ctx.exceptionIds.add(raised.id);
   }
 
   private async applyArrival(
