@@ -10,7 +10,8 @@ escalation), SPK-COND-003 (equipment reserved with a booking, through the asset 
 **Migration range:** `packages/db/migrations/0900_facilities_*.sql` … `0999` (present: `0900`,
 `0901_facilities_task_owner_fk`, `0902_facilities_facility_scoped_keys`,
 `0903_facilities_restriction_withdrawal`, `0904_facilities_restriction_transition_guard`,
-`0905_facilities_restriction_delete_guard`)
+`0905_facilities_restriction_delete_guard`, `0906_facilities_restriction_follow_on`,
+`0907_facilities_task_work_completed`)
 
 **Depends on:** scheduling (closure port, resources public API) and identity
 (`PERSON_DIRECTORY_PORT`, to check assigned task owners). Restrictions create scheduling closures
@@ -32,7 +33,7 @@ switches (DEC-016 with DEC-076 / DEC-077), off by default.
 | Table                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `assets`               | Turf, goals, nets, boards, dividers, lighting, scoreboards, equipment, other; optional `resource_id` (the space it belongs to); status `in_service / restricted / out_of_service / retired`; identifier unique among non-retired assets of a facility                                                                                                                                                                     |
-| `maintenance_tasks`    | Asset or space (check: at least one), issue, severity, reporter snapshot, evidence (references only), assigned owner, due instant, status `open → assigned → in_progress → resolved → closed`, `requires_inspection`, resolution; `assigned` needs an owner, resolved/closed need a resolution                                                                                                                            |
+| `maintenance_tasks`    | Asset or space (check: at least one), issue, severity, reporter snapshot, evidence (references only), assigned owner, due instant, status `open → assigned → in_progress → resolved → closed`, `requires_inspection`, resolution; `assigned` needs an owner, resolved/closed need a resolution; `work_completed_at` (0907): when the task last left `in_progress`                                                         |
 | `inspections`          | Append-only (`forbid_mutation`) outcomes `passed / failed` with inspector snapshot and instant; the latest decides SPK-FAC-004                                                                                                                                                                                                                                                                                            |
 | `restrictions`         | Affected area `resource_id` (whole pitch or subdivision), optional asset/task, kind `closed / limited`, `tstzrange during`, status `proposed → approved → active → released` or `proposed / approved → withdrawn` (0903), approval, release and withdrawal facts (check-constrained to the state), `scheduling_closure_id` (composite FK to closures), `affected_conflict_unit_ids` derived from scheduling at activation |
 | `preventive_schedules` | Recurrence in facility-local time + zone, task template, restriction kind, lead time, status `active / paused / ended`                                                                                                                                                                                                                                                                                                    |
@@ -48,8 +49,8 @@ until the template is edited. Facilities API tests keep the fake principals thro
 Invariants enforced by the database: composite `(organization_id, id)` foreign keys everywhere
 (including the closure reference and the assigned owner); facility-scoped keys (migration `0902`,
 §4.3): an asset, preventive schedule, task or restriction names only the space, asset, task,
-schedule and closure of its own facility; one closure backs at most one restriction; a task carries at
-most one unreleased restriction; a preventive schedule materializes each occurrence's task and
+schedule and closure of its own facility; one closure backs at most one restriction; the unreleased
+restrictions of a task never overlap in time (migration `0906`, below); a preventive schedule materializes each occurrence's task and
 restriction at most once; `active` needs a closure, `released` needs who/when/which closure. A
 preventive recurrence describes at most `maxScheduleOccurrences` (366) occurrences: a longer one is
 refused at creation, and one stored before that rule is refused at generation, with
@@ -76,7 +77,22 @@ database refuses transitions the machine forbids and keeps what was approved fin
 migration 0904)". Migration `0905` (R2-SCHEMA-01, §4.7 invariant 9) refuses deleting a restriction
 past `proposed` (`restrictions_no_delete`, `restrict_violation`), so who approved closing an area,
 and its release or withdrawal, cannot vanish; a proposed one can still be deleted. **Verified**:
-`schema-invariants.spec.ts` "R2-SCHEMA-01 / §4.7 invariant 9 (migration 0905)".
+`schema-invariants.spec.ts` "R2-SCHEMA-01 / §4.7 invariant 9 (migration 0905)". Migration `0906`
+(R4-OPS-MODULES-02, SPK-FAC-004) replaces `restrictions_open_task_idx` (one unreleased restriction
+per task at all) with the exclusion constraint `restrictions_open_task_no_overlap`: the proposed,
+approved and active restrictions of one task never overlap in time (`exclusion_violation`, answered
+409 `RESOURCE_CONFLICT` `details.code = TASK_RESTRICTION_OVERLAP`), and a follow-on restriction of the
+task that starts where the open one ends is accepted, so an overrunning repair keeps the area closed
+under the same inspection gate. **Verified**: `schema-invariants.spec.ts` "SPK-FAC-002 / SPK-FAC-004:
+a task carries at most one unreleased operating restriction at any instant; a follow-on may continue
+it (R4-OPS-MODULES-02, migration 0906)". Migration `0907` (R4-OPS-MODULES-03 follow-up, SPK-FAC-004)
+adds `maintenance_tasks.work_completed_at`, the instant the task's work last ended (set when it
+leaves `in_progress`; the release gate's anchor, below), with the check
+`maintenance_tasks_work_completed_state`: only a task that has been at work (`in_progress`,
+`resolved`, `closed`) carries it. Existing resolved and closed tasks take their `resolved_at`, the
+instant the gate used before, so no stored pass counts for more than it did. **Verified**:
+`schema-invariants.spec.ts` "SPK-FAC-004: only a task that has been at work carries the end of its
+work, the release gate anchor (R4-OPS-MODULES-03, migration 0907)".
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/facilities.ts`)
 
@@ -155,8 +171,26 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
   stay **Pending** (DEC-001).
 - **SPK-FAC-004.** Closing a task never touches its restriction (`openRestrictionIds` says so).
   `release` requires `facilities.release_to_service`, and when the task `requires_inspection` the
-  latest inspection must be `passed` (`ELIGIBILITY_FAILED`, `details.code = inspection_required`
-  otherwise). An inspection is recorded only once it has happened: an `inspectedAt` after the
+  latest inspection must be a pass that speaks for the work as it now stands (R4-OPS-MODULES-03):
+  inspected at or after both the restriction's approval and the end of the task's latest work
+  (`work_completed_at`, migration 0907: stamped when the task leaves `in_progress`, by resolving or
+  closing it), with the task not back at work (`in_progress`). Otherwise `ELIGIBILITY_FAILED`,
+  `details.code = inspection_required`, with `details.cause` (`not_inspected`, `inspection_failed`,
+  `work_in_progress`, `inspection_predates_current_work`) and `details.inspectionRequiredAfter`
+  (the later of the approval and the work end). A pass recorded before the task was reopened for
+  rework, a pass recorded while the task was at work, or the pass that released an earlier
+  restriction of the same task, therefore never releases the area. Resolving or closing an open or
+  assigned task records the outcome without new work, so it does not move the anchor: a pass after
+  the approval releases the area whether the task is still open or was closed or resolved after the
+  pass (the inspection found the area fit). Work on the area is recorded by starting the task
+  (`in_progress`); a repair resolved straight from `open` after a pass is not detected as new work.
+  **Verified**: `restriction-release-gate.spec.ts` "SPK-FAC-004: a pass recorded before the task
+  was reopened for rework does not release the area", "SPK-FAC-004: the pass that released an
+  earlier restriction of the task does not release a later one", "SPK-FAC-004: an open or assigned
+  task may be released on a pass recorded after the approval (the inspection found the area fit)",
+  "SPK-FAC-004: an open task whose pass is followed by closing or resolving the task is released on
+  that pass (no work happened after it)", "SPK-FAC-004: a pass recorded while the task was at work
+  does not release the area once the work ends; closing from in_progress ends the work". An inspection is recorded only once it has happened: an `inspectedAt` after the
   server clock is refused (`VALIDATION_FAILED`, `details.code = inspection_in_future`), so a
   future-dated pass can never outrank a later failed inspection. While a restriction on the task is open (proposed, approved or active), turning
   `requiresInspection` off is refused the same way, so the gate cannot be removed before release;
@@ -170,6 +204,42 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
   maintained space is pending with Operations, DEC-001). As defense in depth, a closure found
   lifted anyway raises `facilities.closure_lifted_outside_release` (outbox handler on
   `scheduling.closure_lifted`) and the restriction keeps its state.
+- **Restriction interval end (R4-OPS-MODULES-02, SPK-FAC-004, SPK-AT-021).** A restriction is
+  approved for a bounded interval and its scheduling closure ends with it, so an active restriction
+  that nobody releases stops blocking the area at its end while it still reads `active` (and its
+  asset `restricted`). The chosen semantics (option b of the finding): nothing reopens on record
+  without the authorized release, and the facilities operator is told before the area reopens. The
+  periodic job `facilities.raise_unreleased_restriction_exceptions` (every 300 s, failure owner
+  `facilities_operator`, `services/facilities-jobs.ts`) runs
+  `RestrictionsService.raiseUnreleasedAtEndExceptions` per organization with an active facility, in
+  one transaction each, locking the restrictions `FOR UPDATE SKIP LOCKED`. It raises one
+  `facilities.restriction_unreleased_at_end` exception per restriction (dedupe key
+  `restriction:<id>:unreleased_at_end`, affected `restriction`, deadline the interval end): `high`
+  from `restrictionEndWarningHours` before the end while the task's inspection is outstanding (the
+  release gate would refuse), `critical` once the interval ended with the inspection still
+  outstanding (the uninspected area is open in scheduling), `warning` once the interval ended with
+  the inspection passed but no release. Each run compares the open item with what is due now (its
+  severity, title, deadline and details: whether the interval ended, the gate's cause, the instant
+  the pass must follow, the latest inspection); an item that no longer states it (the interval
+  ended, the inspection failed or passed, the task went back to work) is settled with the new
+  statement and replaced, so it always states the current cause. To keep the area
+  closed, the operator applies a follow-on restriction for the same task starting at the end
+  (migration `0906`), whose release the same inspection gates; an active follow-on of the same task
+  and area covering the end, a passed inspection before the end, or the release itself settles the
+  exception (system actor `facilities.restriction_unreleased_at_end_settled`; the release settles
+  it in its own unit of work). `GET /operating-status` and scheduling keep reporting the area by the
+  closures in force at the instant. **Verified**: `restriction-interval-end.spec.ts` "SPK-FAC-004 /
+  SPK-AT-021: an active restriction whose task still needs its inspection raises an owned exception
+  before its interval ends, and a follow-on restriction of the same task keeps the area closed past
+  the end under the same inspection gate", "SPK-FAC-004: a passed inspection before the end settles
+  the warning; an interval that then ends without a release is raised again until the release
+  settles it", "SPK-FAC-004: an open item always states the current cause; it is replaced when the
+  inspection passes after the end or the task goes back to work", "SPK-FAC-004: an item raised
+  before the end is replaced when the interval ends with the inspection outstanding (critical), and
+  whenever its cause changes at the same severity". The warning lead (24 h, `FACILITIES_POLICY`)
+  and the three severities (`restrictions.service.ts`) are **Proposed** (DEC-001); open-ended
+  restrictions released only by the release (option a) would need open-ended scheduling closures and
+  are not built.
 - **SPK-FAC-005.** `generate` materializes occurrences starting before `now + leadTimeDays` (or
   `through`) and not yet ended: a task from the template (due at the occurrence end) plus a
   restriction approved under the schedule's own authority (`system` principal
@@ -204,8 +274,18 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
   task being resolved never escalates it (PGlite and TEST_DATABASE_URL)". A manually closed
   exception of a task that is still overdue is raised again by the next sweep (intended).
 - Assets follow their restrictions: `in_service → restricted` on activation and back on release
-  when no other open restriction remains; other asset states are left alone. Retiring an asset
-  with open tasks is refused.
+  when no other approved or active restriction names the asset (a merely proposed one holds
+  nothing; R4-OPS-MODULES-05); other asset states are left alone. `restricted` is the lifecycle
+  status ("an approved, unreleased restriction names it, now or later"); availability for a time is
+  the asset directory's `usable` with the booking's intervals (below). While an approved or active
+  restriction names the asset, `PATCH /v1/assets/{id}` refuses `status: in_service` (from any state)
+  with `ELIGIBILITY_FAILED`, `details.code = restriction_release_required`: the asset returns to
+  service only through the restriction's release, which needs `facilities.release_to_service` and
+  the inspection gate (a system administrator holds `manage_asset` only); it may be set
+  `restricted`, `out_of_service` or retired meanwhile. **Verified**: `asset-directory.spec.ts`
+  "SPK-FAC-004 (R4-OPS-MODULES-05): a restricted asset returns to service only through its
+  restriction release, never through PATCH /v1/assets". Retiring an asset with open tasks is
+  refused.
 
 ## Ports (`ports.ts`, provided by `FacilitiesModule`)
 
@@ -213,10 +293,20 @@ expectedRevision? }` (authority `facilities.apply_restriction`, the restriction 
 - `OPERATING_STATUS_PORT` → `RestrictionsService.operatingStatus` / `activeRestrictions`
   (reporting, communications, Today workspace).
 - `ASSET_DIRECTORY_PORT` (FAC-02, IF-33; SPK-COND-003) → `AssetDirectoryService.describe(organizationId,
-assetIds, trx?)`, registered as `ASSET_DIRECTORY_IMPL`: reads through the passed transaction, else
-  the active one, and returns `{ id, facilityId, kind, name, status, usable }` per known asset of the
-  organization, where `usable` is `in_service` with no active restriction naming the asset at the
-  clock instant. Unknown, malformed and other-organization ids are omitted, so a booking naming them
+assetIds, trx?, { intervals? })`, registered as `ASSET_DIRECTORY_IMPL`: reads through the passed
+  transaction, else the active one, and returns `{ id, facilityId, kind, name, status, usable }` per
+  known asset of the organization. Without `intervals`, `usable` is `in_service` with no active
+  restriction naming the asset at the clock instant (conservative: an asset an approved future
+  restriction already marks `restricted` reads unusable at every time). With the booking's
+  `intervals` (R4-OPS-MODULES-05, SPK-FAC-003: a restriction affects availability for its approved
+  interval), `usable` is: in service, or `restricted` only by approved or active restrictions, and
+  none of them overlaps any interval; out-of-service, retired, and manually restricted assets with no
+  restriction behind them are never usable, and a malformed interval is `VALIDATION_FAILED`
+  (**Verified**, `asset-directory.spec.ts` "SPK-FAC-003 / SPK-COND-003 (R4-OPS-MODULES-05): with the
+  booking intervals, equipment a future restriction names is usable outside its window and unusable
+  inside it"). Enrollment's rental and party bookings do not pass their occurrences yet, so they
+  still get the conservative answer (**Pending** the enrollment change, deferred from
+  R4-OPS-MODULES-05). Unknown, malformed and other-organization ids are omitted, so a booking naming them
   is refused (enrollment's rental and party bookings). Scheduling equipment commitments keep the
   asset id as party id. **Verified**: `asset-directory.spec.ts` "a retired or restricted asset reads
   as not usable", "another organization's asset is omitted", "reads through the passed or active
@@ -238,14 +328,16 @@ open restriction ids), `facilities.inspection_recorded`, `facilities.restriction
 `facilities.maintenance_task_due_reached`.
 
 Handlers registered in `onModuleInit`: `facilities.escalate_overdue_task` (own timer) and
-`facilities.reconcile_lifted_closure` (`scheduling.closure_lifted`). Periodic job:
-`facilities.raise_overdue_task_exceptions` (FAC-03).
+`facilities.reconcile_lifted_closure` (`scheduling.closure_lifted`). Periodic jobs:
+`facilities.raise_overdue_task_exceptions` (FAC-03) and
+`facilities.raise_unreleased_restriction_exceptions` (R4-OPS-MODULES-02).
 
 ## Known gaps / pending decisions
 
 - Due lead time per severity (critical 4 h, high 24 h, medium 72 h, low 168 h), the escalating
-  severities (`critical`), the preventive lead time (14 days) and the default closure resolution
-  mode (`leave_for_resolution`) are **proposed** defaults pending the operations decisions (§6.6);
+  severities (`critical`), the preventive lead time (14 days), the default closure resolution
+  mode (`leave_for_resolution`) and the warning lead before an unreleased restriction's end (24 h,
+  `restrictionEndWarningHours`) are **proposed** defaults pending the operations decisions (§6.6);
   override by providing `FACILITIES_POLICY`.
 - `limited` restrictions close the area for their interval exactly like `closed` ones; partial-use
   rules (formats, capacity, daylight-only) are a **pending** operations decision and would need a

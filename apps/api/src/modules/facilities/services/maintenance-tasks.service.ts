@@ -210,6 +210,7 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
         resolution: null,
         resolved_at: null,
         closed_at: null,
+        work_completed_at: null,
         preventive_schedule_id: data.preventiveScheduleId ?? null,
         occurrence_index: data.occurrenceIndex ?? null,
       })
@@ -290,6 +291,10 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
       let resolution = (current.resolution as TaskResolution | null) ?? null;
       let resolvedAt: Date | null = current.resolved_at;
       let closedAt: Date | null = current.closed_at;
+      // SPK-FAC-004 (R4-OPS-MODULES-03, migration 0907): when the task's work last ended. Only
+      // leaving `in_progress` ends work; resolving or closing an open or assigned task records the
+      // outcome without new work, so a pass that found the area fit before it still speaks for it.
+      let workCompletedAt: Date | null = current.work_completed_at;
 
       if (body.assignedOwnerPersonId !== undefined) {
         if (body.assignedOwnerPersonId === null) {
@@ -323,6 +328,7 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
             break;
           }
           case 'resolved': {
+            if (status === 'in_progress') workCompletedAt = now;
             status = MaintenanceTaskMachine.next(status, 'resolve');
             if (!resolution) {
               throw errors.validation('A resolution is required to resolve a task.', {
@@ -334,6 +340,7 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
             break;
           }
           case 'closed': {
+            if (status === 'in_progress') workCompletedAt = now;
             status = MaintenanceTaskMachine.next(status, 'close');
             if (!resolution) {
               throw errors.validation('A resolution is required to close a task.', {
@@ -385,6 +392,7 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
           resolution: resolution === null ? null : json(resolution),
           resolved_at: resolvedAt,
           closed_at: closedAt,
+          work_completed_at: workCompletedAt,
           revision: current.revision + 1,
         })
         .where('organization_id', '=', organizationId)
@@ -407,6 +415,9 @@ export class MaintenanceTasksService implements MaintenanceReportPort {
           changes,
           status,
           openRestrictionIds,
+          ...(workCompletedAt !== current.work_completed_at && workCompletedAt
+            ? { workCompletedAt: workCompletedAt.toISOString() }
+            : {}),
           ...(updated.requires_inspection !== current.requires_inspection
             ? {
                 requiresInspection: {
