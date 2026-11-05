@@ -367,6 +367,8 @@ describe('durable finalization (SPK-AT-023, §4.11 step 8, §4.12)', () => {
       refundedMinor: 4_000,
       reservedMinor: 0,
       compensatedMinor: 6_000,
+      // R4-PROVIDER-OUTCOMES-02: no refund of this payment was reported failed after success.
+      reversedMinor: 0,
       availableMinor: 0,
       currency: 'USD',
     });

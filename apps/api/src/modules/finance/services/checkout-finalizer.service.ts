@@ -40,7 +40,9 @@ import {
   outcomeUnknownDetails,
   financeSystem,
   minutesFrom,
+  netRefundedMinor,
   organizationOf,
+  refundableAvailableMinor,
   withSavepoint,
   type Reader,
 } from '../finance.shared';
@@ -422,11 +424,7 @@ export class CheckoutFinalizer {
       checkout.organization_id,
       checkout.payment_attempt_id,
     );
-    const available =
-      refundable.captured_minor -
-      refundable.refunded_minor -
-      refundable.reserved_minor -
-      refundable.compensated_minor;
+    const available = refundableAvailableMinor(refundable);
     if (available <= 0) throw errors.refundPending({ checkoutId: checkout.id });
     const refund = await this.refunds.reserveInTrx(trx, {
       organizationId: checkout.organization_id,
@@ -499,7 +497,9 @@ export class CheckoutFinalizer {
         amount += receipt.amount_minor;
         continue;
       }
-      const left = funds.captured_minor - funds.refunded_minor - funds.compensated_minor;
+      // R4-PROVIDER-OUTCOMES-02: a refund the provider reported failed after success returned
+      // nothing, so its amount counts as received again.
+      const left = funds.captured_minor - netRefundedMinor(funds) - funds.compensated_minor;
       if (left <= 0) continue;
       amount += left;
       consumed.push({ paymentAttemptId: funds.payment_attempt_id, amountMinor: left });

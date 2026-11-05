@@ -1022,4 +1022,360 @@ describe('finance database guarantees (§4.7 invariants 5, 6, 7; SPK-PAY-004/008
       ),
     ).toBe(UNIQUE);
   });
+
+  it('§4.7 invariant 5 (R4-DB-INVARIANTS-11): a checkout is charged successfully at most once and compensated by at most one live or succeeded refund', async () => {
+    const { checkoutId } = await completedPlanCheckout();
+    const charge = await t.db
+      .selectFrom('payment_attempts')
+      .selectAll()
+      .where('checkout_id', '=', checkoutId)
+      .where('status', '=', 'succeeded')
+      .executeTakeFirstOrThrow();
+    // A second succeeded attempt for the same checkout is refused; a failed one is not.
+    expect(
+      await refusedBy(
+        copyRow('payment_attempts', charge.id, {
+          id: newId(),
+          provider_reference: `fp_dup_${newId()}`,
+        }),
+      ),
+    ).toBe('payment_attempts_one_success_idx');
+    await copyRow('payment_attempts', charge.id, {
+      id: newId(),
+      provider_reference: `fp_failed_${newId()}`,
+      status: 'failed',
+      failure_reason: 'card_declined',
+    });
+    // One live or succeeded compensation refund per checkout: a failed one does not count.
+    const compensation = (status: 'requested' | 'succeeded' | 'failed') => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      payment_attempt_id: charge.id,
+      amount_minor: 1_000,
+      currency: charge.currency,
+      purpose: 'compensation' as const,
+      checkout_id: checkoutId,
+      status,
+      reservation_status:
+        status === 'requested'
+          ? ('reserved' as const)
+          : status === 'succeeded'
+            ? ('settled' as const)
+            : ('released' as const),
+      reason: 'schema test',
+      provider: charge.provider,
+      provider_reference: null,
+      failure_reason: status === 'failed' ? 'failed' : null,
+      evidence_source: null,
+      evidence_inbox_event_id: null,
+      evidence_sequence: null,
+      requested_by: ACTOR,
+      requested_by_person_id: null,
+      operation_id: null,
+      submitted_at: null,
+      unknown_since: null,
+      resolved_at: status === 'requested' ? null : t.clock.now(),
+    });
+    await t.db.insertInto('refund_attempts').values(compensation('failed')).execute();
+    await t.db.insertInto('refund_attempts').values(compensation('succeeded')).execute();
+    expect(
+      await refusedBy(
+        t.db.insertInto('refund_attempts').values(compensation('requested')).execute(),
+      ),
+    ).toBe('refund_attempts_live_compensation_idx');
+    expect(
+      await refusedBy(
+        t.db.insertInto('refund_attempts').values(compensation('succeeded')).execute(),
+      ),
+    ).toBe('refund_attempts_live_compensation_idx');
+  });
+
+  it('R4-PROVIDER-OUTCOMES-02 (migration 0681, §4.7 invariant 6): a refund reversal is a recorded fact: of a succeeded refund, once, and always matching the payment’s reversed amount', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const refundRow = (status: 'succeeded' | 'failed', amount: number) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      payment_attempt_id: paymentAttemptId,
+      amount_minor: amount,
+      currency: 'USD',
+      checkout_id: null,
+      status,
+      reservation_status: status === 'succeeded' ? ('settled' as const) : ('released' as const),
+      reason: 'schema test',
+      provider: 'fake-payments',
+      provider_reference: null,
+      failure_reason: status === 'failed' ? 'failed' : null,
+      evidence_source: null,
+      evidence_inbox_event_id: null,
+      evidence_sequence: null,
+      requested_by: ACTOR,
+      requested_by_person_id: null,
+      operation_id: null,
+      submitted_at: null,
+      unknown_since: null,
+      resolved_at: t.clock.now(),
+    });
+    const refunded = refundRow('succeeded', 600);
+    const failed = refundRow('failed', 100);
+    await t.db.transaction().execute(async (trx) => {
+      await trx.insertInto('refund_attempts').values([refunded, failed]).execute();
+      await trx
+        .updateTable('payment_refundables')
+        .set({ refunded_minor: 600 })
+        .where('payment_attempt_id', '=', paymentAttemptId)
+        .execute();
+    });
+    const now = t.clock.now();
+    // The refundable funds and the refund are written together, or not at all.
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ reversed_minor: 600 })
+          .where('payment_attempt_id', '=', paymentAttemptId)
+          .execute(),
+      ),
+    ).toBe('payment_refundables_reversal_consistent');
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('refund_attempts')
+          .set({ reversed_at: now })
+          .where('id', '=', refunded.id)
+          .execute(),
+      ),
+    ).toBe('payment_refundables_reversal_consistent');
+    // Only a succeeded refund is reversed, and never more than was refunded.
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('refund_attempts')
+          .set({ reversed_at: now })
+          .where('id', '=', failed.id)
+          .execute(),
+      ),
+    ).toBe('refund_attempts_reversal_fact');
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ reversed_minor: 700 })
+          .where('payment_attempt_id', '=', paymentAttemptId)
+          .execute(),
+      ),
+    ).toBe('payment_refundables_reversal_within_refunded');
+    await t.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('refund_attempts')
+        .set({ reversed_at: now })
+        .where('id', '=', refunded.id)
+        .execute();
+      await trx
+        .updateTable('payment_refundables')
+        .set({ reversed_minor: 600 })
+        .where('payment_attempt_id', '=', paymentAttemptId)
+        .execute();
+    });
+    // Reversed once; the reversed amount only accumulates; a reversal leaves room to refund again.
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('refund_attempts')
+          .set({ reversed_at: new Date(now.getTime() + 1_000) })
+          .where('id', '=', refunded.id)
+          .execute(),
+      ),
+    ).toBe('refund_attempts_reversal_once');
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ reversed_minor: 0 })
+          .where('payment_attempt_id', '=', paymentAttemptId)
+          .execute(),
+      ),
+    ).toBe('payment_refundables_reversed_accumulate');
+    await t.db
+      .updateTable('payment_refundables')
+      .set({ reserved_minor: 1_000 })
+      .where('payment_attempt_id', '=', paymentAttemptId)
+      .execute();
+    expect(
+      await refusedBy(
+        t.db
+          .updateTable('payment_refundables')
+          .set({ reserved_minor: 1_001 })
+          .where('payment_attempt_id', '=', paymentAttemptId)
+          .execute(),
+      ),
+    ).toBe('payment_refundables_within_captured');
+  });
+
+  /** Redeems `amount` of a credit in one transaction, as the history check requires. */
+  async function redeem(creditId: string, amount: number, referenceId: string): Promise<string> {
+    const id = newId();
+    await t.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('credits')
+        .set((eb) => ({ remaining_minor: eb('remaining_minor', '-', amount) }))
+        .where('id', '=', creditId)
+        .execute();
+      await trx
+        .insertInto('credit_redemptions')
+        .values({
+          id,
+          organization_id: t.organizationId,
+          credit_id: creditId,
+          kind: 'redeem',
+          amount_minor: amount,
+          currency: 'USD',
+          reference_type: 'obligation',
+          reference_id: referenceId,
+          reverses_redemption_id: null,
+          actor: ACTOR,
+          redeemed_at: t.clock.now(),
+        })
+        .execute();
+    });
+    return id;
+  }
+
+  /** Gives a redemption back with a reversal row (the credit's balance is restored with it). */
+  function reverse(creditId: string, target: { id: string; amount: number; referenceId: string }) {
+    return t.db.transaction().execute(async (trx) => {
+      // The row first: the reversal checks run before the balance checks see the restored amount.
+      const id = newId();
+      await trx
+        .insertInto('credit_redemptions')
+        .values({
+          id,
+          organization_id: t.organizationId,
+          credit_id: creditId,
+          kind: 'reversal',
+          amount_minor: target.amount,
+          currency: 'USD',
+          reference_type: 'obligation',
+          reference_id: target.referenceId,
+          reverses_redemption_id: target.id,
+          actor: ACTOR,
+          redeemed_at: t.clock.now(),
+        })
+        .execute();
+      await trx
+        .updateTable('credits')
+        .set((eb) => ({ remaining_minor: eb('remaining_minor', '+', target.amount) }))
+        .where('id', '=', creditId)
+        .execute();
+      return id;
+    });
+  }
+
+  /** Allocates `amount` from a credit redemption to an open obligation (and records it there). */
+  function allocateFromCredit(redemptionId: string, obligationId: string, amount: number) {
+    return t.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('obligations')
+        .set((eb) => ({ allocated_minor: eb('allocated_minor', '+', amount) }))
+        .where('id', '=', obligationId)
+        .execute();
+      await trx
+        .insertInto('payment_allocations')
+        .values({
+          id: newId(),
+          organization_id: t.organizationId,
+          obligation_id: obligationId,
+          source_kind: 'credit_redemption',
+          receipt_id: null,
+          credit_redemption_id: redemptionId,
+          amount_minor: amount,
+          currency: 'USD',
+          allocated_at: t.clock.now(),
+        })
+        .execute();
+    });
+  }
+
+  it('R4-DB-INVARIANTS-01 (migration 0682, §4.7 invariants 5 and 7, SPK-PAY-004/009): credit money is allocated only from an unreversed redemption and never beyond what it consumed', async () => {
+    const creditId = await createCreditFixture(t, {
+      ownerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const first = await createObligationFixture(t, {
+      debtorPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const second = await createObligationFixture(t, {
+      debtorPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    // The genuine path: one redemption of 100, allocated in full to the obligation it paid.
+    const redemption = await redeem(creditId, 100, first);
+    await allocateFromCredit(redemption, first, 100);
+    // The same redemption cannot fund a second obligation in a later transaction ...
+    expect(await refusedBy(allocateFromCredit(redemption, second, 100))).toBe(
+      'payment_allocations_credit_redemption_consistent',
+    );
+    // ... nor more than it consumed in one allocation.
+    const small = await redeem(creditId, 50, second);
+    expect(await refusedBy(allocateFromCredit(small, second, 60))).toBe(
+      'payment_allocations_credit_redemption_consistent',
+    );
+    // A reversal row funds nothing, and neither does a redemption that was already given back.
+    const reversal = await reverse(creditId, { id: small, amount: 50, referenceId: second });
+    expect(await refusedBy(allocateFromCredit(reversal, second, 50))).toBe(
+      'payment_allocations_credit_redemption_consistent',
+    );
+    expect(await refusedBy(allocateFromCredit(small, second, 50))).toBe(
+      'payment_allocations_credit_redemption_consistent',
+    );
+    const funded = await t.db
+      .selectFrom('payment_allocations')
+      .select((eb) => eb.fn.sum<number>('amount_minor').as('total'))
+      .where('credit_redemption_id', 'in', [redemption, small, reversal])
+      .executeTakeFirstOrThrow();
+    expect(Number(funded.total)).toBe(100);
+  });
+
+  it('R4-DB-INVARIANTS-02 (migration 0683, §4.7 invariant 7, SPK-PAY-009): a credit reversal gives back only a redemption of the same credit, reference and amount', async () => {
+    const a = await createCreditFixture(t, { ownerPersonId: payer.personId, amountMinor: 1_000 });
+    const b = await createCreditFixture(t, { ownerPersonId: payer.personId, amountMinor: 1_000 });
+    const referenceA = newId();
+    const referenceB = newId();
+    const redeemA = await redeem(a, 600, referenceA);
+    const redeemB = await redeem(b, 500, referenceB);
+    // Credit A names credit B's redemption (another credit, amount and reference).
+    expect(await refusedBy(reverse(a, { id: redeemB, amount: 600, referenceId: referenceA }))).toBe(
+      'credit_redemptions_reversal_matches',
+    );
+    expect(await refusedBy(reverse(a, { id: redeemB, amount: 500, referenceId: referenceB }))).toBe(
+      'credit_redemptions_reversal_matches',
+    );
+    // The composite key refuses it too, whoever writes it (the trigger aside).
+    const fks = await sql<{ name: string }>`
+      select conname as name from pg_constraint
+       where conname = 'credit_redemptions_reversal_same_credit_fk' and convalidated`.execute(t.db);
+    expect(fks.rows).toHaveLength(1);
+    // Another amount or reference than the redemption it gives back.
+    expect(await refusedBy(reverse(a, { id: redeemA, amount: 300, referenceId: referenceA }))).toBe(
+      'credit_redemptions_reversal_matches',
+    );
+    expect(await refusedBy(reverse(a, { id: redeemA, amount: 600, referenceId: newId() }))).toBe(
+      'credit_redemptions_reversal_matches',
+    );
+    // The genuine reversals are accepted; a reversal of a reversal is not.
+    const reversalA = await reverse(a, { id: redeemA, amount: 600, referenceId: referenceA });
+    await reverse(b, { id: redeemB, amount: 500, referenceId: referenceB });
+    expect(
+      await refusedBy(reverse(a, { id: reversalA, amount: 600, referenceId: referenceA })),
+    ).toBe('credit_redemptions_reversal_matches');
+    const balances = await t.db
+      .selectFrom('credits')
+      .select(['id', 'remaining_minor'])
+      .where('id', 'in', [a, b])
+      .execute();
+    expect(balances.map((c) => c.remaining_minor)).toEqual([1_000, 1_000]);
+  });
 });

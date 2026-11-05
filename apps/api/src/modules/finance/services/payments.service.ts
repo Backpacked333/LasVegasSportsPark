@@ -46,6 +46,7 @@ import {
   minutesFrom,
   organizationOf,
   outcomeUnknownDetails,
+  refundableAvailableMinor,
   toPaymentAttempt,
   type PaymentAttemptRow,
   type Reader,
@@ -174,7 +175,13 @@ export class PaymentsService {
   async detail(db: Reader, row: PaymentAttemptRow): Promise<PaymentDetail> {
     const refundable = await db
       .selectFrom('payment_refundables')
-      .select(['captured_minor', 'refunded_minor', 'reserved_minor', 'compensated_minor'])
+      .select([
+        'captured_minor',
+        'refunded_minor',
+        'reversed_minor',
+        'reserved_minor',
+        'compensated_minor',
+      ])
       .where('organization_id', '=', row.organization_id)
       .where('payment_attempt_id', '=', row.id)
       .executeTakeFirst();
@@ -188,12 +195,7 @@ export class PaymentsService {
       .execute();
     return {
       ...toPaymentAttempt(row),
-      refundableMinor: refundable
-        ? Number(refundable.captured_minor) -
-          Number(refundable.refunded_minor) -
-          Number(refundable.reserved_minor) -
-          Number(refundable.compensated_minor)
-        : 0,
+      refundableMinor: refundable ? refundableAvailableMinor(refundable) : 0,
       compensatedMinor: refundable ? Number(refundable.compensated_minor) : 0,
       refunds: refunds.map((r) => ({
         id: r.id,

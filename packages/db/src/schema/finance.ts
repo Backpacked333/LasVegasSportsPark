@@ -417,6 +417,12 @@ export interface PaymentRefundablesTable {
   reserved_minor: GeneratedMinor;
   /** MONEY-02 (0612): what a compensation credit took from these funds; only accumulates. */
   compensated_minor: GeneratedMinor;
+  /**
+   * R4-PROVIDER-OUTCOMES-02 (0681): of `refunded_minor`, what came back because the provider
+   * reported a recorded refund failed; only accumulates and equals the sum of the payment's
+   * reversed refunds.
+   */
+  reversed_minor: GeneratedMinor;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -449,6 +455,11 @@ export interface RefundAttemptsTable {
   submitted_at: NullableTimestamp;
   unknown_since: NullableTimestamp;
   resolved_at: NullableTimestamp;
+  /**
+   * R4-PROVIDER-OUTCOMES-02 (0681): when the provider's report that this succeeded refund failed
+   * was booked as a reversal (set once; the refund keeps its recorded state).
+   */
+  reversed_at: Generated<Date | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

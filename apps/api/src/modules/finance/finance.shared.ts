@@ -286,15 +286,46 @@ export function toOrder(
   };
 }
 
+/**
+ * R4-PROVIDER-OUTCOMES-02 (SPK-PAY-008, §4.7 invariant 6): the money a payment's refunds actually
+ * returned: what was recorded refunded, less the refunds the provider later reported failed
+ * (their reversal is booked, 0681).
+ */
+export function netRefundedMinor(
+  row: Pick<RefundableRow, 'refunded_minor' | 'reversed_minor'>,
+): number {
+  return Number(row.refunded_minor) - Number(row.reversed_minor);
+}
+
+/**
+ * What can still be refunded from a payment: captured less net refunded, reserved and what a
+ * compensation credit took (MONEY-02). The same arithmetic as the database's
+ * payment_refundables_within_captured check.
+ */
+export function refundableAvailableMinor(
+  row: Pick<
+    RefundableRow,
+    'captured_minor' | 'refunded_minor' | 'reversed_minor' | 'reserved_minor' | 'compensated_minor'
+  >,
+): number {
+  return (
+    Number(row.captured_minor) -
+    netRefundedMinor(row) -
+    Number(row.reserved_minor) -
+    Number(row.compensated_minor)
+  );
+}
+
 export function toRefundable(row: RefundableRow): Refundable {
   return {
     capturedMinor: row.captured_minor,
-    refundedMinor: row.refunded_minor,
+    // R4-PROVIDER-OUTCOMES-02: money actually returned (a reversed refund came back).
+    refundedMinor: netRefundedMinor(row),
     reservedMinor: row.reserved_minor,
     compensatedMinor: row.compensated_minor,
+    reversedMinor: row.reversed_minor,
     // MONEY-02: funds a compensation credit took are no longer refundable.
-    availableMinor:
-      row.captured_minor - row.refunded_minor - row.reserved_minor - row.compensated_minor,
+    availableMinor: refundableAvailableMinor(row),
     currency: row.currency,
   };
 }
@@ -316,6 +347,7 @@ export function toRefund(row: RefundRow, refundable: RefundableRow): Refund {
     refundable: toRefundable(refundable),
     unknownSince: isoOrNull(row.unknown_since),
     resolvedAt: isoOrNull(row.resolved_at),
+    reversedAt: isoOrNull(row.reversed_at),
     createdAt: iso(row.created_at),
   };
 }

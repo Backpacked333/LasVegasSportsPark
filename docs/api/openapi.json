@@ -34469,6 +34469,9 @@
           "compensatedMinor": {
             "type": "integer"
           },
+          "reversedMinor": {
+            "type": "integer"
+          },
           "availableMinor": {
             "type": "integer"
           },
@@ -34565,6 +34568,13 @@
             "format": "date-time"
           },
           "resolvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reversedAt": {
             "type": [
               "string",
               "null"

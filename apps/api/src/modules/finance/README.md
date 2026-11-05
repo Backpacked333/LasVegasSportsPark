@@ -72,7 +72,9 @@ carry `revision` and `touch_updated_at`.
   per obligation (`0601`: the checkout charge names the obligation it pays, so the installment
   worker can never charge the same debt beside it; `0611`: one live checkout, installment or
   direct-payment charge per obligation, so a collection and a payer's own payment of the same
-  installment cannot both charge, MONEY-07); one succeeded attempt per checkout; one
+  installment cannot both charge, MONEY-07); one succeeded attempt per checkout
+  (`payment_attempts_one_success_idx`) and one live or succeeded compensation refund per checkout
+  (`refund_attempts_live_compensation_idx`; both proven refused, R4-DB-INVARIANTS-11); one
   credit per source fact (an in-process caller may name the source of an adjustment credit —
   migration passes the imported balance's mapping id — and a second credit for it is refused with
   `CREDIT_ALREADY_ISSUED_FOR_SOURCE`; `POST /credits` never takes one); one redemption per credit
@@ -87,11 +89,16 @@ carry `revision` and `touch_updated_at`.
   `__tests__/credits-installments.spec.ts`). `0617` also gave every earlier plan the sum of its
   installments as total.
 - **§4.7 invariant 6 / SPK-PAY-008:** `payment_refundables_within_captured`
-  (`refunded + reserved + compensated <= captured`, `0612`); captured is fixed, refunded and
-  compensated (what a compensation credit took, MONEY-02) only accumulate.
+  (`refunded - reversed + reserved + compensated <= captured`, `0612`, `0681`); captured is
+  fixed, refunded, compensated (what a compensation credit took, MONEY-02) and reversed (refunds
+  the provider reported failed after success, R4-PROVIDER-OUTCOMES-02) only accumulate; reversed
+  never exceeds refunded and always equals the payment's refunds marked reversed (checked at
+  commit), and a refund is reversed once and only when it succeeded.
 - **§4.7 invariant 7 / SPK-PAY-009:** `remaining_minor >= 0`, `remaining <= original`, and a
   deferred constraint trigger keeps `remaining = original - redeemed + reversed`, so a balance is
-  never overwritten.
+  never overwritten. A reversal gives back only a `redeem` row of the same credit (composite key
+  `credit_redemptions_reversal_same_credit_fk`), the same reference, currency and amount
+  (`credit_redemptions_reversal_matches`, `0683`, R4-DB-INVARIANTS-02).
 - **SPK-PAY-010:** journals, entries, receipts, allocations, redemptions, quote lines, order lines
   and settlement reconciliations are append-only (`forbid_mutation`); a deferred constraint trigger
   refuses a journal that does not balance in one currency with at least two lines; an entry is a
@@ -99,7 +106,10 @@ carry `revision` and `touch_updated_at`.
 - **SPK-PAY-004:** `allocated <= amount`, a deferred trigger keeps `allocated` equal to the
   allocation rows, allocations only accumulate, a settled obligation is fully allocated; a
   receipt's allocations always equal its allocated part in its currency (checked on every
-  allocation that names it, migration 0602, so received money is never allocated twice); a
+  allocation that names it, migration 0602, so received money is never allocated twice); an
+  allocation funded by a credit redemption names an unreversed `redeem` row in its currency and a
+  redemption's allocations never exceed what it consumed (checked under a lock on the redemption,
+  `payment_allocations_credit_redemption_consistent`, `0682`, R4-DB-INVARIANTS-01); a
   contribution request can only reference a `team_with_contributions` obligation.
 - **SPK-PAY-001 (`0603`):** a quote or order line, installment, contribution request, credit
   redemption or refund attempt names its quote, order, plan, obligation, credit or payment attempt
@@ -301,7 +311,15 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
   record" releases it only once the refund was submitted at least the reconciliation threshold
   ago. Refund evidence (synchronous answer, webhook, reconciliation) is compared with the refund
   attempt: another amount, currency or provider reference changes nothing and raises the critical
-  exception `finance.refund_evidence_conflict` (MONEY-09).
+  exception `finance.refund_evidence_conflict` (MONEY-09). A refund recorded `succeeded` that the
+  provider later reports `failed` returned no money (R4-PROVIDER-OUTCOMES-02, §4.11, SPK-PAY-010):
+  the refund keeps its recorded state (the Refund machine forbids the flip) with `reversedAt`,
+  the reversal is booked once (the reversing journal of its `refund_settled` posting, purpose
+  `refund_reversed`), its amount is refundable again (`reversedMinor` on the refundable funds,
+  `refundedMinor` is what was actually returned), settlement reconciliation counts it back in
+  the period it was reversed, and the critical `finance.refund_evidence_conflict` stays open for
+  the finance operator; a reversed compensation refund is not retried automatically. A later
+  success report of a reversed refund books nothing and raises the conflict again.
 - **Team billing (SPK-PAY-004/005, SPK-AT-022):** contribution payments that together exceed the
   remaining balance allocate exactly the remaining amount; the excess stays visible on the receipt
   and the obligation (`excessMinor`), sits in `overpayment_liability`, and is held as a credit
@@ -626,7 +644,8 @@ outcome recording and reconciliation are never gated.
 - A refund released after the reconciliation threshold ("no provider record") that the provider
   later reports as succeeded is not re-reserved or re-booked: it stays visible as the critical
   exception `finance.refund_evidence_conflict` (a design decision against the refundable check is
-  pending).
+  pending). The opposite contradiction, `failed` after `succeeded`, is booked as a reversal
+  (R4-PROVIDER-OUTCOMES-02, above).
 - Compensation does not yet release the order's discount redemptions (per-person discount limits),
   and an open future installment obligation partly paid before compensation is canceled for its
   full amount (the same as abort).

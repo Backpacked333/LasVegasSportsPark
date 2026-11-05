@@ -490,4 +490,98 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
     });
     await drain(t);
   });
+
+  it('R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008, SPK-PAY-010): a refund the provider reports failed after it succeeded is reversed once: refundable again, a reversing journal, the conflict open for finance', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 10_000,
+    });
+    const refundsBefore = await balanceOf(t, 'refunds');
+    const processorBefore = await balanceOf(t, 'cash_processor');
+    const first = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 6_000,
+      reason: 'Refund the provider later reports failed',
+    });
+    expect(first.body).toMatchObject({ status: 'succeeded', reservationStatus: 'settled' });
+    const refundId = first.body.id as string;
+    // The provider reports the refund failed after all; the webhook is delivered twice.
+    provider(t).settleRefund(refundId, 'failed');
+    const event = provider(t).refundWebhook(refundId);
+    await deliver(t, event);
+    await deliver(t, event);
+    await processInbox(t);
+    // A later failure report of the same refund (another event) books nothing more.
+    await deliver(t, provider(t).refundWebhook(refundId, { eventId: `evt_${newId()}` }));
+    await processInbox(t);
+    const reversed = await t.http.get(`/v1/refunds/${refundId}`).set(finance.header);
+    expect(reversed.body).toMatchObject({
+      status: 'succeeded',
+      reservationStatus: 'settled',
+      refundable: {
+        capturedMinor: 10_000,
+        refundedMinor: 0,
+        reversedMinor: 6_000,
+        reservedMinor: 0,
+        availableMinor: 10_000,
+      },
+    });
+    expect(reversed.body.reversedAt).toEqual(t.clock.now().toISOString());
+    const payment = await t.http.get(`/v1/payments/${paymentAttemptId}`).set(finance.header);
+    expect(payment.body.refundableMinor).toBe(10_000);
+    // The ledger: one reversing journal of the refund's posting; the books balance again.
+    const journals = await t.db
+      .selectFrom('journals')
+      .select(['purpose', 'reversal_of_journal_id'])
+      .where('source_type', '=', 'refund')
+      .where('source_id', '=', refundId)
+      .orderBy('purpose')
+      .execute();
+    expect(journals.map((j) => j.purpose)).toEqual(['refund_reversed', 'refund_settled']);
+    expect(journals[0]?.reversal_of_journal_id).not.toBeNull();
+    expect(await balanceOf(t, 'refunds')).toBe(refundsBefore);
+    expect(await balanceOf(t, 'cash_processor')).toBe(processorBefore);
+    const totals = await ledgerTotals(t);
+    expect(totals.debits).toBe(totals.credits);
+    // The finance operator still reviews it.
+    const conflicts = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['severity', 'status', 'details'])
+      .where('category', '=', 'finance.refund_evidence_conflict')
+      .where('affected_id', '=', refundId)
+      .execute();
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({ severity: 'critical', status: 'open' });
+    expect(conflicts[0]?.details).toMatchObject({ reversed: true, reportedStatus: 'failed' });
+    // The money is refundable again: a new refund of the same amount is accepted.
+    const again = await post(t, `/v1/payments/${paymentAttemptId}/refunds`, finance.header, {
+      amountMinor: 10_000,
+      reason: 'Refund again in full',
+    });
+    expect(again.status).toBe(201);
+    expect(again.body).toMatchObject({
+      status: 'succeeded',
+      refundable: { refundedMinor: 10_000, reversedMinor: 6_000, availableMinor: 0 },
+    });
+    // A later success report of the reversed refund contradicts it again; nothing is booked.
+    provider(t).settleRefund(refundId, 'succeeded');
+    await deliver(t, provider(t).refundWebhook(refundId, { eventId: `evt_${newId()}` }));
+    await processInbox(t);
+    const funds = await refundable(t, paymentAttemptId);
+    expect(funds).toMatchObject({
+      refunded_minor: 16_000,
+      reversed_minor: 6_000,
+      reserved_minor: 0,
+    });
+    const reopened = await t.db
+      .selectFrom('operational_exceptions')
+      .select('title')
+      .where('category', '=', 'finance.refund_evidence_conflict')
+      .where('affected_id', '=', refundId)
+      .orderBy('opened_at')
+      .execute();
+    expect(reopened.map((e) => e.title)).toContain(
+      'Conflicting refund evidence (succeeded after reversal); nothing was changed',
+    );
+    await drain(t);
+  });
 });

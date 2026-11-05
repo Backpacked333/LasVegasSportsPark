@@ -650,6 +650,10 @@ export type PaymentOutcome = z.infer<typeof PaymentOutcomeSchema>;
 export const RefundableSchema = z
   .object({
     capturedMinor: z.number().int(),
+    /**
+     * Money the payment's refunds returned: refunds recorded succeeded, less those the provider
+     * later reported failed (`reversedMinor`, R4-PROVIDER-OUTCOMES-02).
+     */
     refundedMinor: z.number().int(),
     reservedMinor: z.number().int(),
     /**
@@ -658,6 +662,12 @@ export const RefundableSchema = z
      * on the earlier contract keep compiling.
      */
     compensatedMinor: z.number().int().optional(),
+    /**
+     * R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008): refunds recorded succeeded that the provider
+     * later reported failed; the money came back, its reversal is booked and it is refundable
+     * again. Always sent; optional only so clients built on the earlier contract keep compiling.
+     */
+    reversedMinor: z.number().int().optional(),
     /** captured − refunded − reserved − compensated. */
     availableMinor: z.number().int(),
     currency: CurrencyCode,
@@ -682,6 +692,13 @@ export const RefundSchema = z
     refundable: RefundableSchema,
     unknownSince: Instant.nullable(),
     resolvedAt: Instant.nullable(),
+    /**
+     * R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-010): when the provider reported this succeeded
+     * refund failed and its reversal was booked (the recorded status stays `succeeded`, with an
+     * open `finance.refund_evidence_conflict` exception for review); null otherwise. Always sent;
+     * optional only so clients built on the earlier contract keep compiling.
+     */
+    reversedAt: Instant.nullable().optional(),
     createdAt: Instant,
   })
   .openapi('Refund');

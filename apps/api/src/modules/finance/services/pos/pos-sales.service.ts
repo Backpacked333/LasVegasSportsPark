@@ -673,6 +673,7 @@ export class PosSalesService {
             'pos_tenders.payment_attempt_id as payment_attempt_id',
             'payment_refundables.captured_minor as captured',
             'payment_refundables.refunded_minor as refunded',
+            'payment_refundables.reversed_minor as reversed',
             'payment_refundables.reserved_minor as reserved',
             'payment_refundables.compensated_minor as compensated',
           ])
@@ -686,7 +687,7 @@ export class PosSalesService {
           candidates.find(
             (c) =>
               Number(c.captured) -
-                Number(c.refunded) -
+                (Number(c.refunded) - Number(c.reversed)) -
                 Number(c.reserved) -
                 Number(c.compensated) >=
               amount,
