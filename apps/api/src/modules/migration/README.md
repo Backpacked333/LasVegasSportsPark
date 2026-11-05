@@ -10,8 +10,8 @@ rely on), §4.4 Migration (ExternalMapping, ImportBatch, ImportException, Author
 §4.7 invariants 5, 9 and 11, SPK-AT-024
 
 **Migration range:** `packages/db/migrations/1200_migration_*.sql` … `1299` (this module uses
-`1200_migration_core.sql`, `1201_migration_import_commands.sql` and
-`1280_migration_org_scoped_kernel_fks.sql`)
+`1200_migration_core.sql`, `1201_migration_import_commands.sql`,
+`1280_migration_org_scoped_kernel_fks.sql` and `1281_migration_exception_reraise.sql`)
 
 **Depends on:** identity (`PeopleService`, `HouseholdsService`, `RelationshipsService`,
 `AUTHORITY_LOOKUP_PORT`), catalog (`ProgramsService`), competition (`CompetitionImportService`,
@@ -79,14 +79,14 @@ The contract is a proposal: once the actual export is known, a transformation st
 these rows (or the contract is extended). **Pending decision:** migration scope and writer
 authority (DEC-014, §6.6, owner Migration owner/operator).
 
-## Tables (migrations `1200_migration_core.sql`, `1201_migration_import_commands.sql`)
+## Tables (migrations `1200_migration_core.sql`, `1201_migration_import_commands.sql`, `1281_migration_exception_reraise.sql`)
 
 | Table                          | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `import_batches`               | Source system, snapshot taken at, received at, declared and computed checksum, declared row count, transformation version, extraction provenance, control totals, status `received/validated/reviewed/applied/aborted`, planned and final counts by outcome, validation summary, every actor, apply lock                                                                                                                    |
 | `import_rows`                  | One per (batch, entity type, external id); payload and payload hash (immutable); planned outcome and reasons (validation); final outcome `created/matched/updated/skipped/exception`, mapping and applied time (final)                                                                                                                                                                                                      |
 | `external_mappings`            | Key (source system, entity type, external id); `pending` (reserved) → `linked` to exactly one typed internal record (person, household, relationship, program, obligation, credit; since 1201 season, team or team entry, roster membership, event, preference import); the record id reserved before an import command runs (`reserved_record_id`); first and last seen batch; extraction provenance; applied payload hash |
-| `import_exceptions`            | One per (row, kind): `ambiguous_relationship/ambiguous_balance/conflict/validation`, phase, reasons, review owner role, `open/decided/withdrawn`, decision `accept/reject/defer` with reason, resolution and actor                                                                                                                                                                                                          |
+| `import_exceptions`            | At most one live (open or decided) per (row, kind), any number withdrawn (1281): `ambiguous_relationship/ambiguous_balance/conflict/validation`, phase, reasons, review owner role, `open/decided/withdrawn`, decision `accept/reject/defer` with reason, resolution and actor                                                                                                                                              |
 | `authority_assignments`        | Record category (the 17 inventory lines), scope (organization, facility, program, competition), authoritative system `legacy/sportspark`, effective period, reason, policy references, approver, superseded assignment, end                                                                                                                                                                                                 |
 | `reconciliation_reports`       | Per applied batch: status `balanced/discrepancy`, the four level summaries, discrepancy count, required approval areas, approval status `pending/approved/rejected/superseded`                                                                                                                                                                                                                                              |
 | `reconciliation_discrepancies` | One row per discrepancy: level, area, entity type, code, external/internal id, expected, actual, currency, money or count difference — append-only                                                                                                                                                                                                                                                                          |
@@ -112,8 +112,10 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
 - **§5.4 retention:** staged rows are unique per batch and immutable; a row outcome is final and a
   created/matched/updated outcome always names its mapping; the batch machine (guard trigger),
   sealed checksum and rows; abort or re-validation after an apply started is refused (§5.8).
-- **Review decisions:** one exception per (row, kind); only ambiguity can be accepted; a decision
-  is final.
+- **Review decisions:** one live (open or decided) exception per (row, kind) — a partial unique
+  index since migration 1281; a withdrawn exception is final history, so a problem that comes back
+  gets a fresh open exception beside it (R4-LIFECYCLES-REVISIONS-01); only ambiguity can be
+  accepted; a decision is final.
 - **§5.5 no netting:** a money discrepancy always carries its currency; discrepancies and
   approvals are append-only; one decision per area; approving an area with discrepancies needs a
   reason; one pending report per batch; report evidence is immutable.
@@ -126,7 +128,9 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
 - **Validation (dry run):** seals the batch (computed checksum must equal the declared one;
   declared row count must match), plans every row with the same rules the apply uses, stores
   planned outcomes and reasons, opens review exceptions, withdraws exceptions whose cause is gone,
-  compares control totals without netting, and raises one owned operational exception (the
+  opens a fresh exception for a problem that comes back after its exception was withdrawn (an
+  authority assignment that cleared it ended; R4-LIFECYCLES-REVISIONS-01), compares control
+  totals without netting, and raises one owned operational exception (the
   batch's Today card: `migration.import_review`, queue `migration`) when rows await review. The
   module settles that card itself — the queue is not a staff role, so the K-10 own-queue grant
   never applies: it is resolved, as the system and in the same transaction, when the review
@@ -165,7 +169,9 @@ editable records carry `revision` and `touch_updated_at`; no table allows DELETE
     `IMPORT_SCHEDULE_CONFLICT` and `IMPORT_CONTENT_MISMATCH`, VALIDATION_FAILED, NOT_FOUND, an
     untranslated database constraint classified by `databaseConstraintOf`) rolls that row back
     whole and its import exception is recorded in a new transaction (`owning_module_refused` with
-    the module's code), so rows never affect each other. A resumed apply reuses the reserved id,
+    the module's code), so rows never affect each other. That exception is open even when
+    validation had raised and withdrawn one of the same kind for the row, so the apply's Today
+    card announces it (R4-LIFECYCLES-REVISIONS-01). A resumed apply reuses the reserved id,
     so it can only create that record. A rerun finds every mapping linked and calls nothing.
   - **Drafts, never publications (§5.6):** an imported future event is a draft that holds no
     space; it is published only through a scheduling schedule draft under SportsPark's
