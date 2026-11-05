@@ -145,6 +145,8 @@ export function toRecipient(
     authorizedAt: isoOrNull(row.authorized_at),
     revokedAt: isoOrNull(row.revoked_at),
     revocationReason: row.revocation_reason,
+    supersededByNotificationId: row.superseded_by_notification_id,
+    supersededAt: isoOrNull(row.superseded_at),
     revision: row.revision,
   };
 }
@@ -192,6 +194,7 @@ export interface InboxRow {
   subject_id: string | null;
   details_before: unknown;
   details_after: unknown;
+  /** The recipient's own pointer (migration 1011), else the notification's (migration 1001). */
   superseded_by_notification_id: string | null;
 }
 

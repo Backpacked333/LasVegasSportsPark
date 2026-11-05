@@ -59,6 +59,7 @@ import { CalendarFeedsService } from './services/calendar-feeds.service';
 import { CompetitionTeamMembership } from './services/competition-team-membership';
 import { ChangeNoticeCheck } from './services/change-notice-check';
 import { CompetitionNotices } from './services/competition-notices';
+import { DeliveryReconciliationService } from './services/delivery-reconciliation.service';
 import { DeliveryRetryService } from './services/delivery-retry.service';
 import { DeliveryWorker } from './services/delivery-worker';
 import { InboxService } from './services/inbox.service';
@@ -105,6 +106,7 @@ const providers: Provider[] = [
   ScheduleNotices,
   PushDevicesService,
   DeliveryRetryService,
+  DeliveryReconciliationService,
   CompetitionNotices,
   PersonMergeFollowUp,
   ActivityReminders,
@@ -143,6 +145,7 @@ const providers: Provider[] = [
     ScheduleNotices,
     PushDevicesService,
     DeliveryRetryService,
+    DeliveryReconciliationService,
     ActivityReminders,
     CHANNEL_PROVIDERS,
     TEAM_MEMBERSHIP_PORT,
@@ -171,7 +174,8 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     // §5.1, §5.2 (COM-01, K-09, DEC-020): the channel adapters this module runs, all deterministic
-    // fakes refused in production; failed deliveries reach the front desk's queue.
+    // fakes refused in production; failed and unknown deliveries of essential notices reach the
+    // front desk's queue, which reconciles unknown ones (POST /delivery-attempts/{id}/reconcile).
     for (const channel of ['push', 'email', 'sms'] as const) {
       this.integrations.register({
         id: `communications.${channel}_provider`,

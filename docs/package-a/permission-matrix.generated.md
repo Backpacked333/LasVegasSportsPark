@@ -3,7 +3,7 @@
 > Generated from code by `apps/api/scripts/emit-permission-matrix.ts`; do not edit by hand.
 > Regenerate with `pnpm build && pnpm permission-matrix` from the repository root.
 
-Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 303 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
+Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 304 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
 
 Columns: **Staff roles** may perform the action within their organization or facility scope; **Self** means a customer may act on themselves as the subject person; **Subject permission** is the grant a customer must hold over every subject person; **Team role** is the role a customer must hold on the target team entry; **Requirements** are the specification ids the action declares.
 
@@ -15,7 +15,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | ---------------- | ------- |
 | `automation`     | 5       |
 | `catalog`        | 16      |
-| `communications` | 11      |
+| `communications` | 12      |
 | `competition`    | 46      |
 | `core`           | 8       |
 | `enrollment`     | 44      |
@@ -30,7 +30,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `scheduling`     | 8       |
 | `support`        | 8       |
 | `workforce`      | 20      |
-| **Total**        | **303** |
+| **Total**        | **304** |
 
 ## Actions
 
@@ -65,6 +65,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `communications.preview_recipients`          | Preview the recipients a notification resolves to (names and count only)                                                                                                   | `front_desk`, `league_manager`, `program_manager`, `scheduler`, `general_manager`, `system_administrator`, `support_operator`                                                                 | no   | —                  | —            | SPK-COMMS-003, SPK-COMMS-006                                       |
 | `communications.read_inbox`                  | Read the in-app notices delivered to oneself                                                                                                                               | —                                                                                                                                                                                             | yes  | —                  | —            | SPK-COMMS-001, SPK-UX-003                                          |
 | `communications.read_notification`           | Read notifications, recipients and delivery attempts with their actual states                                                                                              | `front_desk`, `league_manager`, `program_manager`, `scheduler`, `general_manager`, `system_administrator`, `support_operator`, `finance_operator`, `facilities_operator`                      | no   | —                  | —            | SPK-COMMS-004, SPK-UX-006                                          |
+| `communications.reconcile_delivery`          | Record the outcome established for a push, email or SMS delivery whose outcome is unknown                                                                                  | `front_desk`, `general_manager`, `system_administrator`, `support_operator`                                                                                                                   | no   | —                  | —            | SPK-COMMS-004, §4.11, §5.11, SPK-UX-006                            |
 | `communications.register_push_device`        | Register, list and revoke the push devices of the signed-in account                                                                                                        | —                                                                                                                                                                                             | yes  | —                  | —            | SPK-UX-001, SPK-COMMS-003, SPK-COMMS-004                           |
 | `communications.retry_delivery`              | Retry one failed push, email or SMS delivery as a new attempt                                                                                                              | `general_manager`, `system_administrator`, `support_operator`                                                                                                                                 | no   | —                  | —            | SPK-COMMS-004, SPK-COMMS-003, SPK-UX-006                           |
 | `communications.send`                        | Confirm a composed notification: resolve recipients and queue delivery                                                                                                     | `front_desk`, `league_manager`, `program_manager`, `scheduler`, `general_manager`, `system_administrator`, `support_operator`                                                                 | no   | —                  | —            | SPK-COMMS-003, SPK-COMMS-005, SPK-COMMS-006                        |

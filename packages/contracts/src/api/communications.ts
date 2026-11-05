@@ -66,8 +66,20 @@ export const DeliveryStatusSchema = z
   .enum(['queued', 'provider_accepted', 'delivered', 'failed', 'unknown', 'read', 'acknowledged'])
   .openapi('DeliveryStatus');
 export type DeliveryStatusValue = z.infer<typeof DeliveryStatusSchema>;
+/**
+ * Why an attempt failed. CHANNEL_DISABLED (R4-COMMS-AUTOMATION-05, SPK-COMMS-007): the person
+ * switched the channel off for the notice's category before the attempt was handed over, so it
+ * never was.
+ */
 export const DeliveryFailureCodeSchema = z
-  .enum(['RECIPIENT_REVOKED', 'NO_ADDRESS', 'PROVIDER_REJECTED', 'PROVIDER_ERROR', 'SUPERSEDED'])
+  .enum([
+    'RECIPIENT_REVOKED',
+    'NO_ADDRESS',
+    'PROVIDER_REJECTED',
+    'PROVIDER_ERROR',
+    'SUPERSEDED',
+    'CHANNEL_DISABLED',
+  ])
   .openapi('DeliveryFailureCode');
 export type DeliveryFailureCodeValue = z.infer<typeof DeliveryFailureCodeSchema>;
 export const AcknowledgmentViaSchema = DeliveryChannelSchema;
@@ -328,6 +340,14 @@ export const NotificationRecipientSchema = z
     authorizedAt: Instant.nullable(),
     revokedAt: Instant.nullable(),
     revocationReason: z.string().nullable(),
+    /**
+     * Set when a newer notice about the same subject replaced this one for this recipient only
+     * (SPK-COMMS-005): nothing more is sent to them from this notice; one not yet dispatched is
+     * never sent to them at all. A notice replaced for everyone carries the notification's own
+     * `supersededByNotificationId` instead.
+     */
+    supersededByNotificationId: z.uuid().nullable(),
+    supersededAt: Instant.nullable(),
     revision: Revision,
   })
   .openapi('NotificationRecipient');
@@ -376,6 +396,26 @@ export const RetryDeliveryBody = withRequestMeta({})
   .openapi('RetryDeliveryRequest');
 export type RetryDeliveryInput = z.infer<typeof RetryDeliveryBody>;
 
+/**
+ * §4.11 "unknown kept explicit until reconciled", §5.11 "supported resolution actions"
+ * (R4-COMMS-AUTOMATION-07): record what staff established about a push, email or SMS hand-off whose
+ * outcome is `unknown` — the provider accepted it, it was delivered, or it never reached the person
+ * (`failed`, which a retry may then repeat) — with the evidence they checked. Only an `unknown`
+ * attempt is reconciled. A reconciled `delivered` or `failed` is final: a later provider receipt
+ * cannot overwrite it. A reconciled `provider_accepted` is what it says, an acceptance, and still
+ * moves to `delivered` or `failed` when the provider's receipt arrives, as any accepted attempt
+ * does (SPK-COMMS-004).
+ */
+export const ReconcileDeliveryOutcomeSchema = z
+  .enum(['provider_accepted', 'delivered', 'failed'])
+  .openapi('ReconcileDeliveryOutcome');
+export const ReconcileDeliveryBody = withRequestMeta({
+  outcome: ReconcileDeliveryOutcomeSchema,
+  /** What was checked (the provider's console, the person themself): kept in the audit record. */
+  evidence: Note,
+}).openapi('ReconcileDeliveryRequest');
+export type ReconcileDeliveryInput = z.infer<typeof ReconcileDeliveryBody>;
+
 // ---------------------------------------------------------------------------------------------
 // Inbox (in-app notices = delivery attempts on the in_app channel; SPK-UX-003)
 // ---------------------------------------------------------------------------------------------
@@ -395,7 +435,10 @@ export const InboxItemSchema = z
     deliveredAt: Instant.nullable(),
     readAt: Instant.nullable(),
     acknowledgedAt: Instant.nullable(),
-    /** Set when a newer notice about the same subject replaced this one (SPK-COMMS-005). */
+    /**
+     * Set when a newer notice about the same subject replaced this one for the reader, or for
+     * everyone (SPK-COMMS-005).
+     */
     supersededByNotificationId: z.uuid().nullable(),
     /**
      * The participants this notice concerns for the reader (SPK-UX-003 "each action must identify
@@ -710,6 +753,18 @@ register({
   params: IdParams,
   body: RetryDeliveryBody,
   response: DeliveryAttemptSchema,
+  idempotent: true,
+});
+register({
+  method: 'post',
+  path: '/delivery-attempts/{id}/reconcile',
+  summary:
+    'Record the outcome staff established for a push, email or SMS delivery whose outcome is unknown (accepted, delivered, or failed and then retryable)',
+  requirements: 'SPK-COMMS-004, §4.11, §5.11, SPK-UX-006',
+  params: IdParams,
+  body: ReconcileDeliveryBody,
+  response: DeliveryAttemptSchema,
+  status: 200,
   idempotent: true,
 });
 register({

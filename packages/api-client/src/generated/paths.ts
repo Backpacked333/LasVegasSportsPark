@@ -12245,6 +12245,110 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/delivery-attempts/{id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the outcome staff established for a push, email or SMS delivery whose outcome is unknown (accepted, delivered, or failed and then retryable)
+         * @description Implements SPK-COMMS-004, §4.11, §5.11, SPK-UX-006. Requires an Idempotency-Key header (§4.9).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ReconcileDeliveryRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeliveryAttempt"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (stale revision, invalid transition, idempotency) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/delivery-attempts/{id}/retry": {
         parameters: {
             query?: never;
@@ -53040,7 +53144,7 @@ export type components = {
         /** @enum {string} */
         DeliveryChannel: "in_app" | "push" | "email" | "sms";
         /** @enum {string} */
-        DeliveryFailureCode: "RECIPIENT_REVOKED" | "NO_ADDRESS" | "PROVIDER_REJECTED" | "PROVIDER_ERROR" | "SUPERSEDED";
+        DeliveryFailureCode: "RECIPIENT_REVOKED" | "NO_ADDRESS" | "PROVIDER_REJECTED" | "PROVIDER_ERROR" | "SUPERSEDED" | "CHANNEL_DISABLED";
         DeliveryReceipt: {
             /** Format: uuid */
             attemptId: string;
@@ -55358,6 +55462,10 @@ export type components = {
             revokedAt: string | null;
             status: components["schemas"]["RecipientStatus"];
             subjectPersonIds: string[];
+            /** Format: date-time */
+            supersededAt: string | null;
+            /** Format: uuid */
+            supersededByNotificationId: string | null;
         };
         /** @enum {string} */
         NotificationStatus: "composed" | "queued" | "dispatched" | "suppressed";
@@ -57224,6 +57332,15 @@ export type components = {
         };
         /** @enum {string} */
         RecommendationStatus: "proposed" | "approved" | "rejected" | "applied" | "expired";
+        /** @enum {string} */
+        ReconcileDeliveryOutcome: "provider_accepted" | "delivered" | "failed";
+        ReconcileDeliveryRequest: {
+            evidence: string;
+            expectedRevision?: number;
+            outcome: components["schemas"]["ReconcileDeliveryOutcome"];
+            policyReferences?: string[];
+            reason?: string;
+        };
         /** @enum {string} */
         ReconciliationArea: "identity" | "participation" | "schedule" | "finance";
         /** @enum {string} */
