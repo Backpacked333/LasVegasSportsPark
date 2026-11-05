@@ -297,6 +297,92 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(keys[0]).toBe(keys[1]);
   });
 
+  it('SPK-PAY-007 RESPONSE_UNREADABLE (R4-CLIENTS-A11Y-COPY-01): a success status whose answer could not be read is "Do not pay again": paying stays blocked, the balance is read again and "Check again" keeps the key', async () => {
+    let attempts = 0;
+    const app = renderObligation({
+      'POST /obligations/{id}/payments': () => {
+        attempts += 1;
+        // The payment committed; something in front of the API cut its answer short.
+        return attempts === 1
+          ? fakeResponse(201, '{"payment":{"id":"tru')
+          : fakeResponse(201, outcome('succeeded'));
+      },
+    });
+    const balanceReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/obligations/{id}').length;
+    await screen.findByLabelText('Left to pay: $40.00');
+    const before = balanceReads();
+    await pay();
+    expect(await screen.findByTestId('payment-no-answer')).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText('Payment outcome being confirmed. Do not pay again.'),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'The service answered, but its answer could not be read, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByText('Error code: RESPONSE_UNREADABLE')).toBeOnTheScreen();
+    expect(screen.queryByText('Something went wrong')).toBeNull();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    // What the payment changes is read again, so an attempt the API recorded blocks paying.
+    await waitFor(() => expect(balanceReads()).toBeGreaterThan(before));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Payment received')).toBeOnTheScreen();
+    const keys = payments(app).map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+  });
+
+  it('SPK-AT-028 (R4-CLIENTS-A11Y-COPY-01): payments paused during a restore (503 recovery_mode) are "Not done" with the API message, never "Do not pay again", and paying stays possible', async () => {
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    let attempts = 0;
+    const app = renderObligation({
+      'POST /obligations/{id}/payments': () => {
+        attempts += 1;
+        return attempts === 1
+          ? fakeResponse(
+              503,
+              apiErrorBody('INTEGRATION_UNAVAILABLE', {
+                message: paused,
+                nextAction: 'retry_later',
+                details: { reason: 'recovery_mode' },
+                correlationId: 'c-paused',
+              }),
+            )
+          : fakeResponse(201, outcome('succeeded'));
+      },
+    });
+    await pay();
+    expect(await screen.findByTestId('command-refused-before-running')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Not done')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.getByText('Error code: INTEGRATION_UNAVAILABLE. Reference: c-paused'),
+    ).toBeOnTheScreen();
+    expect(screen.queryByTestId('payment-no-answer')).toBeNull();
+    expect(
+      screen.queryByLabelText('Payment outcome being confirmed. Do not pay again.'),
+    ).toBeNull();
+    expect(screen.queryByText(/may have gone through/)).toBeNull();
+    expect(screen.queryByLabelText('Something went wrong')).toBeNull();
+    // Nothing ran: paying is not blocked.
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeEnabled();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      `Not done. ${paused} Nothing was changed: the service did not run this request, so nothing was paid or recorded. Try again.`,
+      { queue: true },
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    });
+    expect(await screen.findByLabelText('Payment received')).toBeOnTheScreen();
+    expect(payments(app)).toHaveLength(2);
+  });
+
   it('SPK-PAY-007 IDEMPOTENCY_OUTCOME_UNAVAILABLE: when "Check again" finds the payment committed with its answer lost, paying stays blocked and the balance is read again', async () => {
     let attempts = 0;
     const app = renderObligation({

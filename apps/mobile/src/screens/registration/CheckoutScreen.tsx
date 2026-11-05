@@ -14,8 +14,11 @@
  *    only when the API confirms it.
  *
  * Payment uncertainty (SPK-PAY-007): when the request gets no definite answer (`mayHaveTakenEffect`:
- * timeout, connection lost, app backgrounded, the same key still running, any 5xx), the outcome is
- * unknown, never "failed". The screen says "Do not pay again" and asks again with the same
+ * timeout, connection lost, app backgrounded, the same key still running, any 5xx, a success status
+ * whose answer could not be read), the outcome is unknown, never "failed", and the remembered
+ * quote that leads back here is kept. A refusal before running (`refusedBeforeRunning`: payments
+ * paused while the service recovers from a restore, SPK-AT-028) is a definite answer although it
+ * is a 503: nothing ran, so it reads "Not done" with the API's message, never "Do not pay again". The screen says "Do not pay again" and asks again with the same
  * idempotency key (§4.9) when the app returns to the foreground or the connection comes back, or
  * when the customer taps "Check now"; the API also keeps one checkout per quote, so asking again
  * can never charge twice. "Payment outcome being confirmed" is announced to screen readers with
@@ -30,11 +33,15 @@
  * new price); offline (payment cannot start); processing ("Payment processing"); recovery required
  * ("Payment outcome being confirmed. Do not pay again.").
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
+import { ApiError, type Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
-import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import {
+  RESPONSE_UNREADABLE_CODE,
+  mayHaveTakenEffect,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
@@ -66,6 +73,9 @@ import { quoteIsUsable } from './QuoteReviewScreen';
 const UNKNOWN_OUTCOME_LABEL = 'Payment outcome being confirmed. Do not pay again.';
 const UNKNOWN_OUTCOME_BODY =
   'We did not get an answer about this payment. Do not pay again. When the app is back online or opened again, it asks with the same request, which can never charge you twice.';
+/** RESPONSE_UNREADABLE: the service answered success, but its answer could not be read. */
+const UNREADABLE_OUTCOME_BODY =
+  'The service answered about this payment, but its answer could not be read. Do not pay again. When the app is back online or opened again, it asks with the same request, which can never charge you twice.';
 
 type Quote = Schema<'Quote'>;
 type Basket = Schema<'Basket'>;
@@ -156,6 +166,8 @@ function CheckoutContent({
   const [unknownOutcome, setUnknownOutcome] = useState<CheckoutBody | null>(null);
   /** How many times asking got no definite answer: each one is announced (SPK-UX-009). */
   const [unanswered, setUnanswered] = useState(0);
+  /** The last unanswered check was answered success, but the answer could not be read. */
+  const [unreadable, setUnreadable] = useState(false);
 
   const pay = useCallback(
     async (body: CheckoutBody) => {
@@ -173,9 +185,11 @@ function CheckoutContent({
         const apiError = error as ApiError;
         if (mayHaveTakenEffect(apiError)) {
           // No definite answer (a lost connection or timeout, the same key still running, any
-          // 5xx, PAYMENT_OUTCOME_UNKNOWN): the checkout may exist and its payment may be on its
-          // way, so it is never a failure and is asked again under the same key (SPK-PAY-007).
+          // 5xx, a success whose answer could not be read, PAYMENT_OUTCOME_UNKNOWN): the checkout
+          // may exist and its payment may be on its way, so it is never a failure, the remembered
+          // quote is kept and it is asked again under the same key (SPK-PAY-007).
           setUnknownOutcome(body);
+          setUnreadable(apiError.code === RESPONSE_UNREADABLE_CODE);
           setUnanswered((n) => n + 1);
         } else if (tookEffectOutcomeLost(apiError)) {
           // An earlier attempt under this key committed and its answer was lost: the checkout
@@ -186,10 +200,10 @@ function CheckoutContent({
           refetch();
         } else {
           setUnknownOutcome(null);
-          // A definite refusal (4xx) created no checkout: nothing is left to look for later.
-          if (apiError.status !== null && apiError.status < 500) {
-            await update({ pendingCheckoutQuoteId: null });
-          }
+          // A definite answer (a 4xx refusal, or a refusal before running such as payments paused
+          // during a restore) created no checkout: nothing is left to look for later. Every
+          // answer that may have created one took a branch above (the shared predicates).
+          if (ApiError.is(error)) await update({ pendingCheckoutQuoteId: null });
           setFailure({ error: apiError, retry: () => void pay(body) });
         }
       }
@@ -296,7 +310,11 @@ function CheckoutContent({
         <Section title="Payment">
           {/* SPK-UX-009, NA-A01: announced with its next action, again after each unanswered check. */}
           <LiveRegion
-            announcement={sentences(UNKNOWN_OUTCOME_LABEL, UNKNOWN_OUTCOME_BODY, 'Check now')}
+            announcement={sentences(
+              UNKNOWN_OUTCOME_LABEL,
+              unreadable ? UNREADABLE_OUTCOME_BODY : UNKNOWN_OUTCOME_BODY,
+              'Check now',
+            )}
             occurrence={unanswered}
             testID="checkout-outcome-unknown-live"
           >
@@ -305,7 +323,7 @@ function CheckoutContent({
               label={UNKNOWN_OUTCOME_LABEL}
               testID="checkout-outcome-unknown"
             />
-            <Body>{UNKNOWN_OUTCOME_BODY}</Body>
+            <Body>{unreadable ? UNREADABLE_OUTCOME_BODY : UNKNOWN_OUTCOME_BODY}</Body>
             <Button
               label="Check now"
               onPress={() => void pay(unknownOutcome)}

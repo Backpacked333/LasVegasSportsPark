@@ -133,6 +133,80 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
     expect(screen.getByText('Resolve the conflict')).toBeOnTheScreen();
   });
 
+  it('§4.9 RESPONSE_UNREADABLE (R4-CLIENTS-A11Y-COPY-01): a request answered success but unreadable is "No answer yet", never "Not done", and "Check again" keeps the key', async () => {
+    let calls = 0;
+    const app = renderContributions({
+      routes: baseRoutes({
+        'GET /obligations': page([obligation()]),
+        'POST /obligations/{id}/contribution-requests': () => {
+          calls += 1;
+          // The request was recorded; something in front of the API cut its answer short.
+          return calls === 1
+            ? fakeResponse(201, '{"id":"tru')
+            : fakeResponse(
+                201,
+                contributionRequest({ requestedPersonId: IDS.player2, amountMinor: 2500 }),
+              );
+        },
+      }),
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Pat Player' }));
+    fireEvent.changeText(screen.getByLabelText('Amount (USD)'), '25');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Request contribution' }));
+    });
+    expect(
+      await screen.findByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeOnTheScreen();
+    expect(screen.getByText(/Error code: RESPONSE_UNREADABLE/)).toBeOnTheScreen();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(
+      await screen.findByLabelText('Contribution requested from Pat Player: $25.00'),
+    ).toBeOnTheScreen();
+    const keys = app.keysOf('POST', '/obligations/{id}/contribution-requests');
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    await app.settle();
+  });
+
+  it('SPK-AT-028 (R4-CLIENTS-A11Y-COPY-01): a request refused while payments are paused (503 recovery_mode) is "Not done" with the API message, never "No answer yet"', async () => {
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    renderContributions({
+      routes: baseRoutes({
+        'GET /obligations': page([obligation()]),
+        'POST /obligations/{id}/contribution-requests': () =>
+          fakeResponse(
+            503,
+            apiErrorBody('INTEGRATION_UNAVAILABLE', {
+              message: paused,
+              nextAction: 'retry_later',
+              details: { reason: 'recovery_mode' },
+            }),
+          ),
+      }),
+    });
+    fireEvent.press(await screen.findByRole('radio', { name: 'Pat Player' }));
+    fireEvent.changeText(screen.getByLabelText('Amount (USD)'), '25');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Request contribution' }));
+    });
+    expect(await screen.findByLabelText('Not done')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Nothing was changed: the service did not run this request, so nothing was paid or recorded.',
+      ),
+    ).toBeOnTheScreen();
+    expect(
+      screen.queryByLabelText('No answer yet: this may already have been recorded'),
+    ).toBeNull();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+  });
+
   it('empty: no team obligation means individual billing or no fee recorded yet', async () => {
     renderContributions({ routes: baseRoutes({ 'GET /obligations': page([]) }) });
     expect(await screen.findByRole('header', { name: 'No team obligation' })).toBeOnTheScreen();

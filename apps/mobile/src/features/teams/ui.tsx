@@ -13,12 +13,14 @@ import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   mayHaveTakenEffect,
+  refusedBeforeRunning,
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
 import { LiveRegion, LiveText, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
@@ -277,16 +279,19 @@ export function detailCodeOf(error: ApiError): string | null {
  * NOT_FOUND) is "not available" with no hint that a record exists (§4.10).
  *
  * An answer after which the command may have taken effect (`mayHaveTakenEffect`: a lost
- * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx,
- * PAYMENT_OUTCOME_UNKNOWN) is never "Not done" (§4.9, SPK-PAY-007): it reads "No answer yet: this
+ * connection or a timeout after sending, IDEMPOTENCY_IN_PROGRESS, INTERNAL_ERROR or another 5xx, a
+ * success status whose body could not be read (RESPONSE_UNREADABLE), PAYMENT_OUTCOME_UNKNOWN) is
+ * never "Not done" (§4.9, SPK-PAY-007): it reads "No answer yet: this
  * may already have been recorded", and "Check again" repeats the same request under the same key,
  * which the API answers with the stored outcome or runs once. IDEMPOTENCY_OUTCOME_UNAVAILABLE
  * (`tookEffectOutcomeLost`: an earlier attempt committed, its answer lost) is "This may already have
  * been done" with "Reload" (`ui/OutcomeLost`: every API record on screen is read again), never
  * "Not done". IDEMPOTENCY_SECRET_WITHHELD is a success whose one-time link cannot be shown again;
  * screens whose create returns a link show `SecretWithheld` instead, and this never calls it a
- * failure either. Pass `read` for a failed read: it changed nothing, so it is "Not loaded" and
- * "Try again".
+ * failure either. A refusal before running (`refusedBeforeRunning`: payments paused while the
+ * service recovers from a restore, SPK-AT-028) changed nothing although it is a 503: it is "Not
+ * done" with the API's message (`ui/RefusedBeforeRunning`), never "No answer yet". Pass `read` for
+ * a failed read: it changed nothing, so it is "Not loaded" and "Try again".
  */
 export function CommandFailure({
   error,
@@ -325,6 +330,13 @@ export function CommandFailure({
     return (
       <View testID={testID}>
         <OutcomeLost error={error} />
+      </View>
+    );
+  }
+  if (!read && refusedBeforeRunning(error)) {
+    return (
+      <View testID={testID}>
+        <RefusedBeforeRunning error={error} onRetry={onRetry} />
       </View>
     );
   }

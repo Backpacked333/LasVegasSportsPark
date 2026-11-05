@@ -16,7 +16,11 @@
  *   idempotency key per intent. "Payment processing" and "Payment outcome being confirmed. Do not
  *   pay again." are never shown as success or failure (SPK-PAY-007): no answer means the outcome
  *   is unknown, "Check again" repeats the same intent with the same key, and the API refuses a
- *   second payment while one is unresolved (PAYMENT_OUTCOME_UNKNOWN). When "Check again" finds that
+ *   second payment while one is unresolved (PAYMENT_OUTCOME_UNKNOWN). A success status whose answer
+ *   could not be read (RESPONSE_UNREADABLE) is such an answer too: the payment may have been taken.
+ *   A refusal before running (`refusedBeforeRunning`: payments paused while the service recovers
+ *   from a restore, SPK-AT-028) is not: nothing ran, so it reads "Not done" with the API's message
+ *   and paying stays possible later, never "Do not pay again". When "Check again" finds that
  *   the first attempt committed but its answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), it reads
  *   "This may already have been done": paying stays blocked and the balance and payments are read
  *   again, so a recorded attempt shows as on its way. A receipt is shown only when the API returns
@@ -44,7 +48,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import {
+  RESPONSE_UNREADABLE_CODE,
+  mayHaveTakenEffect,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
@@ -84,6 +92,9 @@ type PayBody = Schema<'PayObligationRequest'>;
 const UNCONFIRMED_LABEL = 'Payment outcome being confirmed. Do not pay again.';
 const NO_ANSWER_BODY =
   'We did not get an answer, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice.';
+/** RESPONSE_UNREADABLE: the service answered success, but its answer could not be read. */
+const UNREADABLE_ANSWER_BODY =
+  'The service answered, but its answer could not be read, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice.';
 
 function Totals({ obligation }: { obligation: Obligation }) {
   const now = useNow();
@@ -237,11 +248,14 @@ function PaySection({
     }
   };
 
-  // No definite answer (`mayHaveTakenEffect`): no response, still running under this key, or a
-  // server failure. The payment may still take effect, so it is never shown as a failure
-  // (SPK-PAY-007); "Check again" re-sends the same request under the same key.
+  // No definite answer (`mayHaveTakenEffect`): no response, still running under this key, a
+  // server failure, or a success whose answer could not be read. The payment may still take
+  // effect, so it is never shown as a failure (SPK-PAY-007); "Check again" re-sends the same
+  // request under the same key. A refusal before running is not one: CommandFailure shows it.
   const unknown =
     failure !== null && mayHaveTakenEffect(failure) && failure.code !== 'PAYMENT_OUTCOME_UNKNOWN';
+  const noAnswerBody =
+    failure?.code === RESPONSE_UNREADABLE_CODE ? UNREADABLE_ANSWER_BODY : NO_ANSWER_BODY;
   // The API refused because a payment for this balance is unresolved (SPK-PAY-007).
   const inProgressElsewhere = failure?.code === 'PAYMENT_OUTCOME_UNKNOWN';
   // An earlier attempt under this key committed and its answer was lost
@@ -276,11 +290,11 @@ function PaySection({
       {unknown && sent ? (
         <LiveRegion
           testID="payment-no-answer"
-          announcement={sentences(UNCONFIRMED_LABEL, NO_ANSWER_BODY, 'Check again')}
+          announcement={sentences(UNCONFIRMED_LABEL, noAnswerBody, 'Check again')}
           occurrence={failure}
         >
           <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
-          <Body>{NO_ANSWER_BODY}</Body>
+          <Body>{noAnswerBody}</Body>
           <Caption>Error code: {failure?.code}</Caption>
           <ButtonRow>
             <Button

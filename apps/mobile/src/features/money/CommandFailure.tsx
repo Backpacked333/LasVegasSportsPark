@@ -5,9 +5,13 @@
  *
  * - Permission restriction (ACCESS_DENIED, PARTICIPANT_AUTHORITY_REQUIRED) and protected
  *   NOT_FOUND read as "not available", never as "exists but denied".
+ * - Refused before running (`refusedBeforeRunning`: INTEGRATION_UNAVAILABLE `recovery_mode`, payments
+ *   paused while the service recovers from a restore, SPK-AT-028): nothing ran, so it is "Not done"
+ *   with the API's message (`ui/RefusedBeforeRunning`), never "No answer yet" although it is a 503.
  * - No definite answer (`mayHaveTakenEffect`: no response after sending, IDEMPOTENCY_IN_PROGRESS,
- *   INTERNAL_ERROR or another 5xx, PAYMENT_OUTCOME_UNKNOWN): the change may have been made, so it
- *   is "No answer yet", never "Something went wrong". "Check again" repeats the same intent with
+ *   INTERNAL_ERROR or another 5xx, a success status whose body could not be read
+ *   (RESPONSE_UNREADABLE), PAYMENT_OUTCOME_UNKNOWN): the change may have been made, so it is "No
+ *   answer yet", never "Something went wrong". "Check again" repeats the same intent with
  *   the same idempotency key, so it can never apply twice (§4.9); where the API's next action is
  *   not a retry (PAYMENT_OUTCOME_UNKNOWN: await reconciliation) that action is shown instead.
  * - An earlier attempt committed and its answer was lost (`tookEffectOutcomeLost`,
@@ -27,12 +31,17 @@
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { StyleSheet, Text } from 'react-native';
-import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import {
+  mayHaveTakenEffect,
+  refusedBeforeRunning,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { QueryErrorView } from '../../ui/QueryBoundary';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
@@ -82,6 +91,9 @@ export function CommandFailure({
   }
   if (tookEffectOutcomeLost(error)) {
     return <OutcomeLost error={error} what={what} />;
+  }
+  if (refusedBeforeRunning(error)) {
+    return <RefusedBeforeRunning error={error} onRetry={onRetry} />;
   }
   const recovery = recoveryActionFor(error);
   if (mayHaveTakenEffect(error)) {
