@@ -3,6 +3,7 @@ import { sql, type SqlBool } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RecoveryMode, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
+import { NotificationsService } from '../../communications';
 import { createCapturedPaymentFixture, FakePaymentProvider, RefundsService } from '../../finance';
 import { createOrganizationPeople, type OrganizationPeople } from '../../identity';
 import { MigrationModule, createAuthorityAssignmentFixture } from '../../migration';
@@ -11,6 +12,7 @@ import { SupportModule } from '../support.module';
 import { DEFAULT_SUPPORT_POLICY } from '../support.policy';
 import {
   CLOCK_START,
+  adultCustomer,
   drainOutbox,
   get,
   key,
@@ -995,6 +997,146 @@ describe('case actions (SPK-SUPPORT-003)', () => {
     });
     expect(current.status, JSON.stringify(current.body)).toBe(201);
     expect(current.body.action).toMatchObject({ status: 'succeeded' });
+  });
+
+  it('R4-COMMS-AUTOMATION-04 / SPK-COMMS-005: the current schedule change is resent from cases for two different subjects; a support resend never makes it look replaced, a newer change does', async () => {
+    const second = await adultCustomer(t);
+    const event = newId();
+    const sendNotice = async (kind: string, title: string) => {
+      const composed = await post(t, '/v1/notifications', operator, {
+        kind,
+        subject: { type: 'event', id: event },
+        title,
+        body: `${title}.`,
+        audience: { subjectPersonIds: [people.adult.personId, second.personId] },
+      });
+      expect(composed.status, JSON.stringify(composed.body)).toBe(201);
+      const sent = await post(t, `/v1/notifications/${composed.body.id}/send`, operator, {});
+      expect(sent.status, JSON.stringify(sent.body)).toBeLessThan(300);
+      await drainOutbox(t);
+      return composed.body.id as string;
+    };
+    const resend = async (caseId: string, notificationId: string) => {
+      const res = await post(t, `/v1/cases/${caseId}/resend-notification`, operator, {
+        notificationId,
+        reason: 'Customer says the message never arrived',
+      });
+      await drainOutbox(t);
+      return res;
+    };
+    const notice = await sendNotice('schedule_changed', 'Saturday game now at 17:00');
+    const caseA = await openCase(operator, people.adult.personId);
+    const caseB = await openCase(operator, second.personId);
+
+    const forA = await resend(caseA, notice);
+    expect(forA.status, JSON.stringify(forA.body)).toBe(201);
+    expect(forA.body.action).toMatchObject({ status: 'succeeded' });
+    const copyForA = forA.body.action.record.id as string;
+    // The other family's case resends the same current notice: support's own copy for the first
+    // family replaced nothing.
+    const forB = await resend(caseB, notice);
+    expect(forB.status, JSON.stringify(forB.body)).toBe(201);
+    expect(forB.body.action).toMatchObject({ status: 'succeeded' });
+    const copyForB = forB.body.action.record.id as string;
+    // Again for the first family, and the first family's own copy as well.
+    const again = await resend(caseA, notice);
+    expect(again.status, JSON.stringify(again.body)).toBe(201);
+    const ofCopy = await resend(caseA, copyForA);
+    expect(ofCopy.status, JSON.stringify(ofCopy.body)).toBe(201);
+    const copies = await t.db
+      .selectFrom('notifications')
+      .select(['title', 'audience'])
+      .where('id', 'in', [copyForA, copyForB])
+      .orderBy('created_at')
+      .execute();
+    expect(copies).toEqual([
+      expect.objectContaining({
+        title: 'Saturday game now at 17:00',
+        audience: expect.objectContaining({ subjectPersonIds: [people.adult.personId] }),
+      }),
+      expect.objectContaining({
+        title: 'Saturday game now at 17:00',
+        audience: expect.objectContaining({ subjectPersonIds: [second.personId] }),
+      }),
+    ]);
+
+    // A genuinely newer change replaces the notice and every copy of it.
+    const newer = await sendNotice('schedule_changed', 'Saturday game now at 18:00');
+    const actionsOfB = async () => (await get(t, `/v1/cases/${caseB}`, operator)).body.actions;
+    const before = await actionsOfB();
+    for (const stale of [notice, copyForB]) {
+      const refused = await resend(caseB, stale);
+      expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+      expect(refused.body.details).toMatchObject({
+        code: 'NOTICE_SUPERSEDED',
+        supersededByNotificationId: newer,
+      });
+    }
+    expect(await actionsOfB()).toEqual(before);
+    const current = await resend(caseB, newer);
+    expect(current.status, JSON.stringify(current.body)).toBe(201);
+  });
+
+  it('R4-COMMS-AUTOMATION-04: a newer notice that commits while the resend is being prepared discards the copy; nothing is recorded', async () => {
+    const event = newId();
+    const sendNotice = async (title: string) => {
+      const composed = await post(t, '/v1/notifications', operator, {
+        kind: 'schedule_changed',
+        subject: { type: 'event', id: event },
+        title,
+        body: `${title}.`,
+        audience: { subjectPersonIds: [people.adult.personId] },
+      });
+      expect(composed.status, JSON.stringify(composed.body)).toBe(201);
+      await post(t, `/v1/notifications/${composed.body.id}/send`, operator, {});
+      await drainOutbox(t);
+      return composed.body.id as string;
+    };
+    const notice = await sendNotice('Sunday practice now at 9:00');
+    const newer = await sendNotice('Sunday practice now at 10:00');
+    const caseId = await openCase(operator);
+    // The resend's first read of the notice happened before the newer notice committed.
+    const notifications = t.app.get(NotificationsService);
+    const read = notifications.deliveries.bind(notifications);
+    const before = vi.spyOn(notifications, 'deliveries').mockImplementationOnce(async (...args) => {
+      const deliveries = await read(...args);
+      return {
+        ...deliveries,
+        notification: { ...deliveries.notification, supersededByNotificationId: null },
+      };
+    });
+    const notices = async () =>
+      (
+        await t.db
+          .selectFrom('notifications')
+          .select('id')
+          .where('subject_id', '=', event)
+          .execute()
+      ).length;
+    const operations = async () =>
+      Number(
+        (
+          await t.db
+            .selectFrom('operations')
+            .select((eb) => eb.fn.countAll<number>().as('n'))
+            .where('kind', '=', 'support.resend_notification')
+            .executeTakeFirstOrThrow()
+        ).n,
+      );
+    const operationsBefore = await operations();
+    const res = await post(t, `/v1/cases/${caseId}/resend-notification`, operator, {
+      notificationId: notice,
+      reason: 'Customer says the message never arrived',
+    });
+    before.mockRestore();
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.details).toMatchObject({
+      code: 'NOTICE_SUPERSEDED',
+      supersededByNotificationId: newer,
+    });
+    expect(await notices()).toBe(2);
+    expect(await operations()).toBe(operationsBefore);
+    expect((await get(t, `/v1/cases/${caseId}`, operator)).body.actions).toEqual([]);
   });
 
   it('SPK-SUPPORT-003: the operator links a permission change they ran (audit record), only their own and only of the named command', async () => {
