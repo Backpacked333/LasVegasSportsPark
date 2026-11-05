@@ -232,7 +232,10 @@ and `close` events of `POST /cases/{id}/transition` (there are no separate route
   facility-local day.
 - **Today is bounded per read (R3-PERFORMANCE-01, `today-bounds.spec.ts`):** at most
   `todayExceptionLimit` exceptions are listed (their resolution histories in one
-  `OperationalExceptions.historyMany` read), most severe and soonest due first; the rest are counted on the `kernel.operational_exceptions` source
+  `OperationalExceptions.historyMany` read), most severe and soonest due first, read as one bounded
+  `OperationalExceptions.listOpenPage` page whose queue visibility (`ownerQueues`), facilities and
+  queue service levels the database applies (R4-CARRY-02); the rest are counted by one
+  `summarizeOpen` aggregate on the `kernel.operational_exceptions` source
   (`truncated: true`, `omitted: n`) and summarised by one `exceptions-omitted` item (as severe as
   the most severe of them, by severity and queue, next action `GET /v1/exceptions`, where they all
   stay). Only a listed exception stands in for the coverage slot it owns. At most
@@ -340,14 +343,14 @@ DEC-015 (support coverage, service objectives) and the §6.6 support/operations 
     "moved" can still arrive after it. Closing it needs communications to refuse or supersede the
     copy under its own locks (a resend entry point that refuses a superseded source under the
     source's row lock, and a supersession that also covers notices queued meanwhile).
-- **Today cost (R3-PERFORMANCE-01, pending in the kernel):** the bounds above cap the work of
+- **Today cost (R3-PERFORMANCE-01, R4-CARRY-01, R4-CARRY-02):** the bounds above cap the work of
   one read, and the exception histories and the coverage source are batched (above). Readiness
   eligibility is evaluated per roster (competition `evaluateRoster`, R4-CARRY-01): a fixed number
   of competition reads plus identity's many-ids reads (`personIdsResolvingToMany`,
   `loadPersons`), whatever the roster size (**Verified**: competition `eligibility-roster.spec.ts`
-  "R4-CARRY-01 / §4.12 / SPK-STAFF-002 …"). The exception read itself is unbounded in the kernel (`OperationalExceptions.listOpen` has no
-  limit: the feed filters by queue visibility and ranks by service-level deadline in application
-  code, so a SQL limit would list different exceptions). The staff Today screen lists a source
+  "R4-CARRY-01 / §4.12 / SPK-STAFF-002 …"). The exception read is one bounded `listOpenPage` page; each read
+  still counts every open exception in scope in SQL (one `summarizeOpen` aggregate, no rows
+  loaded, R4-CARRY-02). The staff Today screen lists a source
   with `truncated: true` under "Partly included", and the `*-omitted` items show in every client.
 - **Today workspace:** current and upcoming activities are counted, not listed; expected arrivals
   (entry) and resource-level field status are not part of the feed; incidents from competition

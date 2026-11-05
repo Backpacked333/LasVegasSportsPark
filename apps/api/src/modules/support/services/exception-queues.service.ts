@@ -249,6 +249,24 @@ export class ExceptionQueuesService {
     return queue.owningRoles.some((r) => principal.staffRoles.includes(r as StaffRole));
   }
 
+  /**
+   * R4-CARRY-02: the queue names {@link visibleTo} admits, for the kernel's SQL filter, or
+   * undefined when the viewer sees every queue (oversight roles and the system).
+   */
+  visibleQueueNames(
+    principal: Principal,
+    configured: Map<string, ExceptionQueueRow>,
+  ): string[] | undefined {
+    if (principal.kind === 'system') return undefined;
+    if (principal.kind !== 'staff') return [];
+    if (principal.staffRoles.some((r) => this.policy.oversightRoles.includes(r))) return undefined;
+    const names = [...configured.values()]
+      .filter((q) => q.owning_roles.some((r) => principal.staffRoles.includes(r as StaffRole)))
+      .map((q) => q.name);
+    for (const role of principal.staffRoles) if (!configured.has(role)) names.push(role);
+    return names;
+  }
+
   /** A queue a case or exception may name: a configured active queue or a staff role's queue. */
   async assertKnown(db: Reader, organizationId: string, name: string): Promise<void> {
     if (ROLE_NAMES.has(name)) return;

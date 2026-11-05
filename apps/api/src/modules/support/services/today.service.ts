@@ -19,6 +19,7 @@ import {
   FacilityDirectory,
   OperationalExceptions,
   type Clock,
+  type OpenExceptionsSummary,
   listFacilityScope,
 } from '../../../kernel';
 import { MatchActions, ReadinessService } from '../../competition';
@@ -147,30 +148,35 @@ export class TodayService {
     const coveredKeys = new Set<string>();
     {
       const status = await this.attempt(async () => {
-        const rows = (await this.kernelExceptions.listOpen(
-          principal,
-          organizationId,
-        )) as ExceptionRow[];
-        const facilityIds = new Set(facilities.map((f) => f.id));
-        const visible = rows.filter(
-          (r) =>
-            (r.facility_id === null || facilityIds.has(r.facility_id)) &&
-            this.queues.visibleTo(principal, this.queues.resolve(r.owner_queue, configured)),
-        );
-        const levels = new Map(
-          visible.map((r) => [r.id, this.exceptions.serviceLevelsOf(r, configured, now)]),
-        );
-        const dueAt = (r: ExceptionRow) =>
-          levels.get(r.id)?.deadline?.getTime() ?? Number.POSITIVE_INFINITY;
-        // The feed's own order (severity, deadline, id), so the listed ones are the ones it shows first.
-        const ranked = [...visible].sort(
-          (a, b) =>
-            SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
-            dueAt(a) - dueAt(b) ||
-            `exception:${a.id}`.localeCompare(`exception:${b.id}`),
-        );
-        const listed = ranked.slice(0, Math.max(0, this.policy.todayExceptionLimit));
-        const left = ranked.slice(listed.length);
+        const query = {
+          facilityIds: facilities.map((f) => f.id),
+          ownerQueues: this.queues.visibleQueueNames(principal, configured),
+          serviceLevels: new Map(
+            [...configured.values()].map((q) => [
+              q.name,
+              {
+                resolveWithinMinutes: q.resolve_within_minutes,
+                acknowledgeWithinMinutes: q.acknowledge_within_minutes,
+              },
+            ]),
+          ),
+        };
+        const limit = Math.max(0, this.policy.todayExceptionLimit);
+        const page =
+          limit > 0
+            ? await this.kernelExceptions.listOpenPage(principal, organizationId, {
+                ...query,
+                limit,
+              })
+            : { items: [], more: true, nextCursor: null };
+        const listed = page.items as ExceptionRow[];
+        const rest = page.more
+          ? await this.kernelExceptions.summarizeOpen(principal, organizationId, {
+              ...query,
+              after: page.nextCursor,
+              asOf: now,
+            })
+          : null;
         const history = await this.exceptions.history(
           this.db,
           organizationId,
@@ -209,11 +215,12 @@ export class TodayService {
             details: { ...view.details, exceptionId: row.id, revision: row.revision },
           });
         }
-        if (left.length > 0) {
-          items.push(await this.omittedExceptionsItem(principal, left, levels));
+        if (rest?.first) {
+          items.push(await this.omittedExceptionsItem(principal, rest, rest.first));
         }
         for (const k of keys) coveredKeys.add(k);
-        return { count: listed.length, truncated: left.length > 0, omitted: left.length };
+        const omitted = rest?.count ?? 0;
+        return { count: listed.length, truncated: omitted > 0, omitted };
       }, items);
       sources.push({ source: 'kernel.operational_exceptions', facilityId: null, ...status });
     }
@@ -446,33 +453,24 @@ export class TodayService {
    */
   private async omittedExceptionsItem(
     principal: Principal,
-    left: readonly ExceptionRow[],
-    levels: ReadonlyMap<string, { deadline: Date | null; overdue: boolean }>,
+    rest: OpenExceptionsSummary,
+    lead: NonNullable<OpenExceptionsSummary['first']>,
   ): Promise<TodayItem> {
-    const lead = left[0] as ExceptionRow;
-    const deadlines = left
-      .map((r) => levels.get(r.id)?.deadline?.getTime())
-      .filter((d): d is number => d !== undefined);
-    const tally = (key: (r: ExceptionRow) => string) =>
-      left.reduce<Record<string, number>>((acc, r) => {
-        acc[key(r)] = (acc[key(r)] ?? 0) + 1;
-        return acc;
-      }, {});
     return {
       id: 'exceptions-omitted',
       source: 'exception',
       group: 'other',
       category: 'support.today_exceptions_omitted',
-      title: `${left.length} more open exception(s) in your queues are not listed here`,
+      title: `${rest.count} more open exception(s) in your queues are not listed here`,
       severity: lead.severity,
       facilityId: null,
       affected: null,
-      ownerQueue: lead.owner_queue,
+      ownerQueue: lead.ownerQueue,
       status: 'unresolved',
       openedAt: null,
       ageMinutes: null,
-      deadlineAt: deadlines.length > 0 ? new Date(Math.min(...deadlines)).toISOString() : null,
-      overdue: left.some((r) => levels.get(r.id)?.overdue === true),
+      deadlineAt: rest.earliestDueAt ? rest.earliestDueAt.toISOString() : null,
+      overdue: rest.overdue > 0,
       revision: null,
       nextActions: await this.nextActions.permitted(principal, [
         {
@@ -485,10 +483,10 @@ export class TodayService {
       ]),
       history: [],
       details: {
-        omitted: left.length,
+        omitted: rest.count,
         listed: this.policy.todayExceptionLimit,
-        bySeverity: tally((r) => r.severity),
-        byQueue: tally((r) => r.owner_queue),
+        bySeverity: rest.bySeverity,
+        byQueue: rest.byQueue,
       },
     };
   }

@@ -144,10 +144,22 @@ describe('Today workspace bounds (R3-PERFORMANCE-01, SPK-UX-006)', () => {
   const source = (feed: TodayFeed, name: string, facilityId: string | null = null) =>
     feed.sources.find((s) => s.source === name && s.facilityId === facilityId) as TodaySource;
 
-  it('R3-PERFORMANCE-01 / SPK-UX-006: one read lists at most todayExceptionLimit exceptions with their history, most severe first, and names the rest', async () => {
+  it('R3-PERFORMANCE-01 / R4-CARRY-02 / SPK-UX-006: one read lists at most todayExceptionLimit exceptions with their history, most severe first, and names the rest', async () => {
     const history = vi.spyOn(t.app.get(OperationalExceptions), 'historyMany');
     const single = vi.spyOn(t.app.get(OperationalExceptions), 'history');
+    const unbounded = vi.spyOn(t.app.get(OperationalExceptions), 'listOpen');
+    const page = vi.spyOn(t.app.get(OperationalExceptions), 'listOpenPage');
+    const summary = vi.spyOn(t.app.get(OperationalExceptions), 'summarizeOpen');
     const feed = await feedOf();
+    // R4-CARRY-02: one bounded page of exceptions and one aggregate for the rest, never every
+    // open exception of the organization.
+    expect(unbounded).not.toHaveBeenCalled();
+    expect(page).toHaveBeenCalledTimes(1);
+    expect(page.mock.calls[0]?.[2]).toMatchObject({ limit: EXCEPTION_LIMIT });
+    expect(summary).toHaveBeenCalledTimes(1);
+    unbounded.mockRestore();
+    page.mockRestore();
+    summary.mockRestore();
     // One audit read for the listed exceptions, never one per open exception of the organization.
     expect(history).toHaveBeenCalledTimes(1);
     expect([...(history.mock.calls[0]?.[1] ?? [])].sort()).toEqual([ids.critical, ids.high].sort());
