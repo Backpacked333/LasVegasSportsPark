@@ -12,9 +12,9 @@ Test counts are from 2026-11-04 on the integration branch (stage 7): `vitest run
 `pnpm test`, first half) runs 3548 tests in 438 files, all passing on PGlite and on PostgreSQL
 through `TEST_DATABASE_URL`; the customer app's jest suite (`pnpm test:mobile`, second half) runs
 1211 tests in 90 suites, all passing (three consecutive runs). The per-module and per-app counts in the table below are the tests `vitest` runs in each area (counted with `vitest list --staticParse=false`, which expands `it.each` and tests declared in loops exactly as a run does; the static `vitest list` default counts each such declaration once) and, with the 57 tests of the 31 cross-module journeys, add up to the 3548. All fourteen domain modules under `apps/api/src/modules/` are
-implemented as backend code (141 SQL migrations from 0001 to 1480; 303 registered actions, listed in
-[docs/package-a/permission-matrix.generated.md](docs/package-a/permission-matrix.generated.md); 482
-HTTP paths and 578 operations in [docs/api/openapi.json](docs/api/openapi.json)), and 31
+implemented as backend code (158 SQL migrations from 0001 to 1480; 304 registered actions, listed in
+[docs/package-a/permission-matrix.generated.md](docs/package-a/permission-matrix.generated.md); 483
+HTTP paths and 579 operations in [docs/api/openapi.json](docs/api/openapi.json)), and 31
 cross-module journeys drive the assembled application through HTTP
 (`apps/api/src/__tests__/journeys/`, see
 [docs/architecture/overview.md](docs/architecture/overview.md) section 11). Status words follow
