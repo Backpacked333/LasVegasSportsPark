@@ -188,7 +188,16 @@ operation (`GET /v1/operations/{id}`): `workforce.accept_assignment` (temporary 
   assignment for the slot resolves the exception (it stays as history). Escalation and resolution
   take a per-slot advisory lock, so a decline racing an acceptance of the same slot never leaves
   an open exception on a covered slot (tested under PostgreSQL in
-  `__tests__/replacement-target.spec.ts`).
+  `__tests__/replacement-target.spec.ts`). A requirement edit (PATCH) after which a slot is no
+  longer required (the count lowered below it, or `mustBeAccepted` set to false) resolves that
+  slot's open or acknowledged exception in the same transaction (system actor
+  `workforce.coverage`; the resolution names the requirement id, revision, count and
+  `mustBeAccepted`); exceptions of slots still required stay open (R4-OPS-MODULES-08, SPK-UX-006).
+  The edit holds the requirement row `FOR UPDATE`, which an escalation or acceptance of the role
+  waits for, so a withdrawal racing the edit never leaves an open exception on a slot the edit no
+  longer requires (tested under PostgreSQL in `__tests__/requirement-edit-uncovered.spec.ts`).
+  Raising the count again does not re-escalate a slot: escalation follows a decline or
+  withdrawal only (see "Gap — uncovered-slot sweep").
 - **Replacement candidates** (SPK-AT-012): holders of the kind's staff role at the facility plus
   holders of every required qualification; each candidate lists reasons with severity
   `blocking/warning/info/positive` and source ids (qualification held or missing, declared
