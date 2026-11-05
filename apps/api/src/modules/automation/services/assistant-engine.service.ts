@@ -7,7 +7,15 @@ import type {
   StaffRole,
 } from '@sportspark/contracts';
 import { AUTOMATION_SETTINGS, type AutomationSettings } from '../automation.settings';
-import { mergeEvidence, mergeMissing, missingEvidence } from '../evidence';
+import {
+  evidenceKey,
+  mergeEvidence,
+  mergeMissing,
+  missingEvidence,
+  missingKey,
+  requestGapSummaries,
+  requestReadSummaries,
+} from '../evidence';
 import {
   ASSISTANT_PROVIDER_PORT,
   AssistantProviderError,
@@ -35,11 +43,15 @@ export interface EngineInput {
 export interface ProposedCommand {
   proposal: CommandProposal;
   /**
-   * R4-COMMS-AUTOMATION-09 (SPK-AUTO-002): what the command's own proposal read, then every other
-   * record the request read, named by type, id and freshness only.
+   * R4-COMMS-AUTOMATION-09 (SPK-AUTO-002, §4.10, §4.14): what the command's own proposal read,
+   * then one entry per other tool the request used — the request as its record and the oldest
+   * freshness of that tool's reads — so a reviewer learns no record the command does not concern.
    */
   evidence: AssistantEvidence[];
-  /** Every gap of the request, the proposal's own first (SPK-AUTO-002). */
+  /**
+   * Every gap of the request (SPK-AUTO-002): the proposal's own as recorded, the others by tool,
+   * record type, reason and description, without the record they name.
+   */
   missing: AssistantMissingEvidence[];
   invocationId: string;
 }
@@ -54,11 +66,6 @@ export interface EngineResult {
   commands: ProposedCommand[];
   informational: Array<{ proposal: InformationalProposal; evidence: AssistantEvidence[] }>;
   executions: ToolExecution[];
-}
-
-/** One supporting record as read by one tool (the merge key of `mergeEvidence`). */
-function evidenceKey(item: AssistantEvidence): string {
-  return `${item.source}|${item.recordType}|${item.recordId}`;
 }
 
 /**
@@ -147,21 +154,29 @@ export class AssistantEngine {
         });
       } catch (error) {
         if (!(error instanceof AssistantProviderError)) throw error;
-        return this.finish('failed', turn, executions, extraMissing, {
+        return this.finish(input.assistantRequestId, 'failed', turn, executions, extraMissing, {
           code: error.mode === 'timeout' ? 'PROVIDER_TIMEOUT' : 'PROVIDER_FAILED',
           message: error.message,
         });
       }
       const parsed = AssistantTurnOutputSchema.safeParse(raw);
       if (!parsed.success) {
-        return this.finish('failed', turn, executions, extraMissing, {
+        return this.finish(input.assistantRequestId, 'failed', turn, executions, extraMissing, {
           code: 'PROVIDER_INVALID_OUTPUT',
           message: 'The assistant provider returned an answer in an unexpected form.',
         });
       }
       const output: ParsedAssistantTurnOutput = parsed.data;
       if (output.type === 'answer') {
-        return this.finish('answered', turn, executions, extraMissing, null, output);
+        return this.finish(
+          input.assistantRequestId,
+          'answered',
+          turn,
+          executions,
+          extraMissing,
+          null,
+          output,
+        );
       }
       for (const call of output.calls) {
         if (toolCalls >= this.settings.maxToolCalls) {
@@ -180,13 +195,21 @@ export class AssistantEngine {
         await execute(call);
       }
     }
-    return this.finish('failed', this.settings.maxTurns, executions, extraMissing, {
-      code: 'TURN_LIMIT_REACHED',
-      message: `The assistant did not answer within ${this.settings.maxTurns} turns.`,
-    });
+    return this.finish(
+      input.assistantRequestId,
+      'failed',
+      this.settings.maxTurns,
+      executions,
+      extraMissing,
+      {
+        code: 'TURN_LIMIT_REACHED',
+        message: `The assistant did not answer within ${this.settings.maxTurns} turns.`,
+      },
+    );
   }
 
   private finish(
+    assistantRequestId: string,
     status: 'answered' | 'failed',
     turns: number,
     executions: ToolExecution[],
@@ -199,27 +222,35 @@ export class AssistantEngine {
     if (status === 'failed') {
       this.logger.warn(`assistant request failed: ${error?.code ?? 'unknown'}`);
     }
-    // R4-COMMS-AUTOMATION-09 (SPK-AUTO-002 "missing evidence must remain visible"): a command
-    // recommendation is reviewed by people who cannot open the request, so it carries the whole
-    // request's missing evidence and names every record the request read. Records other than the
-    // command's own are named without their label (§4.10, §4.14): a reviewer holds the command's
-    // action, not necessarily the reads, and opens a record through its owning module.
+    // R4-COMMS-AUTOMATION-09 (SPK-AUTO-002 "responses must identify supporting records and their
+    // freshness; missing evidence must remain visible"): a command recommendation is reviewed by
+    // people who cannot open the request, so it carries what the rest of the request read and
+    // missed. A reviewer holds the command's action, not the reads behind the request (§4.10,
+    // §4.14 least privilege), so only the command's own records are named; every other tool's
+    // reads become one entry for the request with their oldest freshness, and every other gap
+    // stays listed without the record it names. The request itself names them to its requester.
     const commands =
       status === 'answered'
         ? executions
             .filter((e) => e.outcome === 'succeeded' && e.proposal)
             .map((e) => {
               const proposal = e.proposal as CommandProposal;
-              const own = new Set(e.evidence.map(evidenceKey));
+              const ownEvidence = new Set(e.evidence.map(evidenceKey));
+              const ownMissing = mergeMissing(proposal.missing);
+              const ownGaps = new Set(ownMissing.map(missingKey));
               return {
                 proposal,
                 evidence: [
                   ...e.evidence,
-                  ...evidence
-                    .filter((item) => !own.has(evidenceKey(item)))
-                    .map((item) => ({ ...item, label: null })),
+                  ...requestReadSummaries(
+                    assistantRequestId,
+                    evidence.filter((item) => !ownEvidence.has(evidenceKey(item))),
+                  ),
                 ],
-                missing: mergeMissing([...proposal.missing, ...missing]),
+                missing: [
+                  ...ownMissing,
+                  ...requestGapSummaries(missing.filter((item) => !ownGaps.has(missingKey(item)))),
+                ],
                 invocationId: e.invocationId,
               };
             })

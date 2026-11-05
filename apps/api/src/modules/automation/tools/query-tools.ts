@@ -433,6 +433,8 @@ export function assistantPersonView(person: PersonDetail): {
  * What a Today read left out, as missing evidence (SPK-AUTO-002 "missing evidence is named"):
  * a source that could not be read or is not available to the caller, and (R3-PERFORMANCE-01) a
  * source the feed's per-request bound truncated, which is only partly included (`limit_reached`).
+ * Descriptions name the requester, never "you": a command recommendation shows them to reviewers
+ * too (R4-COMMS-AUTOMATION-09).
  */
 export function todaySourceGaps(
   sources: ReadonlyArray<{
@@ -454,7 +456,7 @@ export function todaySourceGaps(
           'support.today_feed',
           s.status === 'not_permitted' ? 'not_available' : 'source_unavailable',
           s.status === 'not_permitted'
-            ? `The ${s.source} source is not available to you, so its issues are not included.`
+            ? `The ${s.source} source is not available to the requester, so its issues are not included.`
             : `The ${s.source} source could not be read; its issues are not included.`,
         ),
       );

@@ -187,7 +187,7 @@ describe('assistant requests (SPK-AUTO-001, SPK-AUTO-002, SPK-AUTO-004)', () => 
     });
   });
 
-  it('SPK-AUTO-002 (R4-COMMS-AUTOMATION-09): a drafted notice carries the request’s missing evidence and names the records the request read, so a reviewer who cannot open the request sees them', async () => {
+  it('SPK-AUTO-002 / §4.10 (R4-COMMS-AUTOMATION-09): a drafted notice keeps every gap of its request visible to a reviewer who cannot open the request, worded for any viewer and without the records the requester read', async () => {
     const fixtureId = await fixture();
     const { home_entry_id: homeEntryId } = await t.db
       .selectFrom('fixtures')
@@ -196,11 +196,14 @@ describe('assistant requests (SPK-AUTO-001, SPK-AUTO-002, SPK-AUTO-004)', () => 
       .executeTakeFirstOrThrow();
     await createObligationFixture(t, { debtorTeamEntryId: homeEntryId, amountMinor: 10_000 });
     const coach = await staffMember(t, ['coach']);
+    const customer = await adultCustomer(t);
     fake.script('tell both teams the game is on', [
       {
         type: 'tool_calls',
         calls: [
           { tool: 'competition.fixture_readiness', arguments: { fixtureId } },
+          // A league manager may not read a customer timeline (support's case staff only).
+          { tool: 'support.customer_timeline', arguments: { personId: customer.personId } },
           {
             tool: 'communications.send',
             arguments: {
@@ -217,10 +220,28 @@ describe('assistant requests (SPK-AUTO-001, SPK-AUTO-002, SPK-AUTO-004)', () => 
     ]);
     const res = await ask(t, leagueManager, { prompt: 'Tell both teams the game is on' });
     const body = res.body;
-    const unknown = (body.missingEvidence as Array<{ recordType: string; reason: string }>).filter(
-      (m) => m.recordType === 'readiness_check' && m.reason === 'unknown_evidence',
-    );
-    expect(unknown.length).toBeGreaterThan(0);
+    type Gap = {
+      recordType: string;
+      recordId: string | null;
+      source: string | null;
+      reason: string;
+      description: string;
+    };
+    const requestGaps = body.missingEvidence as Gap[];
+    expect(
+      requestGaps.filter(
+        (m) => m.recordType === 'readiness_check' && m.reason === 'unknown_evidence',
+      ).length,
+    ).toBeGreaterThan(0);
+    // The requester's own request names the denied record, in words true for any viewer.
+    expect(requestGaps).toContainEqual({
+      recordType: 'person',
+      recordId: customer.personId,
+      source: 'support.customer_timeline',
+      reason: 'not_available',
+      description:
+        'The requested person is not available to the requester; nothing about it was used or disclosed.',
+    });
     const [rec] = body.recommendations;
     expect(rec).toMatchObject({ kind: 'communication_draft' });
 
@@ -229,19 +250,110 @@ describe('assistant requests (SPK-AUTO-001, SPK-AUTO-002, SPK-AUTO-004)', () => 
     expect((await get(t, `/v1/assistant/requests/${body.id}`, generalManager)).status).toBe(404);
     const reviewed = await get(t, `/v1/recommendations/${rec.id}`, generalManager);
     expect(reviewed.status).toBe(200);
-    // Every gap of the request stays visible on the recommendation …
-    expect(reviewed.body.missingEvidence).toEqual(expect.arrayContaining(body.missingEvidence));
-    expect(reviewed.body.missingEvidence).toHaveLength(body.missingEvidence.length);
-    // … and the fixture read is named with its freshness, without the requester's label.
-    expect(reviewed.body.evidence).toContainEqual(
-      expect.objectContaining({
-        recordType: 'fixture',
-        recordId: fixtureId,
+    const shown = reviewed.body.missingEvidence as Gap[];
+    // Every gap of the request stays visible, by tool, record type, reason and description …
+    for (const gap of requestGaps) {
+      expect(shown).toContainEqual({ ...gap, recordId: null });
+    }
+    // … never naming a record, and never telling the reviewer something is unavailable to them.
+    for (const gap of shown) {
+      expect(gap.recordId).toBeNull();
+      expect(gap.description).not.toMatch(/\byou\b/i);
+    }
+    // The fixture read is shown as the request's read through that tool, with its freshness.
+    expect(reviewed.body.evidence).toEqual([
+      {
+        recordType: 'assistant_request',
+        recordId: body.id,
         source: 'competition.fixture_readiness',
-        label: null,
+        label:
+          'Records this request read through competition.fixture_readiness; the request names them.',
+        observedAt: CLOCK_START,
+        asOf: CLOCK_START,
+        ageSeconds: 0,
         freshness: 'live',
-      }),
+        changedSinceClientObservation: null,
+      },
+    ]);
+    // Nothing the requester read or was refused is named to the reviewer.
+    const disclosed = JSON.stringify(reviewed.body);
+    expect(disclosed).not.toContain(fixtureId);
+    expect(disclosed).not.toContain(customer.personId);
+  });
+
+  it('§4.10 / §4.14 / SPK-AT-026 (R4-COMMS-AUTOMATION-09): a reviewer of a notice drafted after a customer-timeline read learns none of the timeline’s records, ids or last-change times', async () => {
+    const frontDesk = await staffMember(t, ['front_desk']);
+    const customer = await adultCustomer(t);
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: customer.personId,
+      amountMinor: 4_500,
+    });
+    t.clock.advance(30 * 60_000);
+    fake.script('remind the customer', [
+      {
+        type: 'tool_calls',
+        calls: [
+          { tool: 'support.customer_timeline', arguments: { personId: customer.personId } },
+          {
+            tool: 'communications.send',
+            arguments: {
+              kind: 'payment_attention',
+              category: 'operational',
+              audience: { personIds: [customer.personId] },
+              title: 'About your payment',
+              body: 'Please contact the front desk.',
+            },
+          },
+        ],
+      },
+      { type: 'answer', text: 'A notice is drafted for your review.' },
+    ]);
+    const res = await ask(t, frontDesk, {
+      prompt: 'Please remind the customer about their payment',
+    });
+    const body = res.body;
+    expect(body.status).toBe('answered');
+    // The requester's own request names every timeline record it read, with its last change.
+    const timeline = (
+      body.evidence as Array<{
+        source: string;
+        recordType: string;
+        recordId: string;
+        asOf: string | null;
+      }>
+    ).filter((e) => e.source === 'support.customer_timeline');
+    expect(timeline).toContainEqual(
+      expect.objectContaining({ recordType: 'obligation', recordId: payment.obligationId }),
     );
+    const [rec] = body.recommendations;
+    expect(rec).toMatchObject({ kind: 'communication_draft' });
+
+    // A scheduler may send the notice, so they review it — but holds no support.read_timeline.
+    const scheduler2 = await staffMember(t, ['scheduler']);
+    expect((await get(t, `/v1/assistant/requests/${body.id}`, scheduler2)).status).toBe(404);
+    const reviewed = await get(t, `/v1/recommendations/${rec.id}`, scheduler2);
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.evidence).toEqual([
+      {
+        recordType: 'assistant_request',
+        recordId: body.id,
+        source: 'support.customer_timeline',
+        label:
+          'Records this request read through support.customer_timeline; the request names them.',
+        observedAt: t.clock.now().toISOString(),
+        asOf: t.clock.now().toISOString(),
+        ageSeconds: 0,
+        freshness: 'live',
+        changedSinceClientObservation: null,
+      },
+    ]);
+    // None of the timeline's records, nor when any of them last changed, reaches the reviewer.
+    const disclosed = JSON.stringify(reviewed.body);
+    for (const item of timeline) {
+      expect(disclosed).not.toContain(item.recordId);
+      if (item.asOf) expect(disclosed).not.toContain(item.asOf);
+    }
+    expect(disclosed).not.toContain(payment.paymentAttemptId);
   });
 
   it('§4.14 (R4-PRIVACY-04): a person context reference sends the provider only who the person is — never a child’s date of birth or a contact value', async () => {

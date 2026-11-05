@@ -1,4 +1,4 @@
-import { newId, systemPrincipal } from '@sportspark/contracts';
+import { newId, systemPrincipal, z } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { sql, type SqlBool } from 'kysely';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,7 @@ import {
 import type { FakeAssistantProvider } from '../providers/fake-assistant.provider';
 import { RecommendationsService } from '../services/recommendations.service';
 import { ToolRegistry } from '../tools/tool-registry';
+import type { AnyCommandTool } from '../tools/tool.types';
 import {
   CLOCK_START,
   adultCustomer,
@@ -1147,6 +1148,162 @@ describe('recommendations (SPK-AUTO-003, SPK-AUTO-004)', () => {
     ).toEqual([]);
     expect(await draftStatus(draftId)).toBe('editing');
     // Unclaimed, it expires on its durable timer like any approved proposal.
+    t.clock.advance(25 * 3600_000);
+    await drainOutbox(t);
+    expect((await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body).toMatchObject({
+      status: 'expired',
+      apply: { operationId: null },
+    });
+  });
+
+  /**
+   * A publication recommendation stored the way an earlier build stored it: its draft named by a
+   * reference this build's command input no longer accepts (build drift, R4-REPLAY-IDEMPOTENCY-03).
+   */
+  async function proposeDrifted(): Promise<{ draftId: string; rec: Rec }> {
+    const registry = t.app.get(ToolRegistry);
+    const real = registry.command('scheduling.publish_schedule') as AnyCommandTool;
+    const original = registry.get.bind(registry);
+    const spy = vi.spyOn(registry, 'get').mockImplementation((name: string) =>
+      name === real.name
+        ? {
+            ...real,
+            propose: async (...call: Parameters<AnyCommandTool['propose']>) => {
+              const proposal = await real.propose(...call);
+              return {
+                ...proposal,
+                command: {
+                  ...proposal.command,
+                  input: { draftId: 'draft-of-an-earlier-build', draftRevision: 1 },
+                },
+              };
+            },
+          }
+        : original(name),
+    );
+    try {
+      const { draftId, rec } = await proposePublish(schedulerA);
+      return { draftId, rec: (await approve(schedulerB, rec)).body as Rec };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  /** Nothing of an apply remains: no claim, no apply operation, no log entry, no exception. */
+  async function expectNothingClaimed(rec: Rec): Promise<void> {
+    const row = await t.db
+      .selectFrom('recommendations')
+      .select(['apply_operation_id', 'apply_started_at', 'status'])
+      .where('id', '=', rec.id)
+      .executeTakeFirstOrThrow();
+    expect(row).toEqual({ apply_operation_id: null, apply_started_at: null, status: 'approved' });
+    expect(
+      await t.db
+        .selectFrom('operations')
+        .select('id')
+        .where('kind', '=', 'automation.apply_recommendation')
+        .where('status', 'in', ['running', 'recovery_required'])
+        .where(sql<SqlBool>`input->>'recommendationId' = ${rec.id}`)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('operational_exceptions')
+        .select('id')
+        .where('affected_id', '=', rec.id)
+        .execute(),
+    ).toEqual([]);
+  }
+
+  it('§4.7 invariant 5 / §4.11 (R4-REPLAY-IDEMPOTENCY-03): a stored command input this build no longer accepts is refused before the apply is claimed; the recommendation stays unclaimed and expires on its timer', async () => {
+    const { draftId, rec } = await proposeDrifted();
+    expect(rec.status).toBe('approved');
+    const refused = await apply(schedulerB, rec);
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: 'INVALID_TRANSITION',
+      details: {
+        code: 'INPUT_NO_LONGER_VALID',
+        commandActionId: 'scheduling.publish_schedule',
+        issues: ['draftId'],
+      },
+    });
+    await expectNothingClaimed(rec);
+    const row = await t.db
+      .selectFrom('recommendations')
+      .select('revision')
+      .where('id', '=', rec.id)
+      .executeTakeFirstOrThrow();
+    expect(row.revision).toBe(rec.revision);
+    expect(
+      await t.db
+        .selectFrom('operations')
+        .select('id')
+        .where('kind', '=', 'automation.apply_recommendation')
+        .where(sql<SqlBool>`input->>'recommendationId' = ${rec.id}`)
+        .execute(),
+    ).toEqual([]);
+    expect(
+      await t.db
+        .selectFrom('tool_invocations')
+        .select('id')
+        .where('recommendation_id', '=', rec.id)
+        .execute(),
+    ).toEqual([]);
+    expect(await draftStatus(draftId)).toBe('editing');
+    t.clock.advance(25 * 3600_000);
+    await drainOutbox(t);
+    expect((await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body).toMatchObject({
+      status: 'expired',
+      apply: { operationId: null },
+    });
+  });
+
+  it('§4.11 (R4-REPLAY-IDEMPOTENCY-03): a stored input the command tool itself refuses is a failed apply, never an unknown outcome — the claim is released, nothing is left to settle by hand, and the recommendation still expires', async () => {
+    const { draftId, rec } = await proposeDrifted();
+    const registry = t.app.get(ToolRegistry);
+    const real = registry.command('scheduling.publish_schedule') as AnyCommandTool;
+    // The claim-time check lets it through (as a check that drifted from the tool would) …
+    const spy = vi
+      .spyOn(registry, 'command')
+      .mockReturnValue({ ...real, inputSchema: z.unknown() });
+    let refused: Awaited<ReturnType<typeof apply>>;
+    try {
+      refused = await apply(schedulerB, rec);
+    } finally {
+      spy.mockRestore();
+    }
+    // … and the tool's own parsing refuses it before scheduling is called.
+    expect(refused.status, JSON.stringify(refused.body)).toBe(400);
+    expect(refused.body).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: { code: 'INPUT_NO_LONGER_VALID', commandActionId: 'scheduling.publish_schedule' },
+    });
+    await expectNothingClaimed(rec);
+    const after = await get(t, `/v1/recommendations/${rec.id}`, schedulerB);
+    expect(after.body).toMatchObject({
+      status: 'approved',
+      apply: {
+        state: 'pending',
+        operationId: null,
+        lastError: { code: 'VALIDATION_FAILED', details: { outcome: 'failed' } },
+      },
+    });
+    const operationId = (after.body.apply.lastError.details as { operationId: string }).operationId;
+    const op = await t.db
+      .selectFrom('operations')
+      .select('status')
+      .where('id', '=', operationId)
+      .executeTakeFirstOrThrow();
+    expect(op.status).toBe('failed');
+    expect(
+      await t.db
+        .selectFrom('tool_invocations')
+        .select(['phase', 'outcome', 'error_code'])
+        .where('recommendation_id', '=', rec.id)
+        .execute(),
+    ).toEqual([{ phase: 'apply', outcome: 'failed', error_code: 'VALIDATION_FAILED' }]);
+    expect(await draftStatus(draftId)).toBe('editing');
     t.clock.advance(25 * 3600_000);
     await drainOutbox(t);
     expect((await get(t, `/v1/recommendations/${rec.id}`, schedulerB)).body).toMatchObject({

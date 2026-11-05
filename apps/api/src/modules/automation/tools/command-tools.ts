@@ -35,6 +35,28 @@ function organizationOf(principal: Principal): string {
   return principal.organizationId;
 }
 
+/**
+ * R4-REPLAY-IDEMPOTENCY-03 (§4.11 "unknown kept explicit until reconciled", and only then): what an
+ * apply builds from the stored command before the owning module is called. A value this build's
+ * schemas refuse means the command never ran, so the refusal is a failed apply (claim released,
+ * the recommendation may still expire), never an unknown outcome held for a manual settlement.
+ */
+function parseForApply<T>(schema: z.ZodType<T>, value: unknown, actionId: string): T {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  throw new ApplyFailure(
+    errors.validation(
+      'The command of this recommendation is not accepted by the owning module’s current request format; nothing was applied. Make the change through the owning module.',
+      {
+        code: 'INPUT_NO_LONGER_VALID',
+        commandActionId: actionId,
+        issues: parsed.error.issues.slice(0, 10).map((i) => i.path.join('.') || '(root)'),
+      },
+    ),
+    { outcome: 'failed' },
+  );
+}
+
 const PublishArgs = z
   .object({
     /** Publish this existing draft … */
@@ -185,6 +207,7 @@ export class CommandTools {
         rationale: 'why',
       },
       argsSchema: PublishArgs,
+      inputSchema: PublishInput,
       propose: async (principal, args, rationale) => {
         const organizationId = organizationOf(principal);
         if (args.draftId) {
@@ -300,7 +323,7 @@ export class CommandTools {
         };
       },
       apply: async (reviewer, rawInput, ctx) => {
-        const input = PublishInput.parse(rawInput);
+        const input = parseForApply(PublishInput, rawInput, 'scheduling.publish_schedule');
         const meta = {
           reason: ctx.reason ?? undefined,
           policyReferences: ctx.policyReferences.length ? [...ctx.policyReferences] : undefined,
@@ -343,12 +366,16 @@ export class CommandTools {
           }
           // Nothing is opened for a repair whose events moved on since it was proposed …
           await this.assertRepairBase(reviewer, input);
-          const body = CreateScheduleDraftBody.parse({
-            facilityId: repair.facilityId,
-            name: repair.name,
-            changes: repair.changes,
-            ...meta,
-          });
+          const body = parseForApply(
+            CreateScheduleDraftBody,
+            {
+              facilityId: repair.facilityId,
+              name: repair.name,
+              changes: repair.changes,
+              ...meta,
+            },
+            'scheduling.publish_schedule',
+          );
           const draft = await this.drafts.create(reviewer, body, ctx.correlationId ?? undefined);
           try {
             // … and a draft that captured a later revision (a change between that read and the
@@ -440,6 +467,7 @@ export class CommandTools {
         facilityId: 'optional facility id',
       },
       argsSchema: SendArgs,
+      inputSchema: SendArgs,
       propose: async (principal, args, rationale) => {
         const organizationId = organizationOf(principal);
         if (args.facilityId) await this.requireFacility(organizationId, args.facilityId);
@@ -489,11 +517,15 @@ export class CommandTools {
         };
       },
       apply: async (reviewer, rawInput, ctx) => {
-        const body: ComposeNotificationInput = ComposeNotificationBody.parse({
-          ...rawInput,
-          reason: ctx.reason ?? undefined,
-          policyReferences: ctx.policyReferences.length ? [...ctx.policyReferences] : undefined,
-        });
+        const body: ComposeNotificationInput = parseForApply(
+          ComposeNotificationBody,
+          {
+            ...rawInput,
+            reason: ctx.reason ?? undefined,
+            policyReferences: ctx.policyReferences.length ? [...ctx.policyReferences] : undefined,
+          },
+          'communications.send',
+        );
         const notification = await this.notifications.composeAndQueue(
           reviewer,
           body,
@@ -578,6 +610,7 @@ export class CommandTools {
         reason: 'why',
       },
       argsSchema: RefundArgs,
+      inputSchema: RefundInput,
       propose: async (principal, args, rationale) => {
         const organizationId = organizationOf(principal);
         // The payment is customer-private: whoever may not read it learns nothing (§4.10).
@@ -621,7 +654,7 @@ export class CommandTools {
         };
       },
       apply: async (reviewer, rawInput, ctx) => {
-        const input = RefundInput.parse(rawInput);
+        const input = parseForApply(RefundInput, rawInput, 'finance.refund');
         // Finance authorizes `finance.refund` for the reviewer and enforces the refundable ceiling
         // (§4.7 invariant 6); automation adds no authority of its own.
         let refund: Awaited<ReturnType<RefundsService['request']>>;

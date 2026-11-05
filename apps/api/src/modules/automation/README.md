@@ -75,22 +75,30 @@ in [Stage 3](#stage-3-aut-01-to-aut-03).
   action on the notice's facility and on its audience's facility, no staff role across every
   facility for a facility-scoped composer, no explicit person ids on protected content, and the
   policy's category for the kind (R4-COMMS-AUTOMATION-10); its reviewers are those who could send
-  it (the action on both facilities). A recommendation whose command this build no longer offers
-  is refused before anything is claimed (`409 INVALID_TRANSITION` `COMMAND_UNAVAILABLE`, nothing
-  written), so it stays reviewable and expires (R4-REPLAY-IDEMPOTENCY-03).
+  it (the action on both facilities). A recommendation whose command this build no longer offers,
+  or whose stored command input this build's command no longer accepts, is refused before
+  anything is claimed (`409 INVALID_TRANSITION` `COMMAND_UNAVAILABLE` or `INPUT_NO_LONGER_VALID`,
+  nothing written), so it stays reviewable and expires; whatever a command tool itself refuses
+  before the owning module is called is a failed apply (`400 VALIDATION_FAILED`
+  `INPUT_NO_LONGER_VALID`, claim released, operation `failed`), never an unknown outcome held for
+  a manual settlement (§4.11, R4-REPLAY-IDEMPOTENCY-03).
 - **Evidence and its freshness are part of every answer (SPK-AUTO-002).** Each supporting record is
   listed with the tool that read it, `observedAt` (when the assistant read it), `asOf` (its last
   change, or the instant a result was computed), `ageSeconds` and `freshness`. Missing evidence —
   denied reads, unknown readiness checks, unvalidated drafts, unknown payment outcomes, sources the
-  caller may not read, calls beyond the limit — is listed explicitly and is never presented as
-  "ready" or "none". `not_available` covers both "does not exist" and "you may not see it", so a
-  denial never reveals another household's record (§4.10). A recommendation keeps the evidence read
-  when it was proposed; when it is read later its evidence is shown with its freshness at that
-  read (`recent` within the evidence window, then `stale`; never `live` again) and its age to that
-  instant. A command recommendation is reviewed by people who cannot open the request, so it
-  carries the whole request's missing evidence and names every record the request read: its own
-  proposal's records with their labels, the others by type, id and freshness only (their labels
-  stay on the requester's request, §4.10; R4-COMMS-AUTOMATION-09).
+  requester may not read, calls beyond the limit — is listed explicitly and is never presented as
+  "ready" or "none". `not_available` covers both "does not exist" and "may not be seen", so a
+  denial never reveals another household's record (§4.10); descriptions say what was not available
+  to the requester, never "to you", because reviewers read them too. A recommendation keeps the
+  evidence read when it was proposed; when it is read later its evidence is shown with its
+  freshness at that read (`recent` within the evidence window, then `stale`; never `live` again)
+  and its age to that instant. A command recommendation is reviewed by people who cannot open the
+  request and who hold the command's action, not the reads behind the request (§4.10, §4.14), so
+  it names only its own proposal's records; every other tool the request used appears as one entry
+  whose record is the request (`recordType` `assistant_request`) with the freshness of that tool's
+  oldest knowledge (a live read stated as of its read, so no record's last change crosses), and
+  every other gap stays listed by tool, record type, reason and description without the record it
+  names. The request names them all to its requester (R4-COMMS-AUTOMATION-09).
 - **Provider output is data, not authority (SPK-AUTO-004).** A facility the provider names in a
   proposed command must be a facility of the requester's organization (otherwise `NOT_FOUND`,
   logged `denied`, no recommendation). If the outcome of a request cannot be recorded, the request
@@ -238,9 +246,14 @@ figures as their modules show them. The provider's answer is stored in
 - **Stage 8 review fixes (`recommendations.spec.ts`, `assistant.spec.ts`):** R4-COMMS-AUTOMATION-01
   ("SPK-SCHED-005 / §4.9 … an event changed after the proposal refuses the apply" and "… a repair
   draft that captured a later revision than the proposal is discarded"); R4-REPLAY-IDEMPOTENCY-03
-  ("… a command the assistant no longer offers is refused before the apply is claimed");
+  ("… a command the assistant no longer offers is refused before the apply is claimed", "… a
+  stored command input this build no longer accepts is refused before the apply is claimed", "… a
+  stored input the command tool itself refuses is a failed apply, never an unknown outcome");
   R4-COMMS-AUTOMATION-10 ("… a drafted notice is proposed only when the requester could send it
-  directly"); R4-COMMS-AUTOMATION-09 ("… a drafted notice carries the request's missing evidence");
+  directly"); R4-COMMS-AUTOMATION-09 ("… a drafted notice keeps every gap of its request visible to
+  a reviewer who cannot open the request, worded for any viewer and without the records the
+  requester read", "… a reviewer of a notice drafted after a customer-timeline read learns none of
+  the timeline's records, ids or last-change times");
   R4-PRIVACY-04 ("§4.14 … never a child's date of birth or a contact value").
 - **SPK-AUTO-005 (`disabled.spec.ts`):** disabled by default; every endpoint 503 without writing
   anything (no idempotency key claimed); support keeps working in the same application and in an

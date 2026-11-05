@@ -573,8 +573,9 @@ export class RecommendationsService {
       }
       // R4-REPLAY-IDEMPOTENCY-03 (§4.7 invariant 5, §4.11): the command must still be one the
       // assistant can run before anything is claimed. A recommendation whose command this build no
-      // longer offers is refused here, with nothing written: it stays reviewable and expires on
-      // its timer, instead of holding a claim that no outcome would ever release.
+      // longer offers, or whose stored input this build's command no longer accepts, is refused
+      // here with nothing written: it stays reviewable and expires on its timer, instead of
+      // holding a claim that no outcome would ever release.
       const tool = this.registry.command(command.actionId);
       if (!tool) {
         throw new DomainError(
@@ -587,6 +588,23 @@ export class RecommendationsService {
               event: 'apply',
               code: 'COMMAND_UNAVAILABLE',
               commandActionId: command.actionId,
+            },
+          },
+        );
+      }
+      const stored = tool.inputSchema.safeParse(command.input);
+      if (!stored.success) {
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          'The command of this recommendation is not accepted by the assistant’s current command format; nothing was applied. Make the change through the owning module.',
+          {
+            details: {
+              machine: 'Recommendation',
+              from: row.status,
+              event: 'apply',
+              code: 'INPUT_NO_LONGER_VALID',
+              commandActionId: command.actionId,
+              issues: stored.error.issues.slice(0, 10).map((i) => i.path.join('.') || '(root)'),
             },
           },
         );
