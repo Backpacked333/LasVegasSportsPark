@@ -1353,10 +1353,12 @@ describe('finance database guarantees (§4.7 invariants 5, 6, 7; SPK-PAY-004/008
     expect(await refusedBy(reverse(a, { id: redeemB, amount: 500, referenceId: referenceB }))).toBe(
       'credit_redemptions_reversal_matches',
     );
-    // The composite key refuses it too, whoever writes it (the trigger aside).
+    // The composite key refuses it too, whoever writes it (the trigger aside); validated, and on
+    // this schema's table (PostgreSQL runs each test file in its own schema).
     const fks = await sql<{ name: string }>`
       select conname as name from pg_constraint
-       where conname = 'credit_redemptions_reversal_same_credit_fk' and convalidated`.execute(t.db);
+       where conrelid = 'credit_redemptions'::regclass
+         and conname = 'credit_redemptions_reversal_same_credit_fk' and convalidated`.execute(t.db);
     expect(fks.rows).toHaveLength(1);
     // Another amount or reference than the redemption it gives back.
     expect(await refusedBy(reverse(a, { id: redeemA, amount: 300, referenceId: referenceA }))).toBe(
