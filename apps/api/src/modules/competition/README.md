@@ -295,8 +295,8 @@ identifiers only.
   in a fixed number of queries, and decides exactly as `evaluatePlayer` (R4-CARRY-01, §4.12;
   **Verified**, `__tests__/eligibility-roster.spec.ts`: every rule compared player by player, and
   the competition reads of a 3- and a 12-player roster are the same number). Identity's reads
-  (`personIdsResolvingTo`, `loadPerson`) are still made per player: identity offers no many-ids
-  form yet (**Pending**, deferred to identity).
+  are batched too (`personIdsResolvingToMany`, `loadPersons`), so the identity reads of both
+  rosters are also the same number (**Verified**, the same test).
 - Rosters (SPK-COMP-005, `services/roster.service.ts`): an addition or removal takes effect now or
   at a later instant. A change dated before now rewrites the roster of matches already played, so
   a captain cannot make one (`VALIDATION_FAILED`, `retroactive_roster_change`); league staff can,

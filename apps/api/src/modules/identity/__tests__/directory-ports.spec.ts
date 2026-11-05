@@ -5,7 +5,7 @@ import {
   type CreatePersonInput,
 } from '@sportspark/contracts';
 import { json, seedOrganization } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AuthorizationService, UnitOfWork } from '../../../kernel';
 import { staffPrincipal } from '../../../testing/principals';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
@@ -97,6 +97,47 @@ describe('person directory and authority lookup ports (ID-01, ID-09, IF-01, IF-0
       displayName: 'Robin Vale',
       kind: 'child',
     });
+  });
+
+  it('R4-CARRY-01 / SPK-IAM-007: personIdsResolvingToMany answers each id exactly as personIdsResolvingTo, in one read', async () => {
+    const a = await createPersonFixture(t, { kind: 'adult' });
+    const b = await createPersonFixture(t, { kind: 'adult' });
+    const c = await createPersonFixture(t, { kind: 'adult' });
+    const d = await createPersonFixture(t, { kind: 'adult' });
+    const lone = await createPersonFixture(t, { kind: 'child' });
+    await markMerged(t, a, b);
+    await markMerged(t, b, c);
+    await markMerged(t, d, c);
+    const other = await seedOrganization(t.db);
+    const foreign = await createPersonFixture(t, {
+      kind: 'adult',
+      organizationId: other.organizationId,
+    });
+    const org = t.organizationId;
+    const ids = [a, b, c, d, lone, foreign, newId(), 'not-a-uuid', a];
+    const executor = t.db.getExecutor();
+    const spy = vi.spyOn(executor, 'executeQuery');
+    let many: Map<string, string[]>;
+    try {
+      many = await directory.personIdsResolvingToMany(org, ids);
+      expect(spy.mock.calls).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect([...many.keys()].sort()).toEqual([...new Set(ids)].sort());
+    for (const id of new Set(ids)) {
+      expect(many.get(id), id).toEqual(await directory.personIdsResolvingTo(org, id));
+    }
+    // any id of the chain resolves to the canonical record first, then everyone merged into it
+    expect(many.get(a)![0]).toBe(c);
+    expect(new Set(many.get(a))).toEqual(new Set([a, b, c, d]));
+    expect(many.get(lone)).toEqual([lone]);
+    expect(many.get(foreign)).toEqual([]);
+    expect(await directory.personIdsResolvingToMany(org, [])).toEqual(new Map());
+    // The batch person read: same rows as loadPerson, unknown and foreign ids omitted.
+    const persons = await people.loadPersons(t.db, org, [a, lone, foreign, newId()]);
+    expect([...persons.keys()].sort()).toEqual([a, lone].sort());
+    expect(persons.get(lone)).toEqual(await people.loadPerson(t.db, org, lone));
   });
 
   it("IF-09: the directory reads through the caller's transaction (sees its uncommitted writes)", async () => {

@@ -340,11 +340,12 @@ DEC-015 (support coverage, service objectives) and the §6.6 support/operations 
     reaches only some recipients leaves the notice's own pointer empty and marks only those
     recipients; support's check reads the notice's pointer, not the recipients', so a resend to a
     subject such a narrower notice already replaced is not refused yet.
-- **Today cost (R3-PERFORMANCE-01, pending in other modules):** the bounds above cap the work of
-  one read, and the exception histories and the coverage source are batched (above), but each
-  readiness evaluation still costs competition's per-player eligibility reads (a roster-level
-  evaluation needs a many-ids identity lookup and a batched eligibility engine, not built), and
-  the exception read itself is unbounded in the kernel (`OperationalExceptions.listOpen` has no
+- **Today cost (R3-PERFORMANCE-01, pending in the kernel):** the bounds above cap the work of
+  one read, and the exception histories and the coverage source are batched (above). Readiness
+  eligibility is evaluated per roster (competition `evaluateRoster`, R4-CARRY-01): a fixed number
+  of competition reads plus identity's many-ids reads (`personIdsResolvingToMany`,
+  `loadPersons`), whatever the roster size (**Verified**: competition `eligibility-roster.spec.ts`
+  "R4-CARRY-01 / §4.12 / SPK-STAFF-002 …"). The exception read itself is unbounded in the kernel (`OperationalExceptions.listOpen` has no
   limit: the feed filters by queue visibility and ranks by service-level deadline in application
   code, so a SQL limit would list different exceptions). The staff Today screen lists a source
   with `truncated: true` under "Partly included", and the `*-omitted` items show in every client.

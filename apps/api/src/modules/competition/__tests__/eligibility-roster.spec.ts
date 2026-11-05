@@ -258,7 +258,7 @@ describe('roster eligibility (R4-CARRY-01; SPK-CAP-004, SPK-COMP-003/005, SPK-AT
     expect(suspension?.source).toEqual({ type: 'suspension', id: null });
   });
 
-  it('R4-CARRY-01 / §4.12 / SPK-STAFF-002: the competition reads of a roster evaluation do not grow with the roster; only identity’s per-person reads do (their many-ids form is deferred to identity)', async () => {
+  it('R4-CARRY-01 / §4.12 / SPK-STAFF-002: the reads of a roster evaluation do not grow with the roster, competition’s nor identity’s', async () => {
     const division = await createDivisionFixture(t, {
       seasonId: season.seasonId,
       name: 'Query count',
@@ -305,7 +305,8 @@ describe('roster eligibility (R4-CARRY-01; SPK-CAP-004, SPK-COMP-003/005, SPK-AT
     const many = await count(large, largeRoster);
     expect(few.competition).toBeGreaterThan(0);
     expect(many.competition).toBe(few.competition);
-    // Identity answers one person at a time today (R4-CARRY-01 deferred): proportional to the roster.
-    expect(many.identity / largeRoster.length).toBe(few.identity / smallRoster.length);
+    // Identity answers the whole roster in its many-ids reads (personIdsResolvingToMany, loadPersons).
+    expect(few.identity).toBeGreaterThan(0);
+    expect(many.identity).toBe(few.identity);
   });
 });

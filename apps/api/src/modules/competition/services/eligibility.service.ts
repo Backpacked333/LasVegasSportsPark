@@ -165,7 +165,8 @@ export class EligibilityService implements EligibilityPort {
    * entry at once, in the order given, with exactly the same rules. The entry context is read once
    * and the roster rows, season memberships, suspensions and fixture conflicts of all players in a
    * fixed number of queries, so readiness (and the staff Today feed built on it) no longer reads
-   * them player by player. Only identity's person reads still run per player (see `identityFacts`).
+   * them player by player; identity's person and merge-history reads are batched too
+   * (`identityFacts`), so the number of reads does not grow with the roster.
    */
   async evaluateRoster(
     organizationId: string,
@@ -319,10 +320,8 @@ export class EligibilityService implements EligibilityPort {
 
   /**
    * The ids each person's records may be held under (CMP-08, SPK-IAM-007, IF-09: the person and
-   * everyone merged into them) and their person row. Identity offers both reads one person at a
-   * time only (`PersonDirectoryPort.personIdsResolvingTo`, `PeopleService.loadPerson`), so this
-   * is the one part of a roster evaluation whose reads still grow with the roster: a many-ids
-   * form of each is deferred to the identity module (R4-CARRY-01).
+   * everyone merged into them) and their person row, for all players in two reads
+   * (R4-CARRY-01: `PersonDirectoryPort.personIdsResolvingToMany`, `PeopleService.loadPersons`).
    */
   private async identityFacts(
     db: Reader,
@@ -331,11 +330,13 @@ export class EligibilityService implements EligibilityPort {
     trx?: Trx,
   ): Promise<Map<string, { personIds: string[]; person: PersonRow | null }>> {
     const out = new Map<string, { personIds: string[]; person: PersonRow | null }>();
+    if (personIds.length === 0) return out;
+    const resolving = await this.directory.personIdsResolvingToMany(organizationId, personIds, trx);
+    const persons = await this.people.loadPersons(db, organizationId, personIds);
     for (const personId of personIds) {
-      const resolving = await this.directory.personIdsResolvingTo(organizationId, personId, trx);
       out.set(personId, {
-        personIds: [...new Set([personId, ...resolving])],
-        person: await this.people.loadPerson(db, organizationId, personId),
+        personIds: [...new Set([personId, ...(resolving.get(personId) ?? [])])],
+        person: persons.get(personId) ?? null,
       });
     }
     return out;

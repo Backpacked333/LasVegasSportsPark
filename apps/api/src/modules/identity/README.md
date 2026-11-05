@@ -224,9 +224,12 @@ in id order, so a lift racing another review's restriction never clears it
 - `PERSON_DIRECTORY_PORT` (`PersonDirectoryPort`, IF-09): `findPerson`, `resolveCanonicalPersonId`
   (follows merges), `displayNames(org, ids, trx?)` (names only, other-organization and unknown ids
   omitted) and `personIdsResolvingTo(org, id, trx?)` (`[canonical, ...merged into it,
-transitively]`, nearest first; `[]` when unknown), both through `trx ?? currentTransaction() ??
-db`: modules holding immutable facts read a survivor's history with it instead of rewriting rows
-  (SPK-IAM-007). **Verified**: `__tests__/directory-ports.spec.ts`.
+transitively]`, nearest first; `[]` when unknown), plus `personIdsResolvingToMany(org, ids,
+trx?)` (the same answer for each id, in one recursive read, R4-CARRY-01), all through `trx ??
+currentTransaction() ?? db`: modules holding immutable facts read a survivor's history with it
+  instead of rewriting rows (SPK-IAM-007). `PeopleService.loadPersons(db, org, ids)` is the batch
+  form of `loadPerson` (competition's roster eligibility uses both). **Verified**:
+  `__tests__/directory-ports.spec.ts`.
 - `PeopleService.createPerson(principal, input, correlationId, { importProvenance })` (alias
   `create`, IF-40, K-13): only the batch's import principal (`assertImportPrincipal`), `id =
 recordId`, source `import`, create-if-absent (same content: the existing person with no new
