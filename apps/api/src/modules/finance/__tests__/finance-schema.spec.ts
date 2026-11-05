@@ -1214,6 +1214,112 @@ describe('finance database guarantees (§4.7 invariants 5, 6, 7; SPK-PAY-004/008
     ).toBe('payment_refundables_within_captured');
   });
 
+  it('R4-PROVIDER-OUTCOMES-02 (migration 0684, §4.7 invariant 6): the reversed amount matches the reversed refunds on insert and delete too, not only on update', async () => {
+    const { paymentAttemptId } = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const now = t.clock.now();
+    const reversedRefund = (reversedAt: Date | null) => ({
+      id: newId(),
+      organization_id: t.organizationId,
+      payment_attempt_id: paymentAttemptId,
+      amount_minor: 400,
+      currency: 'USD',
+      checkout_id: null,
+      status: 'succeeded' as const,
+      reservation_status: 'settled' as const,
+      reason: 'schema test',
+      provider: 'fake-payments',
+      provider_reference: null,
+      failure_reason: null,
+      evidence_source: null,
+      evidence_inbox_event_id: null,
+      evidence_sequence: null,
+      requested_by: ACTOR,
+      requested_by_person_id: null,
+      operation_id: null,
+      submitted_at: null,
+      unknown_since: null,
+      resolved_at: now,
+      reversed_at: reversedAt,
+    });
+    // A refund inserted already reversed while the payment records nothing reversed.
+    expect(
+      await refusedBy(
+        t.db.transaction().execute(async (trx) => {
+          await trx.insertInto('refund_attempts').values(reversedRefund(now)).execute();
+          await trx
+            .updateTable('payment_refundables')
+            .set({ refunded_minor: 400 })
+            .where('payment_attempt_id', '=', paymentAttemptId)
+            .execute();
+        }),
+      ),
+    ).toBe('payment_refundables_reversal_consistent');
+    // Refundable funds inserted with a reversed amount no reversed refund accounts for.
+    const other = await createCapturedPaymentFixture(t, {
+      payerPersonId: payer.personId,
+      amountMinor: 1_000,
+    });
+    const funds = await t.db
+      .selectFrom('payment_refundables')
+      .selectAll()
+      .where('payment_attempt_id', '=', other.paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    expect(
+      await refusedBy(
+        t.db.transaction().execute(async (trx) => {
+          await trx
+            .deleteFrom('payment_refundables')
+            .where('payment_attempt_id', '=', other.paymentAttemptId)
+            .execute();
+          await trx
+            .insertInto('payment_refundables')
+            .values({
+              payment_attempt_id: funds.payment_attempt_id,
+              organization_id: funds.organization_id,
+              receipt_id: funds.receipt_id,
+              pos_tender_id: funds.pos_tender_id,
+              currency: funds.currency,
+              captured_minor: funds.captured_minor,
+              refunded_minor: 100,
+              reversed_minor: 100,
+            })
+            .execute();
+        }),
+      ),
+    ).toBe('payment_refundables_reversal_consistent');
+    // Written together, the insert of a reversed refund is accepted.
+    const accepted = reversedRefund(now);
+    await t.db.transaction().execute(async (trx) => {
+      await trx.insertInto('refund_attempts').values(accepted).execute();
+      await trx
+        .updateTable('payment_refundables')
+        .set({ refunded_minor: 400, reversed_minor: 400 })
+        .where('payment_attempt_id', '=', paymentAttemptId)
+        .execute();
+    });
+    // Deleting either side alone leaves the other unmatched.
+    expect(
+      await refusedBy(t.db.deleteFrom('refund_attempts').where('id', '=', accepted.id).execute()),
+    ).toBe('payment_refundables_reversal_consistent');
+    expect(
+      await refusedBy(
+        t.db
+          .deleteFrom('payment_refundables')
+          .where('payment_attempt_id', '=', paymentAttemptId)
+          .execute(),
+      ),
+    ).toBe('payment_refundables_reversal_consistent');
+    const kept = await t.db
+      .selectFrom('payment_refundables')
+      .select(['refunded_minor', 'reversed_minor'])
+      .where('payment_attempt_id', '=', paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    expect(kept).toEqual({ refunded_minor: 400, reversed_minor: 400 });
+  });
+
   /** Redeems `amount` of a credit in one transaction, as the history check requires. */
   async function redeem(creditId: string, amount: number, referenceId: string): Promise<string> {
     const id = newId();
