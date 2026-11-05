@@ -303,6 +303,80 @@ describe('SCR-S-42 RestrictionDetailScreen', () => {
     expect(release?.body).toEqual({ expectedRevision: 4, reason: 'Repair complete' });
   });
 
+  it('R4-OPS-MODULES-03 / SPK-FAC-004: a refused release says its cause: a pass from before the current work, or a task back at work', async () => {
+    const user = userEvent.setup();
+    const refusal =
+      (cause: string, extra: Record<string, unknown> = {}) =>
+      () =>
+        fakeResponse(
+          422,
+          apiErrorBody('ELIGIBILITY_FAILED', {
+            nextAction: 'review_eligibility_reasons',
+            details: {
+              code: 'inspection_required',
+              cause,
+              taskId: 't-1',
+              latestInspection: {
+                id: 'i-1',
+                outcome: 'passed',
+                inspectedAt: '2026-10-24T11:00:00.000Z',
+              },
+              ...extra,
+            },
+          }),
+        );
+    for (const [cause, extra, text] of [
+      [
+        'inspection_predates_current_work',
+        { inspectionRequiredAfter: '2026-10-24T15:00:00.000Z' },
+        /The latest pass \(.+\) predates this restriction's approval or the end of the task's latest work; record a passed inspection after .+\./,
+      ],
+      [
+        'work_in_progress',
+        {},
+        /The task is back at work; resolve or close it, then record a passed inspection\./,
+      ],
+    ] as const) {
+      const app = createTestApp({
+        routes: routes({
+          'POST /maintenance-restrictions/{id}/release': refusal(cause, extra),
+        }),
+      });
+      const view = render(app.at('/facilities/restrictions/r-1'));
+      await user.type(await screen.findByLabelText('Reason for the release'), 'Repair complete');
+      await user.click(screen.getByRole('button', { name: 'Release to service' }));
+      expect(await screen.findByTestId('inspection-cause')).toHaveTextContent(text);
+      view.unmount();
+    }
+  });
+
+  it('R4-OPS-MODULES-03: a pass while the task is back at work is not shown as the gate being met', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /maintenance-tasks/{id}': {
+          status: 200,
+          body: task({
+            id: 't-1',
+            status: 'in_progress',
+            requiresInspection: true,
+            latestInspection: {
+              id: 'i-1',
+              outcome: 'passed',
+              inspectedAt: '2026-10-24T11:00:00.000Z',
+            },
+          }),
+        },
+      }),
+    });
+    render(app.at('/facilities/restrictions/r-1'));
+    expect(
+      await screen.findByText(
+        'The task is back at work: the latest pass does not release the area',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Latest inspection passed/)).toBeNull();
+  });
+
   it('release authority: ACCESS_DENIED names facilities.release_to_service', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

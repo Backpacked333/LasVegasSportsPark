@@ -30,6 +30,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
+import { restrictionReleaseRequired } from '../../features/schedule-facilities/error-details';
 import { useCommandReload } from '../../features/schedule-facilities/reload';
 import {
   ActionGate,
@@ -381,6 +382,9 @@ function AssetRow({
   const reloadSave = useCommandReload(save.reset, [ASSETS_KEY]);
   const reloadRetire = useCommandReload(retire.reset, [ASSETS_KEY]);
   const badge = ASSET_BADGE[asset.status];
+  // R4-OPS-MODULES-05 (SPK-FAC-004): an operating restriction names the asset; it goes back in
+  // service only through that restriction's release (with its inspection gate), never an edit.
+  const releaseRequired = restrictionReleaseRequired(save.error);
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     if (!name.trim()) return;
@@ -505,7 +509,18 @@ function AssetRow({
           </span>
         </form>
       ) : null}
-      {save.error ? (
+      {releaseRequired ? (
+        <div role="alert" className="banner" data-testid="asset-release-required">
+          <span>This asset returns to service only through its restriction&apos;s release.</span>
+          <ul aria-label="Restrictions naming this asset">
+            {releaseRequired.restrictionIds.map((id) => (
+              <li key={id}>
+                <Link to={`/facilities/restrictions/${id}`}>Open the restriction</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : save.error ? (
         <CommandError
           error={save.error}
           onRetry={() => submit()}
