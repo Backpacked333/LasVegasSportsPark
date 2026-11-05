@@ -328,6 +328,44 @@ describe('SCR-S-39 MessageComposerScreen', () => {
     ).toBeInTheDocument();
     expect(within(form).getByLabelText('Title')).toHaveValue('Draft title');
   });
+
+  it('SPK-SCHED-008: refuses a "deliver no earlier than" time that happens twice at the facility, instead of guessing one', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'POST /notifications': { status: 201, body: notification() } }),
+    });
+    render(app.at('/communications/compose'));
+    const form = await screen.findByRole('form', { name: 'Compose a message' });
+    const when = within(form).getByLabelText('Deliver no earlier than (optional)');
+    await waitFor(() =>
+      expect(when).toHaveAccessibleDescription(
+        'Facility time (America/Los_Angeles). A reminder that becomes obsolete before it is sent is suppressed.',
+      ),
+    );
+    await user.click(within(form).getByRole('radio', { name: 'Essential operational notice' }));
+    await user.click(within(form).getByRole('checkbox', { name: 'Front desk' }));
+    await user.type(within(form).getByLabelText('Title'), 'Car park closed');
+    await user.type(within(form).getByLabelText('Message'), 'Use the north entrance today.');
+    // 01:30 on 1 November 2026 happens twice in Los Angeles (PDT, then PST).
+    await user.type(when, '2026-11-01T01:30');
+    await user.click(within(form).getByRole('button', { name: 'Preview recipients' }));
+    expect(
+      within(form).getByText(
+        '01:30 happens twice on this date in America/Los_Angeles (clocks go back). Choose a time outside the repeated hour.',
+      ),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/notifications' && r.method === 'POST')).toBe(
+      false,
+    );
+    await user.clear(when);
+    await user.type(when, '2026-11-01T02:00');
+    await user.click(within(form).getByRole('button', { name: 'Preview recipients' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/notifications' && r.method === 'POST')?.body,
+      ).toMatchObject({ scheduledFor: '2026-11-01T10:00:00.000Z' }),
+    );
+  });
 });
 
 describe('SCR-S-40 Delivery status', () => {

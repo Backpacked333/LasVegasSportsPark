@@ -34,7 +34,7 @@ import {
   formatRange,
   humanize,
   inputZoneHint,
-  instantFromZonedInput,
+  readZonedInput,
 } from '../../features/operations/format';
 import { AVAILABILITY_KIND, QUALIFICATION_STATUS } from '../../features/operations/labels';
 import { useNow } from '../../providers/AppProviders';
@@ -432,11 +432,16 @@ function RecordQualification() {
     );
   }
   const submit = () => {
-    const from = instantFromZonedInput(validFrom, timezone);
-    const to = instantFromZonedInput(validTo, timezone);
+    // SPK-SCHED-008: a time that happens twice or never on a daylight-saving change is refused.
+    const fromInput = readZonedInput(validFrom, timezone);
+    const toInput = readZonedInput(validTo, timezone);
+    const from = fromInput.iso;
+    const to = toInput.iso;
     const next: Record<string, string> = {};
     if (!kind.trim()) next.kind = 'Name the qualification.';
-    if (!from) next.validFrom = 'Give the date it is valid from.';
+    if (fromInput.error) next.validFrom = fromInput.error;
+    else if (!from) next.validFrom = 'Give the date it is valid from.';
+    if (toInput.error) next.validTo = toInput.error;
     setMissing(next);
     if (Object.keys(next).length > 0 || !from) return;
     void command
@@ -506,7 +511,7 @@ function RecordQualification() {
         value={validTo}
         onChange={setValidTo}
         hint={inputZoneHint(timezone)}
-        error={apiErrors.validTo}
+        error={missing.validTo ?? apiErrors.validTo}
       />
       <CheckboxField
         label="Record as verified"
@@ -692,11 +697,16 @@ function AddWindow({ personId }: { personId: string | null }) {
   const command = useApiCommand('post', '/availability', { invalidate: [AVAILABILITY_KEY] });
   const apiErrors = fieldErrorsOf(command.error);
   const submit = () => {
-    const s = instantFromZonedInput(start, timezone);
-    const e = instantFromZonedInput(end, timezone);
+    // SPK-SCHED-008: a time that happens twice or never on a daylight-saving change is refused.
+    const startInput = readZonedInput(start, timezone);
+    const endInput = readZonedInput(end, timezone);
+    const s = startInput.iso;
+    const e = endInput.iso;
     const next: Record<string, string> = {};
-    if (!s) next.start = 'Give the start.';
-    if (!e) next.end = 'Give the end.';
+    if (startInput.error) next.start = startInput.error;
+    else if (!s) next.start = 'Give the start.';
+    if (endInput.error) next.end = endInput.error;
+    else if (!e) next.end = 'Give the end.';
     if (s && e && s >= e) next.end = 'The end must be after the start.';
     if (!kind) next.kind = 'Choose available or unavailable.';
     setMissing(next);

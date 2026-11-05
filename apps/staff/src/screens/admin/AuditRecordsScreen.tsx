@@ -20,14 +20,11 @@ import {
   type AuditFilters,
 } from '../../features/insight-admin/audit';
 import { TextField } from '../../features/insight-admin/fields';
-import {
-  deviceTimeZone,
-  localDateTimeToInstant,
-  UUID_PATTERN,
-} from '../../features/insight-admin/format';
+import { localDateTimeToInstant, UUID_PATTERN } from '../../features/insight-admin/format';
 import { AdminNav } from '../../features/insight-admin/nav';
 import { PersonIdField } from '../../features/insight-admin/PersonSearch';
 import { Button } from '../../ui/Button';
+import { inputZoneHint } from '../../ui/time';
 
 interface Draft {
   targetType: string;
@@ -160,7 +157,7 @@ export function AuditRecordsScreen() {
             type="datetime-local"
             value={draft.from}
             onChange={(from) => set({ from })}
-            hint={`Your time zone (${deviceTimeZone()}).`}
+            hint={inputZoneHint(null)}
             error={errors.from}
           />
           <TextField
@@ -168,6 +165,7 @@ export function AuditRecordsScreen() {
             type="datetime-local"
             value={draft.to}
             onChange={(to) => set({ to })}
+            hint={inputZoneHint(null)}
             error={errors.to}
           />
         </div>

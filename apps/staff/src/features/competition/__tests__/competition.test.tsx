@@ -7,9 +7,10 @@
 import { ApiError } from '@sportspark/api-client';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FACILITY_A, createTestApp, mePermissions } from '../../../testing/test-app';
 import { fieldErrorsOf, reasonsOf } from '../CommandError';
+import { isoToZonedInput } from '../format';
 import {
   FIXTURE_STATUS,
   READINESS_STATUS,
@@ -67,6 +68,25 @@ describe('competition error helpers (§4.10)', () => {
         }),
       ),
     ).toEqual([{ code: 'a', severity: 'blocking', message: 'A' }]);
+  });
+});
+
+/**
+ * Reading a typed time (`readZonedInput`) and naming its clock (`inputZoneHint`) are shared by every
+ * staff screen and tested with them (schedule-facilities/__tests__/time.test.ts, ui/__tests__/time.test.ts).
+ */
+describe('SPK-SCHED-008 date-and-time fields shown in a named clock', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('SPK-SCHED-008: puts a stored instant back into a field in the facility zone, not the device zone', () => {
+    vi.stubEnv('TZ', 'America/New_York');
+    expect(isoToZonedInput('2026-11-08T02:00:00.000Z', 'America/Los_Angeles')).toBe(
+      '2026-11-07T18:00',
+    );
+    expect(isoToZonedInput('2026-11-08T02:00:00.000Z', null)).toBe('2026-11-07T21:00');
+    expect(isoToZonedInput('2026-11-08T02:00:00.000Z', 'Not/AZone')).toBe('2026-11-07T21:00');
   });
 });
 

@@ -141,7 +141,7 @@ describe('SCR-S-08 CompetitionScreen (SPK-COMP-001, SPK-COMP-002)', () => {
     expect(screen.getByText(/the API has no copy command/)).toBeInTheDocument();
   });
 
-  it('creates a season against the latest rule-set version of the competition’s format', async () => {
+  it('creates a season against the latest rule-set version of the competition’s format; its registration window names the time zone (SPK-SCHED-008)', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
@@ -159,6 +159,12 @@ describe('SCR-S-08 CompetitionScreen (SPK-COMP-001, SPK-COMP-002)', () => {
     await user.selectOptions(within(form).getByLabelText(/^Rule-set version/), ID.ruleSet);
     await user.type(within(form).getByLabelText(/^First day/), '2026-11-01');
     await user.type(within(form).getByLabelText(/^Last day/), '2026-12-20');
+    // SPK-SCHED-008: a season names no facility; its registration window names the device zone.
+    for (const label of ['Registration opens', 'Registration closes']) {
+      expect(within(form).getByLabelText(label)).toHaveAccessibleDescription(
+        /^Your device's time zone \(.+\)\.$/,
+      );
+    }
     await user.click(within(form).getByRole('button', { name: 'Create season (draft)' }));
     await waitFor(() =>
       expect(app.fake.requests.some((r) => r.route === '/seasons' && r.method === 'POST')).toBe(

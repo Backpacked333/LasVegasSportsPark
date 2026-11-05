@@ -12,15 +12,24 @@
  * workspace's `viewer.availableActions` (CMP-02, `GET /v1/team-entries/{id}`) holds
  * `competition.manage_roster` for this entry in its current state; the API still decides and its
  * ACCESS_DENIED is shown as not available.
+ *
+ * Times (SPK-SCHED-008): "Roster as of", "Effective from" and "Effective until" are read, and the
+ * roster's dates shown, in the time zone of the division's facility when it is known; otherwise in
+ * the device's zone. Every date-and-time field names its clock in its hint. A time typed before the
+ * zone is known is not read in a guessed zone, and a time that happens twice or never on a
+ * daylight-saving change is refused with a field error ("Ambiguous or nonexistent times require
+ * resolution"): a change posts nothing, and "Roster as of" says the roster is shown as of now.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { hasAnswered } from '../../api/facility-directory';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useNow } from '../../providers/AppProviders';
 import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError, ReasonList } from '../../features/competition/CommandError';
+import { useDivisionClock, type FacilityClock } from '../../features/competition/facilities';
 import { keys, PendingNote, SuccessNote, useRefetch } from '../../features/competition/feedback';
 import {
   CheckboxField,
@@ -31,14 +40,16 @@ import {
   isRecordReference,
   parseWholeNumber,
 } from '../../features/competition/fields';
-import { formatInstant, isoToLocalInput, localInputToIso } from '../../features/competition/format';
+import { formatInstant, isoToZonedInput } from '../../features/competition/format';
 import { ROSTER_ELIGIBILITY, ROSTER_STATUS, humanizeCode } from '../../features/competition/labels';
 import { TeamsNav } from '../../features/competition/nav';
 import { PENDING } from '../../features/competition/pending';
 import { PersonSearchField } from '../../features/competition/PersonSearchField';
+import { readZonedInput, type ZonedInput } from '../../features/schedule-facilities/time';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { inputZoneHint } from '../../ui/time';
 
 type Member = Schema<'RosterMember'>;
 type Workspace = Schema<'TeamEntryWorkspace'>;
@@ -47,6 +58,25 @@ type PlayingStatus = Schema<'RosterPlayingStatus'>;
 const ROSTER_KEYS = keys('/team-entries/{id}/roster', '/team-entries/{id}', '/team-entries');
 /** The roster command's action id, as listed in the workspace's `viewer.availableActions`. */
 export const MANAGE_ROSTER_ACTION = 'competition.manage_roster';
+
+/** The hint naming the clock of a roster date-and-time field (SPK-SCHED-008). */
+function clockHint(clock: FacilityClock): string {
+  return clock.settled ? inputZoneHint(clock.zone) : "Finding the facility's time zone.";
+}
+
+/** The field error of a roster change whose time was typed before the facility's zone is known. */
+const CLOCK_LOADING_ERROR = "The facility's time zone is still loading. Try again in a moment.";
+
+/**
+ * A typed roster date and time as an instant in the roster's clock (SPK-SCHED-008): `{}` when the
+ * field is empty (now); `{ error }` when the zone is not known yet, or the value is not a date and
+ * time or happens twice or never on a daylight-saving change (never guessed).
+ */
+function readRosterTime(value: string, clock: FacilityClock): ZonedInput {
+  if (!value.trim()) return {};
+  if (!clock.settled) return { error: CLOCK_LOADING_ERROR };
+  return readZonedInput(value, clock.zone);
+}
 
 function EligibilityIndicator({ member }: { member: Member }) {
   const indicator = member.eligibility;
@@ -66,7 +96,15 @@ function EligibilityIndicator({ member }: { member: Member }) {
   );
 }
 
-function ExplainEligibility({ entryId, member }: { entryId: string; member: Member }) {
+function ExplainEligibility({
+  entryId,
+  member,
+  zone,
+}: {
+  entryId: string;
+  member: Member;
+  zone: string | null;
+}) {
   const [open, setOpen] = useState(false);
   const playing: PlayingStatus =
     member.status === 'guest' || member.status === 'substitute' ? member.status : 'active';
@@ -97,7 +135,7 @@ function ExplainEligibility({ entryId, member }: { entryId: string; member: Memb
                 tone={data.eligible ? 'success' : 'danger'}
                 label={data.eligible ? 'Eligible' : 'Not eligible'}
               />
-              <span className="caption"> Evaluated {formatInstant(data.evaluatedAt)}</span>
+              <span className="caption"> Evaluated {formatInstant(data.evaluatedAt, zone)}</span>
               {data.reasons.length === 0 ? (
                 <p>No restriction applies.</p>
               ) : (
@@ -119,10 +157,12 @@ function RemoveMember({
   entryId,
   entryRevision,
   member,
+  clock,
 }: {
   entryId: string;
   entryRevision: number;
   member: Member;
+  clock: FacilityClock;
 }) {
   const change = useApiCommand('post', '/team-entries/{id}/roster', { invalidate: ROSTER_KEYS });
   const reload = useRefetch(['/team-entries/{id}/roster', '/team-entries/{id}']);
@@ -130,13 +170,13 @@ function RemoveMember({
   const [reason, setReason] = useState('');
   const [effectiveTo, setEffectiveTo] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [toError, setToError] = useState<string | null>(null);
   const submit = () => {
-    if (!reason.trim()) {
-      setError('Give the reason for the removal.');
-      return;
-    }
-    setError(null);
-    const to = localInputToIso(effectiveTo);
+    const until = readRosterTime(effectiveTo, clock);
+    setError(reason.trim() ? null : 'Give the reason for the removal.');
+    setToError(until.error ?? null);
+    if (!reason.trim() || until.error) return;
+    const to = until.iso;
     void change
       .submit({
         path: { id: entryId },
@@ -181,7 +221,8 @@ function RemoveMember({
         type="datetime-local"
         value={effectiveTo}
         onChange={setEffectiveTo}
-        hint="Leave empty for now. Past matches keep the player on their record."
+        hint={`Leave empty for now. Past matches keep the player on their record. ${clockHint(clock)}`}
+        error={toError}
       />
       <div className="actions">
         <CommandButton type="submit" variant="secondary" busy={change.isProcessing}>
@@ -206,7 +247,7 @@ function RemoveMember({
   );
 }
 
-function AddMember({ workspace }: { workspace: Workspace }) {
+function AddMember({ workspace, clock }: { workspace: Workspace; clock: FacilityClock }) {
   const change = useApiCommand('post', '/team-entries/{id}/roster', { invalidate: ROSTER_KEYS });
   const reload = useRefetch(['/team-entries/{id}/roster', '/team-entries/{id}']);
   const [person, setPerson] = useState('');
@@ -222,9 +263,11 @@ function AddMember({ workspace }: { workspace: Workspace }) {
     const number = jersey.trim() ? parseWholeNumber(jersey) : null;
     if (jersey.trim() && (number === null || number < 0 || number > 999))
       next.jersey = 'Enter 0 to 999, or leave empty.';
+    const start = readRosterTime(from, clock);
+    if (start.error) next.from = start.error;
     setErrors(next);
     if (Object.keys(next).length > 0) return;
-    const effectiveFrom = localInputToIso(from);
+    const effectiveFrom = start.iso;
     void change
       .submit({
         path: { id: workspace.entry.id },
@@ -280,7 +323,8 @@ function AddMember({ workspace }: { workspace: Workspace }) {
           type="datetime-local"
           value={from}
           onChange={setFrom}
-          hint="Leave empty for now. Your device's time zone."
+          hint={`Leave empty for now. ${clockHint(clock)}`}
+          error={errors.from}
         />
         <NumberField
           label="Jersey number"
@@ -295,7 +339,7 @@ function AddMember({ workspace }: { workspace: Workspace }) {
       {change.status === 'success' ? (
         <SuccessNote>
           {added
-            ? `${added.displayName} ${added.status}, effective from ${formatInstant(added.effectiveFrom)}`
+            ? `${added.displayName} ${added.status}, effective from ${formatInstant(added.effectiveFrom, clock.zone)}`
             : 'Roster changed'}
         </SuccessNote>
       ) : null}
@@ -343,7 +387,15 @@ export function RosterScreen() {
   const workspace = useApiQuery({ path: '/team-entries/{id}', request: { path: { id: entryId } } });
   // CMP-02: what the kernel allows this viewer on this entry now; the client never decides it.
   const canManage = workspace.data?.viewer.availableActions.includes(MANAGE_ROSTER_ACTION) === true;
-  const atIso = localInputToIso(at);
+  const clock = useDivisionClock(workspace.data?.division?.id, hasAnswered(workspace));
+  // A time that cannot be read (yet) is never sent: the roster stays as of now, and the field says so.
+  const asOf = readRosterTime(at, clock);
+  const atIso = asOf.iso;
+  const asOfError = !asOf.error
+    ? null
+    : clock.settled
+      ? `${asOf.error} The roster is shown as of now.`
+      : "The facility's time zone is still loading: the roster is shown as of now until it is known.";
   const roster = useApiQuery({
     path: '/team-entries/{id}/roster',
     request: {
@@ -371,7 +423,8 @@ export function RosterScreen() {
           type="datetime-local"
           value={at}
           onChange={setAt}
-          hint={`Leave empty for now (${isoToLocalInput(now.toISOString()).replace('T', ' ')}).`}
+          hint={`Leave empty for now (${isoToZonedInput(now.toISOString(), clock.zone).replace('T', ' ')}). ${clockHint(clock)}`}
+          error={asOfError}
         />
         <CheckboxField
           label="Include pending and removed rows"
@@ -394,7 +447,9 @@ export function RosterScreen() {
           Adding and removing players is not available to you on this entry now.
         </p>
       ) : null}
-      {adding && workspace.data && canManage ? <AddMember workspace={workspace.data} /> : null}
+      {adding && workspace.data && canManage ? (
+        <AddMember workspace={workspace.data} clock={clock} />
+      ) : null}
       <QueryBoundary
         query={roster}
         label="the roster"
@@ -407,7 +462,7 @@ export function RosterScreen() {
       >
         {(data) => (
           <>
-            <p className="caption">As of {formatInstant(data.at)}</p>
+            <p className="caption">As of {formatInstant(data.at, clock.zone)}</p>
             <ul className="list" aria-label="Roster">
               {data.members.map((member) => {
                 const badge = ROSTER_STATUS[member.status];
@@ -425,9 +480,9 @@ export function RosterScreen() {
                         ) : null}
                       </span>
                       <span className="caption">
-                        Effective {formatInstant(member.effectiveFrom)} to{' '}
-                        {member.effectiveTo ? formatInstant(member.effectiveTo) : 'now'} · added by{' '}
-                        {humanizeCode(member.source)}
+                        Effective {formatInstant(member.effectiveFrom, clock.zone)} to{' '}
+                        {member.effectiveTo ? formatInstant(member.effectiveTo, clock.zone) : 'now'}{' '}
+                        · added by {humanizeCode(member.source)}
                       </span>
                       {member.removalReason ? (
                         <span className="caption">Removed: {member.removalReason}</span>
@@ -435,7 +490,7 @@ export function RosterScreen() {
                       <EligibilityIndicator member={member} />
                     </div>
                     <div className="actions">
-                      <ExplainEligibility entryId={entryId} member={member} />
+                      <ExplainEligibility entryId={entryId} member={member} zone={clock.zone} />
                       {member.status === 'active' ||
                       member.status === 'guest' ||
                       member.status === 'substitute' ? (
@@ -444,6 +499,7 @@ export function RosterScreen() {
                             entryId={entryId}
                             entryRevision={workspace.data.entry.revision}
                             member={member}
+                            clock={clock}
                           />
                         ) : null
                       ) : null}

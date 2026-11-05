@@ -11,7 +11,7 @@
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import {
   GRANT_ID,
@@ -589,5 +589,48 @@ describe('SCR-S-21 RelationshipsScreen', () => {
     await waitFor(() => expect(app.fake.requests.some((r) => r.route === '/people')).toBe(true));
     expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
     expect(within(form).getByLabelText(/Other person reference/)).toHaveValue(OTHER_ID);
+  });
+});
+
+/**
+ * SPK-SCHED-008: a relationship's grant window names no facility, so its date-and-time fields are
+ * read in the device's time zone, and each hint names that zone.
+ */
+describe('SPK-SCHED-008 relationship grant window names the device time zone', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('SPK-SCHED-008: "Effective from" and "Effective to" name the device zone and are read in it', async () => {
+    vi.stubEnv('TZ', 'America/New_York');
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...baseRoutes(),
+        'POST /relationships': { status: 201, body: relationshipCreated(['view']) },
+      },
+    });
+    render(app.at(PATH));
+    const form = await relationshipForm();
+    const from = within(form).getByLabelText('Effective from');
+    const to = within(form).getByLabelText('Effective to');
+    expect(from).toHaveAccessibleDescription(
+      "Leave empty to start now. Your device's time zone (America/New_York).",
+    );
+    expect(to).toHaveAccessibleDescription(
+      "Leave empty for no end date. Your device's time zone (America/New_York).",
+    );
+    await user.type(within(form).getByLabelText(/Other person reference/), OTHER_ID);
+    await user.selectOptions(within(form).getByLabelText(/^Kind/), 'guardian');
+    await user.click(within(form).getByLabelText(/^view:/));
+    await user.type(from, '2026-11-07T18:00');
+    await user.type(to, '2026-12-07T18:00');
+    await user.click(within(form).getByRole('button', { name: 'Record relationship' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.route === '/relationships')?.body).toMatchObject({
+        effectiveFrom: '2026-11-07T23:00:00.000Z',
+        effectiveTo: '2026-12-07T23:00:00.000Z',
+      }),
+    );
   });
 });

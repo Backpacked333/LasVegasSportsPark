@@ -22,7 +22,6 @@ import {
 } from '../../features/insight-admin/feedback';
 import { SelectField, TextField } from '../../features/insight-admin/fields';
 import {
-  deviceTimeZone,
   formatInstant,
   localDateTimeToInstant,
   shortId,
@@ -39,6 +38,7 @@ import { ActionGate } from '../../features/insight-admin/permission';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { inputZoneHint } from '../../ui/time';
 
 type ImportBatch = Schema<'ImportBatch'>;
 
@@ -149,7 +149,7 @@ function StageBatch() {
         required
         value={draft.snapshotTakenAt}
         onChange={(snapshotTakenAt) => set({ snapshotTakenAt })}
-        hint={`Your time zone (${deviceTimeZone()}).`}
+        hint={inputZoneHint(null)}
         error={errors.snapshotTakenAt ?? apiFields.snapshotTakenAt}
       />
       <TextField

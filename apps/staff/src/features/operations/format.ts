@@ -4,7 +4,6 @@
  * feed gives the facility timezone (SPK-SCHED-008), otherwise the device zone, always labelled so a
  * device time is never presented as facility time. Money is minor units plus currency (SPK-PAY-001).
  */
-import { resolveLocal } from '../schedule-facilities/time';
 
 /** "Sat 24 Oct, 10:00 PDT" in the given IANA zone (or the device zone when unknown). */
 export function formatInstant(iso: string, timeZone?: string | null): string {
@@ -108,35 +107,13 @@ export function addDays(date: string, days: number): string {
 }
 
 /**
- * A `datetime-local` input value read in the facility's zone when it is known (SPK-SCHED-008: a
- * device time is never presented as facility time), otherwise in the device zone. A wall time that
- * happens twice on a daylight-saving change resolves to its first occurrence; one that never
- * happens moves to the same time after the change.
+ * `datetime-local` fields on the operations screens are read with `readZonedInput` (facility zone
+ * when known, otherwise the device's, by name; a time that happens twice or never on a
+ * daylight-saving change is refused, never guessed, SPK-SCHED-008) and name their clock with
+ * `inputZoneHint`, the dashboard's one wording (SPK-UX-010).
  */
-export function instantFromZonedInput(value: string, timeZone: string | null): string | null {
-  if (!value) return null;
-  if (!timeZone) return instantFromLocalInput(value);
-  const [date = '', time = ''] = value.split('T');
-  const r = resolveLocal(date, time.slice(0, 5), timeZone);
-  if (r.kind === 'exact') return r.instant;
-  if (r.kind === 'ambiguous') return r.earlier;
-  if (r.kind === 'nonexistent') return r.shiftedForward;
-  return null;
-}
-
-/** The hint naming which clock a `datetime-local` field is read in. */
-export function inputZoneHint(timeZone: string | null): string {
-  if (timeZone) return `Facility time, ${timeZone}.`;
-  const device = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `Your device time${device ? `, ${device}` : ''}.`;
-}
-
-/** A `datetime-local` input value (device zone) as an ISO instant, or null when empty or invalid. */
-export function instantFromLocalInput(value: string): string | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
-}
+export { readZonedInput } from '../schedule-facilities/time';
+export { inputZoneHint } from '../../ui/time';
 
 /** One id per line or comma; blank entries dropped. */
 export function idList(text: string): string[] {

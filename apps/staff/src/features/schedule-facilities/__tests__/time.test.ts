@@ -3,7 +3,7 @@
  * gaps and overlaps reported instead of guessed (Los Angeles: clocks go back on 2026-11-01 and
  * forward on 2026-03-08).
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addDaysToLocalDate,
   formatRange,
@@ -12,6 +12,7 @@ import {
   localTimeOf,
   occupiedRange,
   offsetMinutesAt,
+  readZonedInput,
   resolveLocal,
   weekdayOfLocalDate,
 } from '../time';
@@ -70,6 +71,63 @@ describe('SPK-SCHED-008 facility-local time', () => {
     expect(occupiedRange('2026-10-25T01:00:00.000Z', '2026-10-25T02:00:00.000Z', 15, 10)).toEqual({
       start: '2026-10-25T00:45:00.000Z',
       end: '2026-10-25T02:10:00.000Z',
+    });
+  });
+});
+
+/**
+ * `readZonedInput` reads every staff `datetime-local` field that has no occurrence chooser (roster,
+ * availability, qualifications, message scheduling). The device here is in America/New_York and the
+ * facility in America/Los_Angeles, so a facility time read on the device clock would be three hours
+ * early.
+ */
+describe('SPK-SCHED-008 readZonedInput: a typed time in a named clock, never guessed', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('SPK-SCHED-008: reads a typed time in the facility zone, not the device zone', () => {
+    vi.stubEnv('TZ', 'America/New_York');
+    // 18:00 Pacific standard time is 02:00Z the next day; the New York device would say 23:00Z.
+    expect(readZonedInput('2026-11-07T18:00', LA)).toEqual({ iso: '2026-11-08T02:00:00.000Z' });
+    expect(readZonedInput('2026-10-24T09:00', 'Europe/London')).toEqual({
+      iso: '2026-10-24T08:00:00.000Z',
+    });
+    // No facility zone, or one the platform does not know: the device's zone, which the hint names.
+    expect(readZonedInput('2026-11-07T18:00', null)).toEqual({ iso: '2026-11-07T23:00:00.000Z' });
+    expect(readZonedInput('2026-11-07T18:00', 'Not/AZone')).toEqual({
+      iso: '2026-11-07T23:00:00.000Z',
+    });
+  });
+
+  it('SPK-SCHED-008: "Ambiguous or nonexistent times require resolution": a repeated or skipped time is refused, not guessed', () => {
+    vi.stubEnv('TZ', 'America/New_York');
+    // 01:30 happens twice in Los Angeles on 1 November 2026 (PDT, then PST): neither is picked.
+    expect(readZonedInput('2026-11-01T01:30', LA)).toEqual({
+      error:
+        '01:30 happens twice on this date in America/Los_Angeles (clocks go back). Choose a time outside the repeated hour.',
+    });
+    // 02:30 never happens there on 8 March 2026: it is not moved to 03:30, that time is offered.
+    expect(readZonedInput('2026-03-08T02:30', LA)).toEqual({
+      error:
+        '02:30 does not exist on this date in America/Los_Angeles (clocks go forward). Choose another time, for example 03:30.',
+    });
+    // The device's zone resolves the same way when it is the clock.
+    expect(readZonedInput('2026-11-01T01:30', null)).toEqual({
+      error:
+        '01:30 happens twice on this date in America/New_York (clocks go back). Choose a time outside the repeated hour.',
+    });
+    // The hours either side of the change are single instants.
+    expect(readZonedInput('2026-11-01T00:59', LA)).toEqual({ iso: '2026-11-01T07:59:00.000Z' });
+    expect(readZonedInput('2026-11-01T02:00', LA)).toEqual({ iso: '2026-11-01T10:00:00.000Z' });
+  });
+
+  it('SPK-SCHED-008: an empty field is no time; an unreadable one is a field error', () => {
+    expect(readZonedInput('', LA)).toEqual({});
+    expect(readZonedInput('  ', null)).toEqual({});
+    expect(readZonedInput('not a time', LA)).toEqual({ error: 'Enter a valid date and time.' });
+    expect(readZonedInput('2026-02-30T10:00', LA)).toEqual({
+      error: 'Enter a valid date and time.',
     });
   });
 });

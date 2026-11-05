@@ -9,7 +9,7 @@
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import {
   CHILD_ID,
@@ -613,5 +613,71 @@ describe('SCR-S-22 AccessReviewScreen', () => {
     expect(
       screen.getByText(/1 permission\(s\) affected · recorded by the system/),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * SPK-SCHED-008: an access review names no facility, so its date-and-time fields are read in the
+ * device's time zone, and each hint names that zone so it is never mistaken for facility time.
+ */
+describe('SPK-SCHED-008 access review times name the device time zone', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('SPK-SCHED-008: "Ends at" of a restriction names the device zone and is read in it', async () => {
+    vi.stubEnv('TZ', 'America/New_York');
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /access-reviews/{id}': { status: 200, body: accessReview() },
+        'GET /people/{id}': { status: 200, body: person(OTHER_ID) },
+        'POST /access-reviews/{id}/decisions': {
+          status: 200,
+          body: accessReview({ revision: 3 }),
+        },
+      },
+    });
+    render(app.at(PATH));
+    const form = await screen.findByRole('form', { name: 'Record a decision' });
+    await user.selectOptions(within(form).getByRole('combobox', { name: /^Decision/ }), 'restrict');
+    await user.type(within(form).getByLabelText(/Person holding the permissions/), OTHER_ID);
+    await user.click(within(form).getByLabelText('At a date and time'));
+    const endsAt = within(form).getByLabelText(/^Ends at/);
+    expect(endsAt).toHaveAccessibleDescription("Your device's time zone (America/New_York).");
+    await user.type(endsAt, '2026-11-07T18:00');
+    await user.click(within(form).getByRole('button', { name: 'Record decision' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/access-reviews/{id}/decisions')?.body,
+      ).toMatchObject({ kind: 'restrict', effectiveTo: '2026-11-07T23:00:00.000Z' }),
+    );
+  });
+
+  it('SPK-SCHED-008: "Review effect ends" names the device zone and is read in it', async () => {
+    vi.stubEnv('TZ', 'America/New_York');
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /people/{id}': { status: 200, body: person() },
+        'POST /access-reviews': { status: 201, body: accessReview() },
+        'GET /access-reviews/{id}': { status: 200, body: accessReview() },
+      },
+    });
+    render(app.at(`/people/access-reviews/new?subject=${PERSON_ID}`));
+    const form = await screen.findByRole('form', { name: 'Open an access review' });
+    const ends = within(form).getByLabelText('Review effect ends');
+    expect(ends).toHaveAccessibleDescription(
+      "Optional. Leave empty to keep the review in effect until it is closed. Your device's time zone (America/New_York).",
+    );
+    await user.type(within(form).getByLabelText(/^Reason/), 'Two guardians disagree');
+    await user.selectOptions(within(form).getByLabelText(/Review owner/), 'support_operator');
+    await user.type(ends, '2026-11-07T18:00');
+    await user.click(within(form).getByRole('button', { name: 'Open review' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.route === '/access-reviews')?.body).toMatchObject({
+        effectiveTo: '2026-11-07T23:00:00.000Z',
+      }),
+    );
   });
 });

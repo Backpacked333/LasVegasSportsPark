@@ -134,11 +134,6 @@ export function localDateTimeToInstant(value: string): string | null {
   return Number.isNaN(at.getTime()) ? null : at.toISOString();
 }
 
-/** The device's IANA zone name, for labels such as "your time zone (America/Denver)". */
-export function deviceTimeZone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'device time zone';
-}
-
 /** First eight characters of an opaque id, for dense tables (the full id stays in `title`). */
 export function shortId(id: string): string {
   return id.slice(0, 8);

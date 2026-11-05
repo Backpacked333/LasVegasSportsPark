@@ -4,6 +4,7 @@
  * Local times that do not exist (clocks move forward) or occur twice (clocks move back) are reported
  * so the screen can ask the user to resolve them instead of guessing.
  */
+import { deviceTimeZone, knownTimeZone } from '../../ui/time';
 
 export interface WallClock {
   year: number;
@@ -133,6 +134,52 @@ export function resolveLocal(date: string, time: string, timeZone: string): Loca
         };
   }
   return { kind: 'nonexistent', shiftedForward: new Date(local - before * 60_000).toISOString() };
+}
+
+/**
+ * A typed `<input type="datetime-local">` value: `{}` when empty, `{ iso }` when it is one instant,
+ * `{ error }` (a field message) when it is not a date and time or names no single instant.
+ */
+export interface ZonedInput {
+  iso?: string;
+  error?: string;
+}
+
+/**
+ * A `datetime-local` value ('YYYY-MM-DDTHH:MM') read as wall-clock time in `timeZone` (the
+ * facility's IANA zone), or in the device's zone, by name, when `timeZone` is null or unknown
+ * (SPK-SCHED-008). "Ambiguous or nonexistent times require resolution": a time that happens twice
+ * on a daylight-saving change (clocks go back) or never (clocks go forward) is never guessed; it
+ * comes back as a field error asking for another time, in the words of LocalDateTimeField.
+ */
+export function readZonedInput(value: string, timeZone: string | null | undefined): ZonedInput {
+  const text = value.trim();
+  if (!text) return {};
+  const zone = knownTimeZone(timeZone) ?? deviceTimeZone();
+  if (!zone) {
+    // The platform names no zone at all: the browser's own reading is the only one there is.
+    const date = new Date(text);
+    return Number.isNaN(date.getTime())
+      ? { error: 'Enter a valid date and time.' }
+      : { iso: date.toISOString() };
+  }
+  const [date = '', time = ''] = text.split('T');
+  const hhmm = time.slice(0, 5);
+  const r = resolveLocal(date, hhmm, zone);
+  switch (r.kind) {
+    case 'exact':
+      return { iso: r.instant };
+    case 'ambiguous':
+      return {
+        error: `${hhmm} happens twice on this date in ${zone} (clocks go back). Choose a time outside the repeated hour.`,
+      };
+    case 'nonexistent':
+      return {
+        error: `${hhmm} does not exist on this date in ${zone} (clocks go forward). Choose another time, for example ${localTimeOf(r.shiftedForward, zone)}.`,
+      };
+    case 'invalid':
+      return { error: 'Enter a valid date and time.' };
+  }
 }
 
 /** The first instant of a local day (shifted forward when midnight does not exist that day). */

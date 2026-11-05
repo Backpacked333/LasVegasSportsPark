@@ -175,6 +175,14 @@ the actual devices of §6.3.
   cache; null means the device zone, labelled) and `usePersonNames` / `nameOf`
   (`GET /person-names`, names and kind only, one read per set of up to 100 ids; a person left out
   is "<noun>, name not available" with a short reference).
+- Date-and-time fields (availability windows, qualification validity, a message's "deliver no
+  earlier than") are read with `readZonedInput` (`schedule-facilities/time.ts`) in the facility's
+  zone, or the device's by name when it is not known, and name that clock with `inputZoneHint`
+  (`ui/time.ts`, "Facility time (America/Los_Angeles)."), the wording every staff screen uses
+  (SPK-UX-010). A time that happens twice or never on a daylight-saving change is refused with a
+  field error and nothing is sent ("Ambiguous or nonexistent times require resolution",
+  SPK-SCHED-008). **Verified** (`AvailabilityQualificationsScreen.test.tsx`,
+  `Communications.test.tsx`, `features/schedule-facilities/__tests__/time.test.ts`)
 - `StaffPicker.tsx`: the staff directory picker (`GET /staff-directory`, role and facility filters,
   name prefix, "Load more staff"); a chosen person stays in the options ("chosen") when a search
   leaves them out, and Enter in the name search never submits the enclosing form; not available
