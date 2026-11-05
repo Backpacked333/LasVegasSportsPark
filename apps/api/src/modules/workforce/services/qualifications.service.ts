@@ -38,6 +38,7 @@ import {
   type RequirementRow,
 } from '../workforce.shared';
 import { lockPerson } from './commitment-checker';
+import { settleIfStillOpen } from './exception-settlement';
 import { MergedPersons } from './merged-persons';
 import { lockRequirementShared } from './requirement-locks';
 
@@ -430,6 +431,105 @@ export class QualificationsService {
       raised.push(exception.id);
     }
     return raised;
+  }
+
+  /**
+   * R4-OPS-MODULES-08 rework (SPK-UX-006 the queue reflects reality, SPK-STAFF-001,
+   * SPK-READY-004): after an edit of the requirement (`requirement` is the row as the edit wrote
+   * it), the open or acknowledged `workforce.unqualified_assignment` exception of an accepted
+   * assignment of its target and role is resolved once the requirement no longer makes that
+   * assignment unqualified, the facts under which {@link flagUnqualifiedAssignments} would not
+   * raise it and readiness stops reporting it:
+   *  - `slot_not_required`: its slot is above the required count;
+   *  - `qualified`: its assignee holds every qualification the requirement now names, verified and
+   *    valid at the start (none named included).
+   * An assignee still lacking one keeps the card. The resolution names the requirement's id,
+   * revision, count and qualifications, the assignment, its slot and the ground (system actor
+   * `workforce.coverage`); the exception stays as history. The caller holds the requirement row
+   * `FOR UPDATE`, which a revocation's flagging and an acceptance of the role wait for (they take
+   * its share lock), so neither raises beside this edit on facts it no longer reads; a card an
+   * operator settles meanwhile is skipped ({@link settleIfStillOpen}). Idempotent: only open or
+   * acknowledged exceptions match. Returns the resolved exception ids.
+   */
+  async resolveUnqualifiedNoLongerLacking(
+    trx: Trx,
+    requirement: RequirementRow,
+    editReason: string | null,
+    correlationId: string | null,
+  ): Promise<string[]> {
+    const organizationId = requirement.organization_id;
+    const accepted = await trx
+      .selectFrom('assignments')
+      .select(['id', 'person_id', 'slot', 'scheduled_start'])
+      .where('organization_id', '=', organizationId)
+      .where('target_type', '=', requirement.target_type)
+      .where('target_id', '=', requirement.target_id)
+      .where('role', '=', requirement.role)
+      .where('status', '=', 'accepted')
+      .orderBy('id')
+      .execute();
+    if (accepted.length === 0) return [];
+    const byKey = new Map(accepted.map((a) => [`${UNQUALIFIED_ASSIGNMENT}:${a.id}`, a]));
+    const open = await trx
+      .selectFrom('operational_exceptions')
+      .select(['id', 'dedupe_key'])
+      .where('organization_id', '=', organizationId)
+      .where('category', '=', UNQUALIFIED_ASSIGNMENT)
+      .where('dedupe_key', 'in', [...byKey.keys()])
+      .where('status', 'in', ['open', 'acknowledged'])
+      .orderBy('id')
+      .execute();
+    const role = requirement.role.replaceAll('_', ' ');
+    const names = requirement.required_qualifications;
+    const edit = `(revision ${requirement.revision}).${editReason ? ` ${editReason}` : ''}`;
+    const resolved: string[] = [];
+    for (const exception of open) {
+      const assignment = exception.dedupe_key ? byKey.get(exception.dedupe_key) : undefined;
+      if (!assignment) continue;
+      let ground: 'slot_not_required' | 'qualified';
+      let reason: string;
+      if (assignment.slot > requirement.required_count) {
+        ground = 'slot_not_required';
+        const count = requirement.required_count;
+        reason = `Slot ${assignment.slot} is no longer required: the ${role} requirement now requires ${count} slot${count === 1 ? '' : 's'} ${edit}`;
+      } else {
+        const checks = await this.check(
+          trx,
+          organizationId,
+          assignment.person_id,
+          names,
+          new Date(assignment.scheduled_start),
+        );
+        if (checks.some((c) => c.status !== 'held')) continue;
+        ground = 'qualified';
+        reason =
+          names.length === 0
+            ? `The ${role} requirement no longer names a qualification ${edit}`
+            : `The assignee holds every qualification the ${role} requirement now names (${names.join(', ')}) ${edit}`;
+      }
+      const settled = await settleIfStillOpen(
+        this.exceptions,
+        trx,
+        organizationId,
+        exception.id,
+        'resolved',
+        {
+          reason,
+          resolution: {
+            requirementId: requirement.id,
+            requirementRevision: requirement.revision,
+            requiredCount: requirement.required_count,
+            requiredQualifications: names,
+            assignmentId: assignment.id,
+            slot: assignment.slot,
+            ground,
+          },
+          correlationId,
+        },
+      );
+      if (settled) resolved.push(exception.id);
+    }
+    return resolved;
   }
 
   private acceptedAssignments(trx: Trx, organizationId: string) {

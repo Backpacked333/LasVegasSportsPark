@@ -209,6 +209,16 @@ export class RequirementsService {
       if (body.requiredQualifications !== undefined || body.requiredCount !== undefined) {
         await this.flagUnqualified(trx, row);
       }
+      // R4-OPS-MODULES-08 rework (SPK-UX-006, SPK-STAFF-001): and the reverse. An accepted
+      // assignment the edit no longer makes unqualified (its slot above a lowered count, or its
+      // assignee holding every qualification the requirement now names) has its open
+      // `workforce.unqualified_assignment` card resolved, naming this revision, under the same lock.
+      await this.qualifications.resolveUnqualifiedNoLongerLacking(
+        trx,
+        row,
+        body.reason ?? null,
+        correlationId,
+      );
       return this.view(trx, row);
     });
   }
