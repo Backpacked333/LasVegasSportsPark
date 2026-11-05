@@ -556,6 +556,11 @@ built, waiting on a decision or another module.
   suite passes with it (PGlite and PostgreSQL). CMP-06 officials depend on workforce's
   `ASSIGNMENT_CHECK_IMPL` (DEC-011 governs assignment rules). CMP-14 delivery depends on
   communications consuming `competition.availability_requested`.
+- **Pending (other modules), R4-LIFECYCLES-REVISIONS-02:** the staff dashboard does not yet send
+  `correctsRevisionId` (Results review correction form) and the Match report form has no reason or
+  base once a result is official, so until the staff change lands a staff correction of an official
+  result is refused with 400 `correction_base_required` (the API behaviour above is **Verified**;
+  the client change is deferred to the staff app).
 - **Pending (other modules), R4-DB-INVARIANTS-10:** communications' `competition-notices.spec.ts`
   ends a co-captain role by writing `team_roles` directly without `ended_by` and `ended_reason`;
   0463 refuses that write, so the test needs its end facts (deferred to communications).
