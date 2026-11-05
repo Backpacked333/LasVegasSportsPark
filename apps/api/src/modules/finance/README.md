@@ -93,7 +93,8 @@ carry `revision` and `touch_updated_at`.
   fixed, refunded, compensated (what a compensation credit took, MONEY-02) and reversed (refunds
   the provider reported failed after success, R4-PROVIDER-OUTCOMES-02) only accumulate; reversed
   never exceeds refunded and always equals the payment's refunds marked reversed (checked at
-  commit), and a refund is reversed once and only when it succeeded.
+  commit on every insert, update and delete of either side: `0681` for updates, `0684` for
+  inserts and deletes), and a refund is reversed once and only when it succeeded.
 - **§4.7 invariant 7 / SPK-PAY-009:** `remaining_minor >= 0`, `remaining <= original`, and a
   deferred constraint trigger keeps `remaining = original - redeemed + reversed`, so a balance is
   never overwritten. A reversal gives back only a `redeem` row of the same credit (composite key
@@ -187,7 +188,7 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
 
 ## Durable work
 
-- Outbox handlers (all twelve registered in `finance.module.ts`; the cross-module consumer
+- Outbox handlers (all thirteen registered in `finance.module.ts`; the cross-module consumer
   inventory is `docs/architecture/overview.md` §7.1; R3-DOCS-TRUTH-3-08):
   - `finance.finalize_checkout` on `finance.checkout_payment_received` (§4.11 step 8, SPK-AT-023);
   - `finance.abort_expired_checkout` on its timer `finance.checkout_expiry_due`;
@@ -200,7 +201,10 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
     `finance.checkout_recovery_required`, `finance.notify_checkout_compensated` on
     `finance.checkout_compensated`, `finance.notify_payment_failed` on `finance.payment_failed`,
     `finance.notify_installment_failed` on `finance.installment_failed`,
-    `finance.notify_installment_due` on `finance.installment_notice`;
+    `finance.notify_installment_due` on `finance.installment_notice`,
+    `finance.notify_refund_reversed` on `finance.refund_reversed` (R4-PROVIDER-OUTCOMES-02: the
+    payer of a compensation refund the provider reported failed after success is told it did not
+    go through);
   - `finance.follow_person_merge` on `identity.persons_merged` (R2-LIFECYCLES-02, below).
 
   All are idempotent under replay. A change to the payload of `finance.refund_settled` reaches two
@@ -217,7 +221,7 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
 `finance.quote_created`, `checkout_started`, `checkout_expiry_due`, `checkout_payment_received`,
 `payment_received`, `payment_failed`, `payment_outcome_unknown`, `order_paid`,
 `enrollment_fulfilled`, `checkout_recovery_required`, `checkout_compensated`, `checkout_aborted`,
-`refund_requested`, `refund_settled`, `credit_issued`, `credit_redeemed`, `overpayment_recorded`,
+`refund_requested`, `refund_settled`, `refund_reversed`, `credit_issued`, `credit_redeemed`, `overpayment_recorded`,
 `obligation_created`, `obligation_settled`, `contribution_requested`, `installment_paid`,
 `installment_failed`, `installment_notice_due`, `installment_notice`, `cash_tender_recorded`,
 `settlement_reconciled`. Payloads carry identifiers and amounts only (§4.14).
@@ -325,7 +329,19 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
   `refundedMinor` is what was actually returned), settlement reconciliation counts it back in
   the period it was reversed, and the critical `finance.refund_evidence_conflict` stays open for
   the finance operator; a reversed compensation refund is not retried automatically. A later
-  success report of a reversed refund books nothing and raises the conflict again.
+  success report of a reversed refund books nothing and raises the conflict again. The reversal
+  is read where the refund is: `reversedAt` on the refund, on each refund listed on
+  `GET /payments/{id}` (the payer's and staff's payment detail) and as `refundReversedAt` on a
+  point-of-sale return, so a reversed refund (status still `succeeded`) is never shown as money
+  returned; event `finance.refund_reversed` names it once. The payer of a compensation refund
+  whose checkout it compensated (and who was told "Your refund was made") is told it did not go
+  through and that the facility will contact them (`finance.notify_refund_reversed`, once per
+  reversal); a compensation refund already reversed when its `finance.refund_settled` is handled
+  does not compensate the checkout (it stays `recovery_required`, plan `manual`, with the
+  critical `finance.compensation_failed`), and the "refund made" notice is not sent for a refund
+  reversed by then (`__tests__/finalization.spec.ts`, `__tests__/refunds.spec.ts`). Nothing is
+  sent for a reversed customer refund: finance sent no "refund made" notice for it, and the
+  finance operator owns the open conflict.
 - **Team billing (SPK-PAY-004/005, SPK-AT-022):** contribution payments that together exceed the
   remaining balance allocate exactly the remaining amount; the excess stays visible on the receipt
   and the obligation (`excessMinor`), sits in `overpayment_liability`, and is held as a credit
@@ -660,6 +676,14 @@ outcome recording and reconciliation are never gated.
   states but no commands yet; expired credits read as `expired` and cannot be redeemed.
 - Revenue recognition (deferred → earned) is not implemented (DEC-022); the accounting export
   (FIN-07) exports journal entries as booked, behind the `accounting` capability.
+- A refund reversal (R4-PROVIDER-OUTCOMES-02) is netted out by finance's own figures (refundable
+  funds, `refundedMinor`, settlement reconciliation in the period it was reversed, the ledger's
+  `refund_reversed` journal), but the reporting module's read view `reporting_refund_attempts_v`
+  does not expose `reversed_at` yet, so its payment reconciliation report, economics refund
+  adjustments, the retention "fully refunded" exclusion (MET-082) and the point-of-sale money
+  series still count a reversed refund as money returned. For a period with a reversal, finance's
+  reconciliation report is the authoritative figure until reporting reads the reversal (recorded
+  as a reporting follow-up).
 - Refunds go through the provider only; refunding a cash tender is not supported. Returning an
   overpayment by refund (instead of approving the held credit) has no dedicated command.
 - Finalization is all-or-nothing per checkout: one refused line sends the whole checkout to

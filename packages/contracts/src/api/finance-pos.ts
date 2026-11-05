@@ -280,6 +280,12 @@ export const PosReturnSchema = z
     refundStatus: z
       .enum(['requested', 'processing', 'succeeded', 'failed', 'canceled', 'unknown'])
       .nullable(),
+    /**
+     * R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008): when the provider reported the card refund
+     * failed after it was recorded `succeeded`; the customer was not paid back. Null otherwise.
+     * Always sent; optional only so clients built on the earlier contract keep compiling.
+     */
+    refundReversedAt: Instant.nullable().optional(),
     registerSessionId: z.uuid().nullable(),
     reason: z.string(),
     approvedByPersonId: z.uuid(),

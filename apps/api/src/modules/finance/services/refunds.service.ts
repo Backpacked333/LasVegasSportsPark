@@ -786,6 +786,24 @@ export class RefundsService {
         inboxEventId: evidence.inboxEventId ?? null,
       },
     });
+    // The payer of a compensation refund was told the refund was made; finance's notice handler
+    // corrects that (finance.notify_refund_reversed), and other modules may follow the fact.
+    await this.outbox.enqueue(trx, FinanceEvents.refundReversed, {
+      organizationId,
+      aggregateType: 'refund_attempt',
+      aggregateId: row.id,
+      correlationId,
+      operationId: row.operation_id,
+      payload: {
+        organizationId,
+        refundAttemptId: row.id,
+        paymentAttemptId: row.payment_attempt_id,
+        amountMinor: Number(row.amount_minor),
+        currency: row.currency,
+        purpose: row.purpose,
+        checkoutId: row.checkout_id,
+      },
+    });
     return (await this.load(trx, organizationId, row.id)) as RefundRow;
   }
 

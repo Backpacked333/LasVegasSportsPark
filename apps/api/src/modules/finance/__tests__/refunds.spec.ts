@@ -572,6 +572,34 @@ describe('refunds: reserve before execution (SPK-PAY-008, §4.7 invariant 6, SPK
     expect(reversed.body.reversedAt).toEqual(t.clock.now().toISOString());
     const payment = await t.http.get(`/v1/payments/${paymentAttemptId}`).set(finance.header);
     expect(payment.body.refundableMinor).toBe(10_000);
+    // The payment's refund list (staff and the payer read the same detail) shows the refund as
+    // reversed, so no client reads it as money returned.
+    const reversedSummary = {
+      id: refundId,
+      status: 'succeeded',
+      amountMinor: 6_000,
+      reversedAt: t.clock.now().toISOString(),
+    };
+    expect(payment.body.refunds).toEqual([expect.objectContaining(reversedSummary)]);
+    const mine = await t.http.get(`/v1/payments/${paymentAttemptId}`).set(payer.header);
+    expect(mine.status).toBe(200);
+    expect(mine.body.refunds).toEqual([expect.objectContaining(reversedSummary)]);
+    // An event names the reversal for its consumers, once however often the provider repeats it.
+    const reversedEvents = await t.db
+      .selectFrom('outbox_events')
+      .select('payload')
+      .where('event_type', '=', 'finance.refund_reversed')
+      .where('aggregate_id', '=', refundId)
+      .execute();
+    expect(reversedEvents).toHaveLength(1);
+    expect(reversedEvents[0]?.payload).toMatchObject({
+      refundAttemptId: refundId,
+      paymentAttemptId,
+      amountMinor: 6_000,
+      currency: 'USD',
+      purpose: 'customer_refund',
+      checkoutId: null,
+    });
     // The ledger: one reversing journal of the refund's posting; the books balance again.
     const journals = await t.db
       .selectFrom('journals')

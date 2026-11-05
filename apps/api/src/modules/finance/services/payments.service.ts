@@ -43,6 +43,7 @@ import {
   financeSystem,
   hoursFrom,
   iso,
+  isoOrNull,
   minutesFrom,
   organizationOf,
   outcomeUnknownDetails,
@@ -188,7 +189,7 @@ export class PaymentsService {
       .executeTakeFirst();
     const refunds = await db
       .selectFrom('refund_attempts')
-      .select(['id', 'status', 'amount_minor', 'currency', 'created_at'])
+      .select(['id', 'status', 'amount_minor', 'currency', 'created_at', 'reversed_at'])
       .where('organization_id', '=', row.organization_id)
       .where('payment_attempt_id', '=', row.id)
       .orderBy('created_at')
@@ -204,6 +205,9 @@ export class PaymentsService {
         amountMinor: Number(r.amount_minor),
         currency: r.currency,
         requestedAt: iso(r.created_at),
+        // R4-PROVIDER-OUTCOMES-02 (§4.11): a succeeded refund the provider reported failed
+        // returned nothing; the payer and staff see that, not "refunded".
+        reversedAt: isoOrNull(r.reversed_at),
       })),
     };
   }

@@ -9,10 +9,12 @@ import { PosSalesService } from '../services/pos/pos-sales.service';
 import { approveTaxFee } from './stage3-doubles';
 import {
   adult,
+  deliver,
   drain,
   financeTestApp,
   ledgerTotals,
   post,
+  processInbox,
   provider,
   staff,
   worker,
@@ -508,6 +510,7 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
       amountMinor: 3_000,
       tenderKind: 'card',
       refundStatus: 'succeeded',
+      refundReversedAt: null,
     });
     const attemptId = paid.body.tenders[0].paymentAttemptId as string;
     const payment = await t.http.get(`/v1/payments/${attemptId}`).set(finance.header);
@@ -520,6 +523,18 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
     ]);
     const totals = await ledgerTotals(t);
     expect(totals.debits).toBe(totals.credits);
+    // R4-PROVIDER-OUTCOMES-02 (§4.11): the provider reports the card refund failed after all; the
+    // return shows the customer was not paid back (its status stays `succeeded`).
+    const refundId = returned.body.returns[0].refundAttemptId as string;
+    provider(t).settleRefund(refundId, 'failed');
+    await deliver(t, provider(t).refundWebhook(refundId));
+    await processInbox(t);
+    const reread = await t.http.get(`/v1/pos-sales/${s.id}`).set(finance.header);
+    expect(reread.body.returns[0]).toMatchObject({
+      refundAttemptId: refundId,
+      refundStatus: 'succeeded',
+      refundReversedAt: t.clock.now().toISOString(),
+    });
   });
 
   it('POL-018: closing a register counts the drawer; a difference is raised for finance without tolerance or posting', async () => {

@@ -806,7 +806,16 @@ export class CheckoutFinalizer {
     const checkout = await this.load(trx, organizationId, payload.checkoutId, true);
     if (!checkout || checkout.status !== 'recovery_required') return;
     const actor = financeSystem(organizationId, 'finance.compensation');
-    if (payload.status === 'succeeded') {
+    // R4-PROVIDER-OUTCOMES-02 (§4.11): the provider may report the refund failed before this
+    // event is handled; a reversed refund returned nothing, so it does not compensate the checkout
+    // (and its payer is never told it was made): the checkout stays in recovery for the operator.
+    const refund = await trx
+      .selectFrom('refund_attempts')
+      .select('reversed_at')
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', payload.refundAttemptId)
+      .executeTakeFirst();
+    if (payload.status === 'succeeded' && !refund?.reversed_at) {
       await this.completeCompensationInTrx(
         trx,
         checkout,
@@ -829,7 +838,11 @@ export class CheckoutFinalizer {
       affectedId: checkout.id,
       ownerQueue: 'finance_operator',
       dedupeKey: `compensation-failed:${payload.refundAttemptId}`,
-      details: { refundAttemptId: payload.refundAttemptId },
+      details: {
+        refundAttemptId: payload.refundAttemptId,
+        // Recorded succeeded, then reported failed (its reversal is booked).
+        reversed: !!refund?.reversed_at,
+      },
     });
   }
 

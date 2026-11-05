@@ -1,7 +1,7 @@
 import { errors } from '@sportspark/contracts';
 import { pgErrorCode } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { UnitOfWork, databaseConstraintOf } from '../../../kernel';
+import { Inbox, UnitOfWork, databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createPolicyVersionFixture } from '../../catalog';
 import { ENROLLMENT_PORT, EnrollmentsService, type EnrollmentPort } from '../../enrollment';
@@ -12,12 +12,16 @@ import { createCreditFixture } from '../testing/finance-fixtures';
 import {
   adult,
   basketFor,
+  deliver,
   drain,
   financeTestApp,
   offering,
   post,
+  processInbox,
+  provider,
   quoteFor,
   staff,
+  worker,
   type Actor,
 } from './support';
 
@@ -652,5 +656,183 @@ describe('a purchase keeps its policy basis (SPK-PAY-002; POL-009, POL-016 with 
     expect(statedDefaults).toContain(
       'installment.intervalDays: engineering default 30 (POL-016, DEC-008)',
     );
+  });
+});
+
+describe('a compensation refund the provider reports failed after success (R4-PROVIDER-OUTCOMES-02, §4.11, SPK-AT-023)', () => {
+  let t: TestApp;
+  let parent: Actor;
+
+  beforeAll(async () => {
+    t = await financeTestApp({
+      configure: (builder) =>
+        builder
+          .overrideProvider(ENROLLMENT_PORT)
+          .useFactory({ factory: flakyEnrollmentPort, inject: [EnrollmentsService] }),
+    });
+    parent = await adult(t);
+  });
+  afterAll(async () => {
+    await t.close();
+  });
+
+  /**
+   * A paid checkout whose place was gone: recovery by refund (the engineering default). The
+   * compensation refund is executed right after the request's transaction (outside it) and
+   * succeeds; its `finance.refund_settled` waits in the outbox.
+   */
+  async function refundRecovery(price: number) {
+    const setup = await offering(t, { basePriceMinor: price });
+    const { basketId } = await basketFor(t, parent, [setup]);
+    const quote = await quoteFor(t, parent, basketId);
+    flaky.kind = 'capacity';
+    flaky.failures = 1;
+    const res = await post(t, '/v1/registration-checkouts', parent.header, {
+      quoteId: quote.id,
+      payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+    });
+    expect(res.body).toMatchObject({ status: 'recovery_required', recovery: { plan: 'refund' } });
+    return res.body as { id: string; orderId: string; payment: { id: string } };
+  }
+
+  async function orderNotices(orderId: string) {
+    return t.db
+      .selectFrom('notifications')
+      .select(['title', 'body'])
+      .where('subject_type', '=', 'order')
+      .where('subject_id', '=', orderId)
+      .orderBy('created_at')
+      .orderBy('id')
+      .execute();
+  }
+
+  it('SPK-COMMS-002: the payer told the refund was made is told it did not go through, once; the payment shows it reversed', async () => {
+    const checkout = await refundRecovery(5_500);
+    await worker(t).runOnce(); // nothing left to execute: the refund already ran
+    await drain(t);
+    const compensated = await t.http
+      .get(`/v1/registration-checkouts/${checkout.id}`)
+      .set(parent.header);
+    expect(compensated.body).toMatchObject({ status: 'compensated', recovery: { plan: 'refund' } });
+    const refundId = compensated.body.recovery.refundAttemptId as string;
+    expect((await orderNotices(checkout.orderId)).map((n) => n.title)).toEqual([
+      'Your registration could not be completed',
+      'Your refund was made',
+    ]);
+    // The provider reports the refund failed after all.
+    provider(t).settleRefund(refundId, 'failed');
+    await deliver(t, provider(t).refundWebhook(refundId));
+    await processInbox(t);
+    const notices = await orderNotices(checkout.orderId);
+    expect(notices.map((n) => n.title)).toEqual([
+      'Your registration could not be completed',
+      'Your refund was made',
+      'Your refund did not go through',
+    ]);
+    expect(notices[2]?.body).toBe(
+      'The refund of $55.00 for the registration that could not be completed did not go through, so the money has not been returned to your payment method. The facility will contact you about it.',
+    );
+    // The payer's payment detail names the refund as reversed, not as money returned.
+    const payment = await t.http.get(`/v1/payments/${checkout.payment.id}`).set(parent.header);
+    expect(payment.status).toBe(200);
+    expect(payment.body).toMatchObject({
+      refundableMinor: 5_500,
+      refunds: [
+        {
+          id: refundId,
+          status: 'succeeded',
+          amountMinor: 5_500,
+          reversedAt: t.clock.now().toISOString(),
+        },
+      ],
+    });
+    // A replayed delivery composes nothing new.
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', locked_until: null, dispatched_at: null })
+      .where('event_type', '=', 'finance.refund_reversed')
+      .where('aggregate_id', '=', refundId)
+      .execute();
+    await drain(t);
+    expect(await orderNotices(checkout.orderId)).toHaveLength(3);
+  });
+
+  it('SPK-COMMS-002: a refund reversed after it compensated the checkout but before the "refund made" notice went out is never announced as made', async () => {
+    const checkout = await refundRecovery(7_500);
+    const settled = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'status'])
+      .where('checkout_id', '=', checkout.id)
+      .executeTakeFirstOrThrow();
+    expect(settled.status).toBe('succeeded');
+    // Its handler completes the compensation; the "refund made" notice event then waits.
+    await t.app.get(UnitOfWork).run(({ trx }) =>
+      t.app.get(CheckoutFinalizer).onRefundSettled(
+        trx,
+        t.organizationId,
+        {
+          refundAttemptId: settled.id,
+          checkoutId: checkout.id,
+          status: 'succeeded',
+          purpose: 'compensation',
+        },
+        null,
+      ),
+    );
+    const compensated = await t.http
+      .get(`/v1/registration-checkouts/${checkout.id}`)
+      .set(parent.header);
+    expect(compensated.body.status).toBe('compensated');
+    const refundId = compensated.body.recovery.refundAttemptId as string;
+    provider(t).settleRefund(refundId, 'failed');
+    await deliver(t, provider(t).refundWebhook(refundId));
+    await t.app.get(Inbox).runOnce(200); // the reversal is booked before the notice is composed
+    await drain(t);
+    const titles = (await orderNotices(checkout.orderId)).map((n) => n.title);
+    expect(titles).toHaveLength(2);
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        'Your registration could not be completed',
+        'Your refund did not go through',
+      ]),
+    );
+  });
+
+  it('§4.11: a compensation refund reversed before its settlement is handled does not compensate the checkout, and the payer is never told it was made', async () => {
+    const checkout = await refundRecovery(6_500);
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'status'])
+      .where('checkout_id', '=', checkout.id)
+      .executeTakeFirstOrThrow();
+    expect(refund.status).toBe('succeeded');
+    provider(t).settleRefund(refund.id, 'failed');
+    await deliver(t, provider(t).refundWebhook(refund.id));
+    await t.app.get(Inbox).runOnce(200); // the reversal is booked before the outbox runs
+    await drain(t);
+    const recovery = await t.http
+      .get(`/v1/registration-checkouts/${checkout.id}`)
+      .set(parent.header);
+    expect(recovery.body).toMatchObject({
+      status: 'recovery_required',
+      recovery: { plan: 'manual', refundAttemptId: refund.id },
+    });
+    const order = await t.http.get(`/v1/orders/${checkout.orderId}`).set(parent.header);
+    expect(order.body.fulfillmentStatus).toBe('recovery_required');
+    const failed = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['status', 'details'])
+      .where('category', '=', 'finance.compensation_failed')
+      .where('affected_id', '=', checkout.id)
+      .execute();
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      status: 'open',
+      details: { refundAttemptId: refund.id, reversed: true },
+    });
+    // Neither "refund made" nor its correction: the payer still waits for the facility.
+    expect((await orderNotices(checkout.orderId)).map((n) => n.title)).toEqual([
+      'Your registration could not be completed',
+    ]);
   });
 });

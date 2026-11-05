@@ -309,6 +309,14 @@ export const PaymentRefundSummarySchema = z
     amountMinor: z.number().int(),
     currency: CurrencyCode,
     requestedAt: Instant,
+    /**
+     * R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008): when the provider reported this refund failed
+     * after it was recorded `succeeded`. The status stays `succeeded`, but no money was returned:
+     * a client shows a refund with `reversedAt` as not returned, never as refunded. Null
+     * otherwise. Always sent; optional only so clients built on the earlier contract keep
+     * compiling.
+     */
+    reversedAt: Instant.nullable().optional(),
   })
   .openapi('PaymentRefundSummary');
 export type PaymentRefundSummary = z.infer<typeof PaymentRefundSummarySchema>;

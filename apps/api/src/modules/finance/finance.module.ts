@@ -54,6 +54,7 @@ import {
   InstallmentNotice,
   InstallmentNoticeDue,
   PaymentFailed,
+  RefundReversed,
   RefundSettled,
 } from './finance.events';
 import { FinanceSettings } from './finance.settings';
@@ -419,6 +420,15 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
       'finance.notify_checkout_compensated',
       (event, ctx) =>
         runWithTransaction(ctx.trx, () => this.notices.checkoutCompensated(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    // R4-PROVIDER-OUTCOMES-02 (§4.11): a compensation refund the provider reported failed after
+    // success is corrected to its payer.
+    this.registry.on<EventPayload<typeof RefundReversed>>(
+      RefundReversed.type,
+      'finance.notify_refund_reversed',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.refundReversed(ctx.trx, event)),
       { failureOwner: 'finance_operator' },
     );
     this.registry.on<EventPayload<typeof PaymentFailed>>(

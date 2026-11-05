@@ -33160,6 +33160,13 @@
           "requestedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "reversedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         },
         "required": [
@@ -37100,6 +37107,13 @@
               "unknown",
               null
             ]
+          },
+          "refundReversedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "registerSessionId": {
             "type": [
