@@ -329,6 +329,16 @@ describe('person merge under concurrency (§4.9, SPK-IAM-006, SPK-IAM-007)', () 
           }),
       code: 'INVALID_TRANSITION',
     },
+    {
+      name: 'POST /access-reviews',
+      send: async (duplicate) =>
+        t.http
+          .post('/v1/access-reviews')
+          .set(adminHeader)
+          .set('Idempotency-Key', key())
+          .send({ subjectPersonId: duplicate, reason: 'disputed access' }),
+      code: 'VALIDATION_FAILED',
+    },
   ];
 
   it.each(creates)(
@@ -384,6 +394,12 @@ describe('person merge under concurrency (§4.9, SPK-IAM-006, SPK-IAM-007)', () 
         .where('subject_person_id', '=', duplicate)
         .execute();
       expect(claims).toEqual([]);
+      const reviews = await t.db
+        .selectFrom('access_reviews')
+        .select('id')
+        .where('subject_person_id', '=', duplicate)
+        .execute();
+      expect(reviews).toEqual([]);
     },
   );
 
@@ -393,6 +409,21 @@ describe('person merge under concurrency (§4.9, SPK-IAM-006, SPK-IAM-007)', () 
     const survivor = await createPersonFixture(t, { kind: 'adult' });
     const duplicate = await createPersonFixture(t, { kind: 'adult' });
     const coach = await createStaffMemberFixture(t, { personId: duplicate, roles: ['coach'] });
+    // one carer of both records: the review shows `view` over the duplicate, never the carer's
+    // `receive_messages` over the survivor, which a restrict decided on the moved review would reach
+    const carer = await createPersonFixture(t, { kind: 'adult' });
+    const overSurvivor = await createRelationshipFixture(t, {
+      actorPersonId: carer,
+      subjectPersonId: survivor,
+      kind: 'caregiver',
+      permissions: ['receive_messages'],
+    });
+    await createRelationshipFixture(t, {
+      actorPersonId: carer,
+      subjectPersonId: duplicate,
+      kind: 'caregiver',
+      permissions: ['view'],
+    });
     const opened = await t.http
       .post('/v1/access-reviews')
       .set(supportHeader)
@@ -433,7 +464,12 @@ describe('person merge under concurrency (§4.9, SPK-IAM-006, SPK-IAM-007)', () 
           .post(`/v1/access-reviews/${reviewId}/decisions`)
           .set(supportHeader)
           .set('Idempotency-Key', key())
-          .send({ kind: 'restrict', note: 'pending the hearing', expectedRevision: 1 }),
+          .send({
+            kind: 'restrict',
+            actorPersonId: carer,
+            note: 'pending the hearing',
+            expectedRevision: 1,
+          }),
       );
       if (t.database.concurrent) {
         expect(await untilSettledOrBlockedBy(t, deciding, () => holder, 2)).toBe(true);
@@ -463,6 +499,86 @@ describe('person merge under concurrency (§4.9, SPK-IAM-006, SPK-IAM-007)', () 
       .where('id', '=', reviewId)
       .executeTakeFirstOrThrow();
     expect(review).toEqual({ subject_person_id: survivor, revision: 2 });
+    const decisions = await t.db
+      .selectFrom('access_review_decisions')
+      .select('id')
+      .where('review_id', '=', reviewId)
+      .execute();
+    expect(decisions).toEqual([]);
+    const survivorGrant = await t.db
+      .selectFrom('access_grants')
+      .select(['subject_person_id', 'suspended_by_review_id'])
+      .where('id', '=', overSurvivor.grantIds.receive_messages as string)
+      .executeTakeFirstOrThrow();
+    expect(survivorGrant).toEqual({ subject_person_id: survivor, suspended_by_review_id: null });
+  });
+
+  it('§4.9 / SPK-IAM-005 / SPK-IAM-007: a restrict naming the person a running merge is merging, on a review about someone else, waits for the merge (the actor is share-locked first) and is then refused naming the survivor; nothing is restricted or recorded (PGlite and TEST_DATABASE_URL)', async () => {
+    const survivor = await createPersonFixture(t, { kind: 'adult' });
+    const duplicate = await createPersonFixture(t, { kind: 'adult' });
+    const child = await createPersonFixture(t, { kind: 'child' });
+    const guardianship = await createRelationshipFixture(t, {
+      actorPersonId: duplicate,
+      subjectPersonId: child,
+      permissions: ['collect'],
+    });
+    const grantId = guardianship.grantIds.collect as string;
+    const opened = await t.http
+      .post('/v1/access-reviews')
+      .set(adminHeader)
+      .set('Idempotency-Key', key())
+      .send({ subjectPersonId: child, reason: 'custody dispute' });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(201);
+    const reviewId = opened.body.id as string;
+    const candidateId = await flag(survivor, duplicate);
+    // Pause the merge right after it has locked the candidate and both persons.
+    const operations = t.app.get(OperationsService);
+    const create = operations.create.bind(operations);
+    const paused = gate();
+    let holder: number | undefined;
+    const spy = vi.spyOn(operations, 'create').mockImplementation(async (trx, input) => {
+      if (input.kind === 'identity.merge_persons') {
+        if (t.database.concurrent) holder = await backendPid(trx);
+        await paused.pass();
+      }
+      return create(trx, input);
+    });
+    let results: { status: number; body: Record<string, unknown> }[];
+    try {
+      const merging = tracked(merge(candidateId, survivor));
+      await paused.reached;
+      // the reviewer's screen, read before the merge, names the duplicate record
+      const deciding = tracked(
+        t.http
+          .post(`/v1/access-reviews/${reviewId}/decisions`)
+          .set(adminHeader)
+          .set('Idempotency-Key', key())
+          .send({ kind: 'restrict', actorPersonId: duplicate, expectedRevision: 1 }),
+      );
+      if (t.database.concurrent) {
+        expect(await untilSettledOrBlockedBy(t, deciding, () => holder)).toBe(true);
+      }
+      paused.open();
+      results = await Promise.all([merging.promise, deciding.promise]);
+    } finally {
+      paused.open();
+      spy.mockRestore();
+    }
+    const [merged, decided] = results;
+    expect(merged?.status, JSON.stringify(merged?.body)).toBe(201);
+    expect(decided?.status, JSON.stringify(decided?.body)).toBe(400);
+    expect(decided?.body.code).toBe('VALIDATION_FAILED');
+    expect(decided?.body.details).toEqual({
+      field: 'actorPersonId',
+      personId: duplicate,
+      mergedIntoPersonId: survivor,
+    });
+    const grant = await t.db
+      .selectFrom('access_grants')
+      .select(['actor_person_id', 'suspended_by_review_id'])
+      .where('id', '=', grantId)
+      .executeTakeFirstOrThrow();
+    expect(grant).toEqual({ actor_person_id: survivor, suspended_by_review_id: null });
     const decisions = await t.db
       .selectFrom('access_review_decisions')
       .select('id')

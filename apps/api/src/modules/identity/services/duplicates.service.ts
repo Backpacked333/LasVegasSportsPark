@@ -292,11 +292,12 @@ export class DuplicatesService {
       }
       const now = this.clock.now();
       // §4.9 (R4-LIFECYCLES-REVISIONS-03): the merged person's staff memberships not ended and the
-      // open access reviews about them, which steps 5 and 7 move to the survivor, are locked here
-      // in id order: before the scope check reads the memberships, and before any grant (step 3),
-      // in the same review-then-grants order as an access-review decision. A concurrent change or
-      // end of a membership, or a decision on a review, either commits first (and is checked and
-      // moved as committed) or waits for the merge and then meets the moved row's new revision.
+      // access reviews about them that are open or still hold an unended suspension (closing never
+      // lifts), which steps 5 and 7 move to the survivor, are locked here in id order: before the
+      // scope check reads the memberships, and before any grant (step 3), in the same
+      // review-then-grants order as an access-review decision. A concurrent change or end of a
+      // membership, or a decision on a review, either commits first (and is checked and moved as
+      // committed) or waits for the merge and then meets the moved row's new revision.
       const mergedMemberships = await trx
         .selectFrom('staff_memberships')
         .selectAll()
@@ -311,7 +312,21 @@ export class DuplicatesService {
         .select(['id', 'status', 'revision', 'organization_id'])
         .where('organization_id', '=', organizationId)
         .where('subject_person_id', '=', mergedId)
-        .where('status', '<>', 'closed')
+        .where((eb) =>
+          eb.or([
+            eb('status', '<>', 'closed'),
+            // A closed review whose suspension has not ended still restricts a grant, which step 3
+            // moves to the survivor: the review moves with it, so it is listed and lifted there.
+            eb.exists(
+              eb
+                .selectFrom('access_grant_suspensions')
+                .select('access_grant_suspensions.id')
+                .where('access_grant_suspensions.organization_id', '=', organizationId)
+                .whereRef('access_grant_suspensions.review_id', '=', 'access_reviews.id')
+                .where('access_grant_suspensions.ended_at', 'is', null),
+            ),
+          ]),
+        )
         .orderBy('id')
         .forUpdate()
         .execute();
@@ -419,25 +434,60 @@ export class DuplicatesService {
         .orderBy('id')
         .forUpdate()
         .execute();
+      // Each one is written under that lock, guarded by the revision read under it, and gets its
+      // own audit record tied to the merge (§4.4, §4.14): which person a login resolves to is the
+      // most sensitive thing a merge changes, so the account's own history shows it.
       for (const account of mergedAccounts) {
         if (survivorActive) {
-          await trx
+          const disabledReason = `merged into person ${survivorId}`;
+          const disabled = await trx
             .updateTable('accounts')
             .set({
               status: 'disabled',
               disabled_at: now,
-              disabled_reason: `merged into person ${survivorId}`,
+              disabled_reason: disabledReason,
               revision: account.revision + 1,
             })
+            .where('organization_id', '=', organizationId)
             .where('id', '=', account.id)
-            .execute();
+            .where('revision', '=', account.revision)
+            .where('status', '=', 'active')
+            .executeTakeFirst();
+          ensureUpdated(disabled.numUpdatedRows, () =>
+            errors.staleRevision(account.revision, account.revision + 1),
+          );
+          await this.auditMove(trx, write, {
+            targetType: 'account',
+            operation: 'disable',
+            targetId: account.id,
+            revision: account.revision,
+            reason: 'merge: the survivor keeps its own account',
+            details: {
+              personId: mergedId,
+              survivorAccountId: survivorActive.id,
+              disabledReason,
+            },
+          });
           summary.accountsDisabled += 1;
         } else {
-          await trx
+          const moved = await trx
             .updateTable('accounts')
             .set({ person_id: survivorId, revision: account.revision + 1 })
+            .where('organization_id', '=', organizationId)
             .where('id', '=', account.id)
-            .execute();
+            .where('revision', '=', account.revision)
+            .where('status', '=', 'active')
+            .executeTakeFirst();
+          ensureUpdated(moved.numUpdatedRows, () =>
+            errors.staleRevision(account.revision, account.revision + 1),
+          );
+          await this.auditMove(trx, write, {
+            targetType: 'account',
+            targetId: account.id,
+            revision: account.revision,
+            reason: 'merge: account follows the survivor',
+            details: { from: { personId: mergedId }, to: { personId: survivorId } },
+          });
           summary.accountsMoved += 1;
           await this.outbox.enqueue(trx, IdentityEvents.accountLinked, {
             organizationId,
@@ -855,12 +905,14 @@ export class DuplicatesService {
         summary.pendingClaimsRevoked += 1;
       }
 
-      // 7. Open access reviews about the merged person continue about the survivor. Each one locked
-      // above moves under that lock with its revision bumped, so a decision sent with a revision
-      // read before the merge (whose `restrict` would otherwise reach the survivor's grants, never
-      // shown to the reviewer) is refused (STALE_REVISION, §4.9); it gets its own audit record tied
-      // to the merge (§4.4, R4-LIFECYCLES-REVISIONS-03). No decision is recorded: the merge decides
-      // nothing about the dispute (SPK-IAM-005).
+      // 7. Access reviews about the merged person that are open, or closed with a restriction still
+      // in force on a grant step 3 moved, continue about the survivor. Each one locked above moves
+      // under that lock with its revision bumped, so a decision sent with a revision read before
+      // the merge (whose `restrict` would otherwise reach the survivor's grants, never shown to the
+      // reviewer) is refused (STALE_REVISION, §4.9); it gets its own audit record tied to the
+      // merge (§4.4, R4-LIFECYCLES-REVISIONS-03). No decision is recorded: the merge decides
+      // nothing about the dispute (SPK-IAM-005). A closed review that restricts nothing any more is
+      // history and stays about the merged record (reachable through personIdsResolvingTo).
       for (const review of mergedReviews) {
         const moved = await trx
           .updateTable('access_reviews')
@@ -868,7 +920,6 @@ export class DuplicatesService {
           .where('organization_id', '=', organizationId)
           .where('id', '=', review.id)
           .where('revision', '=', review.revision)
-          .where('status', '<>', 'closed')
           .executeTakeFirst();
         ensureUpdated(moved.numUpdatedRows, () =>
           errors.staleRevision(review.revision, review.revision + 1),
@@ -1092,7 +1143,8 @@ export class DuplicatesService {
 
   /**
    * Audits one record the merge re-pointed to the survivor (§4.4, §4.9, R4-LIFECYCLES-REVISIONS-03):
-   * a relationship, grant, staff membership or access review. No command moves a record from one
+   * a relationship, grant, staff membership, access review or account (or an account it disabled
+   * because the survivor keeps its own, `operation: 'disable'`). No command moves a record from one
    * person to another, so the merge is the audited action, recorded on the record itself with the
    * revision it moved from and to (the caller's revision-guarded write bumped it) and the merge's
    * operation, so the record's own history shows whom it pointed at before.
@@ -1101,7 +1153,9 @@ export class DuplicatesService {
     trx: Trx,
     write: MergeWrite,
     move: {
-      targetType: 'relationship' | 'access_grant' | 'staff_membership' | 'access_review';
+      targetType:
+        'relationship' | 'access_grant' | 'staff_membership' | 'access_review' | 'account';
+      operation?: 'move' | 'disable';
       targetId: string;
       revision: number;
       reason: string;
@@ -1119,7 +1173,12 @@ export class DuplicatesService {
       reason: move.reason,
       correlationId: write.correlationId,
       operationId: write.operationId,
-      details: { via: 'merge', operation: 'move', ...move.details, ...write.merge },
+      details: {
+        via: 'merge',
+        operation: move.operation ?? 'move',
+        ...move.details,
+        ...write.merge,
+      },
     });
   }
 

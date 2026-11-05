@@ -157,21 +157,33 @@ revision-guarded (and must still be unrevoked), audited as `identity.revoke_acce
 once as `identity.access_grant_revoked`; each other open candidate about the merged person is
 dismissed through `DuplicateCandidateMachine` with a revision bump and an `identity.dismiss_duplicate`
 audit record; all of them carry the merge's `operationId`. Every record the merge moves to the
-survivor (each relationship and grant, each staff membership not ended, each open access review) is
-moved under its row lock by a write guarded by the revision read under it that bumps the revision,
-and gets its own `identity.merge_persons` audit record on that record (`details.via: 'merge'`,
-`operation: 'move'`, the person ids it pointed at before and after, the merge's `operationId`); a
-moved staff membership is also announced as `identity.staff_membership_changed` naming its new
-holder. So a `PATCH` or end of a staff membership, or an access-review decision, sent with a revision
-read before the merge is refused with 409 `STALE_REVISION` (§4.4, §4.9; R4-LIFECYCLES-REVISIONS-03):
-a `restrict` decided on the review as it read before the merge would otherwise reach the survivor's
-own grants, which that reviewer never saw. The merge records no decision on a moved review.
+survivor (each active account, relationship and grant, each staff membership not ended, and each
+access review about the merged person that is open or still holds an unended suspension, since
+closing never lifts) is moved under its row lock by a write guarded by the revision read under it
+that bumps the revision, and gets its own `identity.merge_persons` audit record on that record
+(`details.via: 'merge'`, `operation: 'move'`, the person ids it pointed at before and after, the
+merge's `operationId`); an active account of the merged person that the merge disables (the survivor
+keeps its own) gets the same record with `operation: 'disable'`. A moved staff membership is also
+announced as `identity.staff_membership_changed` naming its new holder. So a `PATCH` or end of a
+moved staff membership, or a decision on a moved access review, sent with a revision read before the
+merge is refused with 409 `STALE_REVISION` (§4.4, §4.9; R4-LIFECYCLES-REVISIONS-03): a `restrict`
+decided on the review as it read before the merge would otherwise reach the survivor's own grants,
+which that reviewer never saw. A review about someone else (say, a child of the merged guardian) is
+not moved and keeps its revision; a `restrict` or `lift` on any review that names the merged person
+as `actorPersonId`, and `POST /access-reviews` about the merged person, are refused with 400
+`VALIDATION_FAILED` whose `details.mergedIntoPersonId` names the survivor (they would otherwise match
+none of the grants the merge re-pointed and still be recorded as made); naming the survivor reaches
+those grants. A closed review that restricts nothing any more is history and stays about the merged
+record (reachable through `personIdsResolvingTo`). The merge records no decision on a moved review.
 **Verified**: `__tests__/duplicates.spec.ts` "merge keeps history reachable …", "SPK-IAM-007 / §4.9:
-merge moves the account …" and "§4.9 / §4.4 (R4-LIFECYCLES-REVISIONS-03): every record a merge moves
-to the survivor bumps its revision …".
+merge moves the account …", "§4.9 / §4.4 (R4-LIFECYCLES-REVISIONS-03): every record a merge moves
+to the survivor bumps its revision …", "… a restrict or lift naming a merged actor on a review about
+someone else is refused naming the survivor …", "… an access review cannot be opened about a merged
+person record …" and "… a closed review whose restriction is still in force moves with the
+restricted grant …".
 
 Merge locking (§4.9): the merge locks the candidate and both persons, then the merged person's
-staff memberships not ended and the open access reviews about them (each in id order, before the
+staff memberships not ended and the access reviews about them it moves (each in id order, before the
 staff-assignment scope check reads those memberships and before any grant, in the same
 review-then-grants order as an access-review decision), then the merged person's active accounts,
 then each live relationship of the merged person (and the self-service relationships over the
@@ -179,18 +191,23 @@ survivor it ends) and that relationship's unrevoked grants, before reading them 
 holder's revocation, a review's restriction or decision, a staff membership change or end, or a
 recovery either commits first (and the merge reads the committed row: a revoked grant is no longer
 selected, a changed membership is scope-checked as committed) or waits for the merge and then sees
-its outcome (a moved membership or review at its new revision). Commands that attach a new row to a person (`POST /accounts` with a
-`personId`, `POST /staff-memberships`, `POST /households/{id}/members`, `POST /relationships`,
-`POST /people/{id}/claims`) share-lock the person before checking its status, so one racing a merge
-waits and is then refused instead of linking the row to the merged record behind the merge; `POST
+its outcome (a moved membership or review at its new revision). Commands that attach a new row to a
+person (`POST /accounts` with a `personId`, `POST /staff-memberships`, `POST /households/{id}/members`,
+`POST /relationships`, `POST /people/{id}/claims`, `POST /access-reviews`) share-lock the person
+before checking its status, so one racing a merge waits and is then refused instead of linking the
+row to the merged record behind the merge; an access-review `restrict` or `lift` that names an
+`actorPersonId` share-locks that person before the review (the merge's persons-then-reviews-then-grants
+order), so one racing a merge of the actor waits and is then refused naming the survivor; `POST
 /access-grants` share-locks the relationship, so a grant on a relationship the merge ends is refused
 (409 `INVALID_TRANSITION`). Invitation issue takes no person lock: acceptance refuses an acceptor
 who is not active and grants only over subjects that are still active (the others are reported as
 dropped). **Verified** (PGlite and PostgreSQL):
 `__tests__/merge-concurrency.spec.ts` (a holder revoking, or staff granting on, what a running merge
 has locked; a merge reaching a grant its holder is revoking; each person-scoped create racing a
-merge; a staff membership change and an access-review decision with a pre-merge revision waiting
-for a running merge and then refused `STALE_REVISION`) and `identity-concurrency.spec.ts` "§4.9 / SPK-IAM-007: a merge racing a recovery …".
+merge, `POST /access-reviews` included; a staff membership change and an access-review decision
+with a pre-merge revision waiting for a running merge and then refused `STALE_REVISION`; a
+`restrict` naming the actor being merged waiting and then refused) and `identity-concurrency.spec.ts`
+"§4.9 / SPK-IAM-007: a merge racing a recovery …".
 
 Several reviews may restrict the same grant (SPK-IAM-005, §4.6): each `restrict` records its own
 row in `access_grant_suspensions`, and `lift` ends only the deciding review's rows. A grant is

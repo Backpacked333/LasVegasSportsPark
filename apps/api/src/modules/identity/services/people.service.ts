@@ -46,6 +46,7 @@ import { IdentityEvents } from '../identity.events';
 import type { PersonDirectoryPort, PersonDisplayName, PersonSummary } from '../identity.ports';
 import {
   assertKindMatchesDateOfBirth,
+  canonicalPersonIdOf,
   displayNameOf,
   escapeLike,
   isUuid,
@@ -840,20 +841,8 @@ export class PeopleService implements PersonDirectoryPort {
     personId: string,
     trx?: Trx,
   ): Promise<string> {
-    const db = trx ?? executorFor(this.db);
-    let current = personId;
     // Merges form a chain (A→B, later B→C); follow it with a bounded walk.
-    for (let hop = 0; hop < 16; hop += 1) {
-      const row = await db
-        .selectFrom('persons')
-        .select('merged_into_person_id')
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', current)
-        .executeTakeFirst();
-      if (!row?.merged_into_person_id) return current;
-      current = row.merged_into_person_id;
-    }
-    return current;
+    return canonicalPersonIdOf(trx ?? executorFor(this.db), organizationId, personId);
   }
 
   // -------------------------------------------------------------------------------------------
