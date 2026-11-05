@@ -625,8 +625,27 @@ mirrored by a database transition guard.
   asset out of service and blocks every later occurrence until it is released (SPK-FAC-004); an
   asset in `restricted` that no restriction names stays unusable. Approval re-checks the same.
   R4-MODULE-BOUNDARIES-02, SPK-FAC-003, **Verified** `bookings.spec.ts` "SPK-FAC-003 / SPK-FAC-004
-  / SPK-COND-003 (R4-MODULE-BOUNDARIES-02): …"). Existing bookings that commit an asset whose
-  restriction is approved later are not flagged (restrictions close an area, SPK-FAC-003).
+  / SPK-COND-003 (R4-MODULE-BOUNDARIES-02): …"). A booking is accepted for its equipment as
+  facilities describes it then, so a party booked for a date after a still-active restriction's
+  window relies on that restriction being released in time. The booking keeps its reservation when
+  that changes, but the lifecycle job re-checks every live (held, awaiting staff, confirmed) booking
+  with equipment by the same rules, for its occurrences that have not ended, and raises
+  `enrollment.booking_equipment_unavailable` (owner `scheduler`, deadline the first affected
+  occurrence) once per booking and cause: a restriction approved later whose window meets an
+  occurrence, a restriction whose window passed without an authorized release (every later
+  occurrence, SPK-FAC-004), or an asset taken out of service, retired or put in `restricted`
+  without a restriction. The job settles it itself when the cause is gone (released, back in
+  service), a booking that ends settles its own, and one a scheduler resolved is not raised again
+  for the same cause (R4-MODULE-BOUNDARIES-02 rework, **Verified** `bookings.spec.ts` "SPK-COND-003
+  / SPK-FAC-003 / SPK-FAC-004 (R4-MODULE-BOUNDARIES-02): the lifecycle job flags …"). What the
+  scheduler then does (arranging the equipment, or a cancellation with its consequence) is
+  their call; nothing is cancelled automatically. **Pending** (a facilities change, not made
+  here): an asset's `restricted` status cannot say whether a person or a restriction set it; while
+  a restriction names the asset its window decides, so an asset put in `restricted` by hand and
+  also named by a restriction is bookable outside that window. Facilities refusing a direct
+  `restricted` on asset create and update (a restriction is the only way in; out of service is the
+  manual state) closes this; until then facilities' own release returns such an asset to service
+  the same way.
   Instant mode reserves the event or weekly series (every conflict first; a taken slot writes
   nothing), declares must-be-accepted staffing on every event, and opens the basket line with a
   server-owned hold on a one-place pool for the booking, all in one unit of work. Request mode
@@ -669,7 +688,8 @@ mirrored by a database transition guard.
   `enrollment.booking_lifecycle` (failure owner `scheduler`): undecided requests expire at their
   start, an unstaffed booking that starts raises the critical `enrollment.booking_started_unstaffed`
   once per unstaffed episode (`started_unstaffed_at`, 0514; covered again clears it), ended
-  bookings complete, and a booking whose every occurrence was cancelled is never completed. Reads:
+  bookings complete, a booking whose every occurrence was cancelled is never completed, and the
+  equipment of live bookings is re-checked per facility (above). Reads:
   `GET /v1/offerings/{id}/booking-availability`, `/v1/me/bookings`, `/v1/bookings/{id}` (booker or
   staff; anyone else NOT_FOUND), `/v1/bookings` (staff). `BOOKING_QUERY_IMPL` is provided (IF-36).
 - **Youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006; owner Proposed).** Approved

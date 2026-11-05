@@ -1089,6 +1089,8 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
       entitlementDefinitionId: definitionId,
       basePriceMinor: 0,
       ageBand: { minAgeYears: 18 },
+      // still open when the clock is moved past the restriction window below
+      registrationClosesAt: start(200),
     });
     useBookingTerms(setup.offeringId, await terms('instant'));
     const host = await booker(setup);
@@ -1135,34 +1137,211 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     refusedFor(await party(start(90, 21)));
     expect(await counts()).toEqual(counted);
 
+    // The clock stays after the window until the release has been shown to unblock the party:
+    // before the window, a party after it is accepted whether or not anything was released.
+    t.clock.set(start(91, 12));
     try {
       // The window has passed without an authorized release: the scoreboard is not back in
       // service, so a later party is refused until it is released (SPK-FAC-004).
-      t.clock.set(start(91, 12));
+      const elapsed = await counts();
       refusedFor(await party(start(110, 18)));
+      expect(await counts()).toEqual(elapsed);
+      await t.app
+        .get(RestrictionsService)
+        .release(systemPrincipal(t.organizationId, 'fixtures'), restriction.id, {
+          reason: 'Scoreboard repaired',
+        });
+      // Same clock, same party: only the release changed.
+      const released = await party(start(110, 18));
+      expect(released.status, JSON.stringify(released.body)).toBe(201);
+      expect(released.body).toMatchObject({ status: 'held', equipmentAssetIds: [assetId] });
+
+      // An asset put in `restricted` with no restriction (no window) stays unusable.
+      await t.db
+        .updateTable('assets')
+        .set({ status: 'restricted' })
+        .where('id', '=', assetId)
+        .execute();
+      refusedFor(await party(start(115, 18)));
     } finally {
+      await t.db
+        .updateTable('assets')
+        .set({ status: 'in_service' })
+        .where('id', '=', assetId)
+        .execute();
       t.clock.set(new Date(CLOCK_START));
     }
-    await t.app
-      .get(RestrictionsService)
-      .release(systemPrincipal(t.organizationId, 'fixtures'), restriction.id, {
-        reason: 'Scoreboard repaired',
-      });
-    const released = await party(start(110, 18));
-    expect(released.status, JSON.stringify(released.body)).toBe(201);
+  });
 
-    // An asset put in `restricted` with no restriction (no window) stays unusable.
-    await t.db
-      .updateTable('assets')
-      .set({ status: 'restricted' })
-      .where('id', '=', assetId)
-      .execute();
-    refusedFor(await party(start(115, 18)));
-    await t.db
-      .updateTable('assets')
-      .set({ status: 'in_service' })
-      .where('id', '=', assetId)
-      .execute();
+  it('SPK-COND-003 / SPK-FAC-003 / SPK-FAC-004 (R4-MODULE-BOUNDARIES-02): the lifecycle job flags a live booking whose equipment became unusable after it was accepted, once per cause, and settles the flag when the cause is gone or the booking ends', async () => {
+    const store = (
+      await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Equipment store 2',
+      })
+    ).resourceId;
+    const assetId = await seedAsset(t.db, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceId: store,
+      kind: 'scoreboard',
+      name: 'Scoreboard C',
+    });
+    const definitionId = await definitionWithScope(t, 'party_package' as never, {
+      durationMinutes: 120,
+      guestLimit: 12,
+      resources: { resourceIds: [fields[2]], count: 1 },
+      staffing: [],
+      equipmentAssetIds: [assetId],
+    });
+    const setup = await offering(t, {
+      kind: 'party' as never,
+      entitlementDefinitionId: definitionId,
+      basePriceMinor: 0,
+      ageBand: { minAgeYears: 18 },
+    });
+    useBookingTerms(setup.offeringId, await terms('instant'));
+    const host = await booker(setup);
+    const party = async (at: Date) => {
+      const res = await post(t, '/v1/bookings', host.header, {
+        offeringId: setup.offeringId,
+        start: at.toISOString(),
+        resourceIds: [fields[2]],
+        guestCount: 8,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      return res.body as { id: string; revision: number };
+    };
+    const flags = (bookingId: string) =>
+      t.db
+        .selectFrom('operational_exceptions')
+        .select(['id', 'status', 'owner_queue', 'details', 'resolution'])
+        .where('category', '=', 'enrollment.booking_equipment_unavailable')
+        .where('affected_id', '=', bookingId)
+        .orderBy('opened_at')
+        .orderBy('id')
+        .execute();
+    // Both accepted while the scoreboard is in service.
+    const meets = await party(start(120, 18));
+    const later = await party(start(130, 18));
+    expect(await flags(meets.id)).toEqual([]);
+
+    // A restriction approved afterwards over the first party's date: that party is flagged for
+    // the scheduler, the later one is not (its date is after the window, which is still ahead).
+    const restriction = await createActiveRestriction(t.app.get(RestrictionsService), {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceId: store,
+      assetId,
+      start: start(120, 15).toISOString(),
+      end: start(120, 23).toISOString(),
+      reason: 'Scoreboard repair',
+    });
+    await lifecycle();
+    await lifecycle();
+    const raised = await flags(meets.id);
+    expect(raised).toHaveLength(1);
+    expect(raised[0]).toMatchObject({
+      status: 'open',
+      owner_queue: 'scheduler',
+      details: {
+        bookingId: meets.id,
+        assetId,
+        restrictionId: restriction.id,
+        restrictionElapsedUnreleased: false,
+        affectedOccurrenceStarts: [start(120, 18).toISOString()],
+      },
+    });
+    expect(await flags(later.id)).toEqual([]);
+    // A scheduler handles it (another scoreboard is brought in): it is not raised again.
+    await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) =>
+        t.app
+          .get(OperationalExceptions)
+          .transition(
+            trx,
+            systemPrincipal(t.organizationId, 'test.scheduler'),
+            raised[0]!.id,
+            'resolved',
+            { reason: 'Spare scoreboard arranged' },
+          ),
+      );
+    await lifecycle();
+    expect((await flags(meets.id)).map((e) => e.status)).toEqual(['resolved']);
+
+    try {
+      // The window passes without an authorized release: the scoreboard stays out of service
+      // (SPK-FAC-004), so the later party, accepted for a date after the window, is flagged.
+      t.clock.set(start(121, 12));
+      await lifecycle();
+      const elapsed = await flags(later.id);
+      expect(elapsed).toHaveLength(1);
+      expect(elapsed[0]).toMatchObject({
+        status: 'open',
+        details: {
+          restrictionId: restriction.id,
+          restrictionElapsedUnreleased: true,
+          affectedOccurrenceStarts: [start(130, 18).toISOString()],
+        },
+      });
+      // The release settles the flag; the job records that the cause is gone.
+      await t.app
+        .get(RestrictionsService)
+        .release(systemPrincipal(t.organizationId, 'fixtures'), restriction.id, {
+          reason: 'Scoreboard repaired',
+        });
+      await lifecycle();
+      expect(await flags(later.id)).toMatchObject([
+        { status: 'resolved', resolution: { outcome: 'equipment_usable_again' } },
+      ]);
+
+      // Taken out of service by hand: flagged again (a new cause), back in service: settled, out
+      // of service again: raised again, since the job, not a person, settled the last one.
+      // Each step a minute later, so the flags read back in the order they were raised.
+      const outOfService = async (status: 'out_of_service' | 'in_service') => {
+        t.clock.advance(60_000);
+        await t.db.updateTable('assets').set({ status }).where('id', '=', assetId).execute();
+      };
+      await outOfService('out_of_service');
+      await lifecycle();
+      expect((await flags(later.id)).map((e) => e.status)).toEqual(['resolved', 'open']);
+      expect((await flags(later.id))[1]!.details).toMatchObject({
+        assetId,
+        restrictionId: null,
+        assetState: 'out_of_service',
+      });
+      await outOfService('in_service');
+      await lifecycle();
+      expect((await flags(later.id)).map((e) => e.status)).toEqual(['resolved', 'resolved']);
+      await outOfService('out_of_service');
+      await lifecycle();
+      expect((await flags(later.id)).map((e) => e.status)).toEqual([
+        'resolved',
+        'resolved',
+        'open',
+      ]);
+
+      // The booking ends: its own status change settles what is still open.
+      const canceled = await post(t, `/v1/bookings/${later.id}/cancel`, host.header, {
+        reason: 'No scoreboard',
+        expectedRevision: later.revision,
+      });
+      expect(canceled.status, JSON.stringify(canceled.body)).toBe(200);
+      expect((await flags(later.id)).map((e) => e.status)).toEqual([
+        'resolved',
+        'resolved',
+        'resolved',
+      ]);
+    } finally {
+      await t.db
+        .updateTable('assets')
+        .set({ status: 'in_service' })
+        .where('id', '=', assetId)
+        .execute();
+      t.clock.set(new Date(CLOCK_START));
+    }
   });
 
   it('DEC-016: creating a rental while rentals is disabled answers CAPABILITY_DISABLED; cancellation still works', async () => {
