@@ -1,9 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  systemPrincipal,
-  type AssignmentKind,
-  type AssignmentTargetType,
-} from '@sportspark/contracts';
+import type { AssignmentKind, AssignmentTargetType } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { sql } from 'kysely';
 import {
@@ -35,6 +31,7 @@ import {
   type AssignmentRow,
   type RequirementRow,
 } from '../workforce.shared';
+import { settleIfStillOpen } from './exception-settlement';
 import { QualificationsService } from './qualifications.service';
 import { lockRequirementKey, lockRequirementShared } from './requirement-locks';
 
@@ -598,18 +595,20 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
       .where('status', 'in', ['open', 'acknowledged'])
       .executeTakeFirst();
     if (!open) return null;
-    await this.exceptions.transition(
+    // An operator may have settled the card meanwhile; that never fails the acceptance.
+    const settled = await settleIfStillOpen(
+      this.exceptions,
       trx,
-      systemPrincipal(row.organization_id, 'workforce.coverage'),
+      row.organization_id,
       open.id,
       'resolved',
       {
         reason: `Slot covered by accepted assignment ${row.id}.`,
         resolution: { coveredByAssignmentId: row.id, personId: row.person_id },
-        correlationId: correlationId ?? undefined,
+        correlationId,
       },
     );
-    return open.id;
+    return settled ? open.id : null;
   }
 
   /** Whether the target has an open (or acknowledged) uncovered-slot exception. */
@@ -631,7 +630,8 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
   /**
    * Closes the target's open uncovered-slot exceptions when the activity itself is canceled,
    * postponed or unscheduled (SPK-UX-006: the queue reflects reality; SPK-AT-012). They stay as
-   * history. Idempotent under replay: only open or acknowledged exceptions match.
+   * history. Idempotent under replay: only open or acknowledged exceptions match, and one an
+   * operator settles meanwhile is skipped ({@link settleIfStillOpen}). Returns the closed ids.
    */
   async closeUncovered(
     trx: Trx,
@@ -642,22 +642,26 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     correlationId: string | null,
   ): Promise<string[]> {
     const open = await this.openUncovered(trx, organizationId, targetType, targetId).execute();
+    const closed: string[] = [];
     for (const exception of open) {
-      await this.exceptions.transition(
+      const settled = await settleIfStillOpen(
+        this.exceptions,
         trx,
-        systemPrincipal(organizationId, 'workforce.coverage'),
+        organizationId,
         exception.id,
         'closed',
-        { reason, correlationId: correlationId ?? undefined },
+        { reason, correlationId },
       );
+      if (settled) closed.push(exception.id);
     }
-    return open.map((e) => e.id);
+    return closed;
   }
 
   /**
    * WRK-02: a retired requirement needs no covering, so the open (or acknowledged) uncovered-slot
    * exceptions of its role on the target are resolved, naming the retirement. They stay as
-   * history; idempotent (only open or acknowledged exceptions match).
+   * history; idempotent (only open or acknowledged exceptions match, and one an operator settles
+   * meanwhile is skipped, {@link settleIfStillOpen}).
    */
   async resolveUncoveredOfRetired(
     trx: Trx,
@@ -687,14 +691,67 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
     for (const exception of open) {
       const key = exception.dedupe_key;
       if (!key || !prefixes.some((prefix) => key.startsWith(prefix))) continue;
-      await this.exceptions.transition(
+      const settled = await settleIfStillOpen(
+        this.exceptions,
         trx,
-        systemPrincipal(organizationId, 'workforce.coverage'),
+        organizationId,
         exception.id,
         'resolved',
-        { reason, resolution, correlationId: correlationId ?? undefined },
+        { reason, resolution, correlationId },
       );
-      resolved.push(exception.id);
+      if (settled) resolved.push(exception.id);
+    }
+    return resolved;
+  }
+
+  /**
+   * R4-OPS-MODULES-08 (SPK-UX-006, SPK-STAFF-003, SPK-AT-012): after an edit of the requirement
+   * (`requirement` is the row as the edit wrote it), a slot it no longer requires needs no
+   * covering, so that slot's open (or acknowledged) uncovered-slot exception is resolved: every
+   * slot above the required count, or every slot once acceptance is no longer demanded (the facts
+   * under which {@link escalateIfUncovered} would not raise it). Exceptions of slots still required
+   * stay open. The caller holds the requirement row `FOR UPDATE`, which every escalation and
+   * acceptance waits for (they take its share lock first), and each slot's lock is taken as an
+   * escalation or a resolution takes it. They stay as history; idempotent under replay (only open
+   * or acknowledged exceptions match). An operator settling the card on Today takes neither lock,
+   * so the exception is re-read under its own row lock after the slot's and skipped when it is
+   * settled by then: a card closed or resolved meanwhile never fails the edit (R4-OPS-MODULES-08
+   * rework, {@link settleIfStillOpen}). Returns the resolved exception ids.
+   */
+  async resolveUncoveredNoLongerRequired(
+    trx: Trx,
+    requirement: RequirementRow,
+    reason: string,
+    resolution: Record<string, unknown>,
+    correlationId: string | null,
+  ): Promise<string[]> {
+    const { organization_id: organizationId, target_type, target_id, role } = requirement;
+    const prefix = `${UNCOVERED_ASSIGNMENT}:${target_type}:${target_id}:${role}:`;
+    const open = await this.openUncovered(trx, organizationId, target_type, target_id)
+      .select('dedupe_key')
+      .execute();
+    const resolved: string[] = [];
+    for (const exception of open) {
+      const key = exception.dedupe_key;
+      if (!key?.startsWith(prefix)) continue;
+      const rest = key.slice(prefix.length);
+      if (!/^[1-9]\d*$/.test(rest)) continue;
+      const slot = Number(rest);
+      if (requirement.must_be_accepted && slot <= requirement.required_count) continue;
+      await this.lockSlotOf(trx, organizationId, target_type, target_id, role, slot);
+      const settled = await settleIfStillOpen(
+        this.exceptions,
+        trx,
+        organizationId,
+        exception.id,
+        'resolved',
+        {
+          reason: `Slot ${slot} is no longer required: ${reason}`,
+          resolution: { ...resolution, slot },
+          correlationId,
+        },
+      );
+      if (settled) resolved.push(exception.id);
     }
     return resolved;
   }
@@ -718,7 +775,25 @@ export class CoverageService implements AssignmentCheckPort, AssignmentCoverageP
 
   /** Transaction-scoped lock of one required slot (escalation and resolution are serialized). */
   private async lockSlot(trx: Trx, row: AssignmentRow): Promise<void> {
-    const key = `workforce.slot:${uncoveredDedupeKey(row.target_type, row.target_id, row.role, row.slot)}:${row.organization_id}`;
+    await this.lockSlotOf(
+      trx,
+      row.organization_id,
+      row.target_type,
+      row.target_id,
+      row.role,
+      row.slot,
+    );
+  }
+
+  private async lockSlotOf(
+    trx: Trx,
+    organizationId: string,
+    targetType: AssignmentTargetType,
+    targetId: string,
+    role: string,
+    slot: number,
+  ): Promise<void> {
+    const key = `workforce.slot:${uncoveredDedupeKey(targetType, targetId, role, slot)}:${organizationId}`;
     await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(trx);
   }
 }

@@ -180,6 +180,27 @@ export class RequirementsService {
       });
       const row = (await this.load(trx, organizationId, id)) as RequirementRow;
       await this.notify(trx, row, correlationId);
+      // R4-OPS-MODULES-08 (SPK-UX-006, SPK-STAFF-003, SPK-AT-012): a slot the edit no longer
+      // requires (above a lowered count, or every slot once acceptance is not demanded) needs no
+      // covering, so its open uncovered-slot exception is resolved here, naming this revision, as a
+      // retirement resolves its role's (WRK-02). Under the row's FOR UPDATE lock, which an
+      // escalation or an acceptance of the role waits for, so neither commits beside this edit.
+      const role = row.role.replaceAll('_', ' ');
+      const settled = row.must_be_accepted
+        ? `the ${role} requirement now needs ${row.required_count} accepted`
+        : `the ${role} requirement no longer demands acceptance`;
+      await this.coverage.resolveUncoveredNoLongerRequired(
+        trx,
+        row,
+        `${settled} (revision ${row.revision}).${body.reason ? ` ${body.reason}` : ''}`,
+        {
+          requirementId: row.id,
+          requirementRevision: row.revision,
+          requiredCount: row.required_count,
+          mustBeAccepted: row.must_be_accepted,
+        },
+        correlationId,
+      );
       // A change of the qualifications, or of the count (a slot brought back under the
       // requirement), can leave an accepted assignee unqualified. R2-RACES-02: this runs under the
       // requirement row's FOR UPDATE lock, which a concurrent revocation's flagging waits for (it
@@ -188,6 +209,16 @@ export class RequirementsService {
       if (body.requiredQualifications !== undefined || body.requiredCount !== undefined) {
         await this.flagUnqualified(trx, row);
       }
+      // R4-OPS-MODULES-08 rework (SPK-UX-006, SPK-STAFF-001): and the reverse. An accepted
+      // assignment the edit no longer makes unqualified (its slot above a lowered count, or its
+      // assignee holding every qualification the requirement now names) has its open
+      // `workforce.unqualified_assignment` card resolved, naming this revision, under the same lock.
+      await this.qualifications.resolveUnqualifiedNoLongerLacking(
+        trx,
+        row,
+        body.reason ?? null,
+        correlationId,
+      );
       return this.view(trx, row);
     });
   }
