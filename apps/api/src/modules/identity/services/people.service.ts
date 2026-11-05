@@ -299,9 +299,16 @@ export class PeopleService implements PersonDirectoryPort {
       if (current.status === 'merged') {
         throw errors.invalidTransition('Person', 'merged', 'update');
       }
-      const dateOfBirth =
-        input.dateOfBirth === undefined ? current.date_of_birth : input.dateOfBirth;
-      assertKindMatchesDateOfBirth(current.kind, dateOfBirth, this.clock.now());
+      // §4.5 (R4-PRIVACY-02): kind is fixed when the record is made, and age moves with the clock,
+      // so only a date of birth this command changes is checked against the kind. A child record
+      // whose person has since reached ADULT_AGE_YEARS stays editable (names, status) and stays a
+      // child record: what happens at majority is pending (DEC-004, README "Policy defaults").
+      const dateOfBirthChanges =
+        input.dateOfBirth !== undefined && input.dateOfBirth !== current.date_of_birth;
+      const dateOfBirth = dateOfBirthChanges ? (input.dateOfBirth ?? null) : current.date_of_birth;
+      if (dateOfBirthChanges) {
+        assertKindMatchesDateOfBirth(current.kind, dateOfBirth, this.clock.now());
+      }
       // A staff role that covers person updates, not staff kind alone (SPK-IAM-001).
       if (
         input.status !== undefined &&

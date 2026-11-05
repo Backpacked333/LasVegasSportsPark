@@ -249,7 +249,22 @@ ids in history; they read through `personIdsResolvingTo`, IF-21).
 
 ## Policy defaults (proposed, pending operator decisions §6.6)
 
-- Adult age is 18 (`ADULT_AGE_YEARS`); kind must agree with the date of birth when known.
+- Adult age is 18 (`ADULT_AGE_YEARS`); kind must agree with the date of birth when known. Kind is
+  fixed when the record is made, so the check runs at creation and on a `PATCH /people/{id}` that
+  changes the date of birth; a change of names or status (or the stored date of birth sent back
+  unchanged) is not re-checked, and a child record stays editable after its person turns 18
+  (R4-PRIVACY-02; **Verified**: `__tests__/people.spec.ts` "§4.5 / DEC-004 (R4-PRIVACY-02): a
+  child record stays editable after its person turns 18 …").
+- **Pending decision** (DEC-004, Operator/privacy owner): the transition at majority. Nothing
+  re-evaluates `persons.kind` when a child's date of birth passes `ADULT_AGE_YEARS`, and the code
+  decides none of the following until the operator does: whether guardians' grants over the person
+  end, are suspended or continue (today they continue unchanged); whether the person gains self
+  authority (today `CHILD_SELF_EXCLUDED` still withholds `pay` and `collect` over themselves, and
+  they are not their own message recipient); whether staff may change the record's kind from child
+  to adult (no command does today); whether the person may self-claim the record (today a child
+  record cannot be self-claimed); and how a date-of-birth correction on such a record is made
+  (today a changed date of birth must still agree with kind `child`, so it is refused once the
+  person is 18 or older).
 - An adult customer may create a child record and become its guardian without staff review
   (guardian verification and child-account policy: pending). Because that guardianship is
   unverified, a merge never carries it to another record.
