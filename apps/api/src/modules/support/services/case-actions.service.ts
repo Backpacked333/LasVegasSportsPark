@@ -73,6 +73,37 @@ function refundsPausedForRecovery(): DomainError {
 /** Finance refund states in which a refund moved no money and holds no reservation. */
 const REFUND_NO_EFFECT: readonly string[] = ['failed', 'canceled'];
 
+/**
+ * R4-PROVIDER-OUTCOMES-03 (SPK-SUPPORT-003, §4.11 rule 4 "unknown kept explicit until
+ * reconciled"): what a finance refund's status says about the command a case asked for. Only a
+ * refund finance recorded as `succeeded` moved money, so only it is "action taken"; a `failed` or
+ * `canceled` one moved none; a `requested`, `processing` or `unknown` one is not settled yet and
+ * is no outcome until finance reconciles it.
+ */
+function refundOutcomeOf(status: string): 'succeeded' | 'failed' | 'pending' {
+  if (status === 'succeeded') return 'succeeded';
+  if (REFUND_NO_EFFECT.includes(status)) return 'failed';
+  return 'pending';
+}
+
+/** The refusal of a refund as the evidence of an effective command (link and review). */
+function refundNotEffective(
+  refund: { id: string; status: string } | null | undefined,
+  refundId: string,
+) {
+  const status = refund?.status ?? 'missing';
+  if (refund && refundOutcomeOf(refund.status) === 'pending') {
+    return errors.resourceConflict(
+      `Finance has not settled this refund yet (${status}): it is not a succeeded outcome until finance reconciles it.`,
+      { code: 'REFUND_OUTCOME_PENDING', refundId, status },
+    );
+  }
+  return errors.resourceConflict(
+    `Finance recorded this refund as ${status}: it is not a succeeded outcome.`,
+    { code: 'REFUND_NOT_EFFECTIVE', refundId, status },
+  );
+}
+
 /** What a refund helper asked finance for, as recorded with its intent (case_actions.input). */
 interface RefundRequestOf {
   organizationId: string;
@@ -206,6 +237,18 @@ export class CaseActionsService {
         );
         if (definition.id === FinanceActions.refund.id && evidence.audit) {
           await this.assertNotAnOutstandingHelpersRefund(trx, organizationId, evidence.audit);
+        }
+        // R4-PROVIDER-OUTCOMES-03 (SPK-SUPPORT-003): a linked action is a succeeded outcome, and a
+        // refund is one only once finance recorded it as succeeded — a declined refund, or one the
+        // provider has not settled, is not "action taken".
+        if (
+          definition.id === FinanceActions.refund.id &&
+          evidence.record?.type === 'refund_attempt'
+        ) {
+          const refund = await this.refunds.load(trx, organizationId, evidence.record.id);
+          if (!refund || refundOutcomeOf(refund.status) !== 'succeeded') {
+            throw refundNotEffective(refund, evidence.record.id);
+          }
         }
         const action = await this.record(trx, {
           row,
@@ -376,6 +419,20 @@ export class CaseActionsService {
           code: 'NOT_ADDRESSED_TO_SUBJECT',
         });
       }
+      // R4-COMMS-AUTOMATION-04 (SPK-COMMS-005 "a stale 'moved' never arrives after the
+      // cancellation"): a notice a newer one replaced — superseded once dispatched, or suppressed
+      // as obsolete before it was — carries outdated practical details, so it is not resent; the
+      // same answer as communications' own delivery retry. Nothing is recorded.
+      const stale = original.notification;
+      if (
+        stale.supersededByNotificationId !== null ||
+        (stale.status === 'suppressed' && stale.suppressionReason === 'obsolete')
+      ) {
+        throw errors.resourceConflict('A newer notice replaced this one; it is not resent.', {
+          code: 'NOTICE_SUPERSEDED',
+          supersededByNotificationId: stale.supersededByNotificationId,
+        });
+      }
       const supportOperationId = await this.operations.create(trx, {
         organizationId,
         kind: 'support.resend_notification',
@@ -464,7 +521,11 @@ export class CaseActionsService {
    * `unknown` at once; if the process fails before any outcome is recorded, the follow-up moves the
    * action to `unknown` after the grace period (§4.7 invariant 12). Either way an owned exception
    * asks finance to check, and a retry with the same idempotency key is refused rather than
-   * requesting a second refund (§4.7 invariant 5).
+   * requesting a second refund (§4.7 invariant 5). When finance answers, the outcome recorded is
+   * the refund's own status (R4-PROVIDER-OUTCOMES-03): `succeeded` only for a refund finance
+   * recorded as succeeded, `failed` (REFUND_NOT_EFFECTIVE) for one the provider declined or that
+   * was canceled, and `unknown` (REFUND_OUTCOME_PENDING, with the finance-owned exception) for one
+   * the provider has not settled — the response is 201 with that action either way.
    */
   async requestRefund(
     principal: Principal,
@@ -591,19 +652,44 @@ export class CaseActionsService {
     const evidence = refund.operationId
       ? null
       : await this.refundAuditFor(principal, input, pending, correlationId);
+    const linked = {
+      commandOperationId: refund.operationId,
+      auditRecordId: evidence,
+      record: { type: 'refund_attempt', id: refund.id },
+    };
+    // R4-PROVIDER-OUTCOMES-03 (SPK-SUPPORT-003, §4.11 rule 4): finance answers a refund the
+    // provider declined with the refund `failed` (its reservation released), not with an error,
+    // and one the provider has not settled with `processing` or `unknown`. The outcome recorded is
+    // finance's, read the same way as the periodic job and a reviewer read it (refundOutcomeOf).
+    const outcome = refundOutcomeOf(refund.status);
+    const facts = { refundId: refund.id, refundStatus: refund.status };
     const action = await this.settleHelper(
       principal,
       caseId,
       pending,
       supportOperationId,
       correlationId,
-      {
-        status: 'succeeded',
-        commandOperationId: refund.operationId,
-        auditRecordId: evidence,
-        record: { type: 'refund_attempt', id: refund.id },
-        result: { refundId: refund.id, status: refund.status },
-      },
+      outcome === 'succeeded'
+        ? { status: 'succeeded', ...linked, result: { refundId: refund.id, status: refund.status } }
+        : outcome === 'failed'
+          ? {
+              status: 'failed',
+              ...linked,
+              error: {
+                code: 'REFUND_NOT_EFFECTIVE',
+                message: `Finance recorded the refund as ${refund.status}; nothing was refunded.`,
+                details: { ...facts, failureReason: refund.failureReason },
+              },
+            }
+          : {
+              status: 'unknown',
+              ...linked,
+              error: {
+                code: 'REFUND_OUTCOME_PENDING',
+                message: `Finance has not settled the refund yet (${refund.status}); it is recorded once finance reconciles it.`,
+                details: facts,
+              },
+            },
     );
     return {
       case: await this.cases.detail(this.uowReader(), organizationId, caseId),
@@ -835,7 +921,9 @@ export class CaseActionsService {
         facilityId: row.facility_id,
         category: CASE_ACTION_STALE_CATEGORY,
         severity: 'warning',
-        title: `A ${current.action_id} requested from support case "${row.title.slice(0, 80)}" has no recorded outcome yet`,
+        // R4-PRIVACY-05 (§4.14): identifiers and enumerations only — the case title is the
+        // customer's free text, and the owner queue (finance for refunds) may not read the case.
+        title: `A ${current.action_id} requested from a support case has no recorded outcome yet`,
         affectedType: 'case_action',
         affectedId: current.id,
         ownerQueue: this.outcomeQueue(current.action_id),
@@ -875,21 +963,30 @@ export class CaseActionsService {
   /**
    * The owning module's outcome of a helper request, or null while it reports none. A refund
    * helper reads the refunds its request ran (RefundsService through the request's correlation
-   * id): an effective one is the outcome (unless it already evidences another case action, which
-   * a reviewer must untangle), and only failed or canceled ones mean `failed`. A resend is
-   * recorded with its request in one transaction, so no other helper is ever left `requested`
-   * with an outcome to read; communications exposes no lookup of a resend by correlation id.
+   * id): a succeeded one is the outcome (unless it already evidences another case action, which
+   * a reviewer must untangle), only failed or canceled ones mean `failed`, and one finance has not
+   * settled yet (requested, processing, unknown) leaves the request without an outcome
+   * (R4-PROVIDER-OUTCOMES-03). A resend is recorded with its request in one transaction, so no
+   * other helper is ever left `requested` with an outcome to read; communications exposes no
+   * lookup of a resend by correlation id.
    */
   private async ownerOutcome(trx: Trx, current: CaseActionRow): Promise<OwnerOutcome | null> {
     if (current.action_id !== FinanceActions.refund.id) return null;
     const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, current), trx);
     if (matches.length === 0) return null;
     let failed: { id: string; status: string } | null = null;
+    let unsettled = false;
     for (const match of matches) {
       const refund = await this.refunds.load(trx, current.organization_id, match.targetId);
       if (!refund) continue;
-      if (REFUND_NO_EFFECT.includes(refund.status)) {
+      const outcome = refundOutcomeOf(refund.status);
+      if (outcome === 'failed') {
         failed ??= { id: refund.id, status: refund.status };
+        continue;
+      }
+      // R4-PROVIDER-OUTCOMES-03: a refund finance has not settled yet is no outcome to record.
+      if (outcome === 'pending') {
+        unsettled = true;
         continue;
       }
       const elsewhere = await trx
@@ -912,7 +1009,7 @@ export class CaseActionsService {
         record: { type: 'refund_attempt', id: refund.id },
       };
     }
-    if (!failed) return null;
+    if (!failed || unsettled) return null;
     return {
       status: 'failed',
       record: { type: 'refund_attempt', id: failed.id },
@@ -940,7 +1037,9 @@ export class CaseActionsService {
       facilityId: row.facility_id,
       category: HELPER_OUTCOME_UNKNOWN_CATEGORY,
       severity: 'high',
-      title: `A refund requested from support case "${row.title.slice(0, 80)}" has no recorded outcome`,
+      // R4-PRIVACY-05 (§4.14): identifiers and enumerations only (see settleOneStale); readers
+      // who may open the case find it through details.caseId.
+      title: 'A refund requested from a support case has no recorded outcome',
       affectedType: 'case_action',
       affectedId: action.id,
       ownerQueue: REFUND_OUTCOME_QUEUE,
@@ -1166,8 +1265,8 @@ export class CaseActionsService {
    * support-migration-08 (SPK-SUPPORT-003): the evidence of a helper's succeeded outcome is the
    * command this request ran — recorded after the request, for a refund the same payment and
    * amount under the request's correlation id (finance's audit record of `finance.refund`), of a
-   * refund finance did not record as failed or canceled — and is not already another case
-   * action's evidence (one command settles one request).
+   * refund finance recorded as succeeded (R4-PROVIDER-OUTCOMES-03) — and is not already another
+   * case action's evidence (one command settles one request).
    */
   private async assertEvidenceOfRequest(
     trx: Trx,
@@ -1187,11 +1286,10 @@ export class CaseActionsService {
       const matches = await this.refundAuditsOf(await this.refundRequestOf(trx, current), trx);
       if (!matches.some((m) => m.id === audit.id)) throw notOfThisRequest();
       const refund = await this.refunds.load(trx, current.organization_id, audit.targetId);
-      if (!refund || REFUND_NO_EFFECT.includes(refund.status)) {
-        throw errors.resourceConflict(
-          `Finance recorded this refund as ${refund?.status ?? 'missing'}: it is not a succeeded outcome.`,
-          { code: 'REFUND_NOT_EFFECTIVE', refundId: audit.targetId, status: refund?.status },
-        );
+      // R4-PROVIDER-OUTCOMES-03: finance's record wins over a reviewer's statement — only a refund
+      // finance recorded as succeeded settles the request `succeeded`.
+      if (!refund || refundOutcomeOf(refund.status) !== 'succeeded') {
+        throw refundNotEffective(refund, audit.targetId);
       }
     }
     const elsewhere = await trx

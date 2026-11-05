@@ -3,7 +3,7 @@ import { sql, type SqlBool } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RecoveryMode, UnitOfWork } from '../../../kernel';
 import { createTestApp, staffPrincipal, type TestApp } from '../../../testing';
-import { createCapturedPaymentFixture, RefundsService } from '../../finance';
+import { createCapturedPaymentFixture, FakePaymentProvider, RefundsService } from '../../finance';
 import { createOrganizationPeople, type OrganizationPeople } from '../../identity';
 import { MigrationModule, createAuthorityAssignmentFixture } from '../../migration';
 import { CaseActionsService } from '../services/case-actions.service';
@@ -729,6 +729,272 @@ describe('case actions (SPK-SUPPORT-003)', () => {
     expect(res.status).toBe(409);
     const action = (await get(t, `/v1/cases/${caseId}`, manager)).body.actions[0];
     expect(action.status).toBe('unknown');
+  });
+
+  /** The support operation, finance refund and finance operation behind a helper action. */
+  const refundFacts = async (paymentAttemptId: string, supportOperationId: string) => {
+    const refund = await t.db
+      .selectFrom('refund_attempts')
+      .select(['id', 'status', 'reservation_status', 'operation_id'])
+      .where('payment_attempt_id', '=', paymentAttemptId)
+      .executeTakeFirstOrThrow();
+    const statusOf = async (id: string) =>
+      (
+        await t.db
+          .selectFrom('operations')
+          .select('status')
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow()
+      ).status;
+    return {
+      refund,
+      financeOperation: await statusOf(refund.operation_id as string),
+      supportOperation: await statusOf(supportOperationId),
+    };
+  };
+
+  it('R4-PROVIDER-OUTCOMES-03 / SPK-SUPPORT-003: a refund the provider declined is recorded failed, linking finance’s failed refund, and cannot justify action_taken', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 5000,
+    });
+    const caseId = await openCase(manager);
+    t.app.get(FakePaymentProvider).scriptRefunds('fail');
+    const res = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 2000,
+      reason: 'Charged twice for the same week',
+    });
+    // Finance answered (a declined refund is a recorded fact, not an error): 201 with the outcome.
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const facts = await refundFacts(payment.paymentAttemptId, res.body.action.supportOperationId);
+    expect(facts).toMatchObject({
+      refund: { status: 'failed', reservation_status: 'released' },
+      financeOperation: 'failed',
+      supportOperation: 'failed',
+    });
+    expect(res.body.action).toMatchObject({
+      actionId: 'finance.refund',
+      via: 'helper',
+      status: 'failed',
+      error: {
+        code: 'REFUND_NOT_EFFECTIVE',
+        details: { refundId: facts.refund.id, refundStatus: 'failed' },
+      },
+      commandOperationId: facts.refund.operation_id,
+      record: { type: 'refund_attempt', id: facts.refund.id },
+    });
+    // Finance's answer is the outcome: no question is left for anyone to work.
+    const exceptions = await t.db
+      .selectFrom('operational_exceptions')
+      .select('category')
+      .where('affected_id', '=', res.body.action.id)
+      .execute();
+    expect(exceptions).toEqual([]);
+    // The case cannot read "action taken" for a refund that never happened…
+    const resolve = await post(t, `/v1/cases/${caseId}/transition`, manager, {
+      event: 'resolve',
+      expectedRevision: res.body.case.revision,
+      resolution: { kind: 'action_taken', summary: 'Refunded' },
+    });
+    expect(resolve.status).toBe(409);
+    expect(resolve.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: { code: 'ACTION_REQUIRED' },
+    });
+    // …nor through linking the declined refund's audit record as an action the operator ran.
+    const audit = await t.db
+      .selectFrom('audit_records')
+      .select('id')
+      .where('action', '=', 'finance.refund')
+      .where('target_id', '=', facts.refund.id)
+      .executeTakeFirstOrThrow();
+    const linked = await post(t, `/v1/cases/${caseId}/actions`, manager, {
+      actionId: 'finance.refund',
+      auditRecordId: audit.id,
+    });
+    expect(linked.status).toBe(409);
+    expect(linked.body.details).toMatchObject({
+      code: 'REFUND_NOT_EFFECTIVE',
+      refundId: facts.refund.id,
+      status: 'failed',
+    });
+    const detail = await get(t, `/v1/cases/${caseId}`, manager);
+    expect(detail.body.actions.map((a: { status: string }) => a.status)).toEqual(['failed']);
+  });
+
+  it('R4-PROVIDER-OUTCOMES-03 / §4.11: a refund the provider has not settled is unknown until finance reconciles it; only then does it settle succeeded', async () => {
+    const payment = await createCapturedPaymentFixture(t, {
+      payerPersonId: people.adult.personId,
+      amountMinor: 5000,
+    });
+    const caseId = await openCase(manager);
+    const provider = t.app.get(FakePaymentProvider);
+    provider.scriptRefunds('processing');
+    const res = await post(t, `/v1/cases/${caseId}/request-refund`, manager, {
+      paymentAttemptId: payment.paymentAttemptId,
+      amountMinor: 1500,
+      reason: 'Charged twice for the same week',
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const action = res.body.action;
+    const facts = await refundFacts(payment.paymentAttemptId, action.supportOperationId);
+    expect(facts).toMatchObject({
+      refund: { status: 'processing', reservation_status: 'reserved' },
+      supportOperation: 'recovery_required',
+    });
+    expect(action).toMatchObject({
+      status: 'unknown',
+      error: { code: 'REFUND_OUTCOME_PENDING', details: { refundStatus: 'processing' } },
+      commandOperationId: facts.refund.operation_id,
+      record: { type: 'refund_attempt', id: facts.refund.id },
+    });
+    const exception = await t.db
+      .selectFrom('operational_exceptions')
+      .select(['id', 'category', 'owner_queue', 'status'])
+      .where('affected_id', '=', action.id)
+      .executeTakeFirstOrThrow();
+    expect(exception).toMatchObject({
+      category: 'support.helper_outcome_unknown',
+      owner_queue: 'finance_operator',
+      status: 'open',
+    });
+    const resolve = await post(t, `/v1/cases/${caseId}/transition`, manager, {
+      event: 'resolve',
+      expectedRevision: res.body.case.revision,
+      resolution: { kind: 'action_taken', summary: 'Refunded' },
+    });
+    expect(resolve.status).toBe(409);
+    expect(resolve.body.details).toMatchObject({ code: 'ACTION_REQUIRED' });
+    // Finance's record wins over a reviewer's statement either way while the refund is processing.
+    const early = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, manager, {
+      outcome: 'succeeded',
+      operationId: facts.refund.operation_id,
+      reason: 'The customer says the money arrived',
+    });
+    expect(early.status).toBe(409);
+    expect(early.body.details).toMatchObject({
+      code: 'REFUND_OUTCOME_PENDING',
+      refundId: facts.refund.id,
+      status: 'processing',
+    });
+    const assumed = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, manager, {
+      outcome: 'failed',
+      reason: 'Assumed nothing happened',
+    });
+    expect(assumed.status).toBe(409);
+    expect(assumed.body.details).toMatchObject({ code: 'REFUND_RECORDED_BY_FINANCE' });
+    // The provider settles the refund and finance reconciles it: now the evidence holds.
+    provider.settleRefund(facts.refund.id, 'succeeded');
+    await t.app.get(RefundsService).reconcile(t.organizationId, facts.refund.id, null);
+    const settled = await post(t, `/v1/cases/${caseId}/actions/${action.id}/settle`, manager, {
+      outcome: 'succeeded',
+      operationId: facts.refund.operation_id,
+      reason: 'Finance reconciled the refund as succeeded',
+    });
+    expect(settled.status, JSON.stringify(settled.body)).toBe(200);
+    expect(settled.body.action).toMatchObject({
+      status: 'succeeded',
+      record: { type: 'refund_attempt', id: facts.refund.id },
+    });
+    // A refund the operator ran in finance is linked only once finance settled it, too.
+    provider.scriptRefunds('processing');
+    const direct = await post(t, `/v1/payments/${payment.paymentAttemptId}/refunds`, manager, {
+      amountMinor: 500,
+      reason: 'Goodwill refund at the desk',
+    });
+    expect(direct.status, JSON.stringify(direct.body)).toBe(201);
+    expect(direct.body.status).toBe('processing');
+    const pendingLink = await post(t, `/v1/cases/${caseId}/actions`, manager, {
+      actionId: 'finance.refund',
+      operationId: direct.body.operationId,
+    });
+    expect(pendingLink.status).toBe(409);
+    expect(pendingLink.body.details).toMatchObject({
+      code: 'REFUND_OUTCOME_PENDING',
+      refundId: direct.body.id,
+      status: 'processing',
+    });
+    const resolved = await post(t, `/v1/cases/${caseId}/transition`, manager, {
+      event: 'resolve',
+      expectedRevision: settled.body.case.revision,
+      resolution: { kind: 'action_taken', summary: 'Refunded the duplicate week' },
+    });
+    expect(resolved.status, JSON.stringify(resolved.body)).toBe(200);
+  });
+
+  it('R4-COMMS-AUTOMATION-04 / SPK-COMMS-005: a notice a newer schedule change or a cancellation replaced is not resent from a case, and the current notice stays current', async () => {
+    const compose = async (kind: string, subjectId: string, title: string) => {
+      const composed = await post(t, '/v1/notifications', operator, {
+        kind,
+        subject: { type: 'event', id: subjectId },
+        title,
+        body: `${title}.`,
+        audience: { subjectPersonIds: [people.adult.personId] },
+      });
+      expect(composed.status, JSON.stringify(composed.body)).toBe(201);
+      const sent = await post(t, `/v1/notifications/${composed.body.id}/send`, operator, {});
+      expect(sent.status, JSON.stringify(sent.body)).toBeLessThan(300);
+      await drainOutbox(t);
+      return composed.body.id as string;
+    };
+    const noticeOf = (id: string) =>
+      t.db
+        .selectFrom('notifications')
+        .select(['status', 'superseded_by_notification_id'])
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+    const noticesAbout = async (subjectId: string) =>
+      (
+        await t.db
+          .selectFrom('notifications')
+          .select('id')
+          .where('subject_id', '=', subjectId)
+          .execute()
+      ).length;
+    const caseId = await openCase(operator);
+    // A schedule change a newer change replaced.
+    const moved = newId();
+    const at17 = await compose('schedule_changed', moved, 'Saturday game now at 17:00');
+    const at18 = await compose('schedule_changed', moved, 'Saturday game now at 18:00');
+    expect(await noticeOf(at17)).toMatchObject({ superseded_by_notification_id: at18 });
+    const stale = await post(t, `/v1/cases/${caseId}/resend-notification`, operator, {
+      notificationId: at17,
+      reason: 'Customer says the message never arrived',
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: { code: 'NOTICE_SUPERSEDED', supersededByNotificationId: at18 },
+    });
+    // Nothing was composed or recorded, and the 18:00 notice is still the current one.
+    expect(await noticesAbout(moved)).toBe(2);
+    expect(await noticeOf(at18)).toMatchObject({
+      status: 'dispatched',
+      superseded_by_notification_id: null,
+    });
+    // A schedule change followed by the cancellation: the stale "moved" never arrives after it.
+    const canceled = newId();
+    const movedFirst = await compose('schedule_changed', canceled, 'Sunday practice now at 9:00');
+    const cancellation = await compose('cancellation', canceled, 'Sunday practice canceled');
+    const afterCancel = await post(t, `/v1/cases/${caseId}/resend-notification`, operator, {
+      notificationId: movedFirst,
+      reason: 'Customer says the message never arrived',
+    });
+    expect(afterCancel.status).toBe(409);
+    expect(afterCancel.body.details).toMatchObject({
+      code: 'NOTICE_SUPERSEDED',
+      supersededByNotificationId: cancellation,
+    });
+    expect(await noticesAbout(canceled)).toBe(2);
+    expect((await get(t, `/v1/cases/${caseId}`, operator)).body.actions).toEqual([]);
+    // The notice that is current can still be resent.
+    const current = await post(t, `/v1/cases/${caseId}/resend-notification`, operator, {
+      notificationId: cancellation,
+      reason: 'Customer says the message never arrived',
+    });
+    expect(current.status, JSON.stringify(current.body)).toBe(201);
+    expect(current.body.action).toMatchObject({ status: 'succeeded' });
   });
 
   it('SPK-SUPPORT-003: the operator links a permission change they ran (audit record), only their own and only of the named command', async () => {
