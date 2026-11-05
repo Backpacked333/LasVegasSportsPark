@@ -683,7 +683,7 @@ export class TimelineService {
         // R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008): the provider reported a refund failed after
         // it was recorded succeeded; finance keeps the status and records the reversal, so no
         // money was returned and the timeline never shows it as refunded.
-        const reversed = r.reversedAt != null;
+        const reversed = r.reversedAt !== null && r.reversedAt !== undefined;
         return {
           at: g.at,
           id,
