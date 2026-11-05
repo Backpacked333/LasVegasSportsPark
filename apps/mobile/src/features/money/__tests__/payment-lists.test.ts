@@ -147,6 +147,12 @@ describe('SCR-C-34 payment list wording', () => {
     expect(refundStatus('processing').label).toBe('Refund processing');
     expect(refundStatus('succeeded').label).toBe('Refunded');
     expect(refundStatus('failed').label).toBe('Refund failed');
+    // R4-PROVIDER-OUTCOMES-02: a refund the provider reversed after success returned nothing.
+    expect(refundStatus('succeeded', '2026-10-25T09:00:00.000Z')).toEqual({
+      tone: 'danger',
+      label: 'Refund did not go through. The facility will contact you.',
+    });
+    expect(refundStatus('succeeded', null).label).toBe('Refunded');
   });
 });
 

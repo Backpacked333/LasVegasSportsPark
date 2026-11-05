@@ -95,7 +95,7 @@ function Refunds({ payment }: { payment: PaymentDetail }) {
             key={refund.id}
             title={`Refund of ${formatMoney(refund.amountMinor, refund.currency)}`}
             detail={`Requested ${formatInstant(refund.requestedAt)}`}
-            status={refundStatus(refund.status)}
+            status={refundStatus(refund.status, refund.reversedAt)}
             testID={`refund-${refund.id}`}
           />
         ))}
