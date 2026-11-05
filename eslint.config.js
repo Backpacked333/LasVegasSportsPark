@@ -8,6 +8,7 @@ module.exports = tseslint.config(
     ignores: [
       '**/node_modules/**',
       '**/dist/**',
+      '**/dist-demo/**',
       '**/coverage/**',
       '.claude/**',
       'docs/api/openapi.json',

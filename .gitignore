@@ -20,5 +20,8 @@ expo-env.d.ts
 apps/mobile/ios/
 apps/mobile/android/
 *.hbc
-# Vite (apps/staff): build output is dist/ above; local env files are .env.* above
+# Vite (apps/staff): build output is dist/ above (demo builds: dist-demo/); local env files are .env.* above
+dist-demo/
+# Demo database (pnpm demo)
+.pglite-demo/
 .vite/

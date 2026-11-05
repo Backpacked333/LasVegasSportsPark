@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:demo": "vite --mode demo",
     "build": "tsc -p tsconfig.json && vite build && node scripts/check-release-bundle.mjs dist",
+    "build:demo": "tsc -p tsconfig.json && vite build --mode demo",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",

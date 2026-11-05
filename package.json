@@ -23,6 +23,7 @@
     "openapi": "pnpm --filter @sportspark/api openapi",
     "api-client:generate": "pnpm --filter @sportspark/api-client generate",
     "build:staff": "pnpm --filter @sportspark/staff build",
+    "demo": "node scripts/demo.mjs",
     "export:mobile": "pnpm --filter @sportspark/mobile export:ios",
     "permission-matrix": "pnpm --filter @sportspark/api permission-matrix",
     "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"

@@ -42,6 +42,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         : process.env.SPORTSPARK_SUPERVISED_PICKUP === 'false'
           ? false
           : null,
+    // `demo` turns on demo mode (src/demo) in development builds: a parent sign-in with sample
+    // data and a guided tour. Set by `pnpm demo --mobile` with the seeded accounts.
+    appMode: process.env.SPORTSPARK_APP_MODE === 'demo' ? 'demo' : 'real',
+    demoAccounts: process.env.SPORTSPARK_DEMO_ACCOUNTS ?? null,
     // How customers reach the facility for help (SCR-C-38): facility facts, unset until the
     // operator provides them (support coverage is DEC-015).
     supportContact: {

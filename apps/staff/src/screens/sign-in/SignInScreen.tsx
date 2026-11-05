@@ -5,6 +5,7 @@
  */
 import { Suspense } from 'react';
 import { useLocation } from 'react-router';
+import { DemoRolePicker } from '../../demo';
 import { DevSignIn } from '../../dev';
 import { StateView } from '../../ui/StateView';
 
@@ -15,7 +16,11 @@ export function SignInScreen() {
     <main id="main" className="shell-main">
       <h1>Sportspark staff</h1>
       {expired ? <p role="status">Your session ended. Sign in again.</p> : null}
-      {DevSignIn ? (
+      {DemoRolePicker ? (
+        <Suspense fallback={<StateView variant="loading" label="demo roles" />}>
+          <DemoRolePicker />
+        </Suspense>
+      ) : DevSignIn ? (
         <Suspense fallback={<StateView variant="loading" label="sign-in" />}>
           <DevSignIn />
         </Suspense>

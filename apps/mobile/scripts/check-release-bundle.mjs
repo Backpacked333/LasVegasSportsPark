@@ -1,6 +1,6 @@
 // Release-bundle smoke check (§6.2: a successful export is not native acceptance). Verifies that
-// `expo export` produced a bundle and that the development sign-in and the development payment
-// method (fake provider tokens) are not in it (§5.2). Bundles may be Hermes bytecode, so files are
+// `expo export` produced a bundle and that the development sign-in, the demo mode and the
+// development payment method (fake provider tokens) are not in it (§5.2). Bundles may be Hermes bytecode, so files are
 // searched as bytes.
 import { Buffer } from 'node:buffer';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -13,6 +13,9 @@ const MARKERS = [
   'Development payment method',
   'Development payment:',
   'pm_fake_',
+  // Demo mode (src/demo) is development-server only.
+  'Sign in as the parent',
+  'Family tour',
 ];
 
 function files(root) {

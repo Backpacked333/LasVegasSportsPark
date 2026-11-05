@@ -12,10 +12,16 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 const apiOrigin = process.env.SPORTSPARK_API_ORIGIN ?? 'http://localhost:3000';
 const proxy = { '/v1': { target: apiOrigin, changeOrigin: false } };
 
-export default defineConfig({
+// `--mode demo` builds the demo mode (src/demo): role picker, sample-data banner, guided tours.
+// Every other mode is the real dashboard, and the demo code is dropped from its bundle.
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    // A literal at transform time, so a real build drops the demo imports before chunking.
+    __DEMO__: JSON.stringify(mode === 'demo'),
+  },
   server: { port: 5173, strictPort: true, proxy },
   preview: { port: 4173, strictPort: true, proxy },
-  build: { outDir: 'dist', sourcemap: true },
-});
+  build: { outDir: mode === 'demo' ? 'dist-demo' : 'dist', sourcemap: true },
+}));
