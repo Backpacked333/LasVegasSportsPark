@@ -557,7 +557,9 @@ describe('entry follow-ups (ENT-03, ENT-04)', () => {
       await drainOutbox(t);
       const system = systemPrincipal(t.organizationId, 'tests');
 
-      // Same facility-local day: the admission stands, at the session's new times.
+      // Same facility-local day: the admission stands, at the session's new times. (The clock
+      // advances between steps so the announcements below have a deterministic order.)
+      t.clock.set(at(TODAY, '09:40'));
       await events.moveEvent(system, event.id, {
         scheduledStart: at(TODAY, '10:30'),
         scheduledEnd: at(TODAY, '11:30'),
@@ -573,6 +575,7 @@ describe('entry follow-ups (ENT-03, ENT-04)', () => {
       expect(new Date(retimed.activity_end).toISOString()).toBe(at(TODAY, '11:30'));
 
       // Another day: the check-in for this day is withdrawn, the live slot is free again.
+      t.clock.set(at(TODAY, '09:50'));
       await events.moveEvent(system, event.id, {
         scheduledStart: at('2027-01-23', '10:00'),
         scheduledEnd: at('2027-01-23', '11:00'),
@@ -588,8 +591,18 @@ describe('entry follow-ups (ENT-03, ENT-04)', () => {
           revision: (admitted.body.revision as number) + 2,
         }),
       ]);
-      const announced = await checkinEvents([admitted.body.id as string]);
-      expect(announced.map((e) => e.status)).toEqual(['admitted', 'admitted', 'withdrawn']);
+      const announced = await t.db
+        .selectFrom('outbox_events')
+        .select('payload')
+        .where('event_type', '=', 'entry.session_checkin_changed')
+        .where('aggregate_id', '=', admitted.body.id as string)
+        .orderBy('occurred_at')
+        .execute();
+      expect(announced.map((e) => (e.payload as { status: string }).status)).toEqual([
+        'admitted',
+        'admitted',
+        'withdrawn',
+      ]);
       // Replay-safe: both moves announced again (redeliveries under new event ids, the older one
       // last) change nothing — the check-in follows the session as it is now, never the payload.
       const retimedEvents = await t.db

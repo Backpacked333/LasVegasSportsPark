@@ -10,9 +10,9 @@ export type ActivityAuthority = 'desk' | 'assigned';
 /**
  * Activity-scoped authority (§2.1, SPK-UX-007). Desk roles act on any activity inside their
  * facility scope — always decided by the kernel at the activity's facility (each held role's own
- * scope, §4.3), never from role names alone. A coach or official acts only on an activity they hold an accepted (or
- * completed) workforce assignment for: the session itself, its scheduling event, or the fixture
- * the event schedules. Assignment facts are read through workforce's ASSIGNMENT_COVERAGE_PORT,
+ * scope, §4.3), never from role names alone (R4-AUTHZ-TARGETS-02). A coach or official acts only
+ * on an activity they hold an accepted (or completed) workforce assignment for: the session
+ * itself, its scheduling event, or the fixture the event schedules. Assignment facts are read through workforce's ASSIGNMENT_COVERAGE_PORT,
  * never its tables (§4.2).
  */
 @Injectable()
