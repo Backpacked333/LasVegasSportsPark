@@ -410,6 +410,33 @@ describe('competition schema invariants (migration 0400)', () => {
     expect(await constraintOf(update({ ended_reason: 'not ended' }))).toBe(
       'team_roles_open_immutable',
     );
+    // A role ends only with who ended it and why (0463): not silently, not back to its own start
+    // with nothing recorded, and not without a reason.
+    expect(await constraintOf(update({ effective_to: new Date('2026-10-20T12:00:00Z') }))).toBe(
+      'team_roles_open_immutable',
+    );
+    expect(await constraintOf(update({ effective_to: new Date('2026-09-01T12:00:00Z') }))).toBe(
+      'team_roles_open_immutable',
+    );
+    expect(
+      await constraintOf(
+        update({ effective_to: new Date('2026-10-20T12:00:00Z'), ended_by: actor }),
+      ),
+    ).toBe('team_roles_open_immutable');
+    expect(
+      await constraintOf(
+        update({ effective_to: new Date('2026-10-20T12:00:00Z'), ended_reason: 'handover' }),
+      ),
+    ).toBe('team_roles_open_immutable');
+    expect(
+      await constraintOf(
+        update({
+          effective_to: new Date('2026-10-20T12:00:00Z'),
+          ended_by: actor,
+          ended_reason: ' ',
+        }),
+      ),
+    ).toBe('team_roles_open_immutable');
     await update({
       effective_to: new Date('2026-10-20T12:00:00Z'),
       ended_by: actor,
