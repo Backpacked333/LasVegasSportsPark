@@ -9,7 +9,7 @@ import { Link } from 'react-router';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { Facts } from './fields';
 import { formatInstant, formatMoney, humanize } from './format';
-import { REFUND_STATUS, RESERVATION_STATUS } from './labels';
+import { RESERVATION_STATUS, refundBadge } from './labels';
 
 export function RefundView({
   refund,
@@ -22,9 +22,15 @@ export function RefundView({
   return (
     <div role="group" aria-label="Refund">
       <p>
-        <StatusBadge {...REFUND_STATUS[refund.status]} />{' '}
+        <StatusBadge {...refundBadge(refund.status, refund.reversedAt)} />{' '}
         <StatusBadge {...RESERVATION_STATUS[refund.reservationStatus]} />
       </p>
+      {refund.reversedAt ? (
+        <p data-testid="refund-reversed">
+          The provider reported this refund failed after it was recorded as made: no money was
+          returned. Finance has booked the reversal; the amount is refundable again.
+        </p>
+      ) : null}
       {refund.status === 'unknown' ? (
         <p>
           Recovery required: the provider&apos;s result is unknown. The reserved amount stays held
@@ -41,6 +47,7 @@ export function RefundView({
           ['Failure reason', refund.failureReason ?? 'None'],
           ['Unknown since', formatInstant(refund.unknownSince)],
           ['Resolved', formatInstant(refund.resolvedAt)],
+          ...(refund.reversedAt ? ([['Reversed', formatInstant(refund.reversedAt)]] as const) : []),
           ['Requested', formatInstant(refund.createdAt)],
         ]}
       />
@@ -49,6 +56,14 @@ export function RefundView({
         items={[
           ['Captured', formatMoney(refundable.capturedMinor, refundable.currency)],
           ['Refunded', formatMoney(refundable.refundedMinor, refundable.currency)],
+          ...((refundable.reversedMinor ?? 0) > 0
+            ? ([
+                [
+                  'Reversed after success (not returned)',
+                  formatMoney(refundable.reversedMinor ?? 0, refundable.currency),
+                ],
+              ] as const)
+            : []),
           [
             'Reserved by pending refunds',
             formatMoney(refundable.reservedMinor, refundable.currency),

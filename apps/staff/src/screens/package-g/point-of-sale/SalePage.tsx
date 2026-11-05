@@ -26,6 +26,7 @@ import {
   POS_SALE_STATUS,
   POS_TENDER_KIND,
   POS_TENDER_STATUS,
+  RETURN_REFUND_REVERSED,
   RETURN_REFUND_STATUS,
 } from '../../../features/pos-access-accounting/labels';
 import { POS_ACTIONS, useOffer } from '../../../features/pos-access-accounting/permission';
@@ -333,8 +334,12 @@ function Returns({ sale, zone }: { sale: Sale; zone: string | null }) {
               <td>
                 {r.refundStatus ? (
                   <>
-                    <StatusBadge {...RETURN_REFUND_STATUS[r.refundStatus]} />
-                    {r.refundAttemptId && r.refundStatus !== 'succeeded' ? (
+                    <StatusBadge
+                      {...(r.refundReversedAt
+                        ? RETURN_REFUND_REVERSED
+                        : RETURN_REFUND_STATUS[r.refundStatus])}
+                    />
+                    {r.refundAttemptId && (r.refundStatus !== 'succeeded' || r.refundReversedAt) ? (
                       <>
                         {' '}
                         <Link to={`/finance/refunds/${r.refundAttemptId}`}>Open the refund</Link>

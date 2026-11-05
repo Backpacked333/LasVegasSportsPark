@@ -403,6 +403,49 @@ describe('SCR-S-37 RefundScreen', () => {
   });
 });
 
+describe('R4-PROVIDER-OUTCOMES-02 / SPK-PAY-008: a refund the provider reversed after success', () => {
+  const REVERSED_AT = '2026-10-25T09:00:00.000Z';
+  const reversed = refund({
+    reversedAt: REVERSED_AT,
+    refundable: {
+      capturedMinor: 12500,
+      refundedMinor: 0,
+      reversedMinor: 2500,
+      reservedMinor: 0,
+      availableMinor: 12500,
+      currency: 'USD',
+    },
+  });
+
+  it('shows the refund as reversed, never as succeeded, with the reversal and its amount', async () => {
+    const app = createTestApp({ routes: routes({ 'GET /refunds/{id}': ok(reversed) }) });
+    render(app.at(`/finance/refunds/${REFUND_ID}`));
+    expect(
+      await screen.findByText('Refund reversed: provider reported it failed'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Refund succeeded')).toBeNull();
+    expect(screen.getByTestId('refund-reversed')).toHaveTextContent(/no money was returned/);
+    const amounts = screen.getByLabelText('Refundable amount of the payment');
+    expect(within(amounts).getByText('Reversed after success (not returned)')).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText('Refund details')).getByText('Reversed'),
+    ).toBeInTheDocument();
+  });
+
+  it('lists the reversed refund of a payment as reversed', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /payments/{id}': ok(paymentDetail({}, { refundableMinor: 12500 })),
+        'GET /refunds': ok({ items: [reversed], nextCursor: null }),
+      }),
+    });
+    render(app.at(REFUNDS_PATH));
+    const list = await screen.findByRole('list', { name: 'Earlier refunds of this payment' });
+    expect(within(list).getByText('Refund reversed: provider reported it failed')).toBeVisible();
+    expect(within(list).queryByText('Refund succeeded')).toBeNull();
+  });
+});
+
 describe('SCR-S-37 CreditsScreen', () => {
   it('SPK-PAY-009: lists a person’s credits with owner, uses, expiry, balance, source and history, and approves one', async () => {
     const user = userEvent.setup();

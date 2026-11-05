@@ -11,7 +11,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { formatInstant, formatMoney, humanize, shortRef } from './format';
-import { REFUND_STATUS, RESERVATION_STATUS } from './labels';
+import { RESERVATION_STATUS, refundBadge } from './labels';
 
 export function RefundList({
   filter,
@@ -60,7 +60,7 @@ export function RefundList({
                   ) : null}
                 </div>
                 <span>
-                  <StatusBadge {...REFUND_STATUS[r.status]} />{' '}
+                  <StatusBadge {...refundBadge(r.status, r.reversedAt)} />{' '}
                   <StatusBadge {...RESERVATION_STATUS[r.reservationStatus]} />
                 </span>
               </li>

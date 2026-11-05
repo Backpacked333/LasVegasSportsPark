@@ -195,6 +195,24 @@ export const REFUND_STATUS: Labels<Schema<'RefundStatus'>> = {
   unknown: { tone: 'warning', label: 'Refund unknown: reservation retained' },
 };
 
+/**
+ * R4-PROVIDER-OUTCOMES-02 (§4.11, SPK-PAY-008): a refund the provider reported failed after it was
+ * recorded succeeded keeps its status but returned no money (`reversedAt`), so it is never shown as
+ * refunded.
+ */
+export const REFUND_REVERSED: Badge = {
+  tone: 'danger',
+  label: 'Refund reversed: provider reported it failed',
+};
+
+/** The badge for a refund, its reversal first. */
+export function refundBadge(
+  status: Schema<'RefundStatus'>,
+  reversedAt: string | null | undefined,
+): Badge {
+  return reversedAt ? REFUND_REVERSED : REFUND_STATUS[status];
+}
+
 export const RESERVATION_STATUS: Record<'reserved' | 'settled' | 'released', Badge> = {
   reserved: { tone: 'pending', label: 'Amount reserved' },
   settled: { tone: 'success', label: 'Reservation settled' },

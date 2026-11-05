@@ -18,8 +18,8 @@ import { Facts } from '../../features/registration-finance/fields';
 import { formatInstant, formatMoney, humanize } from '../../features/registration-finance/format';
 import {
   PAYMENT_STATUS,
-  REFUND_STATUS,
   paymentUnresolved,
+  refundBadge,
 } from '../../features/registration-finance/labels';
 import { PersonName } from '../../features/registration-finance/names';
 import { OfflineCaption, useOnline } from '../../features/registration-finance/offline';
@@ -153,7 +153,7 @@ export function PaymentAttemptScreen() {
                           {formatMoney(r.amountMinor, r.currency)} requested{' '}
                           {formatInstant(r.requestedAt, 'UTC')}
                         </Link>
-                        <StatusBadge {...REFUND_STATUS[r.status]} />
+                        <StatusBadge {...refundBadge(r.status, r.reversedAt)} />
                       </li>
                     ))}
                   </ul>
