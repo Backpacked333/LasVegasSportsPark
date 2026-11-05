@@ -51,7 +51,11 @@ makeups. Those screens, their states and what stays open are in
   load, never "may already have been made". A refusal before running (503 INTEGRATION_UNAVAILABLE
   `recovery_mode`: payments paused while the service recovers from a restore, SPK-AT-028) reads
   "Not done" with the API's message and that nothing was changed (`ui/RefusedBeforeRunning.tsx`),
-  never "No answer yet" or "Do not pay again"; on SCR-C-34 paying stays possible.
+  never "No answer yet" or "Do not pay again"; on SCR-C-34 paying stays possible. The same refusal
+  of "Check again" after no answer (`refusedAfterNoAnswer`, marked by `useApiCommand`) proves only
+  that the check did not run: it reads "Check not run" with the API's message and that the earlier
+  attempt may still have gone through, never "Nothing was changed", and on SCR-C-34 "Do not pay
+  again" and the blocked Pay stay (R4-CLIENTS-A11Y-COPY-01).
 - A payment whose outcome is unknown, or still processing, reads "Payment outcome being confirmed.
   Do not pay again." or "Payment processing", never success or failure; paying is blocked and
   "Check again" asks about the same payment (SPK-PAY-007, SPK-UX-004). PAYMENT_OUTCOME_UNKNOWN from

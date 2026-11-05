@@ -3,7 +3,9 @@
  * recipients at once (SCR-C-23, partial completion permitted and shown per recipient) or inviting
  * suggested prior players after a renewal (SCR-C-27). Each item key has its own intent tracker, so
  * retrying one recipient reuses that recipient's idempotency key and never repeats another's. The
- * key is kept or ended as in `useApiCommand` (`keepsIntentAfterFailure`).
+ * key is kept or ended as in `useApiCommand` (`keepsIntentAfterFailure`), and a refusal before
+ * running that answers the re-check of an item left without an answer is marked as in
+ * `useApiCommand` (`refusedAfterNoAnswer`).
  */
 import {
   ApiError,
@@ -14,7 +16,7 @@ import {
 } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
-import { keepsIntentAfterFailure } from '../../api/command-outcome';
+import { NoAnswerMemory, keepsIntentAfterFailure } from '../../api/command-outcome';
 import type { CommandRequest } from '../../api/useApiCommand';
 import { useApi } from '../../providers/AppProviders';
 
@@ -31,6 +33,7 @@ export function useKeyedCommands<M extends CommandMethod, P extends PathsWithMet
   const api = useApi();
   const queryClient = useQueryClient();
   const trackers = useRef(new Map<string, CommandIntentTracker>());
+  const noAnswer = useRef(new Map<string, NoAnswerMemory>());
   const [states, setStates] = useState<Record<string, KeyedState<ResponseBody<P, M>>>>({});
   const invalidate = options.invalidate;
 
@@ -42,11 +45,17 @@ export function useKeyedCommands<M extends CommandMethod, P extends PathsWithMet
         trackers.current.set(key, tracker);
       }
       const intent = tracker.current(request);
+      let memory = noAnswer.current.get(key);
+      if (!memory) {
+        memory = new NoAnswerMemory();
+        noAnswer.current.set(key, memory);
+      }
       setStates((s) => ({ ...s, [key]: { status: 'processing' } }));
       try {
         const send = api[method] as (path: P, options: object) => Promise<ResponseBody<P, M>>;
         const data = await send(path, { ...request, intent });
         tracker.complete();
+        memory.settled();
         setStates((s) => ({ ...s, [key]: { status: 'succeeded', data } }));
         await Promise.all(
           (invalidate ?? []).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
@@ -64,6 +73,7 @@ export function useKeyedCommands<M extends CommandMethod, P extends PathsWithMet
                 nextAction: 'retry_or_contact_support',
                 correlationId: null,
               });
+        memory.failed(intent.key, error);
         // As useApiCommand: IDEMPOTENCY_OUTCOME_UNAVAILABLE keeps the key, a new one would re-run it.
         if (!keepsIntentAfterFailure(apiError)) tracker.complete();
         setStates((s) => ({ ...s, [key]: { status: 'failed', error: apiError } }));
@@ -77,6 +87,7 @@ export function useKeyedCommands<M extends CommandMethod, P extends PathsWithMet
   const forget = useCallback((key: string) => {
     trackers.current.get(key)?.reset();
     trackers.current.delete(key);
+    noAnswer.current.delete(key);
     setStates((s) => {
       const next = { ...s };
       delete next[key];

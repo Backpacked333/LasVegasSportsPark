@@ -16,16 +16,23 @@
  * Payment uncertainty (SPK-PAY-007): when the request gets no definite answer (`mayHaveTakenEffect`:
  * timeout, connection lost, app backgrounded, the same key still running, any 5xx, a success status
  * whose answer could not be read), the outcome is unknown, never "failed", and the remembered
- * quote that leads back here is kept. A refusal before running (`refusedBeforeRunning`: payments
- * paused while the service recovers from a restore, SPK-AT-028) is a definite answer although it
- * is a 503: nothing ran, so it reads "Not done" with the API's message, never "Do not pay again". The screen says "Do not pay again" and asks again with the same
- * idempotency key (§4.9) when the app returns to the foreground or the connection comes back, or
- * when the customer taps "Check now"; the API also keeps one checkout per quote, so asking again
- * can never charge twice. "Payment outcome being confirmed" is announced to screen readers with
- * "Check now" each time a check gets no answer (`ui/announce`, SPK-UX-009). When asking again finds that the first attempt committed but its answer
- * was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the checkout exists: it reads "This may already have
- * been done", the price and basket are read again (the price then names the checkout, which this
- * screen opens), and paying is not offered.
+ * quote that leads back here is kept. The screen says "Do not pay again" and asks again with the
+ * same idempotency key (§4.9) when the app returns to the foreground or the connection comes back,
+ * or when the customer taps "Check now"; the API also keeps one checkout per quote, so asking
+ * again can never charge twice. "Payment outcome being confirmed" is announced to screen readers
+ * with "Check now" each time a check gets no answer (`ui/announce`, SPK-UX-009). When asking again
+ * finds that the first attempt committed but its answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE),
+ * the checkout exists: it reads "This may already have been done", the price and basket are read
+ * again (the price then names the checkout, which this screen opens), and paying is not offered.
+ *
+ * Payments paused while the service recovers from a restore (SPK-AT-028: `refusedBeforeRunning`,
+ * a 503 the guard answers before the idempotency key is read):
+ * - on the first attempt it is a definite answer: nothing ran, so it reads "Not done" with the
+ *   API's message, never "Do not pay again", and nothing is left to look for later;
+ * - on a re-check of a checkout that got no answer (`refusedAfterNoAnswer`) only the check did not
+ *   run, and the earlier attempt may have created the checkout and taken the payment: "Do not pay
+ *   again", the remembered quote and the blocked Pay stay, and the refusal reads "Check not run"
+ *   with the API's message beside "Check now" (R4-CLIENTS-A11Y-COPY-01).
  *
  * Approval before payment (SPK-REG-007, DEC-028 pending): a basket awaiting approval cannot be
  * paid. States: loading; ready (hold active); validation failure; permission restriction (payer
@@ -40,6 +47,7 @@ import { View } from 'react-native';
 import {
   RESPONSE_UNREADABLE_CODE,
   mayHaveTakenEffect,
+  refusedAfterNoAnswer,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -65,6 +73,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -198,6 +207,14 @@ function CheckoutContent({
           setUnknownOutcome(null);
           setFailure({ error: apiError, retry: () => void pay(body) });
           refetch();
+        } else if (refusedAfterNoAnswer(apiError)) {
+          // The re-check of a checkout that got no answer was refused before it ran (payments
+          // paused during a restore, SPK-AT-028). That proves only that this check did not run:
+          // the earlier attempt under this key may have created the checkout and taken the
+          // payment. The outcome stays unknown, the remembered quote is kept and paying stays
+          // blocked (SPK-PAY-007); "Check now" asks again with the same key.
+          setUnknownOutcome(body);
+          setFailure({ error: apiError, retry: () => void pay(body) });
         } else {
           setUnknownOutcome(null);
           // A definite answer (a 4xx refusal, or a refusal before running such as payments paused
@@ -248,6 +265,8 @@ function CheckoutContent({
   // A command of this screen committed with its answer lost: nothing is offered to pay until the
   // price and basket read again show where it stands (the failure's "Reload").
   const outcomeLost = failure !== null && tookEffectOutcomeLost(failure.error);
+  // The re-check of an unanswered checkout was refused before it ran: shown with "Check now".
+  const checkRefused = failure !== null && refusedAfterNoAnswer(failure.error);
   const body: CheckoutBody =
     dueNow === 0
       ? { quoteId: quote.id, authorizeFutureInstallments: false }
@@ -331,6 +350,14 @@ function CheckoutContent({
               disabled={offline}
             />
           </LiveRegion>
+          {checkRefused && failure ? (
+            <RefusedBeforeRunning
+              error={failure.error}
+              priorUnknown
+              payment
+              testID="checkout-check-refused"
+            />
+          ) : null}
         </Section>
       ) : null}
 
@@ -415,7 +442,7 @@ function CheckoutContent({
       ) : null}
 
       <CommandError
-        error={failure?.error ?? null}
+        error={checkRefused ? null : (failure?.error ?? null)}
         onRetry={failure?.retry}
         onReload={() => {
           setFailure(null);

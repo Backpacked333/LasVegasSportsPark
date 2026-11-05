@@ -19,8 +19,11 @@
  *   second payment while one is unresolved (PAYMENT_OUTCOME_UNKNOWN). A success status whose answer
  *   could not be read (RESPONSE_UNREADABLE) is such an answer too: the payment may have been taken.
  *   A refusal before running (`refusedBeforeRunning`: payments paused while the service recovers
- *   from a restore, SPK-AT-028) is not: nothing ran, so it reads "Not done" with the API's message
- *   and paying stays possible later, never "Do not pay again". When "Check again" finds that
+ *   from a restore, SPK-AT-028) of a first attempt is not: nothing ran, so it reads "Not done" with
+ *   the API's message and paying stays possible later, never "Do not pay again". The same refusal
+ *   of "Check again" (`refusedAfterNoAnswer`) proves only that the check did not run: "Do not pay
+ *   again" and the blocked Pay stay, and it reads "Check not run" with the API's message
+ *   (R4-CLIENTS-A11Y-COPY-01). When "Check again" finds that
  *   the first attempt committed but its answer was lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE), it reads
  *   "This may already have been done": paying stays blocked and the balance and payments are read
  *   again, so a recorded attempt shows as on its way. A receipt is shown only when the API returns
@@ -51,6 +54,7 @@ import { View } from 'react-native';
 import {
   RESPONSE_UNREADABLE_CODE,
   mayHaveTakenEffect,
+  refusedAfterNoAnswer,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -81,6 +85,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
@@ -232,6 +237,13 @@ function PaySection({
   };
   const [token, setToken] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
+  /**
+   * The last attempt that got no definite answer (`mayHaveTakenEffect`): no response, still running
+   * under this key, a server failure, or a success whose answer could not be read. Kept while it is
+   * checked again and while a check of it is refused before running (`refusedAfterNoAnswer`, which
+   * says nothing about this attempt); cleared by any other answer.
+   */
+  const [unanswered, setUnanswered] = useState<ApiError | null>(null);
   const [sent, setSent] = useState<PayBody | null>(null);
   const t = obligation.totals;
 
@@ -241,21 +253,32 @@ function PaySection({
     try {
       onOutcome((await pay.submit({ path: { id: obligation.id }, body })) as PaymentOutcome);
       setToken(null);
+      setUnanswered(null);
     } catch (error) {
       const apiError = error as ApiError;
+      const refusedCheck = refusedAfterNoAnswer(apiError);
       setFailure(apiError);
-      if (mayHaveTakenEffect(apiError) || tookEffectOutcomeLost(apiError)) reread();
+      if (!refusedCheck) {
+        setUnanswered(
+          mayHaveTakenEffect(apiError) && apiError.code !== 'PAYMENT_OUTCOME_UNKNOWN'
+            ? apiError
+            : null,
+        );
+      }
+      if (mayHaveTakenEffect(apiError) || tookEffectOutcomeLost(apiError) || refusedCheck) {
+        reread();
+      }
     }
   };
 
-  // No definite answer (`mayHaveTakenEffect`): no response, still running under this key, a
-  // server failure, or a success whose answer could not be read. The payment may still take
-  // effect, so it is never shown as a failure (SPK-PAY-007); "Check again" re-sends the same
-  // request under the same key. A refusal before running is not one: CommandFailure shows it.
-  const unknown =
-    failure !== null && mayHaveTakenEffect(failure) && failure.code !== 'PAYMENT_OUTCOME_UNKNOWN';
+  // No definite answer yet: the payment may still take effect, so it is never shown as a failure
+  // (SPK-PAY-007) and paying stays blocked; "Check again" re-sends the same request under the same
+  // key. A refusal before running of a first attempt is not one (CommandFailure shows "Not done");
+  // a refusal of "Check again" leaves it unanswered and is shown beside it ("Check not run").
+  const unknown = unanswered !== null;
+  const checkRefused = failure !== null && refusedAfterNoAnswer(failure);
   const noAnswerBody =
-    failure?.code === RESPONSE_UNREADABLE_CODE ? UNREADABLE_ANSWER_BODY : NO_ANSWER_BODY;
+    unanswered?.code === RESPONSE_UNREADABLE_CODE ? UNREADABLE_ANSWER_BODY : NO_ANSWER_BODY;
   // The API refused because a payment for this balance is unresolved (SPK-PAY-007).
   const inProgressElsewhere = failure?.code === 'PAYMENT_OUTCOME_UNKNOWN';
   // An earlier attempt under this key committed and its answer was lost
@@ -288,23 +311,33 @@ function PaySection({
         </ButtonRow>
       ) : null}
       {unknown && sent ? (
-        <LiveRegion
-          testID="payment-no-answer"
-          announcement={sentences(UNCONFIRMED_LABEL, noAnswerBody, 'Check again')}
-          occurrence={failure}
-        >
-          <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
-          <Body>{noAnswerBody}</Body>
-          <Caption>Error code: {failure?.code}</Caption>
-          <ButtonRow>
-            <Button
-              label="Check again"
-              onPress={() => void submit(sent)}
-              busy={pay.isProcessing}
-              disabled={offline}
+        <>
+          <LiveRegion
+            testID="payment-no-answer"
+            announcement={sentences(UNCONFIRMED_LABEL, noAnswerBody, 'Check again')}
+            occurrence={unanswered}
+          >
+            <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
+            <Body>{noAnswerBody}</Body>
+            <Caption>Error code: {unanswered?.code}</Caption>
+            <ButtonRow>
+              <Button
+                label="Check again"
+                onPress={() => void submit(sent)}
+                busy={pay.isProcessing}
+                disabled={offline}
+              />
+            </ButtonRow>
+          </LiveRegion>
+          {checkRefused && failure ? (
+            <RefusedBeforeRunning
+              error={failure}
+              priorUnknown
+              payment
+              testID="payment-check-refused"
             />
-          </ButtonRow>
-        </LiveRegion>
+          ) : null}
+        </>
       ) : inProgressElsewhere ? (
         <LiveRegion
           testID="payment-in-progress"

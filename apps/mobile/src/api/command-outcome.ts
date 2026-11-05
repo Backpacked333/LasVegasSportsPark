@@ -21,12 +21,14 @@
  *   running, although it is a 503. `ApiError.outcomeUnknown` covers only the timeout and
  *   PAYMENT_OUTCOME_UNKNOWN, so screens use this instead.
  * - `refusedBeforeRunning`: INTEGRATION_UNAVAILABLE from a guard that answers before the
- *   idempotency key is claimed, so nothing ran: `details.reason: 'recovery_mode'` (payments are
- *   paused while the organization recovers from a restore, §5.8, SPK-AT-028) or `'disabled'`.
- *   Screens show it as "Not done" with the API's message ("Payments are paused ... Try again
- *   later."), never as "No answer yet" or "Do not pay again" (`ui/RefusedBeforeRunning`).
+ *   idempotency key is claimed, so this request did not run: `details.reason: 'recovery_mode'`
+ *   (payments are paused while the organization recovers from a restore, §5.8, SPK-AT-028) or
+ *   `'disabled'`. On a first attempt nothing ran at all: screens show it as "Not done" with the
+ *   API's message ("Payments are paused ... Try again later."), never as "No answer yet" or "Do not
+ *   pay again" (`ui/RefusedBeforeRunning`). When it answers a re-check of an attempt that got no
+ *   answer (`refusedAfterNoAnswer`), only the check did not run and the outcome stays open.
  * - `outcomeStillOpen`: the key is kept and the outcome is open (not after a refusal before
- *   running, where nothing happened).
+ *   running, where this request did not run; the customer app has no form that locks on it).
  * - `tookEffectOutcomeLost`: IDEMPOTENCY_OUTCOME_UNAVAILABLE. An earlier attempt under this key
  *   committed changes, but its response was never recorded (the API stopped first, and its lease
  *   lapsed), so the API will not run it again and cannot say what it returned (next action
@@ -46,7 +48,17 @@
  *   revoke it and issue a new one (next action `revoke_and_reissue`).
  * - `mustNotCreateAgain`: either of the last two. A create form holds back creating again and shows
  *   `ui/SecretWithheld`, which points to where the record is listed.
+ *
+ * One rule is the customer app's own, because only its command hooks know which attempts share an
+ * idempotency key: `refusedAfterNoAnswer` (below).
  */
+import {
+  ApiError,
+  mayHaveTakenEffect,
+  refusedBeforeRunning,
+  tookEffectOutcomeLost,
+} from '@sportspark/api-client';
+
 export {
   OUTCOME_LOST_CODE,
   RESPONSE_UNREADABLE_CODE,
@@ -59,3 +71,49 @@ export {
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '@sportspark/api-client';
+
+/** Refusals before running that answered a re-check of an attempt left without an answer. */
+const refusedRechecks = new WeakSet<object>();
+
+/**
+ * A refusal before running (`refusedBeforeRunning`) that answered a re-check: an earlier attempt
+ * under the same idempotency key got no definite answer (`mayHaveTakenEffect`) or committed with
+ * its answer lost (`tookEffectOutcomeLost`), and "Check again" (or the automatic re-check on
+ * returning to the app) sent it again. The kernel RecoveryGuard answers before the idempotency
+ * interceptor reads the key's stored outcome, so the refusal proves only that this check did not
+ * run; it says nothing about the earlier attempt, which may have committed or charged a card (the
+ * SPK-AT-028 case: a payment sent just before an outage, checked again after a restore). The
+ * outcome stays open: payment screens keep "Do not pay again" and keep paying blocked (SPK-PAY-007,
+ * "Unknown outcomes must be reconciled before another operation risks charging the customer
+ * again"), and `ui/RefusedBeforeRunning` reads "Check not run", never "Nothing was changed"
+ * (R4-CLIENTS-A11Y-COPY-01). Marked by the command hooks (`useApiCommand`, teams
+ * `useKeyedCommands`) through `NoAnswerMemory`.
+ */
+export function refusedAfterNoAnswer(error: unknown): boolean {
+  return !!error && typeof error === 'object' && refusedRechecks.has(error);
+}
+
+/**
+ * What one command hook remembers about its attempts: the idempotency key whose last answered
+ * attempt left the outcome open. A refusal before running under that key is marked
+ * (`refusedAfterNoAnswer`) and leaves it open; any other definite answer settles it.
+ */
+export class NoAnswerMemory {
+  private key: string | null = null;
+
+  /** An attempt under `key` failed with `error`. */
+  failed(key: string, error: unknown): void {
+    if (refusedBeforeRunning(error)) {
+      if (this.key === key && error && typeof error === 'object') refusedRechecks.add(error);
+      return;
+    }
+    // Anything that is not the typed client error (a programming error) may still have been sent.
+    const open = !ApiError.is(error) || mayHaveTakenEffect(error) || tookEffectOutcomeLost(error);
+    this.key = open ? key : null;
+  }
+
+  /** The API answered with success, or the intent was abandoned: nothing is open any more. */
+  settled(): void {
+    this.key = null;
+  }
+}

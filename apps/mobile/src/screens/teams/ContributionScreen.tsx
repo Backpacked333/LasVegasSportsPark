@@ -26,15 +26,24 @@
  * (IDEMPOTENCY_OUTCOME_UNAVAILABLE), the line reads "This may already have been done": the payment
  * methods stay hidden, the payments and the request are read again (so an attempt the API recorded
  * shows "Do not pay again"), and "Reload" reads them again; paying is not offered again on this
- * visit. Each of these answers, and every change of the payment's state, is announced to screen
- * readers with what to do next (`ui/announce`, SPK-UX-009, NA-A01).
+ * visit. When that check is refused before running (`refusedAfterNoAnswer`: payments paused while
+ * the service recovers from a restore, SPK-AT-028), only the check did not run: the methods stay
+ * hidden and it reads "Check not run" with the API's message, that the earlier payment may still
+ * have gone through and "Do not pay again", with "Check again" (R4-CLIENTS-A11Y-COPY-01). A refusal
+ * of the first attempt is "Not done": nothing ran. Each of these answers, and every change of the
+ * payment's state, is announced to screen readers with what to do next (`ui/announce`,
+ * SPK-UX-009, NA-A01).
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { mayHaveTakenEffect, tookEffectOutcomeLost } from '../../api/command-outcome';
+import {
+  mayHaveTakenEffect,
+  refusedAfterNoAnswer,
+  tookEffectOutcomeLost,
+} from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { DEV_CONTRIBUTION_PAYMENT_METHODS } from '../../features/teams/dev';
@@ -58,6 +67,7 @@ import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -204,10 +214,15 @@ function PayContribution({
     void pay
       .submit({ path: { id: request.id }, body: { paymentMethodToken: token } })
       .catch((error: ApiError) => {
-        // The payment may have been made (or was, its answer lost): read what the API knows, so
-        // an attempt it recorded is shown with "Do not pay again" even before "Check again"
-        // (SPK-PAY-007).
-        if (mayHaveTakenEffect(error) || tookEffectOutcomeLost(error)) rereadPayments();
+        // The payment may have been made (or was, its answer lost, or a check of it could not
+        // run): read what the API knows, so an attempt it recorded is shown with "Do not pay
+        // again" even before "Check again" (SPK-PAY-007).
+        if (
+          mayHaveTakenEffect(error) ||
+          tookEffectOutcomeLost(error) ||
+          refusedAfterNoAnswer(error)
+        )
+          rereadPayments();
       });
   };
   // What the API knows of a payment on its way for this line, shown in every build (SPK-PAY-007).
@@ -257,9 +272,13 @@ function PayContribution({
   // running, a server failure, PAYMENT_OUTCOME_UNKNOWN) the method picker stays hidden: picking
   // another method would change the request and send it under a new key. "Check again" repeats
   // the same request under the same key until the API answers with the attempt. An attempt that
-  // committed with its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) keeps them hidden too.
+  // committed with its answer lost (IDEMPOTENCY_OUTCOME_UNAVAILABLE) keeps them hidden too, and so
+  // does a check of an unanswered attempt refused before running (`refusedAfterNoAnswer`: only the
+  // check did not run, SPK-AT-028).
+  const checkRefused = pay.error !== null && refusedAfterNoAnswer(pay.error);
   const unanswered =
-    pay.error !== null && (mayHaveTakenEffect(pay.error) || tookEffectOutcomeLost(pay.error));
+    pay.error !== null &&
+    (mayHaveTakenEffect(pay.error) || tookEffectOutcomeLost(pay.error) || checkRefused);
   const locked =
     elsewhere !== null ||
     unanswered ||
@@ -306,7 +325,17 @@ function PayContribution({
           />
         </>
       ) : null}
-      {pay.error ? <CommandFailure error={pay.error} onRetry={submit} /> : null}
+      {pay.error && checkRefused ? (
+        <RefusedBeforeRunning
+          error={pay.error}
+          onRetry={submit}
+          priorUnknown
+          payment
+          testID="contribution-check-refused"
+        />
+      ) : pay.error ? (
+        <CommandFailure error={pay.error} onRetry={submit} />
+      ) : null}
     </View>
   );
 }

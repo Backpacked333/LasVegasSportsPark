@@ -7,13 +7,42 @@
  */
 import * as shared from '@sportspark/api-client';
 import { ApiError } from '@sportspark/api-client';
-import { render, screen } from '@testing-library/react-native';
+import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react-native';
 import { AccessibilityInfo } from 'react-native';
+import { CommandFailure as MoneyCommandFailure } from '../../features/money/CommandFailure';
 import { CommandError } from '../../screens/account/components/CommandError';
 import { createTestApp } from '../../testing/test-app';
 import * as outcome from '../command-outcome';
+import { useApiCommand } from '../useApiCommand';
 
 const PAUSED = 'Payments are paused while the service recovers from a restore. Try again later.';
+
+function noAnswer(): ApiError {
+  const error = new ApiError({
+    kind: 'network',
+    status: null,
+    code: 'NETWORK_UNAVAILABLE',
+    message: 'No connection.',
+    nextAction: 'retry_with_same_key',
+    correlationId: null,
+  });
+  error.method = 'post';
+  return error;
+}
+
+function refused(code: string, status: number): ApiError {
+  const error = new ApiError({
+    kind: 'api',
+    status,
+    code,
+    message: 'Refused.',
+    nextAction: 'review_and_correct',
+    correlationId: null,
+  });
+  error.method = 'post';
+  return error;
+}
 
 function unreadable(method: string | null = 'post'): ApiError {
   const error = new ApiError({
@@ -109,5 +138,111 @@ describe('R4-CLIENTS-A11Y-COPY-01 account CommandError', () => {
     expect(screen.getByRole('button', { name: 'Check again' })).toBeOnTheScreen();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
     expect(screen.queryByLabelText('Not done')).toBeNull();
+  });
+});
+
+describe('R4-CLIENTS-A11Y-COPY-01 a refusal before running of a re-check (refusedAfterNoAnswer)', () => {
+  it('SPK-AT-028: marks a refusal under the key whose last attempt got no answer, and only then', () => {
+    const memory = new outcome.NoAnswerMemory();
+    // A first attempt refused: nothing ran.
+    const first = paused();
+    memory.failed('key-a', first);
+    expect(outcome.refusedAfterNoAnswer(first)).toBe(false);
+    // No answer, then the check of it refused: only the check did not run.
+    memory.failed('key-a', noAnswer());
+    const check = paused();
+    memory.failed('key-a', check);
+    expect(outcome.refusedAfterNoAnswer(check)).toBe(true);
+    // A later refusal of the same check is still one; another key's is not.
+    const again = paused();
+    memory.failed('key-a', again);
+    expect(outcome.refusedAfterNoAnswer(again)).toBe(true);
+    const other = paused();
+    memory.failed('key-b', other);
+    expect(outcome.refusedAfterNoAnswer(other)).toBe(false);
+  });
+
+  it('a definite answer or a success settles the earlier attempt', () => {
+    const memory = new outcome.NoAnswerMemory();
+    memory.failed('key-a', noAnswer());
+    memory.failed('key-a', refused('PAYMENT_FAILED', 402));
+    const afterRefusal = paused();
+    memory.failed('key-a', afterRefusal);
+    expect(outcome.refusedAfterNoAnswer(afterRefusal)).toBe(false);
+    memory.failed('key-a', noAnswer());
+    memory.settled();
+    const afterSuccess = paused();
+    memory.failed('key-a', afterSuccess);
+    expect(outcome.refusedAfterNoAnswer(afterSuccess)).toBe(false);
+    // An earlier attempt that committed with its answer lost is open too.
+    memory.failed('key-c', refused('IDEMPOTENCY_OUTCOME_UNAVAILABLE', 409));
+    const afterLost = paused();
+    memory.failed('key-c', afterLost);
+    expect(outcome.refusedAfterNoAnswer(afterLost)).toBe(true);
+  });
+
+  it('SPK-PAY-007: useApiCommand marks the refused check of an intent that got no answer, under the same key', async () => {
+    let calls = 0;
+    const app = createTestApp({
+      routes: {
+        'POST /obligations/{id}/payments': () => {
+          calls += 1;
+          if (calls === 1) throw new TypeError('Network request failed');
+          return fakeResponse(
+            503,
+            apiErrorBody('INTEGRATION_UNAVAILABLE', {
+              message: PAUSED,
+              nextAction: 'retry_later',
+              details: { reason: 'recovery_mode' },
+            }),
+          );
+        },
+      },
+    });
+    const { result } = renderHook(() => useApiCommand('post', '/obligations/{id}/payments'), {
+      wrapper: app.wrapper,
+    });
+    await act(async () => undefined);
+    const request = {
+      path: { id: '0192f1a0-0000-7000-8000-000000000501' },
+      body: { paymentMethodToken: 'pm_fake_visa' },
+    };
+    await act(async () => {
+      await result.current.submit(request).catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error?.code).toBe('NETWORK_UNAVAILABLE'));
+    await act(async () => {
+      await result.current.submit(request).catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.error?.code).toBe('INTEGRATION_UNAVAILABLE'));
+    expect(outcome.refusedAfterNoAnswer(result.current.error)).toBe(true);
+    const keys = app.fake.requests.map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('the shared failure views read "Check not run" for it, never "Nothing was changed"', () => {
+    const memory = new outcome.NoAnswerMemory();
+    memory.failed('key-a', noAnswer());
+    const check = paused();
+    memory.failed('key-a', check);
+    const app = createTestApp();
+    render(<MoneyCommandFailure error={check} what="the cancellation" onRetry={jest.fn()} />, {
+      wrapper: app.wrapper,
+    });
+    expect(screen.getByLabelText('Check not run')).toBeOnTheScreen();
+    expect(screen.getByText(PAUSED)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'This check could not run now, so the earlier attempt may still have gone through. Check again later before doing it again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/nothing was paid or recorded/)).toBeNull();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      `Check not run. ${PAUSED} This check could not run now, so the earlier attempt may still have gone through. Check again later before doing it again. Check again.`,
+      { queue: true },
+    );
   });
 });

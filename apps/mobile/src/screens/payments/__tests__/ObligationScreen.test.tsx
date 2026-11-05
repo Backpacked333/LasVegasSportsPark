@@ -383,6 +383,63 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(payments(app)).toHaveLength(2);
   });
 
+  it('SPK-AT-028 SPK-PAY-007 (R4-CLIENTS-A11Y-COPY-01): when "Check again" of a payment that got no answer is refused during a restore, "Do not pay again" and the blocked Pay stay, and nothing claims that nothing was paid', async () => {
+    const paused =
+      'Payments are paused while the service recovers from a restore. Try again later.';
+    let attempts = 0;
+    const app = renderObligation({
+      'POST /obligations/{id}/payments': () => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('Network request failed');
+        return attempts === 2
+          ? fakeResponse(
+              503,
+              apiErrorBody('INTEGRATION_UNAVAILABLE', {
+                message: paused,
+                nextAction: 'retry_later',
+                details: { reason: 'recovery_mode' },
+                correlationId: 'c-check-paused',
+              }),
+            )
+          : fakeResponse(201, outcome('succeeded'));
+      },
+    });
+    await pay();
+    expect(await screen.findByTestId('payment-no-answer')).toBeOnTheScreen();
+    (AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock).mockClear();
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByTestId('payment-check-refused')).toBeOnTheScreen();
+    // The refusal says only that the check did not run: the first payment may have gone through.
+    expect(screen.getByTestId('payment-no-answer')).toBeOnTheScreen();
+    expect(
+      screen.getAllByLabelText('Payment outcome being confirmed. Do not pay again.').length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Check not run')).toBeOnTheScreen();
+    expect(screen.getByText(paused)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'This check could not run now; the earlier payment may still have gone through. Do not pay again.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/nothing was paid or recorded/)).toBeNull();
+    expect(screen.queryByLabelText('Not done')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      `Check not run. ${paused} This check could not run now; the earlier payment may still have gone through. Do not pay again. Check again later.`,
+      { queue: true },
+    );
+    // The same request under the same key, once payments resume.
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+    });
+    expect(await screen.findByLabelText('Payment received')).toBeOnTheScreen();
+    const keys = payments(app).map((r) => r.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
+  });
+
   it('SPK-PAY-007 IDEMPOTENCY_OUTCOME_UNAVAILABLE: when "Check again" finds the payment committed with its answer lost, paying stays blocked and the balance is read again', async () => {
     let attempts = 0;
     const app = renderObligation({
