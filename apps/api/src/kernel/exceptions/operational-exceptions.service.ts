@@ -17,7 +17,7 @@ import {
   type ExceptionStatus,
   type OperationalExceptionsTable,
 } from '@sportspark/db';
-import { sql, type Selectable, type SqlBool } from 'kysely';
+import { sql, type RawBuilder, type Selectable, type SqlBool } from 'kysely';
 import { AuditReader, type AuditRecord } from '../audit/audit-reader';
 import { AuditWriter } from '../audit/audit.writer';
 import { defineActions, type ActionDefinition } from '../authorization/actions';
@@ -91,6 +91,94 @@ export interface ListExceptionsFilter {
 }
 
 const ExceptionCursor = z.object({ at: z.string(), id: z.uuid() });
+
+/** What the Today workspace shows (SPK-UX-006): exceptions not yet resolved or closed. */
+const OPEN_STATUSES: readonly ExceptionStatus[] = ['open', 'acknowledged'];
+
+/**
+ * The severity order, most severe first: the `severity_rank` the database derives from `severity`
+ * (migration 0017, R4-CARRY-02). Severity is text, and its text order is not this order.
+ */
+export const EXCEPTION_SEVERITY_RANK: Readonly<Record<ExceptionSeverity, number>> = {
+  critical: 0,
+  high: 1,
+  warning: 2,
+  info: 3,
+};
+
+const SEVERITY_OF_RANK: ReadonlyMap<number, ExceptionSeverity> = new Map(
+  Object.entries(EXCEPTION_SEVERITY_RANK).map(([severity, rank]) => [
+    rank,
+    severity as ExceptionSeverity,
+  ]),
+);
+
+/**
+ * Service levels a caller applies to one owner queue. The kernel stores none: support configures
+ * them per queue (SPK-UX-006 owner queue) and passes them to the open reads, which compute the
+ * due time and overdue state in SQL from them.
+ */
+export interface QueueServiceLevel {
+  /** An exception without its own deadline is due this many minutes after it opened. */
+  resolveWithinMinutes: number | null;
+  /** An exception still `open` is overdue this many minutes after it opened. */
+  acknowledgeWithinMinutes: number | null;
+}
+
+/** Which open exceptions an open read covers. Every read also keeps to the viewer's scope. */
+export interface OpenExceptionsQuery {
+  /** Exactly this facility (organization-wide exceptions excluded); authorized at that facility. */
+  facilityId?: string | null;
+  /**
+   * Without `facilityId`: only these facilities, plus organization-wide exceptions (empty:
+   * organization-wide only). Never widens the viewer's facility scope.
+   */
+  facilityIds?: readonly string[];
+  ownerQueue?: string;
+  /** Only these owner queues (empty: none). */
+  ownerQueues?: readonly string[];
+  /**
+   * Service levels by queue name. An exception is due at its `deadline_at`, else `opened_at` plus
+   * its queue's `resolveWithinMinutes`, else never; a queue without levels has none.
+   */
+  serviceLevels?: ReadonlyMap<string, QueueServiceLevel>;
+}
+
+/**
+ * A bounded page of open exceptions in the open order: most severe first (`severity_rank`), then
+ * soonest due (never due last), then id. `more` says whether any open exception follows the page;
+ * `nextCursor` continues after it (for the same query).
+ */
+export interface OpenExceptionsPage {
+  items: OperationalExceptionRow[];
+  more: boolean;
+  nextCursor: string | null;
+}
+
+/** The open exceptions of a query (after a page's cursor when given), counted in one read. */
+export interface OpenExceptionsSummary {
+  count: number;
+  /** The first of them in the open order, or null when there are none. */
+  first: { id: string; severity: ExceptionSeverity; ownerQueue: string } | null;
+  /** Counts by severity and by owner queue; only the severities and queues that occur. */
+  bySeverity: Partial<Record<ExceptionSeverity, number>>;
+  byQueue: Record<string, number>;
+  /** The soonest due time among them, or null when none of them is due. */
+  earliestDueAt: Date | null;
+  /** How many are overdue at `asOf`: past due, or still `open` past the acknowledgment window. */
+  overdue: number;
+}
+
+/** A position in the open order: severity rank, due time (ISO, microseconds) or null, id. */
+const OpenCursor = z.object({
+  r: z.number().int(),
+  d: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
+    .nullable(),
+  i: z.uuid(),
+});
+type OpenPosition = z.infer<typeof OpenCursor>;
 
 export interface RaiseExceptionInput {
   organizationId: string;
@@ -431,41 +519,181 @@ export class OperationalExceptions {
     );
   }
 
+  /**
+   * Every open exception the viewer may read, in the open order (most severe, then soonest
+   * `deadline_at`, then id). Unbounded: prefer {@link listOpenPage} and {@link summarizeOpen},
+   * which bound the read (R4-CARRY-02); this form stays until its last caller (support's Today
+   * feed) has moved to them.
+   * @deprecated R4-CARRY-02: use listOpenPage and summarizeOpen.
+   */
   async listOpen(
     principal: Principal,
     organizationId: string,
     filter: { facilityId?: string | null; ownerQueue?: string } = {},
-  ) {
+  ): Promise<OperationalExceptionRow[]> {
+    await this.requireRead(principal, organizationId, filter);
+    return this.openScope(executorFor(this.db), principal, organizationId, filter)
+      .selectAll()
+      .orderBy('severity_rank')
+      .orderBy('deadline_at')
+      .orderBy('id')
+      .execute();
+  }
+
+  /**
+   * R4-CARRY-02 (R3-PERFORMANCE-01, SPK-UX-006, §5.10): a bounded keyset page (1..200, default
+   * 50) of the open exceptions the viewer may read, in the open order computed by the database:
+   * `severity_rank`, then the due time (`deadline_at`, else `opened_at` plus the queue's
+   * `resolveWithinMinutes`; never due last), then id. Served by
+   * `operational_exceptions_open_rank_idx` (migration 0017). An invalid cursor reads the first page.
+   */
+  async listOpenPage(
+    principal: Principal,
+    organizationId: string,
+    query: OpenExceptionsQuery & { cursor?: string | null; limit?: number } = {},
+  ): Promise<OpenExceptionsPage> {
+    await this.requireRead(principal, organizationId, query);
+    const requested = query.limit !== undefined && Number.isFinite(query.limit) ? query.limit : 50;
+    const limit = Math.min(Math.max(Math.trunc(requested), 1), 200);
+    const due = dueExpression(query.serviceLevels);
+    let rows = this.openScope(executorFor(this.db), principal, organizationId, query)
+      .selectAll()
+      .select(isoMicros(due).as('open_due'));
+    const after = decodeCursor(query.cursor ?? undefined, OpenCursor);
+    if (after) rows = rows.where(afterPosition(after, due));
+    const read = await rows
+      .orderBy('severity_rank')
+      .orderBy(sql`${due} asc nulls last`)
+      .orderBy('id')
+      .limit(limit + 1)
+      .execute();
+    const more = read.length > limit;
+    const page = read.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map(({ open_due: _due, ...row }) => row),
+      more,
+      nextCursor:
+        more && last
+          ? encodeCursor({
+              r: last.severity_rank,
+              d: last.open_due,
+              i: last.id,
+            } satisfies OpenPosition)
+          : null,
+    };
+  }
+
+  /**
+   * R4-CARRY-02: counts the open exceptions of `query` the viewer may read (only those after the
+   * `after` cursor of {@link listOpenPage}, when given) in one aggregate read, by severity and
+   * queue, with the soonest due time, how many are overdue at `asOf` (default now) and the first
+   * of them. A Today read lists one page and summarises the rest with this, so it never loads
+   * every open exception of the organization. The page and the summary are separate statements:
+   * a caller that needs them from one snapshot runs both in one transaction (they join it).
+   */
+  async summarizeOpen(
+    principal: Principal,
+    organizationId: string,
+    query: OpenExceptionsQuery & { after?: string | null; asOf?: Date } = {},
+  ): Promise<OpenExceptionsSummary> {
+    await this.requireRead(principal, organizationId, query);
+    const executor = executorFor(this.db);
+    const due = dueExpression(query.serviceLevels);
+    const asOf = (query.asOf ?? this.clock.now()).toISOString();
+    const overdue = overdueExpression(query.serviceLevels, due, asOf);
+    const after = decodeCursor(query.after ?? undefined, OpenCursor);
+    const scoped = () => {
+      const rows = this.openScope(executor, principal, organizationId, query);
+      return after ? rows.where(afterPosition(after, due)) : rows;
+    };
+    // Grouped by the stored rank, not the severity text: every column this read needs is in
+    // operational_exceptions_open_rank_idx (migration 0017).
+    const groups = await scoped()
+      .select([
+        'severity_rank',
+        'owner_queue',
+        sql<number>`count(*)::int`.as('n'),
+        sql<Date | string | null>`min(${due})`.as('earliest'),
+        sql<number>`(count(*) filter (where ${overdue}))::int`.as('overdue'),
+      ])
+      .groupBy(['severity_rank', 'owner_queue'])
+      .execute();
+    const first = await scoped()
+      .select(['id', 'severity', 'owner_queue'])
+      .orderBy('severity_rank')
+      .orderBy(sql`${due} asc nulls last`)
+      .orderBy('id')
+      .limit(1)
+      .executeTakeFirst();
+    const summary: OpenExceptionsSummary = {
+      count: 0,
+      first: first
+        ? { id: first.id, severity: first.severity, ownerQueue: first.owner_queue }
+        : null,
+      bySeverity: {},
+      byQueue: {},
+      earliestDueAt: null,
+      overdue: 0,
+    };
+    for (const group of groups) {
+      const severity = SEVERITY_OF_RANK.get(group.severity_rank);
+      if (!severity) throw new Error(`unknown severity_rank ${group.severity_rank}`);
+      summary.count += group.n;
+      summary.overdue += group.overdue;
+      summary.bySeverity[severity] = (summary.bySeverity[severity] ?? 0) + group.n;
+      summary.byQueue[group.owner_queue] = (summary.byQueue[group.owner_queue] ?? 0) + group.n;
+      const earliest = group.earliest === null ? null : new Date(group.earliest);
+      if (earliest && (!summary.earliestDueAt || earliest < summary.earliestDueAt)) {
+        summary.earliestDueAt = earliest;
+      }
+    }
+    return summary;
+  }
+
+  private async requireRead(
+    principal: Principal,
+    organizationId: string,
+    query: { facilityId?: string | null },
+  ): Promise<void> {
     await this.authorization.require(principal, ExceptionActions.read, {
       type: 'operational_exception',
       organizationId,
-      facilityId: filter.facilityId ?? null,
+      facilityId: query.facilityId ?? null,
     });
-    let query = this.db
+  }
+
+  /** The open exceptions of the organization that `query` and the viewer's scope cover. */
+  private openScope(
+    executor: Db | Trx,
+    principal: Principal,
+    organizationId: string,
+    query: OpenExceptionsQuery,
+  ) {
+    let rows = executor
       .selectFrom('operational_exceptions')
-      .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('status', 'in', ['open', 'acknowledged'])
-      .orderBy('severity')
-      .orderBy('opened_at');
-    if (filter.facilityId) {
-      query = query.where('facility_id', '=', filter.facilityId);
+      .where('status', 'in', [...OPEN_STATUSES]);
+    if (query.facilityId) {
+      rows = rows.where('facility_id', '=', query.facilityId);
     } else {
       // §4.3, §4.14, SPK-UX-006 ("within the viewer's scope"): facility-scoped staff see their
       // facilities' exceptions plus organization-wide ones (facility_id null), the same scope
       // AuthorizationService.decide grants them for a single exception.
       const scope = listFacilityScope(principal, ExceptionActions.read);
-      if (scope) {
-        const facilityIds = [...scope];
-        query = query.where((eb) =>
-          facilityIds.length > 0
-            ? eb.or([eb('facility_id', 'in', facilityIds), eb('facility_id', 'is', null)])
-            : eb('facility_id', 'is', null),
-        );
-      }
+      if (scope) rows = rows.where(facilityOrOrganizationWide([...scope]));
+      if (query.facilityIds) rows = rows.where(facilityOrOrganizationWide([...query.facilityIds]));
     }
-    if (filter.ownerQueue) query = query.where('owner_queue', '=', filter.ownerQueue);
-    return query.execute();
+    if (query.ownerQueue) rows = rows.where('owner_queue', '=', query.ownerQueue);
+    if (query.ownerQueues) {
+      const queues = [...query.ownerQueues];
+      rows = rows.where(
+        queues.length > 0
+          ? sql<SqlBool>`owner_queue in (${sql.join(queues)})`
+          : sql<SqlBool>`false`,
+      );
+    }
+    return rows;
   }
 }
 
@@ -501,4 +729,71 @@ function ownQueueAction(principal: Principal, ownerQueue: string): ActionDefinit
   if (!role.success || !principal.staffRoles.includes(role.data)) return null;
   if (!ExceptionActions.manageOwnQueue.staffRoles.includes(role.data)) return null;
   return { ...ExceptionActions.manageOwnQueue, staffRoles: [role.data] };
+}
+
+/** `facility_id` in `facilityIds` or null (organization-wide). */
+function facilityOrOrganizationWide(facilityIds: readonly string[]): RawBuilder<SqlBool> {
+  return facilityIds.length > 0
+    ? sql<SqlBool>`(facility_id in (${sql.join([...facilityIds])}) or facility_id is null)`
+    : sql<SqlBool>`facility_id is null`;
+}
+
+/**
+ * The per-queue minutes `pick` names, as `case owner_queue when <queue> then <minutes> end`, or
+ * null when no queue has a positive window (queues without one read as null).
+ */
+function queueMinutes(
+  levels: ReadonlyMap<string, QueueServiceLevel> | undefined,
+  pick: (level: QueueServiceLevel) => number | null,
+): RawBuilder<number | null> | null {
+  const windows: Array<[string, number]> = [];
+  for (const [queue, level] of levels ?? []) {
+    const minutes = pick(level);
+    if (minutes !== null && Number.isSafeInteger(minutes) && minutes > 0) {
+      windows.push([queue, minutes]);
+    }
+  }
+  if (windows.length === 0) return null;
+  const branches = windows.map(
+    ([queue, minutes]) => sql`when ${queue} then cast(${minutes} as integer)`,
+  );
+  return sql<number | null>`case owner_queue ${sql.join(branches, sql` `)} end`;
+}
+
+/** When an open exception is due: `deadline_at`, else opened_at plus its queue's window. */
+function dueExpression(
+  levels: ReadonlyMap<string, QueueServiceLevel> | undefined,
+): RawBuilder<Date | null> {
+  const minutes = queueMinutes(levels, (l) => l.resolveWithinMinutes);
+  return minutes
+    ? sql<Date | null>`coalesce(deadline_at, opened_at + make_interval(mins => ${minutes}))`
+    : sql<Date | null>`deadline_at`;
+}
+
+/** Past due at `asOf`, or still `open` past its queue's acknowledgment window. */
+function overdueExpression(
+  levels: ReadonlyMap<string, QueueServiceLevel> | undefined,
+  due: RawBuilder<Date | null>,
+  asOf: string,
+): RawBuilder<SqlBool> {
+  const at = sql`cast(${asOf} as timestamptz)`;
+  const acknowledge = queueMinutes(levels, (l) => l.acknowledgeWithinMinutes);
+  return acknowledge
+    ? sql<SqlBool>`(${due} < ${at} or (status = 'open' and opened_at + make_interval(mins => ${acknowledge}) < ${at}))`
+    : sql<SqlBool>`${due} < ${at}`;
+}
+
+/** A due time as an exact ISO instant (microseconds, UTC) for the keyset cursor. */
+function isoMicros(due: RawBuilder<Date | null>): RawBuilder<string | null> {
+  return sql<string | null>`to_char(${due} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/** Strictly after `position` in the open order (severity_rank, due asc nulls last, id). */
+function afterPosition(position: OpenPosition, due: RawBuilder<Date | null>): RawBuilder<SqlBool> {
+  const { r: rank, d: dueAt, i: id } = position;
+  if (dueAt === null) {
+    return sql<SqlBool>`(severity_rank > ${rank} or (severity_rank = ${rank} and ${due} is null and id > ${id}))`;
+  }
+  const at = sql`cast(${dueAt} as timestamptz)`;
+  return sql<SqlBool>`(severity_rank > ${rank} or (severity_rank = ${rank} and (${due} is null or ${due} > ${at} or (${due} = ${at} and id > ${id}))))`;
 }
