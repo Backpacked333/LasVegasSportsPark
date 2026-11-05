@@ -383,6 +383,252 @@ describe('duplicate review and merge (SPK-IAM-007)', () => {
     expect(again.status).toBe(409);
   });
 
+  it('§4.9 / §4.4 (R4-LIFECYCLES-REVISIONS-03): every record a merge moves to the survivor bumps its revision and carries its own audit, so an edit or decision read before the merge is refused', async () => {
+    const admin = await createStaffMemberFixture(t, { roles: ['system_administrator'] });
+    const header = await authHeaderForPerson(t, admin.personId);
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const supportHeader = await authHeaderForPerson(t, support.personId);
+    const org = t.organizationId;
+    const survivor = await createPersonFixture(t, { kind: 'adult' });
+    const duplicate = await createPersonFixture(t, { kind: 'adult' });
+    // the survivor's own caregiver grant, which a review about the duplicate never showed
+    const survivorCarer = await createPersonFixture(t, { kind: 'adult' });
+    const overSurvivor = await createRelationshipFixture(t, {
+      actorPersonId: survivorCarer,
+      subjectPersonId: survivor,
+      kind: 'caregiver',
+      permissions: ['receive_messages'],
+    });
+    // what moves: a staff membership, a caregiver relationship with its grant, an open review
+    const coach = await createStaffMemberFixture(t, { personId: duplicate, roles: ['coach'] });
+    const duplicateCarer = await createPersonFixture(t, { kind: 'adult' });
+    const overDuplicate = await createRelationshipFixture(t, {
+      actorPersonId: duplicateCarer,
+      subjectPersonId: duplicate,
+      kind: 'caregiver',
+      permissions: ['receive_messages'],
+    });
+    const opened = await t.http
+      .post('/v1/access-reviews')
+      .set(supportHeader)
+      .set('Idempotency-Key', key())
+      .send({ subjectPersonId: duplicate, reason: 'disputed caregiver access' });
+    expect(opened.status).toBe(201);
+    const reviewId = opened.body.id as string;
+    // the revisions a staff screen holds before the merge
+    expect(opened.body.revision).toBe(1);
+    const membershipBefore = await t.db
+      .selectFrom('staff_memberships')
+      .select('revision')
+      .where('id', '=', coach.membershipId)
+      .executeTakeFirstOrThrow();
+    expect(membershipBefore.revision).toBe(1);
+
+    const flagged = await t.http
+      .post('/v1/duplicate-candidates')
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ personAId: survivor, personBId: duplicate, reasons: ['same person'] });
+    const merged = await t.http
+      .post(`/v1/duplicate-candidates/${flagged.body.id}/merge`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ survivorPersonId: survivor, reason: 'verified at the desk' });
+    expect(merged.status, JSON.stringify(merged.body)).toBe(201);
+    expect(merged.body.moved).toMatchObject({
+      staffMembershipsMoved: 1,
+      accessReviewsMoved: 1,
+      relationshipsMoved: 1,
+      grantsMoved: 1,
+    });
+    const operationId = merged.body.operationId as string;
+    const moveDetails = {
+      via: 'merge',
+      operation: 'move',
+      mergeId: merged.body.id,
+      survivorPersonId: survivor,
+      mergedPersonId: duplicate,
+    };
+
+    // each moved record: new holder, revision bumped, its own audit tied to the merge
+    const grantId = overDuplicate.grantIds.receive_messages as string;
+    const rows = {
+      membership: await t.db
+        .selectFrom('staff_memberships')
+        .select(['person_id', 'revision'])
+        .where('id', '=', coach.membershipId)
+        .executeTakeFirstOrThrow(),
+      review: await t.db
+        .selectFrom('access_reviews')
+        .select(['subject_person_id', 'revision', 'status'])
+        .where('id', '=', reviewId)
+        .executeTakeFirstOrThrow(),
+      relationship: await t.db
+        .selectFrom('relationships')
+        .select(['subject_person_id', 'revision'])
+        .where('id', '=', overDuplicate.relationshipId)
+        .executeTakeFirstOrThrow(),
+      grant: await t.db
+        .selectFrom('access_grants')
+        .select(['subject_person_id', 'revision'])
+        .where('id', '=', grantId)
+        .executeTakeFirstOrThrow(),
+    };
+    expect(rows).toEqual({
+      membership: { person_id: survivor, revision: 2 },
+      review: { subject_person_id: survivor, revision: 2, status: 'open' },
+      relationship: { subject_person_id: survivor, revision: 2 },
+      grant: { subject_person_id: survivor, revision: 2 },
+    });
+    const audits = await t.db
+      .selectFrom('audit_records')
+      .select([
+        'target_type',
+        'target_id',
+        'action',
+        'before_revision',
+        'after_revision',
+        'operation_id',
+        'details',
+      ])
+      .where('target_id', 'in', [
+        coach.membershipId,
+        reviewId,
+        overDuplicate.relationshipId,
+        grantId,
+      ])
+      .where('action', '=', 'identity.merge_persons')
+      .orderBy('target_type')
+      .execute();
+    expect(audits).toEqual([
+      {
+        target_type: 'access_grant',
+        target_id: grantId,
+        action: 'identity.merge_persons',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: {
+          ...moveDetails,
+          permission: 'receive_messages',
+          from: {
+            relationshipId: overDuplicate.relationshipId,
+            actorPersonId: duplicateCarer,
+            subjectPersonId: duplicate,
+          },
+          to: {
+            relationshipId: overDuplicate.relationshipId,
+            actorPersonId: duplicateCarer,
+            subjectPersonId: survivor,
+          },
+        },
+      },
+      {
+        target_type: 'access_review',
+        target_id: reviewId,
+        action: 'identity.merge_persons',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: {
+          ...moveDetails,
+          status: 'open',
+          from: { subjectPersonId: duplicate },
+          to: { subjectPersonId: survivor },
+        },
+      },
+      {
+        target_type: 'relationship',
+        target_id: overDuplicate.relationshipId,
+        action: 'identity.merge_persons',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: {
+          ...moveDetails,
+          kind: 'caregiver',
+          source: 'staff',
+          from: { actorPersonId: duplicateCarer, subjectPersonId: duplicate },
+          to: { actorPersonId: duplicateCarer, subjectPersonId: survivor },
+        },
+      },
+      {
+        target_type: 'staff_membership',
+        target_id: coach.membershipId,
+        action: 'identity.merge_persons',
+        before_revision: 1,
+        after_revision: 2,
+        operation_id: operationId,
+        details: {
+          ...moveDetails,
+          roles: ['coach'],
+          facilityIds: [],
+          from: { personId: duplicate },
+          to: { personId: survivor },
+        },
+      },
+    ]);
+    const membershipEvents = await t.db
+      .selectFrom('outbox_events')
+      .select(['payload', 'operation_id'])
+      .where('event_type', '=', 'identity.staff_membership_changed')
+      .where('aggregate_id', '=', coach.membershipId)
+      .execute();
+    expect(membershipEvents).toEqual([
+      {
+        payload: {
+          membershipId: coach.membershipId,
+          personId: survivor,
+          status: 'active',
+          roles: ['coach'],
+        },
+        operation_id: operationId,
+      },
+    ]);
+
+    // a staff screen still holding the pre-merge revision is told the record changed
+    const stalePatch = await t.http
+      .patch(`/v1/staff-memberships/${coach.membershipId}`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ roles: ['coach', 'official'], expectedRevision: 1 });
+    expect(stalePatch.status).toBe(409);
+    expect(stalePatch.body.code).toBe('STALE_REVISION');
+    const staleEnd = await t.http
+      .post(`/v1/staff-memberships/${coach.membershipId}/end`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ reason: 'stale screen', expectedRevision: 1 });
+    expect(staleEnd.status).toBe(409);
+    expect(staleEnd.body.code).toBe('STALE_REVISION');
+    // a restriction decided on the review as it read before the merge would reach the survivor's
+    // own caregiver grant, which that reviewer never saw: refused
+    const staleRestrict = await t.http
+      .post(`/v1/access-reviews/${reviewId}/decisions`)
+      .set(supportHeader)
+      .set('Idempotency-Key', key())
+      .send({ kind: 'restrict', note: 'pending the hearing', expectedRevision: 1 });
+    expect(staleRestrict.status).toBe(409);
+    expect(staleRestrict.body.code).toBe('STALE_REVISION');
+    expect(await authority.hasPermission(org, survivorCarer, survivor, 'receive_messages')).toBe(
+      true,
+    );
+    const survivorGrant = await t.db
+      .selectFrom('access_grants')
+      .select(['suspended_by_review_id', 'revision'])
+      .where('id', '=', overSurvivor.grantIds.receive_messages as string)
+      .executeTakeFirstOrThrow();
+    expect(survivorGrant).toEqual({ suspended_by_review_id: null, revision: 1 });
+    // with the current revision the edit goes through
+    const fresh = await t.http
+      .patch(`/v1/staff-memberships/${coach.membershipId}`)
+      .set(header)
+      .set('Idempotency-Key', key())
+      .send({ roles: ['coach', 'official'], expectedRevision: 2 });
+    expect(fresh.status, JSON.stringify(fresh.body)).toBe(200);
+    expect(fresh.body).toMatchObject({ personId: survivor, revision: 3 });
+  });
+
   /**
    * A customer who knows a child's name and date of birth creates a matching child record and
    * gives themselves guardian grants over it (self-service, unverified). Detection flags the pair

@@ -386,4 +386,88 @@ describe('person merge under concurrency (§4.9, SPK-IAM-006, SPK-IAM-007)', () 
       expect(claims).toEqual([]);
     },
   );
+
+  it('§4.9 / §4.4 (R4-LIFECYCLES-REVISIONS-03): a staff membership change and an access-review decision sent with the revision read before a running merge wait for the merge, which has locked them, and are then refused STALE_REVISION (PGlite and TEST_DATABASE_URL)', async () => {
+    const support = await createStaffMemberFixture(t, { roles: ['support_operator'] });
+    const supportHeader = await authHeaderForPerson(t, support.personId);
+    const survivor = await createPersonFixture(t, { kind: 'adult' });
+    const duplicate = await createPersonFixture(t, { kind: 'adult' });
+    const coach = await createStaffMemberFixture(t, { personId: duplicate, roles: ['coach'] });
+    const opened = await t.http
+      .post('/v1/access-reviews')
+      .set(supportHeader)
+      .set('Idempotency-Key', key())
+      .send({ subjectPersonId: duplicate, reason: 'disputed access' });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(201);
+    const reviewId = opened.body.id as string;
+    const candidateId = await flag(survivor, duplicate);
+    // Pause the merge right after it has locked the merged person's memberships and open reviews.
+    const operations = t.app.get(OperationsService);
+    const create = operations.create.bind(operations);
+    const paused = gate();
+    let holder: number | undefined;
+    const spy = vi.spyOn(operations, 'create').mockImplementation(async (trx, input) => {
+      if (input.kind === 'identity.merge_persons') {
+        if (t.database.concurrent) holder = await backendPid(trx);
+        await paused.pass();
+      }
+      return create(trx, input);
+    });
+    let results: { status: number; body: Record<string, unknown> }[];
+    try {
+      const merging = tracked(merge(candidateId, survivor));
+      await paused.reached;
+      // both screens hold revision 1, read before the merge
+      const changing = tracked(
+        t.http
+          .patch(`/v1/staff-memberships/${coach.membershipId}`)
+          .set(adminHeader)
+          .set('Idempotency-Key', key())
+          .send({ roles: ['coach', 'official'], expectedRevision: 1 }),
+      );
+      if (t.database.concurrent) {
+        expect(await untilSettledOrBlockedBy(t, changing, () => holder, 1)).toBe(true);
+      }
+      const deciding = tracked(
+        t.http
+          .post(`/v1/access-reviews/${reviewId}/decisions`)
+          .set(supportHeader)
+          .set('Idempotency-Key', key())
+          .send({ kind: 'restrict', note: 'pending the hearing', expectedRevision: 1 }),
+      );
+      if (t.database.concurrent) {
+        expect(await untilSettledOrBlockedBy(t, deciding, () => holder, 2)).toBe(true);
+      }
+      paused.open();
+      results = await Promise.all([merging.promise, changing.promise, deciding.promise]);
+    } finally {
+      paused.open();
+      spy.mockRestore();
+    }
+    const [merged, changed, decided] = results;
+    expect(merged?.status, JSON.stringify(merged?.body)).toBe(201);
+    expect(merged?.body.moved).toMatchObject({ staffMembershipsMoved: 1, accessReviewsMoved: 1 });
+    expect(changed?.status, JSON.stringify(changed?.body)).toBe(409);
+    expect(changed?.body.code).toBe('STALE_REVISION');
+    expect(decided?.status, JSON.stringify(decided?.body)).toBe(409);
+    expect(decided?.body.code).toBe('STALE_REVISION');
+    const membership = await t.db
+      .selectFrom('staff_memberships')
+      .select(['person_id', 'roles', 'revision'])
+      .where('id', '=', coach.membershipId)
+      .executeTakeFirstOrThrow();
+    expect(membership).toEqual({ person_id: survivor, roles: ['coach'], revision: 2 });
+    const review = await t.db
+      .selectFrom('access_reviews')
+      .select(['subject_person_id', 'revision'])
+      .where('id', '=', reviewId)
+      .executeTakeFirstOrThrow();
+    expect(review).toEqual({ subject_person_id: survivor, revision: 2 });
+    const decisions = await t.db
+      .selectFrom('access_review_decisions')
+      .select('id')
+      .where('review_id', '=', reviewId)
+      .execute();
+    expect(decisions).toEqual([]);
+  });
 });

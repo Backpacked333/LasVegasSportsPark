@@ -87,6 +87,7 @@ const UNVERIFIED_AUTHORITY_SOURCES: ReadonlySet<string> = new Set(['self_service
 
 /** What every per-record write of one merge records: who, when, and which merge (§4.9, §4.14). */
 interface MergeWrite {
+  organizationId: string;
   principal: Principal;
   actor: ReturnType<typeof json>;
   now: Date;
@@ -290,6 +291,30 @@ export class DuplicatesService {
         );
       }
       const now = this.clock.now();
+      // §4.9 (R4-LIFECYCLES-REVISIONS-03): the merged person's staff memberships not ended and the
+      // open access reviews about them, which steps 5 and 7 move to the survivor, are locked here
+      // in id order: before the scope check reads the memberships, and before any grant (step 3),
+      // in the same review-then-grants order as an access-review decision. A concurrent change or
+      // end of a membership, or a decision on a review, either commits first (and is checked and
+      // moved as committed) or waits for the merge and then meets the moved row's new revision.
+      const mergedMemberships = await trx
+        .selectFrom('staff_memberships')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('person_id', '=', mergedId)
+        .where('status', '=', 'active')
+        .orderBy('id')
+        .forUpdate()
+        .execute();
+      const mergedReviews = await trx
+        .selectFrom('access_reviews')
+        .select(['id', 'status', 'revision', 'organization_id'])
+        .where('organization_id', '=', organizationId)
+        .where('subject_person_id', '=', mergedId)
+        .where('status', '<>', 'closed')
+        .orderBy('id')
+        .forUpdate()
+        .execute();
       // §2.1, §4.3, §4.14 (R3-SECURITY-01): a merge moves the merged person's staff memberships
       // onto the survivor and may hand the survivor's record to the merged person's login, so it
       // takes over staff logins; both persons' memberships not ended (in force, scheduled or
@@ -297,7 +322,7 @@ export class DuplicatesService {
       // administers (an organization-wide one needs an organization-wide administrator).
       requireStaffAssignmentScope(principal, [
         ...(await staffMembershipFacilityLists(trx, organizationId, survivorId)),
-        ...(await staffMembershipFacilityLists(trx, organizationId, mergedId)),
+        ...mergedMemberships.map((m) => [...m.facility_ids]),
       ]);
       const operationId = await this.operations.create(trx, {
         organizationId,
@@ -333,6 +358,7 @@ export class DuplicatesService {
       const mergeId = newId();
       const mergeAudit = { mergeId, survivorPersonId: survivorId, mergedPersonId: mergedId };
       const write: MergeWrite = {
+        organizationId,
         principal,
         actor,
         now,
@@ -536,6 +562,25 @@ export class DuplicatesService {
             ensureUpdated(moved.numUpdatedRows, () =>
               errors.staleRevision(grant.revision, grant.revision + 1),
             );
+            await this.auditMove(trx, write, {
+              targetType: 'access_grant',
+              targetId: grant.id,
+              revision: grant.revision,
+              reason: 'merge: grant follows the survivor',
+              details: {
+                permission: grant.permission,
+                from: {
+                  relationshipId: grant.relationship_id,
+                  actorPersonId: grant.actor_person_id,
+                  subjectPersonId: grant.subject_person_id,
+                },
+                to: {
+                  relationshipId: target ? target.id : relationship.id,
+                  actorPersonId: newActor,
+                  subjectPersonId: newSubject,
+                },
+              },
+            });
             summary.grantsMoved += 1;
           }
         }
@@ -564,6 +609,21 @@ export class DuplicatesService {
           ensureUpdated(moved.numUpdatedRows, () =>
             errors.staleRevision(relationship.revision, relationship.revision + 1),
           );
+          await this.auditMove(trx, write, {
+            targetType: 'relationship',
+            targetId: relationship.id,
+            revision: relationship.revision,
+            reason: 'merge: relationship follows the survivor',
+            details: {
+              kind: relationship.kind,
+              source: relationship.source,
+              from: {
+                actorPersonId: relationship.actor_person_id,
+                subjectPersonId: relationship.subject_person_id,
+              },
+              to: { actorPersonId: newActor, subjectPersonId: newSubject },
+            },
+          });
           summary.relationshipsMoved += 1;
         }
       }
@@ -630,15 +690,50 @@ export class DuplicatesService {
         }
       }
 
-      // 5. Staff memberships (verified by a system administrator) follow the survivor.
-      const staff = await trx
-        .updateTable('staff_memberships')
-        .set({ person_id: survivorId })
-        .where('organization_id', '=', organizationId)
-        .where('person_id', '=', mergedId)
-        .where('status', '=', 'active')
-        .executeTakeFirst();
-      summary.staffMembershipsMoved = Number(staff.numUpdatedRows);
+      // 5. Staff memberships (verified by a system administrator) follow the survivor. Each one
+      // locked above moves under that lock with its revision bumped, so an edit or end sent with a
+      // revision read before the merge is refused (STALE_REVISION, §4.9); it gets its own audit
+      // record tied to the merge (§4.4) and an identity.staff_membership_changed naming its new
+      // holder (R4-LIFECYCLES-REVISIONS-03).
+      for (const membership of mergedMemberships) {
+        const moved = await trx
+          .updateTable('staff_memberships')
+          .set({ person_id: survivorId, revision: membership.revision + 1 })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', membership.id)
+          .where('revision', '=', membership.revision)
+          .where('status', '=', 'active')
+          .executeTakeFirst();
+        ensureUpdated(moved.numUpdatedRows, () =>
+          errors.staleRevision(membership.revision, membership.revision + 1),
+        );
+        await this.auditMove(trx, write, {
+          targetType: 'staff_membership',
+          targetId: membership.id,
+          revision: membership.revision,
+          reason: 'merge: staff membership follows the survivor',
+          details: {
+            roles: membership.roles,
+            facilityIds: membership.facility_ids,
+            from: { personId: mergedId },
+            to: { personId: survivorId },
+          },
+        });
+        await this.outbox.enqueue(trx, IdentityEvents.staffMembershipChanged, {
+          organizationId,
+          aggregateType: 'staff_membership',
+          aggregateId: membership.id,
+          payload: {
+            membershipId: membership.id,
+            personId: survivorId,
+            status: 'active',
+            roles: membership.roles,
+          },
+          correlationId,
+          operationId,
+        });
+        summary.staffMembershipsMoved += 1;
+      }
 
       // 6. Pending invitations and claims addressed to the merged person are unverified: revoke.
       // Each takes the same pending → revoked transition as the revoke commands (machine, revision
@@ -760,15 +855,37 @@ export class DuplicatesService {
         summary.pendingClaimsRevoked += 1;
       }
 
-      // 7. Open access reviews about the merged person continue about the survivor.
-      const reviews = await trx
-        .updateTable('access_reviews')
-        .set({ subject_person_id: survivorId })
-        .where('organization_id', '=', organizationId)
-        .where('subject_person_id', '=', mergedId)
-        .where('status', '<>', 'closed')
-        .executeTakeFirst();
-      summary.accessReviewsMoved = Number(reviews.numUpdatedRows);
+      // 7. Open access reviews about the merged person continue about the survivor. Each one locked
+      // above moves under that lock with its revision bumped, so a decision sent with a revision
+      // read before the merge (whose `restrict` would otherwise reach the survivor's grants, never
+      // shown to the reviewer) is refused (STALE_REVISION, §4.9); it gets its own audit record tied
+      // to the merge (§4.4, R4-LIFECYCLES-REVISIONS-03). No decision is recorded: the merge decides
+      // nothing about the dispute (SPK-IAM-005).
+      for (const review of mergedReviews) {
+        const moved = await trx
+          .updateTable('access_reviews')
+          .set({ subject_person_id: survivorId, revision: review.revision + 1 })
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', review.id)
+          .where('revision', '=', review.revision)
+          .where('status', '<>', 'closed')
+          .executeTakeFirst();
+        ensureUpdated(moved.numUpdatedRows, () =>
+          errors.staleRevision(review.revision, review.revision + 1),
+        );
+        await this.auditMove(trx, write, {
+          targetType: 'access_review',
+          targetId: review.id,
+          revision: review.revision,
+          reason: 'merge: access review continues about the survivor',
+          details: {
+            status: review.status,
+            from: { subjectPersonId: mergedId },
+            to: { subjectPersonId: survivorId },
+          },
+        });
+        summary.accessReviewsMoved += 1;
+      }
 
       // 8. Other open candidates involving the merged person are moot. Each takes the dismiss
       // command's transition (machine, revision bump, its own identity.dismiss_duplicate audit
@@ -970,6 +1087,39 @@ export class DuplicatesService {
         revokedGrantIds: grants.map((g) => g.id),
         ...write.merge,
       },
+    });
+  }
+
+  /**
+   * Audits one record the merge re-pointed to the survivor (§4.4, §4.9, R4-LIFECYCLES-REVISIONS-03):
+   * a relationship, grant, staff membership or access review. No command moves a record from one
+   * person to another, so the merge is the audited action, recorded on the record itself with the
+   * revision it moved from and to (the caller's revision-guarded write bumped it) and the merge's
+   * operation, so the record's own history shows whom it pointed at before.
+   */
+  private async auditMove(
+    trx: Trx,
+    write: MergeWrite,
+    move: {
+      targetType: 'relationship' | 'access_grant' | 'staff_membership' | 'access_review';
+      targetId: string;
+      revision: number;
+      reason: string;
+      details: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    await this.audit.record(trx, {
+      organizationId: write.organizationId,
+      actor: write.principal,
+      action: IdentityActions.mergePersons.id,
+      targetType: move.targetType,
+      targetId: move.targetId,
+      beforeRevision: move.revision,
+      afterRevision: move.revision + 1,
+      reason: move.reason,
+      correlationId: write.correlationId,
+      operationId: write.operationId,
+      details: { via: 'merge', operation: 'move', ...move.details, ...write.merge },
     });
   }
 
