@@ -1042,7 +1042,20 @@ export class OfferingsService implements OfferingLookupPort {
     });
     if (!reader.allowed) throw errors.protectedNotFound('offering');
     const row = await this.loadOffering(this.db, organizationId, id);
-    if (!row) throw errors.notFound('offering', id);
+    if (!row) throw errors.protectedNotFound('offering');
+    // §4.10 (R4-AUTHZ-TARGETS-04 follow-up): for a reader the offering exists exactly as
+    // GET /offerings/{id} says. An unpublished one at a facility their reading roles do not cover
+    // is the same NOT_FOUND as an unknown id; only an offering they can see may be refused the
+    // publish authority (ACCESS_DENIED), which reveals nothing they could not already read.
+    const facilityReader = await this.authorization.decide(principal, CatalogActions.readCatalog, {
+      type: 'offering',
+      id,
+      organizationId,
+      facilityId: row.facility_id,
+    });
+    if (!facilityReader.allowed && !PUBLIC_PUBLICATION_STATES.includes(row.publication_state)) {
+      throw errors.protectedNotFound('offering');
+    }
     await this.authorization.require(principal, CatalogActions.publishOffering, {
       type: 'offering',
       id,

@@ -1,5 +1,7 @@
-import { newId } from '@sportspark/contracts';
+import { newId, type Principal } from '@sportspark/contracts';
+import type { Response } from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { UnitOfWork } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
   authHeaderForPerson,
@@ -7,7 +9,12 @@ import {
   createStaffMemberFixture,
 } from '../../identity';
 import { CatalogModule } from '../catalog.module';
-import { createOfferingFixture, createProgramFixture } from '../testing/catalog-fixtures';
+import { PRICING_PORT, type PricingPort } from '../catalog.ports';
+import {
+  createDiscountFixture,
+  createOfferingFixture,
+  createProgramFixture,
+} from '../testing/catalog-fixtures';
 
 type Auth = { Authorization: string };
 
@@ -25,6 +32,8 @@ describe('catalog facility-scoped reads (§4.14, R4-AUTHZ-TARGETS-03/04)', () =>
   let eastFrontDeskOfficialEverywhere: Auth;
   let official: Auth;
   let customer: Auth;
+  let customerPersonId: string;
+  let eastManager: Auth;
   let eastFacilityId: string;
   let programId: string;
   let mainDraft: string;
@@ -67,7 +76,9 @@ describe('catalog facility-scoped reads (§4.14, R4-AUTHZ-TARGETS-03/04)', () =>
     });
     await createStaffMemberFixture(t, { roles: ['official'], personId: mixed.personId });
     eastFrontDeskOfficialEverywhere = await authHeaderForPerson(t, mixed.personId);
-    customer = await authHeaderForPerson(t, (await createOrganizationPeople(t)).adult.personId);
+    customerPersonId = (await createOrganizationPeople(t)).adult.personId;
+    customer = await authHeaderForPerson(t, customerPersonId);
+    eastManager = await staff(['program_manager'], [eastFacilityId]);
 
     programId = await createProgramFixture(t);
     const offering = async (facilityId: string, publicationState: 'draft' | 'registration_open') =>
@@ -175,5 +186,151 @@ describe('catalog facility-scoped reads (§4.14, R4-AUTHZ-TARGETS-03/04)', () =>
     expect(mixed.status).toBe(403);
     // an organization-wide reader previews any facility's draft at any instant
     expect((await evaluate(frontDesk, mainDraft, AT)).status).toBe(200);
+  });
+
+  /** What a caller can tell from an error: its status, code and message (never ids or timing). */
+  const answer = (res: Response) => ({
+    status: res.status,
+    code: res.body.code as string,
+    message: res.body.message as string,
+  });
+
+  it('SPK-IAM-003 §4.10 R4-AUTHZ-TARGETS-04 follow-up: a preview names only participants the caller may register, so it is no oracle on another household’s discount use', async () => {
+    const pricing = t.app.get<PricingPort>(PRICING_PORT);
+    const uow = t.app.get(UnitOfWork);
+    const household = await createOrganizationPeople(t);
+    const guardian = await authHeaderForPerson(t, household.adult.personId);
+    const child = household.child.personId;
+    // a guardian who may only view their child does not register them
+    const viewOnly = await createOrganizationPeople(t, { guardianPermissions: ['view'] });
+    const viewer = await authHeaderForPerson(t, viewOnly.adult.personId);
+    const aidAt = async (facilityId: string) =>
+      (
+        await createOfferingFixture(t, {
+          responsibleManagerPersonId: managerPersonId,
+          programId,
+          facilityId,
+          publicationState: 'registration_open',
+          basePriceMinor: 22_200,
+        })
+      ).offeringId;
+    const mainAid = await aidAt(t.facilityId);
+    const eastAid = await aidAt(eastFacilityId);
+    const aid = await createDiscountFixture(t, {
+      code: null,
+      name: 'Hardship aid',
+      perPersonLimit: 1,
+      eligibilityRules: { offeringIds: [mainAid, eastAid] },
+    });
+    const preview = (auth: Auth, offeringId: string, participantPersonId: string) =>
+      t.http
+        .post('/v1/discounts/evaluate')
+        .set(auth)
+        .send({
+          currency: 'USD',
+          lines: [{ lineId: 'a', offeringId, participantPersonId }],
+        });
+    const applied = (res: Response) =>
+      (res.body.discounts as { discountDefinitionId: string; applied: boolean }[]).find(
+        (d) => d.discountDefinitionId === aid,
+      )?.applied;
+
+    // Every refused caller, before and after the child's redemption, and for a person id that
+    // names nobody: the answers must not move.
+    const refused = async () => ({
+      stranger: answer(await preview(customer, mainAid, child)),
+      strangerUnknownPerson: answer(await preview(customer, mainAid, newId())),
+      official: answer(await preview(official, mainAid, child)),
+      viewer: answer(await preview(viewer, mainAid, child)),
+      eastReaderElsewhere: answer(await preview(eastFrontDesk, mainAid, child)),
+      eastReaderOfficialElsewhere: answer(
+        await preview(eastFrontDeskOfficialEverywhere, mainAid, child),
+      ),
+    });
+    const before = await refused();
+    for (const key of ['stranger', 'official', 'viewer'] as const) {
+      expect(before[key]).toEqual({
+        status: 403,
+        code: 'PARTICIPANT_AUTHORITY_REQUIRED',
+        message: expect.any(String),
+      });
+    }
+    expect(before.strangerUnknownPerson).toEqual(before.stranger);
+    expect(before.eastReaderElsewhere).toMatchObject({ status: 403, code: 'ACCESS_DENIED' });
+    expect(before.eastReaderOfficialElsewhere).toEqual(before.eastReaderElsewhere);
+    // the people who may see the child's counts see the discount still available
+    expect(applied(await preview(guardian, mainAid, child))).toBe(true);
+    expect(applied(await preview(frontDesk, mainAid, child))).toBe(true);
+    expect(applied(await preview(eastFrontDesk, eastAid, child))).toBe(true);
+    // naming oneself is the self basis, for a customer and for a staff member without the role
+    expect((await preview(customer, mainAid, customerPersonId)).status).toBe(200);
+
+    const system: Principal = {
+      kind: 'system',
+      organizationId: t.organizationId,
+      accountId: null,
+      personId: null,
+      staffRoles: [],
+      facilityIds: [],
+      sessionId: null,
+      actorLabel: 'test',
+    };
+    await uow.run(({ trx }) =>
+      pricing.redeemDiscount(trx, t.organizationId, {
+        discountDefinitionId: aid,
+        referenceType: 'order',
+        referenceId: newId(),
+        personId: child,
+        amountMinor: 2_220,
+        currency: 'USD',
+        actor: system,
+      }),
+    );
+
+    expect(await refused()).toEqual(before);
+    for (const allowed of [
+      await preview(guardian, mainAid, child),
+      await preview(frontDesk, mainAid, child),
+      await preview(eastFrontDesk, eastAid, child),
+    ]) {
+      expect(allowed.status).toBe(200);
+      expect(applied(allowed)).toBe(false);
+    }
+  });
+
+  it('§4.10 §4.14 R4-AUTHZ-TARGETS-04 follow-up: the staff reads of one offering answer for a draft the caller cannot see exactly as for an unknown id', async () => {
+    const read = async (auth: Auth, path: string) => answer(await t.http.get(path).set(auth));
+    const priceRules = (id: string) => `/v1/offerings/${id}/price-rules`;
+    const check = (id: string) => `/v1/offerings/${id}/publication-check`;
+    for (const route of [priceRules, check]) {
+      for (const caller of [customer, eastFrontDesk, eastManager, eastCoach]) {
+        const unknown = await read(caller, route(newId()));
+        expect(unknown).toMatchObject({ status: 404, code: 'NOT_FOUND' });
+        // another facility's draft: the same answer as GET /offerings/{id} and an unknown id
+        expect(await read(caller, route(mainDraft))).toEqual(unknown);
+        expect((await t.http.get(`/v1/offerings/${mainDraft}`).set(caller)).status).toBe(404);
+      }
+    }
+    // an offering the caller can see may be refused the staff read (it reveals nothing new)
+    for (const caller of [customer, eastFrontDesk]) {
+      expect(await read(caller, priceRules(mainOpen))).toMatchObject({
+        status: 403,
+        code: 'ACCESS_DENIED',
+      });
+    }
+    expect(await read(eastManager, check(mainOpen))).toMatchObject({
+      status: 403,
+      code: 'ACCESS_DENIED',
+    });
+    // a desk reader at the east complex reads its rules, but may not check publication there
+    expect((await t.http.get(priceRules(eastDraft)).set(eastFrontDesk)).status).toBe(200);
+    expect(await read(eastFrontDesk, check(eastDraft))).toMatchObject({
+      status: 403,
+      code: 'ACCESS_DENIED',
+    });
+    // the east manager may check publication of its own facility's draft
+    expect((await t.http.get(check(eastDraft)).set(eastManager)).status).toBe(200);
+    // an organization-wide reader reads every facility's rules
+    expect((await t.http.get(priceRules(mainDraft)).set(frontDesk)).status).toBe(200);
   });
 });

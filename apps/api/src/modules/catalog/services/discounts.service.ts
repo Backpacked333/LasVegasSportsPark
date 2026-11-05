@@ -69,6 +69,11 @@ interface LineOffering {
 const atIsStaffOnly = () =>
   errors.accessDenied('Only staff may evaluate discounts at another instant.', { field: 'at' });
 
+/** The distinct participants a preview names (their per-person redemption counts are read). */
+const participantsOf = (lines: EvaluateDiscountsInput['lines']): string[] => [
+  ...new Set(lines.map((l) => l.participantPersonId).filter((p): p is string => !!p)),
+];
+
 /**
  * Discount definitions (SPK-PAY-003) and their redemption counters (§4.7 invariant 7). Evaluation
  * is the pure function in `pricing/discount-evaluator.ts`; redemption is a conditional update of
@@ -369,6 +374,13 @@ export class DiscountsService {
    * (SPK-IAM-001/003, R4-AUTHZ-TARGETS-04): a staff principal whose roles do not hold the action
    * keeps their own self authority, and a role scoped to some facilities unlocks unpublished
    * offerings and another instant only at those facilities (§4.3, §4.14, §4.10).
+   *
+   * A line's `participantPersonId` selects that person's per-person redemption counts, so it is
+   * authorized like a basket line (SPK-IAM-003, §4.10, R4-AUTHZ-TARGETS-04 follow-up): unless
+   * staff authority covers the line's facility, the participant is the caller or someone the
+   * caller holds `register` over. Anyone else is PARTICIPANT_AUTHORITY_REQUIRED (ACCESS_DENIED for
+   * a facility-scoped reader at another facility), the same answer for every person id whatever
+   * their redemptions, so the preview is no oracle on another household's discount use.
    */
   async evaluate(principal: Principal, body: EvaluateDiscountsInput): Promise<DiscountEvaluation> {
     const organizationId = organizationOf(principal);
@@ -380,22 +392,39 @@ export class DiscountsService {
         organizationId,
       })
     ).allowed;
+    // Without staff authority every line is the caller's own basket: the caller and each named
+    // participant are the subjects, decided before any offering is looked up.
     await this.authorization.require(principal, action, {
       type: 'discount_evaluation',
       organizationId,
-      subjectPersonIds: !staffAuthority && principal.personId ? [principal.personId] : undefined,
+      subjectPersonIds:
+        !staffAuthority && principal.personId
+          ? [...new Set([principal.personId, ...participantsOf(body.lines)])]
+          : undefined,
     });
     // §4.10: without staff authority another instant is refused before any offering is looked up,
     // so the refusal says nothing about the offerings named.
     if (body.at && !staffAuthority) throw atIsStaffOnly();
-    const { offerings, everyFacilityStaff } = await this.visibleOfferings(
+    const { offerings, staffAt } = await this.visibleOfferings(
       principal,
       organizationId,
       body,
       staffAuthority,
     );
+    if (staffAuthority) {
+      await this.requireParticipantsOutsideStaffScope(
+        principal,
+        organizationId,
+        body,
+        offerings,
+        staffAt,
+      );
+    }
     // Only staff preview another instant (past or upcoming promotions), and only when their role
     // covers the facility of every line's offering. Decided before any price rule is read.
+    const everyFacilityStaff = [...offerings.values()].every(
+      (o) => staffAt.get(o.facility_id) === true,
+    );
     if (body.at && !everyFacilityStaff) throw atIsStaffOnly();
     const at = body.at ? new Date(body.at) : this.clock.now();
     return this.evaluateForOrganization(organizationId, {
@@ -407,17 +436,51 @@ export class DiscountsService {
   }
 
   /**
+   * A staff reader whose role does not reach a line's facility previews that line as the person
+   * they are (SPK-IAM-001/003): its participant must be themselves or someone they may register.
+   * Decided at that facility, so the staff role, which does not cover it, grants nothing there.
+   */
+  private async requireParticipantsOutsideStaffScope(
+    principal: Principal,
+    organizationId: string,
+    body: EvaluateDiscountsInput,
+    offerings: ReadonlyMap<string, LineOffering>,
+    staffAt: ReadonlyMap<string, boolean>,
+  ): Promise<void> {
+    const byFacility = new Map<string, Set<string>>();
+    for (const line of body.lines) {
+      if (!line.participantPersonId) continue;
+      const facilityId = offerings.get(line.offeringId)!.facility_id;
+      if (staffAt.get(facilityId)) continue;
+      const participants = byFacility.get(facilityId) ?? new Set<string>();
+      participants.add(line.participantPersonId);
+      byFacility.set(facilityId, participants);
+    }
+    for (const [facilityId, participants] of [...byFacility].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      await this.authorization.require(principal, CatalogActions.evaluateDiscounts, {
+        type: 'discount_evaluation',
+        organizationId,
+        facilityId,
+        subjectPersonIds: [...participants].sort(),
+      });
+    }
+  }
+
+  /**
    * The lines' offerings as the caller may see them (§4.10): an offering in any publication state
    * when the kernel allows the action at that offering's facility, otherwise only a discoverable
    * one; anything else does not exist for the caller (NOT_FOUND, as for an unknown id).
-   * `everyFacilityStaff` is whether staff authority covers the facility of every line's offering.
+   * `staffAt` says, per facility of a line's offering, whether staff authority covers it (empty
+   * without staff authority).
    */
   private async visibleOfferings(
     principal: Principal,
     organizationId: string,
     body: EvaluateDiscountsInput,
     staffAuthority: boolean,
-  ): Promise<{ offerings: Map<string, LineOffering>; everyFacilityStaff: boolean }> {
+  ): Promise<{ offerings: Map<string, LineOffering>; staffAt: Map<string, boolean> }> {
     const offeringIds = [...new Set(body.lines.map((l) => l.offeringId))];
     const rows = await executorFor(this.db)
       .selectFrom('offerings')
@@ -438,7 +501,6 @@ export class DiscountsService {
     }
     const byId = new Map(rows.map((o) => [o.id, o]));
     const offerings = new Map<string, LineOffering>();
-    let everyFacilityStaff = true;
     for (const offeringId of offeringIds) {
       const offering = byId.get(offeringId);
       const staff = offering ? (staffAt.get(offering.facility_id) ?? false) : false;
@@ -448,10 +510,9 @@ export class DiscountsService {
       ) {
         throw errors.protectedNotFound('offering');
       }
-      if (!staff) everyFacilityStaff = false;
       offerings.set(offeringId, offering);
     }
-    return { offerings, everyFacilityStaff };
+    return { offerings, staffAt };
   }
 
   /** Lines priced by the server: offering kind and program, base price from the effective rule. */
