@@ -108,6 +108,21 @@ export function localDayWindow(timezone: string, at: Date, date?: string): DayWi
   return { date: day, start, end };
 }
 
+/**
+ * R4-OPS-MODULES-06 (SPK-ENTRY-001, SPK-ENTRY-004, SPK-ENTRY-005): whether `at` falls before the
+ * facility-local day on which the activity starts. A session check-in and an observed attendance
+ * are facts about the activity's own day: one recorded ahead of it would hold the person's one
+ * live check-in for that activity, and count as a live check-in of today's visit.
+ */
+export function beforeActivityDay(activity: { timezone: string; start: Date }, at: Date): boolean {
+  return at.getTime() < localDayWindow(activity.timezone, activity.start).start.getTime();
+}
+
+/** The facility-local date an activity starts on (for the `activity_not_today` refusal). */
+export function activityDateOf(activity: { timezone: string; start: Date }): string {
+  return localDateOf(activity.timezone, activity.start);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Attendance (SPK-ENTRY-005, §4.5): observations are never edited. A correction is a new row that
 // names the observation it corrects; the current state of a person in an activity is the set of

@@ -12,6 +12,7 @@ import {
   enroll,
   entryTestApp,
   exceptionsOf,
+  expectPgError,
   family,
   key,
   post,
@@ -599,5 +600,99 @@ describe('supervised release (§4.8 POST /v1/releases, SPK-ENTRY-007, SPK-AT-016
       });
       expect(read.body.escalationExceptionId).not.toBeNull();
     }
+  });
+  it('SPK-ENTRY-007 / SPK-ENTRY-001: a visit with live session check-ins is not voided, and voiding a supervised child arrival needs the release authority and raises a follow-up (R4-OPS-MODULES-04)', async () => {
+    const child = await createPersonFixture(t, { kind: 'child' });
+    await enroll(t, p, child, fam.guardian.personId);
+    const visitId = await arrive(child);
+    const admitted = await post(t, '/v1/session-checkins', desk, {
+      personId: child,
+      activity: sessionRef(p),
+    });
+    expect(admitted.status, JSON.stringify(admitted.body)).toBe(201);
+    expect(admitted.body).toMatchObject({ status: 'admitted', visitId });
+    const departure = await post(t, '/v1/departures', desk, { visitId });
+    expect(departure.body.details).toMatchObject({ code: 'release_required' });
+
+    // The void does not walk the admitted child out of the facility records.
+    const refused = await post(t, `/v1/visits/${visitId}/void`, desk, {
+      reason: 'Recorded by mistake',
+      expectedRevision: 1,
+    });
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.details).toMatchObject({
+      code: 'live_checkins',
+      checkinIds: [admitted.body.id],
+    });
+    expect(await visitStatus(visitId)).toBe('on_site');
+    // The database refuses the same, whoever writes (0808).
+    await expectPgError(
+      t.db
+        .updateTable('visits')
+        .set({ status: 'voided', voided_at: t.clock.now(), void_reason: 'direct' })
+        .where('id', '=', visitId)
+        .execute(),
+      '23514',
+    );
+    // ... and a live check-in never names a voided visit.
+    const adult = await createPersonFixture(t, { kind: 'adult' });
+    const adultVisit = await post(t, '/v1/visits', desk, {
+      facilityId: t.facilityId,
+      arrivals: [{ personId: adult, visitorCategory: 'spectator' }],
+    });
+    const adultVisitId = adultVisit.body.visits[0].id as string;
+    const voidedAdult = await post(t, `/v1/visits/${adultVisitId}/void`, desk, {
+      reason: 'Wrong person',
+      expectedRevision: 1,
+    });
+    expect(voidedAdult.status, JSON.stringify(voidedAdult.body)).toBe(200);
+    await expectPgError(
+      t.db
+        .updateTable('session_checkins')
+        .set({ visit_id: adultVisitId })
+        .where('id', '=', admitted.body.id)
+        .execute(),
+      '23514',
+    );
+    // A plain adult arrival raises no pickup follow-up.
+    const voidedAdultFollowUps = (await exceptionsOf(t, 'entry.supervised_visit_voided')).filter(
+      (e) => e.affected_id === adultVisitId,
+    );
+    expect(voidedAdultFollowUps).toEqual([]);
+
+    // Once the check-in is withdrawn (its own reason), the child's participant arrival may be
+    // voided — only by staff who may record the release, and never silently.
+    const withdrawn = await post(t, `/v1/session-checkins/${admitted.body.id}/withdraw`, desk, {
+      reason: 'Checked in by mistake',
+      expectedRevision: admitted.body.revision,
+    });
+    expect(withdrawn.status, JSON.stringify(withdrawn.body)).toBe(200);
+    const leagueManager = await staffMember(t, ['league_manager']);
+    const notPickupStaff = await post(t, `/v1/visits/${visitId}/void`, leagueManager, {
+      reason: 'Recorded by mistake',
+      expectedRevision: 1,
+    });
+    expect(notPickupStaff.status, JSON.stringify(notPickupStaff.body)).toBe(403);
+    expect(await visitStatus(visitId)).toBe('on_site');
+    const voided = await post(t, `/v1/visits/${visitId}/void`, desk, {
+      reason: 'Recorded by mistake',
+      expectedRevision: 1,
+    });
+    expect(voided.status, JSON.stringify(voided.body)).toBe(200);
+    expect(voided.body).toMatchObject({ status: 'voided' });
+    const followUps = (await exceptionsOf(t, 'entry.supervised_visit_voided')).filter(
+      (e) => e.affected_id === visitId,
+    );
+    expect(followUps).toHaveLength(1);
+    expect(followUps[0]).toMatchObject({
+      severity: 'warning',
+      owner_queue: 'general_manager',
+      affected_type: 'visit',
+    });
+    expect(followUps[0]!.details).toMatchObject({
+      personId: child,
+      voidReason: 'Recorded by mistake',
+      nextAction: 'confirm_the_child_was_not_on_site',
+    });
   });
 });

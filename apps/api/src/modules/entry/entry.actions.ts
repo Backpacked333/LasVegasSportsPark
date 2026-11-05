@@ -233,6 +233,3 @@ export const EntryActions = defineActions({
     requirements: ['§3.16'],
   },
 });
-
-/** Desk roles: principals holding one act on any activity of their facility scope. */
-export const DESK_ROLES = DESK;

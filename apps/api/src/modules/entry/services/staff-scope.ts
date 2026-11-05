@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { errors, type AssignmentTargetType, type Principal } from '@sportspark/contracts';
 import { AuthorizationService, type ActionDefinition, type Trx } from '../../../kernel';
 import { ASSIGNMENT_COVERAGE_PORT, type AssignmentCoveragePort } from '../../workforce';
-import { DESK_ROLES } from '../entry.actions';
 import { organizationOf } from '../entry.shared';
 import type { ResolvedActivity } from './activity-resolver';
 
@@ -10,9 +9,10 @@ export type ActivityAuthority = 'desk' | 'assigned';
 
 /**
  * Activity-scoped authority (§2.1, SPK-UX-007). Desk roles act on any activity inside their
- * facility scope. A coach or official acts only on an activity they hold an accepted (or
- * completed) workforce assignment for: the session itself, its scheduling event, or the fixture
- * the event schedules. Assignment facts are read through workforce's ASSIGNMENT_COVERAGE_PORT,
+ * facility scope — always decided by the kernel at the activity's facility (each held role's own
+ * scope, §4.3), never from role names alone (R4-AUTHZ-TARGETS-02). A coach or official acts only
+ * on an activity they hold an accepted (or completed) workforce assignment for: the session
+ * itself, its scheduling event, or the fixture the event schedules. Assignment facts are read through workforce's ASSIGNMENT_COVERAGE_PORT,
  * never its tables (§4.2).
  */
 @Injectable()
@@ -80,12 +80,5 @@ export class StaffScope {
       if (people.includes(personId)) return true;
     }
     return false;
-  }
-
-  hasDeskRole(principal: Principal): boolean {
-    return (
-      principal.kind === 'system' ||
-      (principal.kind === 'staff' && principal.staffRoles.some((r) => DESK_ROLES.includes(r)))
-    );
   }
 }
