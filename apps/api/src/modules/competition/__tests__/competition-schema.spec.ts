@@ -195,16 +195,38 @@ describe('competition schema invariants (migration 0400)', () => {
     expect(await constraintOf(update({ effective_to: clock.now(), status: 'guest' }))).toBe(
       'roster_memberships_open_immutable',
     );
-    // ...its jersey may change, and it may be closed by a removal
+    // ...its jersey may change...
     await update({ jersey_number: 8 })();
-    await update({
+    // ...and it closes only as a removal of the status it held, recording who removed it and why
+    // (0462): not as the removal of another status, not with its status kept and nothing recorded,
+    // and not back to its own start so that it covers no instant.
+    const removal = {
       status: 'removed',
       status_before_removal: 'active',
       effective_to: new Date('2026-10-20T12:00:00Z'),
       removed_at: clock.now(),
       removed_by: actor,
       removal_reason: 'left the team',
-    })();
+    };
+    expect(await constraintOf(update({ ...removal, status_before_removal: 'guest' }))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(await constraintOf(update({ effective_to: new Date('2026-10-20T12:00:00Z') }))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(await constraintOf(update({ effective_to: new Date('2026-09-01T12:00:00Z') }))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(await constraintOf(update({ ...removal, removed_by: null }))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(await constraintOf(update({ ...removal, removal_reason: null }))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(await constraintOf(update({ ...removal, removal_reason: '  ' }))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    await update(removal)();
 
     // A closed row is history: it is never deleted, re-dated, reopened or rewritten.
     expect(
@@ -255,6 +277,108 @@ describe('competition schema invariants (migration 0400)', () => {
     });
     expect(new Date(kept.effective_from).toISOString()).toBe('2026-09-01T12:00:00.000Z');
     expect(new Date(kept.effective_to as Date).toISOString()).toBe('2026-10-20T12:00:00.000Z');
+  });
+
+  it('R4-DB-INVARIANTS-10 / SPK-COMP-005: closing a roster row never rewrites the status it conferred; a pending row closes as it was', async () => {
+    const { teamEntryId } = await entryWithCaptain();
+    const from = new Date('2026-09-01T12:00:00Z');
+    const to = new Date('2026-10-20T12:00:00Z');
+    const pendingRow = async (status: 'invited' | 'requested') => {
+      const id = newId();
+      await db
+        .insertInto('roster_memberships')
+        .values({
+          id,
+          organization_id: ctx.organizationId,
+          team_entry_id: teamEntryId,
+          person_id: await createPersonFixture(ctx, { kind: 'adult' }),
+          status,
+          status_before_removal: null,
+          effective_from: from,
+          effective_to: null,
+          jersey_number: null,
+          source: status === 'invited' ? 'invitation' : 'join_request',
+          added_by: actor,
+          added_by_person_id: null,
+          removed_at: null,
+          removed_by: null,
+          removal_reason: null,
+        })
+        .execute();
+      return id;
+    };
+    const invited = await pendingRow('invited');
+    const requested = await pendingRow('requested');
+    const guest = await addRosterMemberFixture(ctx, {
+      teamEntryId,
+      personId: await createPersonFixture(ctx, { kind: 'adult' }),
+      status: 'guest',
+      effectiveFrom: from,
+    });
+    const constraintOf = async (run: () => Promise<unknown>) => {
+      const error = await run().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(error, 'the database accepted a rewrite of roster history').not.toBeNull();
+      expect(isRestrictViolation(error)).toBe(true);
+      return pgConstraintName(error);
+    };
+    const update = (id: string, set: Record<string, unknown>) => () =>
+      db.updateTable('roster_memberships').set(set).where('id', '=', id).execute();
+    const removalOf = (prior: 'active' | 'guest' | 'substitute') => ({
+      status: 'removed',
+      status_before_removal: prior,
+      effective_to: to,
+      removed_at: clock.now(),
+      removed_by: actor,
+      removal_reason: 'left the team',
+    });
+
+    // A pending invitation or join request conferred no status: it is never closed as the removal
+    // of a playing membership, and a close records no removal facts.
+    expect(await constraintOf(update(invited, removalOf('active')))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(await constraintOf(update(requested, removalOf('guest')))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(
+      await constraintOf(
+        update(invited, { effective_to: to, removed_by: actor, removal_reason: 'declined' }),
+      ),
+    ).toBe('roster_memberships_open_immutable');
+    // A guest is not closed as the removal of an active player (or any other status).
+    expect(await constraintOf(update(guest, removalOf('active')))).toBe(
+      'roster_memberships_open_immutable',
+    );
+    expect(await constraintOf(update(guest, removalOf('substitute')))).toBe(
+      'roster_memberships_open_immutable',
+    );
+
+    // What RosterService writes is accepted: a pending row closes as it was, a removal records the
+    // status the row held.
+    await update(invited, { effective_to: to })();
+    await update(requested, { effective_to: to })();
+    await update(guest, removalOf('guest'))();
+    const rows = await db
+      .selectFrom('roster_memberships')
+      .select(['id', 'status', 'status_before_removal', 'removed_by', 'removal_reason'])
+      .where('id', 'in', [invited, requested, guest])
+      .execute();
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(invited)).toMatchObject({
+      status: 'invited',
+      status_before_removal: null,
+      removed_by: null,
+      removal_reason: null,
+    });
+    expect(byId.get(requested)).toMatchObject({ status: 'requested', status_before_removal: null });
+    expect(byId.get(guest)).toMatchObject({
+      status: 'removed',
+      status_before_removal: 'guest',
+      removal_reason: 'left the team',
+    });
   });
 
   it('R4-DB-INVARIANTS-10 / SPK-IAM-001: team-role authority history is never deleted or rewritten; an open role may only be ended', async () => {
