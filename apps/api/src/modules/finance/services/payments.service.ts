@@ -1067,7 +1067,15 @@ export class PaymentsService {
       const since = new Date(row.unknown_since ?? row.submitted_at ?? this.clock.now());
       if (since > threshold) return unchanged;
     }
-    const found = await this.provider.retrievePayment(row.id);
+    let found = await this.provider.retrievePayment(row.id);
+    if (found?.status === 'requires_action' && row.status === 'unknown') {
+      // R4-PROVIDER-OUTCOMES-01 (SPK-PAY-007, §4.11 rule 4): the provider opened a challenge but
+      // the answer that carried it was lost, so the payer never saw it. Non-terminal evidence
+      // never moves an unknown attempt, and only `action_required` attempts reach
+      // cancelAbandoned, so the challenge is canceled here once it is as old as an abandoned one;
+      // the provider's answer (canceled, or a capture that won the race) then resolves it.
+      found = (await this.cancelUnseenChallenge(row)) ?? found;
+    }
     return this.uow.run(async ({ trx }) => {
       if (!found) {
         const current = await this.load(trx, organizationId, id, true);
@@ -1102,6 +1110,36 @@ export class PaymentsService {
         correlationId,
       );
     });
+  }
+
+  /**
+   * R4-PROVIDER-OUTCOMES-01 (SPK-PAY-007; DEC-019 pending, as for cancelAbandoned): asks the
+   * provider, outside any transaction, to cancel the challenge it holds for an `unknown` attempt
+   * submitted at least `actionRequiredCancelAfterMinutes` ago (the window after which a challenge
+   * the payer did see is abandoned too). Returns the provider's answer, or null when it is too
+   * early, the provider has no record, or the call gave no answer (the attempt stays unknown, its
+   * open exception says so, and the next pass asks again: cancel is idempotent).
+   */
+  private async cancelUnseenChallenge(
+    row: PaymentAttemptRow,
+  ): Promise<ProviderPaymentResult | null> {
+    if (this.uow.current()) {
+      throw errors.internal('a provider call must never run inside a database transaction (§4.11)');
+    }
+    const handedOver = row.submitted_at ?? row.unknown_since;
+    const abandonedBefore = minutesFrom(
+      this.clock.now(),
+      -this.policy.configuration.actionRequiredCancelAfterMinutes,
+    );
+    if (!handedOver || new Date(handedOver) > abandonedBefore) return null;
+    try {
+      return await this.provider.cancelPayment(row.id);
+    } catch (error) {
+      this.logger.warn(
+        `payment ${row.id}: cancel of an unseen challenge unanswered (${String(error)})`,
+      );
+      return null;
+    }
   }
 
   /**

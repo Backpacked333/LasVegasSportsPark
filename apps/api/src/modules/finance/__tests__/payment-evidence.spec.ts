@@ -939,10 +939,12 @@ describe('compensation ends what the order still asks and gives back applied cre
 describe('abandoned payment challenges are canceled at the provider (SPK-PAY-007, §4.11 step 10; DEC-019 pending)', () => {
   let t: TestApp;
   let parent: Actor;
+  let finance: Actor;
 
   beforeAll(async () => {
     t = await financeTestApp();
     parent = await adult(t);
+    finance = await staff(t, ['finance_operator']);
   });
   afterAll(async () => {
     await t.close();
@@ -1051,6 +1053,88 @@ describe('abandoned payment challenges are canceled at the provider (SPK-PAY-007
     await drain(t);
     const aborted = await t.http.get(`/v1/registration-checkouts/${started.id}`).set(parent.header);
     expect(aborted.body.status).toBe('aborted');
+  });
+
+  it('R4-PROVIDER-OUTCOMES-01 / SPK-PAY-007: a challenge opened by a call that timed out is canceled once abandoned; the checkout then aborts', async () => {
+    const { checkout: started } = await checkout(
+      t,
+      parent,
+      FakePaymentTokens.timeoutRequiresAction,
+      7_000,
+    );
+    expect(started).toMatchObject({ status: 'awaiting_payment', payment: { status: 'unknown' } });
+    const paymentId = (started['payment'] as { id: string }).id;
+    expect((await provider(t).retrievePayment(paymentId))?.status).toBe('requires_action');
+    // Before a challenge would count as abandoned, reconciliation leaves it unknown and asks
+    // nothing to be canceled; no second charge is taken meanwhile.
+    t.clock.advance(20 * MINUTE);
+    await worker(t).runOnce();
+    await drain(t);
+    t.clock.advance(20 * MINUTE);
+    await worker(t).runOnce();
+    await drain(t);
+    expect(provider(t).cancelCalls).not.toContain(paymentId);
+    expect((await t.http.get(`/v1/payments/${paymentId}`).set(parent.header)).body.status).toBe(
+      'unknown',
+    );
+    const retry = await post(
+      t,
+      `/v1/registration-checkouts/${started.id}/payments`,
+      parent.header,
+      {
+        paymentMethodToken: FakePaymentTokens.succeed,
+      },
+    );
+    expect(retry.status).toBe(409);
+    t.clock.advance(21 * MINUTE); // 61 minutes after submission
+    await worker(t).runOnce();
+    expect(provider(t).cancelCalls).toContain(paymentId);
+    const canceled = await t.http.get(`/v1/payments/${paymentId}`).set(parent.header);
+    expect(canceled.body).toMatchObject({
+      status: 'canceled',
+      failureReason: 'action_abandoned',
+      evidenceSource: 'reconciliation',
+    });
+    t.clock.advance(5 * MINUTE);
+    await drain(t);
+    const aborted = await t.http.get(`/v1/registration-checkouts/${started.id}`).set(parent.header);
+    expect(aborted.body.status).toBe('aborted');
+    // Nothing was captured for it at the provider, and nothing was booked here.
+    expect((await provider(t).retrievePayment(paymentId))?.status).toBe('canceled');
+    expect(
+      await t.db
+        .selectFrom('receipts')
+        .select('id')
+        .where('payment_attempt_id', '=', paymentId)
+        .execute(),
+    ).toHaveLength(0);
+  });
+
+  it('R4-PROVIDER-OUTCOMES-01 / SPK-PAY-007: a finance operator reconciling an unseen challenge cancels it; a capture that won the race is recorded once', async () => {
+    const { checkout: started } = await checkout(
+      t,
+      parent,
+      FakePaymentTokens.timeoutRequiresAction,
+      7_500,
+    );
+    const paymentId = (started['payment'] as { id: string }).id;
+    const early = await post(t, `/v1/payments/${paymentId}/reconcile`, finance.header);
+    expect(early.status).toBe(201);
+    expect(early.body.status).toBe('unknown');
+    expect(provider(t).cancelCalls).not.toContain(paymentId);
+    provider(t).scriptCancels('succeed');
+    t.clock.advance(61 * MINUTE);
+    const forced = await post(t, `/v1/payments/${paymentId}/reconcile`, finance.header);
+    expect(forced.body).toMatchObject({ status: 'succeeded', evidenceSource: 'reconciliation' });
+    await drain(t);
+    const done = await t.http.get(`/v1/registration-checkouts/${started.id}`).set(parent.header);
+    expect(done.body).toMatchObject({ status: 'completed', payment: { status: 'succeeded' } });
+    const receipts = await t.db
+      .selectFrom('receipts')
+      .select('id')
+      .where('payment_attempt_id', '=', paymentId)
+      .execute();
+    expect(receipts).toHaveLength(1);
   });
 
   it('SPK-PAY-007: abandoned challenges never starve the reconciliation of a later unknown outcome', async () => {

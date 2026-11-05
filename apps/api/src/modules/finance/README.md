@@ -163,7 +163,8 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
   `verifyWebhook`; every call carries the
   attempt id as idempotency key; a thrown error is an unknown outcome. Only
   `FakePaymentProvider` exists (deterministic by payment-method token: succeed, require action,
-  decline, asynchronous processing, timeout after capture, timeout after decline, unreachable;
+  decline, asynchronous processing, timeout after capture, timeout after decline, timeout after
+  opening a challenge, unreachable;
   scriptable payments, cancels and refunds; signed webhooks for duplicates and reordering). An
   adapter must bound `createRefund` below the reconciliation threshold. The port refuses
   to start in production (DEC-019 pending).
@@ -263,7 +264,13 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
   up), so a restored database never cancels a capture by assumption (SPK-AT-028). A payment
   challenge still open an hour after submission is treated as abandoned and canceled at the
   provider (proposed, DEC-019 pending); a cancel without an answer keeps the attempt live with an
-  exception `finance.payment_action_abandoned`.
+  exception `finance.payment_action_abandoned`. The same applies to a challenge the payer never
+  saw because the call that opened it timed out (R4-PROVIDER-OUTCOMES-01): non-terminal evidence
+  never moves an `unknown` attempt, so when reconciliation (the sweep, or staff forcing it) finds
+  the provider holding it in `requires_action` an hour after submission, it asks the provider to
+  cancel it and applies the answer (canceled, or a capture that won the race), and the checkout,
+  holds and payer are released (`__tests__/payment-evidence.spec.ts`; the fake's
+  `timeoutRequiresAction` token reproduces it).
 - **Webhooks (§4.11):** authenticated, recorded once in the inbox, applied through the state
   machine: duplicates do nothing, an older non-terminal event never moves a resolved attempt back,
   and a contradiction raises `finance.payment_evidence_conflict` without changing the recorded
