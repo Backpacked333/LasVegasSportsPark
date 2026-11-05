@@ -9,6 +9,7 @@ import {
 } from '../../identity';
 import { at, seedPitchWithHalves, type PitchFixture } from '../../scheduling';
 import { ASSIGNMENT_CHECK_IMPL, type AssignmentCheckPort } from '../competition-matches.ports';
+import { createResultRevisionFixture } from '../testing/competition-matches-fixtures';
 import {
   addRosterMemberFixture,
   createDivisionFixture,
@@ -20,6 +21,7 @@ import {
   adultCustomer,
   atKickoff,
   competitionTestApp,
+  correctionBase,
   key,
   staffMember,
   type Actor,
@@ -334,6 +336,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
 
   it('SPK-RESULT-004: a correction is a new revision that supersedes the official one, keeping actor, reason and publication time; the database refuses any rewrite (invariant 9)', async () => {
     const withoutReason = await post(`/fixtures/${f1}/results`, leagueManager, {
+      ...(await correctionBase(t, f1)),
       classification: 'completed',
       homeScore: 2,
       awayScore: 2,
@@ -345,6 +348,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
       .where('id', '=', f1Official)
       .executeTakeFirstOrThrow();
     const correction = await post(`/fixtures/${f1}/results`, leagueManager, {
+      ...(await correctionBase(t, f1)),
       classification: 'completed',
       homeScore: 2,
       awayScore: 2,
@@ -434,6 +438,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
     expect(node.status).toBe(201);
     await atKickoff(t, f3);
     const submitted = await post(`/fixtures/${f3}/results`, leagueManager, {
+      ...(await correctionBase(t, f3)),
       classification: 'completed',
       homeScore: 1,
       awayScore: 0,
@@ -465,6 +470,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
     expect(publishedNode.body.published).toBe(true);
 
     const correction = await post(`/fixtures/${f3}/results`, leagueManager, {
+      ...(await correctionBase(t, f3)),
       classification: 'completed',
       homeScore: 0,
       awayScore: 1,
@@ -693,6 +699,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
 
     // the fixture machine does allow a forfeit of a game that was never scheduled
     const forfeit = await post(`/fixtures/${unscheduled}/results`, leagueManager, {
+      ...(await correctionBase(t, unscheduled)),
       classification: 'forfeit',
       homeScore: 3,
       awayScore: 0,
@@ -709,6 +716,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
     // never had a kickoff, so neither the standings nor served suspensions may count a game there
     for (const body of [played, abandoned]) {
       const correction = await post(`/fixtures/${unscheduled}/results`, leagueManager, {
+        ...(await correctionBase(t, unscheduled)),
         ...body,
         reason: 'The game was played after all.',
       });
@@ -718,6 +726,7 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
     }
     // a correction that keeps the outcome a forfeit (the other side forfeited) is still accepted
     const forfeitCorrection = await post(`/fixtures/${unscheduled}/results`, leagueManager, {
+      ...(await correctionBase(t, unscheduled)),
       classification: 'forfeit',
       homeScore: 0,
       awayScore: 3,
@@ -827,5 +836,177 @@ describe('results, standings and brackets (SPK-RESULT-001..004, SPK-STAFF-005, ย
       expect(text).not.toContain(leagueManager.personId);
       expect(text).not.toContain(leagueManager.accountId);
     }
+  });
+  it('R4-LIFECYCLES-REVISIONS-02 / ยง4.9 / SPK-RESULT-004: a correction drafted from an official result that a newer correction has replaced is refused with STALE_REVISION, so it never silently undoes the newer correction', async () => {
+    const fixtureId = await scheduleFixture(c, d, '2027-03-06', '18:00', '19:00');
+    await atKickoff(t, fixtureId);
+    const publish = async (revision: { id: string; revision: number }) => {
+      const res = await post(`/results/${revision.id}/publish`, leagueManager, {
+        expectedRevision: revision.revision,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    };
+    const first = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 2,
+      awayScore: 1,
+    });
+    expect(first.status).toBe(201);
+    await publish(first.body);
+    const officialO = (await get(`/results/${first.body.id}`, leagueManager)).body;
+    expect(officialO.status).toBe('official');
+
+    // Staff X and staff Y both open the correction form on O; Y corrects and publishes first.
+    const correctionA = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 3,
+      awayScore: 1,
+      reason: 'Third home goal confirmed by the match card.',
+      correctsRevisionId: officialO.id,
+      expectedRevision: officialO.revision,
+    });
+    expect(correctionA.status, JSON.stringify(correctionA.body)).toBe(201);
+    expect(correctionA.body.supersedesRevisionId).toBe(officialO.id);
+    await publish(correctionA.body);
+
+    // X, still looking at O, submits a correction of the away score: refused, nothing recorded.
+    const stale = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 2,
+      awayScore: 2,
+      reason: 'Away goal missed.',
+      correctsRevisionId: officialO.id,
+      expectedRevision: officialO.revision,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REVISION');
+    expect(stale.body.details).toMatchObject({
+      code: 'CORRECTION_BASE_STALE',
+      correctsRevisionId: officialO.id,
+      officialRevisionId: correctionA.body.id,
+    });
+    // A correction that names no base is refused rather than bound to whatever is official.
+    const unbound = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 2,
+      awayScore: 2,
+      reason: 'Away goal missed.',
+    });
+    expect(unbound.status).toBe(400);
+    expect(unbound.body.details).toMatchObject({
+      code: 'correction_base_required',
+      officialRevisionId: correctionA.body.id,
+    });
+    // The right base with a revision other than the official one's is stale too.
+    const officialA = (await get(`/results/${correctionA.body.id}`, leagueManager)).body;
+    const wrongRevision = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 3,
+      awayScore: 2,
+      reason: 'Away goal missed.',
+      correctsRevisionId: officialA.id,
+      expectedRevision: officialA.revision + 1,
+    });
+    expect(wrongRevision.status).toBe(409);
+    expect(wrongRevision.body.code).toBe('STALE_REVISION');
+    // expectedRevision alone names nothing: it belongs to the revision in correctsRevisionId.
+    const revisionOnly = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 3,
+      awayScore: 2,
+      reason: 'Away goal missed.',
+      expectedRevision: officialA.revision,
+    });
+    expect(revisionOnly.status).toBe(400);
+    const open = await t.db
+      .selectFrom('result_revisions')
+      .select('id')
+      .where('fixture_id', '=', fixtureId)
+      .where('status', 'in', ['draft', 'submitted'])
+      .execute();
+    expect(open).toEqual([]);
+
+    // X reloads, sees A and corrects it: accepted against A, and A's home score stands.
+    const fresh = await post(`/fixtures/${fixtureId}/results`, leagueManager, {
+      classification: 'completed',
+      homeScore: 3,
+      awayScore: 2,
+      reason: 'Away goal missed.',
+      correctsRevisionId: officialA.id,
+      expectedRevision: officialA.revision,
+    });
+    expect(fresh.status, JSON.stringify(fresh.body)).toBe(201);
+    expect(fresh.body.supersedesRevisionId).toBe(officialA.id);
+    await publish(fresh.body);
+    const history = await t.db
+      .selectFrom('result_revisions')
+      .select(['id', 'status', 'home_score', 'away_score', 'supersedes_revision_id'])
+      .where('fixture_id', '=', fixtureId)
+      .orderBy('revision_no')
+      .execute();
+    expect(history).toEqual([
+      expect.objectContaining({
+        id: officialO.id,
+        status: 'superseded',
+        supersedes_revision_id: null,
+      }),
+      expect.objectContaining({
+        id: officialA.id,
+        status: 'superseded',
+        supersedes_revision_id: officialO.id,
+      }),
+      expect.objectContaining({
+        id: fresh.body.id,
+        status: 'official',
+        home_score: 3,
+        away_score: 2,
+        supersedes_revision_id: officialA.id,
+      }),
+    ]);
+  });
+
+  it('R4-LIFECYCLES-REVISIONS-02 / ยง4.9: publication refuses a revision bound to an official result that is no longer official', async () => {
+    const fixtureId = await scheduleFixture(d, c, '2027-03-13', '18:00', '19:00');
+    await atKickoff(t, fixtureId);
+    const older = await createResultRevisionFixture(t, {
+      fixtureId,
+      status: 'superseded',
+      homeScore: 1,
+      awayScore: 0,
+      revisionNo: 1,
+    });
+    const current = await createResultRevisionFixture(t, {
+      fixtureId,
+      status: 'official',
+      homeScore: 1,
+      awayScore: 1,
+      revisionNo: 2,
+      supersedesRevisionId: older,
+    });
+    // A revision that names the older result as the one it corrects (as a pre-check submission
+    // would have recorded): publishing it would silently replace the newer official result.
+    const stale = await createResultRevisionFixture(t, {
+      fixtureId,
+      status: 'submitted',
+      homeScore: 2,
+      awayScore: 0,
+      revisionNo: 3,
+      supersedesRevisionId: older,
+      reason: 'Drafted from the first result.',
+    });
+    const res = await post(`/results/${stale}/publish`, leagueManager, { expectedRevision: 1 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('STALE_REVISION');
+    expect(res.body.details).toMatchObject({
+      correctsRevisionId: older,
+      officialRevisionId: current,
+    });
+    const official = await t.db
+      .selectFrom('result_revisions')
+      .select('id')
+      .where('fixture_id', '=', fixtureId)
+      .where('status', '=', 'official')
+      .executeTakeFirstOrThrow();
+    expect(official.id).toBe(current);
   });
 });

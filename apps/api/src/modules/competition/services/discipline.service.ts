@@ -70,7 +70,12 @@ import {
   DISCIPLINE_MANAGER_ROLES,
   SUSPENSION_CARD_REMOVED,
 } from '../competition-matches.policy';
-import type { ActiveSuspension, SuspensionCheckPort, SuspensionScope } from '../ports';
+import type {
+  ActiveSuspension,
+  SuspensionCheckPort,
+  SuspensionScope,
+  SuspensionSubject,
+} from '../ports';
 
 type SuspensionRow = Selectable<SuspensionsTable>;
 
@@ -117,11 +122,50 @@ export class DisciplineService implements SuspensionCheckPort {
   ): Promise<ActiveSuspension[]> {
     const db: Reader = trx ?? currentTransaction() ?? this.db;
     const subjectIds = await this.idsOf(organizationId, personId, trx);
-    const rows = await db
+    const rows = await this.activeSuspensionRows(db, organizationId, subjectIds, at, scope);
+    return rows.map(toActiveSuspension);
+  }
+
+  /**
+   * R4-CARRY-01 (§4.12): `activeSuspensions` for many people in one query. Each subject brings
+   * the ids its records may be held under (the caller already resolved merges), so a suspension
+   * recorded against a merged person binds the survivor exactly as the single read does, and
+   * every subject's list keeps the single read's order.
+   */
+  async activeSuspensionsOfMany(
+    organizationId: string,
+    subjects: ReadonlyArray<SuspensionSubject>,
+    at: Date,
+    scope: SuspensionScope,
+    trx?: Trx,
+  ): Promise<Map<string, ActiveSuspension[]>> {
+    const out = new Map<string, ActiveSuspension[]>(subjects.map((s) => [s.personId, []]));
+    const ids = [...new Set(subjects.flatMap((s) => [s.personId, ...s.personIds]))];
+    if (ids.length === 0) return out;
+    const db: Reader = trx ?? currentTransaction() ?? this.db;
+    const rows = await this.activeSuspensionRows(db, organizationId, ids, at, scope);
+    for (const subject of subjects) {
+      const own = new Set([subject.personId, ...subject.personIds]);
+      out.set(
+        subject.personId,
+        rows.filter((row) => own.has(row.subject_person_id)).map(toActiveSuspension),
+      );
+    }
+    return out;
+  }
+
+  private activeSuspensionRows(
+    db: Reader,
+    organizationId: string,
+    subjectIds: readonly string[],
+    at: Date,
+    scope: SuspensionScope,
+  ) {
+    return db
       .selectFrom('suspensions')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('subject_person_id', 'in', subjectIds)
+      .where('subject_person_id', 'in', [...subjectIds])
       .where('status', '=', 'active')
       .where((eb) =>
         eb.or([
@@ -135,13 +179,8 @@ export class DisciplineService implements SuspensionCheckPort {
         eb.or([eb('match_count', 'is', null), sql<boolean>`matches_served < match_count`]),
       )
       .orderBy('created_at')
+      .orderBy('id')
       .execute();
-    return rows.map((row) => ({
-      id: row.id,
-      reason: row.basis,
-      scope: row.scope === 'all' ? 'organization' : 'competition',
-      until: row.effective_to ? new Date(row.effective_to).toISOString() : null,
-    }));
   }
 
   /**
@@ -1873,4 +1912,14 @@ export async function nextCursorOf(
         id: last.id,
       })
     : null;
+}
+
+/** The eligibility view of an active suspension (never its basis outside the reason field). */
+function toActiveSuspension(row: SuspensionRow): ActiveSuspension {
+  return {
+    id: row.id,
+    reason: row.basis,
+    scope: row.scope === 'all' ? 'organization' : 'competition',
+    until: row.effective_to ? new Date(row.effective_to).toISOString() : null,
+  };
 }

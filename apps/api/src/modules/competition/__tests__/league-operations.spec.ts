@@ -14,6 +14,7 @@ import {
   adultCustomer,
   atKickoff,
   competitionTestApp,
+  correctionBase,
   key,
   staffMember,
   type Actor,
@@ -181,6 +182,7 @@ describe('league operations (CMP-05, CMP-12; SPK-RESULT-001..005, SPK-DISC-001..
 
     // the correction removes both red cards
     const correction = await post(`/fixtures/${carded}/results`, leagueManager, {
+      ...(await correctionBase(t, carded)),
       classification: 'completed',
       homeScore: 2,
       awayScore: 1,

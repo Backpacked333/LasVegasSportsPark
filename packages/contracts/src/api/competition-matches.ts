@@ -254,10 +254,25 @@ function refineResult<T extends z.ZodType<ResultShapeOutput>>(schema: T): T {
  * `POST /v1/fixtures/{id}/results`: an assigned official or the league manager submits a result
  * revision (draft → submitted in one command). A fixture that already has an official result
  * receives a correction revision; publishing it supersedes the official one (SPK-RESULT-004).
+ * A correction names the official revision it was drafted from (`correctsRevisionId`, and
+ * optionally that revision's `expectedRevision`): once another correction has become official it
+ * is refused with STALE_REVISION instead of silently undoing it (§4.9, R4-LIFECYCLES-REVISIONS-02).
  */
-export const SubmitResultBody = refineResult(withCommandMeta(resultShape)).openapi(
-  'SubmitResultRequest',
-);
+export const SubmitResultBody = refineResult(
+  withCommandMeta(resultShape).extend({
+    /**
+     * The official result revision this correction is based on. Required when the fixture has an
+     * official result; STALE_REVISION when that revision is no longer the official one.
+     * `expectedRevision`, when given, is that revision's `revision`.
+     */
+    correctsRevisionId: z.uuid().optional(),
+  }),
+)
+  .refine((b) => b.expectedRevision === undefined || b.correctsRevisionId !== undefined, {
+    message: 'expectedRevision names the revision of the official result in correctsRevisionId',
+    path: ['expectedRevision'],
+  })
+  .openapi('SubmitResultRequest');
 export type SubmitResultInput = z.infer<typeof SubmitResultBody>;
 
 /** `POST /v1/results/{id}/submit`: resubmit a revision returned for correction (draft → submitted). */

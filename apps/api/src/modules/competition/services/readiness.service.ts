@@ -3,6 +3,7 @@ import {
   errors,
   SEASON_READINESS_MAX_FIXTURES,
   systemPrincipal,
+  type EligibilityEvaluation,
   type EligibilitySeverity,
   type Event,
   type FixtureDetail,
@@ -407,21 +408,23 @@ export class ReadinessService {
       const members = await this.roster.effectiveRoster(organizationId, side.entryId, at);
       let eligible = 0;
       let unknown = 0;
-      for (const member of members) {
+      // R4-CARRY-01 (§4.12, SPK-UX-006, SPK-STAFF-002): the whole roster in one evaluation, its
+      // reads bounded by the entry rather than repeated player by player.
+      const evaluations = await this.eligibility.evaluateRoster(
+        organizationId,
+        side.entryId,
+        members.map((member) => ({ personId: member.personId, membershipStatus: member.status })),
+        at,
+        {
+          existingMembership: true,
+          fixtureId,
+          // R3-TIME-MONEY-03 (SPK-SCHED-008): a match-date age is the local date at the venue
+          timezone: event?.timezone ?? detail.venue?.timezone ?? null,
+        },
+      );
+      for (const [index, member] of members.entries()) {
         allPersons.add(member.personId);
-        const evaluation = await this.eligibility.evaluatePlayer(
-          organizationId,
-          side.entryId,
-          member.personId,
-          at,
-          {
-            existingMembership: true,
-            fixtureId,
-            membershipStatus: member.status,
-            // R3-TIME-MONEY-03 (SPK-SCHED-008): a match-date age is the local date at the venue
-            timezone: event?.timezone ?? detail.venue?.timezone ?? null,
-          },
-        );
+        const evaluation = evaluations[index] as EligibilityEvaluation;
         if (evaluation.eligible) eligible += 1;
         else if (evaluation.reasons.every((r) => r.severity !== 'blocking')) unknown += 1;
         for (const reason of evaluation.reasons) {

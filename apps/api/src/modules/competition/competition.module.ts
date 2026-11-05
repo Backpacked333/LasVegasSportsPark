@@ -56,6 +56,7 @@ import {
   SUSPENSION_CHECK_IMPL,
   SUSPENSION_CHECK_PORT,
   TEAM_ENTRY_QUERY_PORT,
+  type ActiveSuspension,
   type SuspensionCheckPort,
 } from './ports';
 import { AvailabilityRequestsService } from './services/availability-requests.service';
@@ -99,6 +100,21 @@ function suspensionAuthority(moduleRef: ModuleRef): SuspensionCheckPort {
   return {
     activeSuspensions: (organizationId, personId, at, scope, trx) =>
       resolve().activeSuspensions(organizationId, personId, at, scope, trx),
+    // R4-CARRY-01: the batched read when the implementation offers one, else person by person.
+    activeSuspensionsOfMany: async (organizationId, subjects, at, scope, trx) => {
+      const authority = resolve();
+      if (authority.activeSuspensionsOfMany) {
+        return authority.activeSuspensionsOfMany(organizationId, subjects, at, scope, trx);
+      }
+      const out = new Map<string, ActiveSuspension[]>();
+      for (const subject of subjects) {
+        out.set(
+          subject.personId,
+          await authority.activeSuspensions(organizationId, subject.personId, at, scope, trx),
+        );
+      }
+      return out;
+    },
   };
 }
 

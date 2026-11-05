@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   decodeCursor,
   DIVISION_SPECIFICATIONS_LIMIT,
@@ -65,17 +65,13 @@ const RunCursor = z.object({ at: KeysetInstant, id: z.uuid() });
 /** Draft states in which a generated proposal still waits in scheduling (CMP-12). */
 const OPEN_DRAFT_STATUSES = new Set(['editing', 'validated', 'publishing', 'failed']);
 
-interface GenerationPlan {
-  runId: string;
-  operationId: string;
-  facilityId: string;
-  draftName: string;
-  draftChanges: DraftChangeInput[];
-  seasonId: string;
-  divisionId: string;
-  outcome: SolverOutcome;
-  complete: boolean;
-  fixtureIds: string[];
+/** The step a generation reached, so a failure after the solver ran is recorded with it. */
+type GenerationStep = 'solve' | 'create_draft' | 'record_run';
+
+interface GenerationProgress {
+  /** Set once the solver ran inside the current attempt (the run id it would commit). */
+  solved: { runId: string; outcome: SolverOutcome } | null;
+  step: GenerationStep;
 }
 
 /**
@@ -86,10 +82,14 @@ interface GenerationPlan {
  * settings and an honest outcome (SPK-FIX-004); the fixtures it creates are the season's
  * obligations, and the scheduled games become a scheduling draft through the scheduling module's
  * draft API (SPK-FIX-005) — publication is the scheduler's normal command, never done here.
- * The draft is created between two transactions like every cross-module command (§4.9).
+ * The fixtures, the run, the draft and the operation's outcome commit in one transaction (the
+ * scheduling command joins it), so an interrupted generation leaves nothing half done
+ * (R4-REPLAY-IDEMPOTENCY-01, §4.12).
  */
 @Injectable()
 export class FixtureGenerationService {
+  private readonly logger = new Logger(FixtureGenerationService.name);
+
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
@@ -472,337 +472,387 @@ export class FixtureGenerationService {
         cleanupMinutes: resource.defaultCleanupMinutes,
       };
     }
-    const plan = await this.uow.run(async ({ trx }): Promise<GenerationPlan> => {
-      const spec = await this.loadSpecification(trx, organizationId, specificationId, {
-        forUpdate: true,
+    // R4-REPLAY-IDEMPOTENCY-01 (§4.12, §4.7 invariant 12, SPK-FIX-005): the fixtures, the solver
+    // run, the scheduling draft that holds the proposed times and the operation's outcome commit
+    // in ONE transaction (the scheduling command joins it; `UnitOfWork.run` is reentrant). An
+    // interruption or a failure anywhere before that commit leaves nothing behind: no fixture
+    // without its draft, no draft its run does not name, no operation left `running`, and a rerun
+    // is not refused for fixtures a half-finished run left in the division.
+    const progress: GenerationProgress = { solved: null, step: 'solve' };
+    try {
+      return await this.uow.run(async ({ trx }): Promise<SolverRun> => {
+        // A serialization retry starts again from the specification.
+        progress.solved = null;
+        progress.step = 'solve';
+        const spec = await this.loadSpecification(trx, organizationId, specificationId, {
+          forUpdate: true,
+        });
+        if (!spec) throw errors.notFound('fixture_specification', specificationId);
+        await this.authorization.require(principal, MatchActions.generateFixtures, {
+          type: 'fixture_specification',
+          id: specificationId,
+          organizationId,
+          facilityId: spec.facility_id,
+        });
+        const season = await loadSeasonRow(trx, organizationId, spec.season_id);
+        if (!season) throw errors.notFound('season', spec.season_id);
+        const ruleSet = await loadRuleSetRow(trx, organizationId, season.rule_set_id);
+        if (!ruleSet) throw errors.notFound('rule_set', season.rule_set_id);
+        let divisionQuery = trx
+          .selectFrom('divisions')
+          .selectAll()
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', spec.division_id);
+        // SPK-FIX-002 / §4.7: the "division already has fixtures" check below and the fixture
+        // inserts must not interleave with a run of another specification of the same division, so
+        // a real run holds the division row. FOR NO KEY UPDATE still lets other writers reference it.
+        if (!input.dryRun) divisionQuery = divisionQuery.forNoKeyUpdate();
+        const division = await divisionQuery.executeTakeFirstOrThrow();
+        // CMP-11 (§4.2): the facility's IANA time zone through the kernel's directory (IF-03).
+        const facility = (
+          await this.facilities.describe(organizationId, [spec.facility_id], trx)
+        ).get(spec.facility_id);
+        if (!facility) throw errors.notFound('facility', spec.facility_id);
+        const entries = await trx
+          .selectFrom('team_entries')
+          .innerJoin('teams', (join) =>
+            join
+              .onRef('teams.organization_id', '=', 'team_entries.organization_id')
+              .onRef('teams.id', '=', 'team_entries.team_id'),
+          )
+          .select(['team_entries.id', 'teams.name'])
+          .where('team_entries.organization_id', '=', organizationId)
+          .where('team_entries.division_id', '=', spec.division_id)
+          .where('team_entries.status', '=', 'approved')
+          .orderBy('team_entries.id')
+          .execute();
+        const teamEntryIds = entries.map((e) => e.id);
+        const names = new Map(entries.map((e) => [e.id, e.name]));
+        // A specification error is a 422 before any run: never reported as "infeasible" (SPK-FIX-004).
+        assertSpecificationConsistent(
+          {
+            gamesPerTeam: spec.games_per_team,
+            opponentFrequency: spec.opponent_frequency,
+            startsOn: spec.starts_on,
+            endsOn: spec.ends_on,
+            fairnessPreferences: spec.fairness_preferences as FairnessPreference[],
+          },
+          season,
+          teamEntryIds,
+          { requireTeams: true },
+        );
+        if (!input.dryRun) {
+          const existing = await trx
+            .selectFrom('fixtures')
+            .select('id')
+            .where('organization_id', '=', organizationId)
+            .where('division_id', '=', spec.division_id)
+            .where('status', '<>', 'canceled')
+            .limit(1)
+            .executeTakeFirst();
+          if (existing) {
+            throw errors.resourceConflict(
+              'The division already has fixtures. Run with dryRun to preview, or cancel them first.',
+              { divisionId: spec.division_id },
+            );
+          }
+        }
+        const snapshot = toFixtureSpecification(spec, teamEntryIds);
+        const startedAt = this.clock.now();
+        const result = generateFixtures(
+          {
+            teamEntryIds,
+            gamesPerTeam: spec.games_per_team,
+            opponentFrequency: spec.opponent_frequency,
+            startsOn: spec.starts_on,
+            endsOn: spec.ends_on,
+            blackouts: snapshot.blackouts,
+            byesAllowed: spec.byes_allowed,
+            minimumRestMinutes: spec.minimum_rest_minutes,
+            allowedStartTimes: snapshot.allowedStartTimes,
+            matchDurationMinutes: spec.match_duration_minutes,
+            resourceIds: spec.required_resource_ids,
+            resourceBuffers,
+            fairnessPreferences: snapshot.fairnessPreferences,
+            playoffStructure: snapshot.playoffStructure,
+            maxGamesPerTeamPerDay: spec.max_games_per_team_per_day ?? null,
+            officialsPerGame: spec.officials_per_game ?? null,
+            resolveInstant: (date, time) =>
+              resolveLocal(date, time, facility.timezone)?.instant ?? null,
+            obligationDeadline: unscheduledFixtureDeadline(
+              this.clock.now(),
+              resolveLocal(addDays(season.ends_on, 1), '00:00', facility.timezone)?.instant ?? null,
+            ).toISOString(),
+          },
+          input.searchSettings,
+          () => this.clock.now().getTime(),
+        );
+        const finishedAt = this.clock.now();
+        const runId = newId();
+        progress.solved = { runId, outcome: result.outcome };
+        const operationId = await this.operations.create(trx, {
+          organizationId,
+          kind: 'competition.generate_fixtures',
+          requestedBy: principal,
+          correlationId,
+          input: { specificationId, dryRun: input.dryRun, searchSettings: input.searchSettings },
+          status: 'running',
+        });
+        const games: ProposedGame[] = result.proposal?.games ?? [];
+        const fixtureIds: string[] = [];
+        // A proposal that breaks a hard constraint is an explanation only: it never becomes
+        // fixtures or a scheduling draft (SPK-FIX-003 hard constraints are visibly distinct,
+        // SPK-FIX-004 "no feasible proposal found"). A partial proposal that respects every hard
+        // constraint is materialized, its unscheduled games kept as remaining obligations
+        // (SPK-FIX-002).
+        const materialize =
+          !input.dryRun &&
+          result.outcome !== 'proven_infeasible' &&
+          result.explanation.hardViolations.length === 0 &&
+          games.length > 0;
+        if (materialize) {
+          for (const game of games) {
+            const fixtureId = newId();
+            game.fixtureId = fixtureId;
+            fixtureIds.push(fixtureId);
+            await trx
+              .insertInto('fixtures')
+              .values({
+                id: fixtureId,
+                organization_id: organizationId,
+                season_id: spec.season_id,
+                division_id: spec.division_id,
+                round: game.round,
+                home_entry_id: game.homeEntryId,
+                away_entry_id: game.awayEntryId,
+                scheduling_event_id: null,
+                scheduled_start: null,
+                scheduled_end: null,
+                notes: null,
+                created_by: json(snapshotActor(principal)),
+              })
+              .execute();
+            await this.outbox.enqueue(trx, CompetitionEvents.fixtureCreated, {
+              organizationId,
+              aggregateType: 'fixture',
+              aggregateId: fixtureId,
+              payload: {
+                fixtureId,
+                seasonId: spec.season_id,
+                divisionId: spec.division_id,
+                homeEntryId: game.homeEntryId,
+                awayEntryId: game.awayEntryId,
+                operationId,
+              },
+              correlationId,
+              operationId,
+            });
+          }
+        }
+        const format = criteriaOf(division).format;
+        const draftChanges: DraftChangeInput[] = materialize
+          ? games
+              .filter(
+                (g) => g.awayEntryId !== null && g.scheduledStart && g.scheduledEnd && g.resourceId,
+              )
+              .map((g) => ({
+                kind: 'create' as const,
+                proposed: {
+                  kind: 'game' as const,
+                  // R2-TENANCY-INPUT-02: bounded to scheduling's title limit.
+                  title: fixtureTitle(
+                    names.get(g.homeEntryId) ?? 'Home',
+                    names.get(g.awayEntryId as string) ?? 'Away',
+                  ),
+                  format,
+                  scheduledStart: g.scheduledStart as string,
+                  scheduledEnd: g.scheduledEnd as string,
+                  sourceType: 'fixture',
+                  sourceId: g.fixtureId as string,
+                  commitments: [
+                    { partyType: 'team' as const, partyId: g.homeEntryId, role: 'home_team' },
+                    {
+                      partyType: 'team' as const,
+                      partyId: g.awayEntryId as string,
+                      role: 'away_team',
+                    },
+                  ],
+                },
+                resourceIds: [g.resourceId as string],
+              }))
+          : [];
+        // The proposal becomes a scheduling draft, never a publication (SPK-FIX-005), inside this
+        // transaction: publication stays the scheduler's own command.
+        let scheduleDraftId: string | null = null;
+        if (draftChanges.length > 0) {
+          progress.step = 'create_draft';
+          const earlierRuns = await trx
+            .selectFrom('solver_runs')
+            .select((eb) => eb.fn.countAll<number>().as('n'))
+            .where('organization_id', '=', organizationId)
+            .where('specification_id', '=', specificationId)
+            .executeTakeFirstOrThrow();
+          const draft = await this.drafts.create(
+            principal,
+            {
+              facilityId: spec.facility_id,
+              name: input.draftName ?? solverDraftName(spec.name, Number(earlierRuns.n) + 1),
+              changes: draftChanges,
+              reason: `fixture generation run ${runId}`,
+            },
+            correlationId ?? undefined,
+          );
+          scheduleDraftId = draft.id;
+        }
+        progress.step = 'record_run';
+        const run = await trx
+          .insertInto('solver_runs')
+          .values({
+            id: runId,
+            organization_id: organizationId,
+            specification_id: specificationId,
+            specification_snapshot: json(snapshot),
+            rule_set_id: ruleSet.id,
+            search_settings: json(input.searchSettings),
+            outcome: result.outcome,
+            proposal: result.proposal ? json({ games }) : null,
+            completeness_report: json(result.completeness),
+            explanation: json(result.explanation),
+            dry_run: input.dryRun,
+            schedule_draft_id: scheduleDraftId,
+            fixture_ids: fixtureIds,
+            operation_id: operationId,
+            started_at: startedAt,
+            finished_at: finishedAt,
+            created_by: json(snapshotActor(principal)),
+          })
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: MatchActions.generateFixtures.id,
+          targetType: 'solver_run',
+          targetId: runId,
+          afterRevision: 1,
+          reason: input.reason ?? null,
+          correlationId,
+          operationId,
+          details: {
+            specificationId,
+            outcome: result.outcome,
+            dryRun: input.dryRun,
+            complete: result.completeness.complete,
+            fixtureCount: fixtureIds.length,
+            candidatesTried: result.explanation.candidatesTried,
+            scheduleDraftId,
+          },
+        });
+        await this.operations.transition(trx, operationId, 'succeeded', {
+          result: { solverRunId: runId, outcome: result.outcome, scheduleDraftId, fixtureIds },
+        });
+        await this.outbox.enqueue(trx, MatchEvents.fixturesGenerated, {
+          organizationId,
+          aggregateType: 'solver_run',
+          aggregateId: runId,
+          payload: {
+            solverRunId: runId,
+            specificationId,
+            seasonId: spec.season_id,
+            divisionId: spec.division_id,
+            outcome: result.outcome,
+            fixtureIds,
+            scheduleDraftId,
+            complete: result.completeness.complete,
+            operationId,
+          },
+          correlationId,
+          operationId,
+        });
+        const [view] = await this.runViews(trx, organizationId, [run]);
+        return view as SolverRun;
       });
-      if (!spec) throw errors.notFound('fixture_specification', specificationId);
-      await this.authorization.require(principal, MatchActions.generateFixtures, {
-        type: 'fixture_specification',
-        id: specificationId,
-        organizationId,
-        facilityId: spec.facility_id,
-      });
-      const season = await loadSeasonRow(trx, organizationId, spec.season_id);
-      if (!season) throw errors.notFound('season', spec.season_id);
-      const ruleSet = await loadRuleSetRow(trx, organizationId, season.rule_set_id);
-      if (!ruleSet) throw errors.notFound('rule_set', season.rule_set_id);
-      let divisionQuery = trx
-        .selectFrom('divisions')
-        .selectAll()
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', spec.division_id);
-      // SPK-FIX-002 / §4.7: the "division already has fixtures" check below and the fixture inserts
-      // must not interleave with a run of another specification of the same division, so a real
-      // run holds the division row. FOR NO KEY UPDATE still lets other writers reference it.
-      if (!input.dryRun) divisionQuery = divisionQuery.forNoKeyUpdate();
-      const division = await divisionQuery.executeTakeFirstOrThrow();
-      // CMP-11 (§4.2): the facility's IANA time zone through the kernel's directory (IF-03).
-      const facility = (
-        await this.facilities.describe(organizationId, [spec.facility_id], trx)
-      ).get(spec.facility_id);
-      if (!facility) throw errors.notFound('facility', spec.facility_id);
-      const entries = await trx
-        .selectFrom('team_entries')
-        .innerJoin('teams', (join) =>
-          join
-            .onRef('teams.organization_id', '=', 'team_entries.organization_id')
-            .onRef('teams.id', '=', 'team_entries.team_id'),
-        )
-        .select(['team_entries.id', 'teams.name'])
-        .where('team_entries.organization_id', '=', organizationId)
-        .where('team_entries.division_id', '=', spec.division_id)
-        .where('team_entries.status', '=', 'approved')
-        .orderBy('team_entries.id')
-        .execute();
-      const teamEntryIds = entries.map((e) => e.id);
-      const names = new Map(entries.map((e) => [e.id, e.name]));
-      // A specification error is a 422 before any run: never reported as "infeasible" (SPK-FIX-004).
-      assertSpecificationConsistent(
-        {
-          gamesPerTeam: spec.games_per_team,
-          opponentFrequency: spec.opponent_frequency,
-          startsOn: spec.starts_on,
-          endsOn: spec.ends_on,
-          fairnessPreferences: spec.fairness_preferences as FairnessPreference[],
-        },
-        season,
-        teamEntryIds,
-        { requireTeams: true },
-      );
-      if (!input.dryRun) {
-        const existing = await trx
-          .selectFrom('fixtures')
+    } catch (error) {
+      if (progress.solved) {
+        await this.recordFailedRun(
+          principal,
+          specificationId,
+          input,
+          progress.solved,
+          progress.step,
+          error,
+          correlationId,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * R4-REPLAY-IDEMPOTENCY-01 (§4.8, §4.12): a generation that failed after the solver ran rolled
+   * back whole (no fixtures, no run, no draft), so a rerun is allowed; its failure stays readable
+   * as a `failed` operation, recorded in a transaction of its own after the rollback, as
+   * scheduling records a refused publication. When the run did commit (only its acknowledgement
+   * was lost) nothing is recorded. A failure to record is logged and never hides the original error.
+   */
+  private async recordFailedRun(
+    principal: Principal,
+    specificationId: string,
+    input: GenerateFixturesInput,
+    solved: { runId: string; outcome: SolverOutcome },
+    step: GenerationStep,
+    error: unknown,
+    correlationId: string | null,
+  ): Promise<void> {
+    const organizationId = organizationOf(principal);
+    try {
+      await this.uow.run(async ({ trx }) => {
+        const committed = await trx
+          .selectFrom('solver_runs')
           .select('id')
           .where('organization_id', '=', organizationId)
-          .where('division_id', '=', spec.division_id)
-          .where('status', '<>', 'canceled')
-          .limit(1)
+          .where('id', '=', solved.runId)
           .executeTakeFirst();
-        if (existing) {
-          throw errors.resourceConflict(
-            'The division already has fixtures. Run with dryRun to preview, or cancel them first.',
-            { divisionId: spec.division_id },
-          );
-        }
-      }
-      const snapshot = toFixtureSpecification(spec, teamEntryIds);
-      const startedAt = this.clock.now();
-      const result = generateFixtures(
-        {
-          teamEntryIds,
-          gamesPerTeam: spec.games_per_team,
-          opponentFrequency: spec.opponent_frequency,
-          startsOn: spec.starts_on,
-          endsOn: spec.ends_on,
-          blackouts: snapshot.blackouts,
-          byesAllowed: spec.byes_allowed,
-          minimumRestMinutes: spec.minimum_rest_minutes,
-          allowedStartTimes: snapshot.allowedStartTimes,
-          matchDurationMinutes: spec.match_duration_minutes,
-          resourceIds: spec.required_resource_ids,
-          resourceBuffers,
-          fairnessPreferences: snapshot.fairnessPreferences,
-          playoffStructure: snapshot.playoffStructure,
-          maxGamesPerTeamPerDay: spec.max_games_per_team_per_day ?? null,
-          officialsPerGame: spec.officials_per_game ?? null,
-          resolveInstant: (date, time) =>
-            resolveLocal(date, time, facility.timezone)?.instant ?? null,
-          obligationDeadline: unscheduledFixtureDeadline(
-            this.clock.now(),
-            resolveLocal(addDays(season.ends_on, 1), '00:00', facility.timezone)?.instant ?? null,
-          ).toISOString(),
-        },
-        input.searchSettings,
-        () => this.clock.now().getTime(),
-      );
-      const finishedAt = this.clock.now();
-      const operationId = await this.operations.create(trx, {
-        organizationId,
-        kind: 'competition.generate_fixtures',
-        requestedBy: principal,
-        correlationId,
-        input: { specificationId, dryRun: input.dryRun, searchSettings: input.searchSettings },
-        status: 'running',
-      });
-      const runId = newId();
-      const games: ProposedGame[] = result.proposal?.games ?? [];
-      const fixtureIds: string[] = [];
-      // A proposal that breaks a hard constraint is an explanation only: it never becomes fixtures
-      // or a scheduling draft (SPK-FIX-003 hard constraints are visibly distinct, SPK-FIX-004 "no
-      // feasible proposal found"). A partial proposal that respects every hard constraint is
-      // materialized, its unscheduled games kept as remaining obligations (SPK-FIX-002).
-      const materialize =
-        !input.dryRun &&
-        result.outcome !== 'proven_infeasible' &&
-        result.explanation.hardViolations.length === 0 &&
-        games.length > 0;
-      if (materialize) {
-        for (const game of games) {
-          const fixtureId = newId();
-          game.fixtureId = fixtureId;
-          fixtureIds.push(fixtureId);
-          await trx
-            .insertInto('fixtures')
-            .values({
-              id: fixtureId,
-              organization_id: organizationId,
-              season_id: spec.season_id,
-              division_id: spec.division_id,
-              round: game.round,
-              home_entry_id: game.homeEntryId,
-              away_entry_id: game.awayEntryId,
-              scheduling_event_id: null,
-              scheduled_start: null,
-              scheduled_end: null,
-              notes: null,
-              created_by: json(snapshotActor(principal)),
-            })
-            .execute();
-          await this.outbox.enqueue(trx, CompetitionEvents.fixtureCreated, {
-            organizationId,
-            aggregateType: 'fixture',
-            aggregateId: fixtureId,
-            payload: {
-              fixtureId,
-              seasonId: spec.season_id,
-              divisionId: spec.division_id,
-              homeEntryId: game.homeEntryId,
-              awayEntryId: game.awayEntryId,
-              operationId,
-            },
-            correlationId,
-            operationId,
-          });
-        }
-      }
-      await trx
-        .insertInto('solver_runs')
-        .values({
-          id: runId,
-          organization_id: organizationId,
-          specification_id: specificationId,
-          specification_snapshot: json(snapshot),
-          rule_set_id: ruleSet.id,
-          search_settings: json(input.searchSettings),
-          outcome: result.outcome,
-          proposal: result.proposal ? json({ games }) : null,
-          completeness_report: json(result.completeness),
-          explanation: json(result.explanation),
-          dry_run: input.dryRun,
-          schedule_draft_id: null,
-          fixture_ids: fixtureIds,
-          operation_id: operationId,
-          started_at: startedAt,
-          finished_at: finishedAt,
-          created_by: json(snapshotActor(principal)),
-        })
-        .execute();
-      await this.audit.record(trx, {
-        organizationId,
-        actor: principal,
-        action: MatchActions.generateFixtures.id,
-        targetType: 'solver_run',
-        targetId: runId,
-        afterRevision: 1,
-        reason: input.reason ?? null,
-        correlationId,
-        operationId,
-        details: {
-          specificationId,
-          outcome: result.outcome,
-          dryRun: input.dryRun,
-          complete: result.completeness.complete,
-          fixtureCount: fixtureIds.length,
-          candidatesTried: result.explanation.candidatesTried,
-        },
-      });
-      const format = criteriaOf(division).format;
-      const draftChanges: DraftChangeInput[] = materialize
-        ? games
-            .filter(
-              (g) => g.awayEntryId !== null && g.scheduledStart && g.scheduledEnd && g.resourceId,
-            )
-            .map((g) => ({
-              kind: 'create' as const,
-              proposed: {
-                kind: 'game' as const,
-                // R2-TENANCY-INPUT-02: bounded to scheduling's title limit.
-                title: fixtureTitle(
-                  names.get(g.homeEntryId) ?? 'Home',
-                  names.get(g.awayEntryId as string) ?? 'Away',
-                ),
-                format,
-                scheduledStart: g.scheduledStart as string,
-                scheduledEnd: g.scheduledEnd as string,
-                sourceType: 'fixture',
-                sourceId: g.fixtureId as string,
-                commitments: [
-                  { partyType: 'team' as const, partyId: g.homeEntryId, role: 'home_team' },
-                  {
-                    partyType: 'team' as const,
-                    partyId: g.awayEntryId as string,
-                    role: 'away_team',
-                  },
-                ],
-              },
-              resourceIds: [g.resourceId as string],
-            }))
-        : [];
-      const runCount = await trx
-        .selectFrom('solver_runs')
-        .select((eb) => eb.fn.countAll<number>().as('n'))
-        .where('organization_id', '=', organizationId)
-        .where('specification_id', '=', specificationId)
-        .executeTakeFirstOrThrow();
-      return {
-        runId,
-        operationId,
-        facilityId: spec.facility_id,
-        draftName: input.draftName ?? solverDraftName(spec.name, Number(runCount.n)),
-        draftChanges,
-        seasonId: spec.season_id,
-        divisionId: spec.division_id,
-        outcome: result.outcome,
-        complete: result.completeness.complete,
-        fixtureIds,
-      };
-    });
-
-    // Step 2 (own transaction, scheduling module): the proposal becomes a draft, never a publication.
-    let scheduleDraftId: string | null = null;
-    if (plan.draftChanges.length > 0) {
-      try {
-        const draft = await this.drafts.create(
-          principal,
-          {
-            facilityId: plan.facilityId,
-            name: plan.draftName,
-            changes: plan.draftChanges,
-            reason: `fixture generation run ${plan.runId}`,
-          },
-          correlationId ?? undefined,
-        );
-        scheduleDraftId = draft.id;
-      } catch (error) {
-        await this.uow.run(async ({ trx }) => {
-          await this.operations.transition(trx, plan.operationId, 'failed', {
-            error: DomainError.is(error)
-              ? { code: error.code, message: error.message, details: error.details }
-              : { code: 'INTERNAL_ERROR', message: 'opening the schedule draft failed' },
-          });
-          await this.audit.record(trx, {
-            organizationId,
-            actor: principal,
-            action: MatchActions.generateFixtures.id,
-            targetType: 'solver_run',
-            targetId: plan.runId,
-            correlationId,
-            operationId: plan.operationId,
-            details: { step: 'create_draft', outcome: 'failed' },
-          });
+        if (committed) return;
+        const operationId = await this.operations.create(trx, {
+          organizationId,
+          kind: 'competition.generate_fixtures',
+          requestedBy: principal,
+          correlationId,
+          input: { specificationId, dryRun: input.dryRun, searchSettings: input.searchSettings },
+          status: 'running',
         });
-        throw error;
-      }
+        await this.operations.transition(trx, operationId, 'failed', {
+          error: DomainError.is(error)
+            ? { code: error.code, message: error.message, details: error.details }
+            : {
+                code: 'INTERNAL_ERROR',
+                message: `fixture generation failed at ${step}: ${String(error)}`,
+              },
+        });
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: MatchActions.generateFixtures.id,
+          targetType: 'fixture_specification',
+          targetId: specificationId,
+          reason: input.reason ?? null,
+          correlationId,
+          operationId,
+          details: {
+            step,
+            outcome: 'failed',
+            solverOutcome: solved.outcome,
+            dryRun: input.dryRun,
+            rolledBack: true,
+          },
+        });
+      });
+    } catch (recordError) {
+      this.logger.error(
+        `could not record the failed generation of specification ${specificationId}: ${String(recordError)}`,
+      );
     }
-
-    return this.uow.run(async ({ trx }) => {
-      const run = await trx
-        .updateTable('solver_runs')
-        .set({ schedule_draft_id: scheduleDraftId, revision: sql`revision + 1` })
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', plan.runId)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      await this.operations.transition(trx, plan.operationId, 'succeeded', {
-        result: {
-          solverRunId: plan.runId,
-          outcome: plan.outcome,
-          scheduleDraftId,
-          fixtureIds: plan.fixtureIds,
-        },
-      });
-      await this.outbox.enqueue(trx, MatchEvents.fixturesGenerated, {
-        organizationId,
-        aggregateType: 'solver_run',
-        aggregateId: plan.runId,
-        payload: {
-          solverRunId: plan.runId,
-          specificationId,
-          seasonId: plan.seasonId,
-          divisionId: plan.divisionId,
-          outcome: plan.outcome,
-          fixtureIds: plan.fixtureIds,
-          scheduleDraftId,
-          complete: plan.complete,
-          operationId: plan.operationId,
-        },
-        correlationId,
-        operationId: plan.operationId,
-      });
-      const [view] = await this.runViews(trx, organizationId, [run]);
-      return view as SolverRun;
-    });
   }
 
   async getRun(principal: Principal, id: string): Promise<SolverRun> {

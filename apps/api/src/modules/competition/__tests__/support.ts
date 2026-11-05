@@ -82,3 +82,21 @@ export async function atKickoff(t: TestApp, fixtureId: string): Promise<void> {
 export function isRestrictViolation(error: unknown): boolean {
   return pgErrorCode(error) === '23001';
 }
+
+/**
+ * R4-LIFECYCLES-REVISIONS-02 (§4.9): a correction names the official result revision it is drafted
+ * from, as a client does after reading the fixture's results. `{}` when the fixture has no
+ * official result yet (a first result names none).
+ */
+export async function correctionBase(
+  t: TestApp,
+  fixtureId: string,
+): Promise<{ correctsRevisionId?: string }> {
+  const official = await t.db
+    .selectFrom('result_revisions')
+    .select('id')
+    .where('fixture_id', '=', fixtureId)
+    .where('status', '=', 'official')
+    .executeTakeFirst();
+  return official ? { correctsRevisionId: official.id } : {};
+}
