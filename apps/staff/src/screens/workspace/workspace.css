@@ -677,3 +677,101 @@ a.ws-now-open:hover {
     grid-row: 1;
   }
 }
+
+/* ---------- Report a problem (SPK-FAC-002), big tap targets beside a field ---------- */
+.ws-report .ws-pick {
+  border: 0;
+  margin: 0 0 14px;
+  padding: 0;
+}
+.ws-report .ws-pick legend {
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.ws-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ws-chips-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.ws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ws-chip[aria-pressed='true'] {
+  background: var(--night);
+  border-color: var(--night);
+  color: var(--floodlight);
+}
+.ws-chip[aria-pressed='true']::before {
+  content: '✓';
+}
+.ws-chip-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px 14px;
+  gap: 0;
+}
+.ws-chip[aria-pressed='true'] .caption {
+  color: var(--night-muted);
+}
+.ws-report-send .button {
+  width: 100%;
+  min-height: 52px;
+}
+
+/* ---------- Phone bottom tab bar (SPK-UX-007) ---------- */
+.ws-tabbar {
+  display: none;
+}
+@media (max-width: 900px) {
+  .ws-tabbar {
+    display: block;
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    background: var(--night);
+    border-top: 1px solid var(--night-2);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .ws-tabbar ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .ws-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-height: 58px;
+    justify-content: center;
+    color: var(--night-muted);
+    text-decoration: none;
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .ws-tab[aria-current='page'] {
+    color: var(--floodlight);
+  }
+}
