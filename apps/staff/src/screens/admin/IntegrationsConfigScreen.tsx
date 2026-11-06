@@ -54,6 +54,7 @@ import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type PolicyVersion = Schema<'PolicyVersion'>;
 
 const POLICY_KINDS: Schema<'PolicyKind'>[] = [
@@ -513,7 +514,11 @@ function PolicyPage({
 export function IntegrationsConfigScreen() {
   return (
     <section aria-labelledby="integrations-title" className="ia-screen">
-      <h2 id="integrations-title">Integrations and configuration</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Integrations and configuration"
+        titleId="integrations-title"
+      />
       <AdminNav />
       <PendingNote decisions={DECISIONS.providers.ids} owner={DECISIONS.providers.owner}>
         Every external provider and the ownership of every production account.

@@ -103,6 +103,7 @@ export class ResourcesService {
             parent_resource_id: parent?.id ?? null,
             dimensions: json(body.dimensions ?? {}),
             compatible_formats: body.compatibleFormats ?? [],
+            compatible_sports: body.compatibleSports ?? [],
             default_setup_minutes: body.defaultSetupMinutes ?? 0,
             default_cleanup_minutes: body.defaultCleanupMinutes ?? 0,
             required_equipment: json(body.requiredEquipment ?? []),
@@ -165,6 +166,7 @@ export class ResourcesService {
           name: body.name,
           dimensions: body.dimensions === undefined ? undefined : json(body.dimensions),
           compatible_formats: body.compatibleFormats,
+          compatible_sports: body.compatibleSports,
           default_setup_minutes: body.defaultSetupMinutes,
           default_cleanup_minutes: body.defaultCleanupMinutes,
           required_equipment:
@@ -819,6 +821,7 @@ export class ResourcesService {
       parentResourceId: row.parent_resource_id,
       dimensions: row.dimensions,
       compatibleFormats: row.compatible_formats,
+      compatibleSports: row.compatible_sports ?? [],
       defaultSetupMinutes: row.default_setup_minutes,
       defaultCleanupMinutes: row.default_cleanup_minutes,
       requiredEquipment: row.required_equipment,

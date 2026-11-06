@@ -22,11 +22,17 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, WORKSPACE_TABS } from '../../features/operations/AreaTabs';
 import { CommandError } from '../../features/operations/feedback';
-import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
-import { useApp } from '../../providers/AppProviders';
+import { formatClock, humanize } from '../../features/operations/format';
+import {
+  OfflineQueueChip,
+  OfflineQueueStatus,
+} from '../../features/operations/offline/OfflineQueueStatus';
+import { useApp, useNow } from '../../providers/AppProviders';
 import { CommandButton } from '../../ui/CommandButton';
+import { PageHeader } from '../../ui/Page';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
+import './workspace.css';
 
 type WorkspaceAssignment = Schema<'WorkspaceAssignment'>;
 type AssignmentStatus = WorkspaceAssignment['assignment']['status'];
@@ -98,8 +104,17 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
   const badge = ASSIGNMENT_BADGE[item.assignment.status];
   const canAccept = item.availableActions.includes('accept');
   const participants = item.activity.participants.map((p) => p.name).join(' v ');
+  const zone = activityZone(item);
   return (
-    <li aria-labelledby={`assignment-${item.assignment.id}`}>
+    <li
+      aria-labelledby={`assignment-${item.assignment.id}`}
+      className="ws-card"
+      data-status={item.assignment.status}
+    >
+      <span className="ws-when" aria-hidden="true">
+        <span className="ws-when-day">{formatDay(item.activity.scheduledStart, zone)}</span>
+        <span className="ws-when-time">{formatClock(item.activity.scheduledStart, zone)}</span>
+      </span>
       <div className="row-text">
         <Link
           className="row-title"
@@ -115,13 +130,14 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
             activityZone(item),
           )}{' '}
           · {item.activity.facility?.name ? `${item.activity.facility.name} · ` : ''}
-          {item.assignment.role}
+          {humanize(item.assignment.role)}
         </span>
         {participants ? <span className="caption">{participants}</span> : null}
         <StatusBadge tone={badge.tone} label={badge.label} />
       </div>
       {canAccept ? (
         <CommandButton
+          className="ws-accept"
           busy={accept.isProcessing}
           aria-label={`Accept assignment: ${item.activity.title}`}
           onClick={submit}
@@ -131,12 +147,14 @@ function AssignmentCard({ item }: { item: WorkspaceAssignment }) {
       ) : null}
       {/* A lost answer reads as an unknown outcome, never "Something went wrong" (§4.9). */}
       {accept.error ? (
-        <CommandError
-          error={accept.error}
-          onRetry={retry}
-          onReload={reload}
-          subject="This assignment"
-        />
+        <div className="ws-card-error">
+          <CommandError
+            error={accept.error}
+            onRetry={retry}
+            onReload={reload}
+            subject="This assignment"
+          />
+        </div>
       ) : null}
     </li>
   );
@@ -152,11 +170,124 @@ export function orderAssignments(items: readonly WorkspaceAssignment[]): Workspa
   });
 }
 
+/** "Sat" in the activity's facility zone (SPK-SCHED-008). */
+function formatDay(iso: string, timeZone?: string | null): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    weekday: 'short',
+    ...(timeZone ? { timeZone } : {}),
+  }).format(new Date(iso));
+}
+
+/** "in 45 min", "in 3 h 10 min" or "in 2 days": how long until an activity starts. */
+export function untilText(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) return `in ${minutes} min`;
+  if (minutes < 24 * 60) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return `in ${h} h${m > 0 ? ` ${m} min` : ''}`;
+  }
+  const days = Math.round(minutes / (24 * 60));
+  return `in ${days} day${days === 1 ? '' : 's'}`;
+}
+
+function zoneName(at: Date, timeZone: string): string {
+  const part = new Intl.DateTimeFormat('en-GB', { timeZone, timeZoneName: 'short' })
+    .formatToParts(at)
+    .find((p) => p.type === 'timeZoneName');
+  return part?.value ?? '';
+}
+
+/**
+ * The night-pitch "now" board at the top of the workspace (SPK-UX-007): the time in the facility
+ * zone of the viewer's next activity, how many offers wait for an answer, and the accepted
+ * assignment on now or next, with how far through it is or how long until it starts. Everything
+ * is derived from the assignments read; nothing is shown that the list does not hold.
+ */
+function NowBoard({ items }: { items: readonly WorkspaceAssignment[] }) {
+  const now = useNow(30_000);
+  const t = now.getTime();
+  const offers = items.filter((i) => i.assignment.status === 'offered').length;
+  const upcoming = items
+    .filter(
+      (i) => i.assignment.status === 'accepted' && new Date(i.activity.scheduledEnd).getTime() > t,
+    )
+    .sort((a, b) => a.activity.scheduledStart.localeCompare(b.activity.scheduledStart));
+  const next = upcoming[0];
+  const zone = next ? activityZone(next) : null;
+  const start = next ? new Date(next.activity.scheduledStart).getTime() : 0;
+  const end = next ? new Date(next.activity.scheduledEnd).getTime() : 0;
+  const live = next !== undefined && start <= t;
+  const progress =
+    live && end > start ? Math.min(100, Math.round(((t - start) / (end - start)) * 100)) : 0;
+  return (
+    <section className="card card-dark ws-now" aria-labelledby="ws-now-title">
+      <div className="ws-now-top">
+        <h3 id="ws-now-title" className="ws-now-kicker">
+          {live ? 'On now' : 'Next up'}
+        </h3>
+        {live ? (
+          <span className="live-chip">
+            <span className="live-dot" aria-hidden="true" />
+            Live
+          </span>
+        ) : null}
+      </div>
+      <span className="ws-now-clock">
+        {formatClock(now.toISOString(), zone)}
+        {zone ? <span className="ws-now-zone"> {zoneName(now, zone)}</span> : null}
+      </span>
+      <div className="ws-now-chips">
+        <span className="ws-now-chip" data-attention={offers > 0}>
+          {offers === 0
+            ? 'No offers waiting'
+            : `${offers} offer${offers === 1 ? ' needs' : 's need'} your answer`}
+        </span>
+        <span className="ws-now-chip">{upcoming.length} accepted ahead</span>
+      </div>
+      {next ? (
+        <div className="ws-now-next">
+          <span className="ws-now-title">{next.activity.title}</span>
+          <span className="ws-now-meta">
+            {formatClock(next.activity.scheduledStart, zone)}–
+            {formatClock(next.activity.scheduledEnd, zone)}
+            {next.activity.facility?.name ? ` · ${next.activity.facility.name}` : ''} ·{' '}
+            {humanize(next.assignment.role)}
+          </span>
+          {live ? (
+            <span className="ws-now-progress">
+              <span className="ws-now-bar" aria-hidden="true">
+                <span style={{ width: `${progress}%` }} />
+              </span>
+              <span>{Math.max(0, Math.round((end - t) / 60_000))} min left</span>
+            </span>
+          ) : (
+            <span className="ws-now-until">Starts {untilText(start - t)}</span>
+          )}
+          <Link
+            className="button button-lime ws-now-open"
+            to={`/workspace/assignments/${next.assignment.id}`}
+          >
+            Open assignment
+          </Link>
+        </div>
+      ) : (
+        <p className="caption">No accepted assignment ahead. Offers you accept appear here.</p>
+      )}
+    </section>
+  );
+}
+
 export function WorkspaceScreen() {
   const assignments = useApiQuery({ path: '/me/assignments' });
   return (
-    <section aria-labelledby="workspace-title">
-      <h2 id="workspace-title">My assignments</h2>
+    <section aria-labelledby="workspace-title" className="ops-screen workspace">
+      <PageHeader
+        eyebrow="Workspace · coaches and officials"
+        title="My assignments"
+        titleId="workspace-title"
+        actions={<OfflineQueueChip reviewPath="/workspace/offline" />}
+      />
       <AreaTabs label="Workspace screens" tabs={WORKSPACE_TABS} />
       <OfflineQueueStatus reviewPath="/workspace/offline" />
       <QueryBoundary
@@ -171,11 +302,14 @@ export function WorkspaceScreen() {
         unavailableOffline={['accepting or declining assignments']}
       >
         {(data) => (
-          <ul className="list" aria-label="Assignments">
-            {orderAssignments(data.items).map((item) => (
-              <AssignmentCard key={item.assignment.id} item={item} />
-            ))}
-          </ul>
+          <div className="ws-layout">
+            <NowBoard items={data.items} />
+            <ul className="ws-list" aria-label="Assignments">
+              {orderAssignments(data.items).map((item) => (
+                <AssignmentCard key={item.assignment.id} item={item} />
+              ))}
+            </ul>
+          </div>
         )}
       </QueryBoundary>
     </section>

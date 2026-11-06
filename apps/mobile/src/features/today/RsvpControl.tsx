@@ -32,7 +32,7 @@ import { useConnectivity } from '../../providers/AppProviders';
 import { LiveText } from '../../ui/announce';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import { CommandFailure } from '../teams/ui';
 import { fixtureAcceptsRsvp, rsvpStatus, type RsvpState } from './status';
 
@@ -224,21 +224,23 @@ export function RsvpControl({
 
 const styles = StyleSheet.create({
   box: { gap: spacing.sm },
-  heading: { ...type.body, fontWeight: '700', color: colors.text },
+  heading: { ...type.eyebrow, color: colors.textMuted },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   choice: {
     minHeight: MIN_TOUCH_SIZE,
     minWidth: MIN_TOUCH_SIZE,
+    flexGrow: 1,
     paddingHorizontal: spacing.lg,
+    alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: colors.primary,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.control,
     backgroundColor: colors.background,
   },
-  selected: { backgroundColor: colors.primary },
+  selected: { backgroundColor: colors.primary, borderColor: colors.primary },
   disabled: { opacity: 0.55 },
-  choiceText: { ...type.body, fontWeight: '600', color: colors.primary },
+  choiceText: { ...type.body, ...fonts.extrabold, color: colors.text },
   selectedText: { color: colors.primaryText },
   caption: { ...type.caption, color: colors.textMuted },
 });

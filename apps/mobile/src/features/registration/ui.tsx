@@ -5,9 +5,11 @@
  */
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SectionCard } from '../../ui/Card';
 import { LiveText } from '../../ui/announce';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
+/** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
 export function Section({
   title,
   children,
@@ -18,12 +20,9 @@ export function Section({
   testID?: string;
 }) {
   return (
-    <View style={styles.section} testID={testID}>
-      <Text style={styles.heading} accessibilityRole="header">
-        {title}
-      </Text>
+    <SectionCard title={title} testID={testID}>
       {children}
-    </View>
+    </SectionCard>
   );
 }
 
@@ -158,21 +157,19 @@ export function ButtonRow({ children }: { children: ReactNode }) {
 }
 
 const styles = StyleSheet.create({
-  section: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    gap: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  title: { ...type.title, color: colors.text },
-  heading: { ...type.heading, color: colors.text },
+  title: { ...type.display, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
   detail: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 },
-  detailLabel: { ...type.body, color: colors.textMuted, flexShrink: 1 },
-  detailValue: { ...type.body, color: colors.text, flexShrink: 1, textAlign: 'right' },
-  emphasis: { fontWeight: '700', color: colors.text },
+  detailLabel: { ...type.caption, color: colors.textMuted, flexShrink: 1, paddingTop: 1 },
+  detailValue: {
+    ...type.body,
+    ...fonts.semibold,
+    color: colors.text,
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  emphasis: { ...fonts.bold, color: colors.text },
   choice: {
     minHeight: MIN_TOUCH_SIZE,
     flexDirection: 'row',
@@ -182,19 +179,20 @@ const styles = StyleSheet.create({
   },
   pressed: { opacity: 0.8 },
   off: { opacity: 0.55 },
-  mark: { ...type.heading, color: colors.primary },
+  mark: { ...type.heading, fontSize: 22, color: colors.primary },
   choiceText: { flex: 1, gap: 2 },
-  choiceLabel: { ...type.body, color: colors.text, fontWeight: '600' },
+  choiceLabel: { ...type.body, color: colors.text, ...fonts.semibold },
   field: { gap: spacing.xs },
-  fieldLabel: { ...type.body, color: colors.text, fontWeight: '600' },
+  fieldLabel: { ...type.body, color: colors.text, ...fonts.semibold },
   input: {
-    minHeight: MIN_TOUCH_SIZE,
+    minHeight: 48,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 6,
-    paddingHorizontal: spacing.md,
+    borderColor: colors.control,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
     ...type.body,
     color: colors.text,
+    backgroundColor: colors.background,
   },
   multiline: { minHeight: 88, textAlignVertical: 'top', paddingVertical: spacing.sm },
   inputError: { borderColor: colors.danger, borderWidth: 2 },

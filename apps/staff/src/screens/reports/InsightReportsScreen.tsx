@@ -45,6 +45,7 @@ import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CostInputsPanel } from './CostInputsPanel';
 
+import { PageHeader } from '../../ui/Page';
 interface Extras {
   includeBuffers: '' | 'true' | 'false';
   weighting: '' | 'conflict_units' | 'custom';
@@ -102,6 +103,9 @@ export function buildInsightParams(
 ): { params: ReportParams | null; errors: FieldErrors; withheld?: string } {
   const errors: FieldErrors = {};
   const params: ReportParams = { ...base };
+  if (key === 'utilization_heatmap' && extras.includeBuffers) {
+    params.includeBuffers = extras.includeBuffers;
+  }
   if (key === 'utilization') {
     if (extras.includeBuffers) params.includeBuffers = extras.includeBuffers;
     if (extras.weighting) params.weighting = extras.weighting;
@@ -170,6 +174,19 @@ function ExtraFields({
   errors: FieldErrors;
 }) {
   switch (entry.key) {
+    case 'utilization_heatmap':
+      return (
+        <SelectField
+          label="Setup and cleanup buffers"
+          value={extras.includeBuffers}
+          onChange={(v) => set({ includeBuffers: v as Extras['includeBuffers'] })}
+          placeholder="Report default (named in the disclosures)"
+          options={[
+            { value: 'true', label: 'Count buffers as reserved time' },
+            { value: 'false', label: 'Leave buffers out of reserved time' },
+          ]}
+        />
+      );
     case 'utilization':
       return (
         <>
@@ -419,7 +436,11 @@ export function InsightReportsScreen() {
 
   return (
     <section aria-labelledby="insight-reports-title" className="ia-screen">
-      <h2 id="insight-reports-title">Utilization, economics, demand and retention</h2>
+      <PageHeader
+        eyebrow="Business · Reports"
+        title="Utilization, economics, demand and retention"
+        titleId="insight-reports-title"
+      />
       <ReportsNav />
       <PendingNote
         decisions={DECISIONS.benchmarkTargets.ids}

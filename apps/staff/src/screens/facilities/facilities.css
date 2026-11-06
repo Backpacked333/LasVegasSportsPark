@@ -1,0 +1,249 @@
+/*
+ * SCR-S-41/42 facilities: the active-restriction hero with its release checklist, work orders and
+ * the asset health summary. Status is glyph plus text everywhere (SPK-UX-009).
+ */
+.facilities-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- Active restriction hero ---------- */
+.restriction-heroes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.restriction-hero {
+  background: var(--card);
+  border: 2px solid #e8c77e;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.restriction-hero-inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 18px;
+  background: repeating-linear-gradient(135deg, #fdf6e6 0 10px, #fffbf2 10px 20px);
+}
+.restriction-hero-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--tone-warning);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.restriction-hero-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.restriction-hero-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tone-warning);
+}
+.shell-main .restriction-hero-title {
+  font-size: 22px;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+.all-in-service {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--tone-success-bg);
+  color: var(--tone-success);
+  font-weight: 600;
+  font-size: 13px;
+  width: fit-content;
+}
+
+/* Release checklist (read from recorded facts, never ticked by hand) */
+.release-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 230px;
+  flex: 0 1 300px;
+}
+.release-checks li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.release-mark {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 2px solid #b9b5a8;
+  background: var(--card);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+}
+.release-checks li[data-state='met'] .release-mark {
+  background: var(--pitch);
+  border-color: var(--pitch);
+  color: #fff;
+}
+.release-checks li[data-state='unmet'] .release-mark {
+  border-color: var(--tone-danger);
+  color: var(--tone-danger);
+}
+.release-checks li[data-state='warn'] .release-mark {
+  border-color: var(--tone-warning);
+  color: var(--tone-warning);
+}
+.release-gate {
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--tone-warning-line);
+  background: #fffbf2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.release-gate .release-checks {
+  flex: none;
+}
+
+/* ---------- Work orders ---------- */
+.work-orders > li {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+.work-order-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--sand);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+}
+.work-order-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+@media (max-width: 640px) {
+  .work-orders > li {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+  .work-order-status {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
+
+/* ---------- Asset health ---------- */
+.asset-health {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.asset-health li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+.asset-health li:first-child {
+  border-top: 0;
+}
+.asset-health-kind {
+  flex: 1;
+  font-weight: 600;
+}
+
+/* Release checks of the restriction itself (migration 0909): confirmed by staff, who and when kept */
+.checklist-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.checklist-editor h5 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.checklist-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.checklist-items > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.checklist-items > li[data-state='met'] .release-mark {
+  background: var(--pitch);
+  border-color: var(--pitch);
+  color: #fff;
+}
+.checklist-label {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.checklist-reason,
+.checklist-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+.checklist-reason label,
+.checklist-add label {
+  width: 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+.checklist-reason input,
+.checklist-add input {
+  flex: 1 1 200px;
+  min-width: 0;
+}

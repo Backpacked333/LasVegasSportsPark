@@ -53,7 +53,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { colors, radius, spacing } from '../../ui/theme';
 import { SessionPackagesSection } from '../session-packages/MySessionPackagesScreen';
 
 const REFERENCE_LABELS: Record<string, string> = {
@@ -267,7 +267,8 @@ const styles = StyleSheet.create({
   card: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
     padding: spacing.md,
     gap: spacing.xs,
   },

@@ -24,6 +24,8 @@ const KNOWN_UNDOCUMENTED: Record<string, string> = {};
 /** Commands that are consequential-free reads or provider callbacks: never Idempotency-Key. */
 const HEADER_FREE = [
   'POST /discounts/evaluate',
+  // Read-only: counts the recipients an audience resolves to (communications composer).
+  'POST /notification-audience-counts',
   'POST /passes/scan',
   'POST /releases/collector-checks',
   'POST /webhooks/payments/{provider}',

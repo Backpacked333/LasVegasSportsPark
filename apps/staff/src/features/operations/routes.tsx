@@ -28,6 +28,7 @@ import {
   WorkspaceMessageScreen,
   WorkspaceReleaseScreen,
 } from '../../screens/workspace/WorkspaceActivityScreens';
+import { ReportProblemScreen } from '../../screens/workspace/ReportProblemScreen';
 import { WorkspaceScreen } from '../../screens/workspace/WorkspaceScreen';
 import { WORKSPACE_TABS } from './AreaTabs';
 import './operations.css';
@@ -57,6 +58,7 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   [`${WORKSPACE_PATH}/assignments/:assignmentId/message`, <WorkspaceMessageScreen />],
   [`${WORKSPACE_PATH}/fees`, <MyFeesScreen />],
   [`${WORKSPACE_PATH}/assessments`, <AssessmentsScreen />],
+  [`${WORKSPACE_PATH}/report-problem`, <ReportProblemScreen />],
   [
     `${WORKSPACE_PATH}/offline`,
     <OfflineQueueScreen tabs={WORKSPACE_TABS} tabsLabel="Workspace screens" />,

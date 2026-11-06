@@ -26,6 +26,10 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Icon } from '../../ui/Icon';
+import { PageHeader } from '../../ui/Page';
+import { Avatar } from '../../features/grow/Grow';
+import './people.css';
 
 type PersonKind = Schema<'PersonKind'>;
 type PersonStatus = Schema<'PersonStatus'>;
@@ -76,9 +80,10 @@ function SearchResults({ search }: { search: Search }) {
         }}
       >
         {(items) => (
-          <ul className="list" aria-label="Matching people">
+          <ul className="list person-results" aria-label="Matching people">
             {items.map((p) => (
               <li key={p.id}>
+                <Avatar name={displayName(p)} seed={p.id} />
                 <div className="row-text">
                   <Link to={`/people/${p.id}`} className="row-title">
                     {displayName(p)}
@@ -115,71 +120,126 @@ export function PeopleScreen() {
     if (!problem) setSearch({ query: input.trim(), kind, status });
   };
   return (
-    <section aria-labelledby="people-title">
-      <h2 id="people-title">People and families</h2>
+    <section aria-labelledby="people-title" className="grow">
+      <PageHeader
+        eyebrow="Grow · Households, pickup authority and history"
+        title="People and families"
+        titleId="people-title"
+        intro="Find a participant or adult; their record brings household and pickup authority, activities, money and history together."
+      />
       <PeopleNav />
-      <section className="panel" aria-labelledby="lookup-title">
-        <h3 id="lookup-title">Find a person</h3>
-        {permitted === false ? (
-          <StateView
-            variant="unavailable"
-            title="Not available to you"
-            description="Person search is not available to your role. Open a person from a case, an exception or a receipt."
-          />
-        ) : (
-          <>
-            <form
-              noValidate
-              role="search"
-              className="form"
-              aria-label="Search people"
-              onSubmit={(event) => {
-                event.preventDefault();
-                submit();
-              }}
-            >
-              <TextField
-                label="Name, email address or phone number"
-                type="search"
-                required
-                hint="The start of a given or family name, or a full email address or phone number."
-                value={input}
-                onChange={setInput}
-                error={error}
-              />
-              <SelectField
-                label="Kind"
-                placeholder="Adults and children"
-                options={[
-                  { value: 'adult', label: 'adult' },
-                  { value: 'child', label: 'child' },
-                ]}
-                value={kind}
-                onChange={setKind}
-              />
-              <SelectField
-                label="Status"
-                placeholder="Active and inactive"
-                hint="Merged records are listed only when merged is chosen."
-                options={[
-                  { value: 'active', label: 'active' },
-                  { value: 'inactive', label: 'inactive' },
-                  { value: 'merged', label: 'merged' },
-                ]}
-                value={status}
-                onChange={setStatus}
-              />
-              <Button type="submit">Search</Button>
-            </form>
-            {search ? (
-              <SearchResults
-                key={`${search.query}|${search.kind}|${search.status}`}
-                search={search}
-              />
-            ) : null}
-          </>
-        )}
-      </section>
+      <div className="split">
+        <section className="card split-main people-lookup" aria-labelledby="lookup-title">
+          <h3 id="lookup-title">Find a person</h3>
+          {permitted === false ? (
+            <StateView
+              variant="unavailable"
+              title="Not available to you"
+              description="Person search is not available to your role. Open a person from a case, an exception or a receipt."
+            />
+          ) : (
+            <>
+              <form
+                noValidate
+                role="search"
+                className="form people-search"
+                aria-label="Search people"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submit();
+                }}
+              >
+                <TextField
+                  label="Name, email address or phone number"
+                  type="search"
+                  required
+                  hint="The start of a given or family name, or a full email address or phone number."
+                  value={input}
+                  onChange={setInput}
+                  error={error}
+                />
+                <SelectField
+                  label="Kind"
+                  placeholder="Adults and children"
+                  options={[
+                    { value: 'adult', label: 'adult' },
+                    { value: 'child', label: 'child' },
+                  ]}
+                  value={kind}
+                  onChange={setKind}
+                />
+                <SelectField
+                  label="Status"
+                  placeholder="Active and inactive"
+                  hint="Merged records are listed only when merged is chosen."
+                  options={[
+                    { value: 'active', label: 'active' },
+                    { value: 'inactive', label: 'inactive' },
+                    { value: 'merged', label: 'merged' },
+                  ]}
+                  value={status}
+                  onChange={setStatus}
+                />
+                <Button type="submit">Search</Button>
+              </form>
+              {search ? (
+                <SearchResults
+                  key={`${search.query}|${search.kind}|${search.status}`}
+                  search={search}
+                />
+              ) : null}
+            </>
+          )}
+        </section>
+        <aside className="split-side" aria-label="Also in People and families">
+          <section className="card card-flush">
+            <div className="card-head">
+              <h4>Also here</h4>
+            </div>
+            <ul className="list people-links">
+              <li>
+                <span className="icon-tile" data-tone="warning" aria-hidden="true">
+                  <Icon name="person_off" size={20} />
+                </span>
+                <div className="row-text">
+                  <Link className="row-title" to="/people/duplicates">
+                    Duplicate review
+                  </Link>
+                  <span className="caption">
+                    Records that may be the same person, to merge or keep apart.
+                  </span>
+                </div>
+              </li>
+              <li>
+                <span className="icon-tile" data-tone="pending" aria-hidden="true">
+                  <Icon name="shield_person" size={20} />
+                </span>
+                <div className="row-text">
+                  <Link className="row-title" to="/people/access-reviews">
+                    Access reviews
+                  </Link>
+                  <span className="caption">
+                    Disputed guardian or pickup access, decided with evidence.
+                  </span>
+                </div>
+              </li>
+              <li>
+                <span className="icon-tile" data-tone="info" aria-hidden="true">
+                  <Icon name="mail" size={20} />
+                </span>
+                <div className="row-text">
+                  <Link className="row-title" to="/people/invitations">
+                    Invitations
+                  </Link>
+                  <span className="caption">
+                    Household and guardian invitations and their expiry.
+                  </span>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </aside>
+      </div>
     </section>
   );
 }

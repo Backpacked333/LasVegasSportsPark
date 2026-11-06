@@ -1,0 +1,35 @@
+/* Sidebar attention pills (GET /v1/me/attention). The pill sits beside the link, outside it, so
+   the link's accessible name stays the area title; the count is read from the visually hidden
+   text after the link. */
+.nav-item {
+  position: relative;
+}
+.nav-item .nav-count {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--night-2);
+  color: var(--night-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  pointer-events: none;
+}
+.nav-item a[aria-current='page'] + .nav-count {
+  background: var(--night);
+  color: var(--floodlight);
+}
+.nav-item .nav-count-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

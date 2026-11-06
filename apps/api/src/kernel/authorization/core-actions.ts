@@ -69,6 +69,13 @@ export const CoreActions = defineActions({
     ],
     requirements: ['§5.11', '§4.12', 'SPK-UX-006'],
   },
+  setDefaultCurrency: {
+    id: 'core.set_default_currency',
+    description:
+      'Set the organization default currency screens use before a record names one (no record is converted)',
+    staffRoles: ['system_administrator'],
+    requirements: ['SPK-PAY-001', '§2.1'],
+  },
   manageCapabilities: {
     id: 'core.manage_capabilities',
     description:

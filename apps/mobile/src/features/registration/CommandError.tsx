@@ -36,7 +36,7 @@ import { OutcomeLost } from '../../ui/OutcomeLost';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 
 export interface CommandErrorProps {
   error: ApiError | null;
@@ -191,6 +191,6 @@ const styles = StyleSheet.create({
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.xs },
-  label: { ...type.body, fontWeight: '600', color: colors.text },
+  label: { ...type.body, ...fonts.semibold, color: colors.text },
   item: { ...type.body, color: colors.text },
 });

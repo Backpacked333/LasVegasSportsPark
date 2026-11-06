@@ -8,12 +8,46 @@
  * States (SPK-UX-008): loading; error with the code and "Load areas again" (pages and the
  * workspace stay reachable by address); offline with nothing loaded; no area visible ("none
  * available"). Areas already loaded stay listed while offline (the cached read).
+ *
+ * Attention counts (`GET /v1/me/attention`, park UI redesign): beside an area, how many items wait
+ * for the viewer there, as the owning module's own list answers the viewer. The pill is outside
+ * the link (aria-hidden) so the link's accessible name stays the area title; the same count is
+ * said in visually hidden text after it. An area the API leaves out shows no pill (never a zero
+ * for a list the viewer cannot read), and nothing is shown while the read fails.
  */
+import type { Schema } from '@sportspark/api-client';
 import { NavLink } from 'react-router';
 import { usePermissions } from '../api/permissions';
-import { STAFF_AREAS } from '../navigation/areas';
+import { useApiQuery } from '../api/useApiQuery';
+import { STAFF_AREAS, STAFF_AREA_GROUPS } from '../navigation/areas';
 import { useApp } from '../providers/AppProviders';
 import { Button } from '../ui/Button';
+import { Icon } from '../ui/Icon';
+import './area-nav.css';
+
+/** Re-read the counts every two minutes while the dashboard is open. */
+const ATTENTION_REFRESH_MS = 120_000;
+
+function AttentionPill({
+  title,
+  count,
+}: {
+  title: string;
+  count: Schema<'AttentionAreaCount'> | undefined;
+}) {
+  if (!count || count.count === 0) return null;
+  const shown = `${count.count}${count.capped ? '+' : ''}`;
+  return (
+    <>
+      <span className="nav-count" aria-hidden="true" data-testid={`nav-count-${count.area}`}>
+        {shown}
+      </span>
+      <span className="nav-count-text">
+        {title}: {shown} {count.counts}
+      </span>
+    </>
+  );
+}
 
 /**
  * The navigation's own compact states: distinct words and test ids from the page's StateView, so
@@ -44,6 +78,13 @@ export function AreaNav({ onNavigate }: { onNavigate: () => void }) {
   const permissions = usePermissions();
   const { online } = useApp();
   const { query } = permissions;
+  const attention = useApiQuery({
+    path: '/me/attention',
+    enabled: query.data !== undefined,
+    staleTime: ATTENTION_REFRESH_MS,
+    refetchInterval: ATTENTION_REFRESH_MS,
+  });
+  const countOf = new Map((attention.data?.areas ?? []).map((a) => [a.area, a]));
 
   if (query.data === undefined) {
     const retry = () => void query.refetch();
@@ -82,15 +123,37 @@ export function AreaNav({ onNavigate }: { onNavigate: () => void }) {
       />
     );
   }
+  // One "Areas" list holding a labelled sub-list per sidebar group (Operate, Compete, Grow,
+  // Business); an empty group is left out.
   return (
-    <ul aria-label="Areas">
-      {areas.map((area) => (
-        <li key={area.id}>
-          <NavLink to={area.path} onClick={onNavigate}>
-            {area.title}
-          </NavLink>
-        </li>
-      ))}
+    <ul aria-label="Areas" className="nav-groups">
+      {STAFF_AREA_GROUPS.map((group) => {
+        const inGroup = areas.filter((area) => area.group === group);
+        if (inGroup.length === 0) return null;
+        const labelId = `nav-group-${group}`;
+        return (
+          <li key={group} className="nav-group">
+            <span className="nav-group-label" id={labelId}>
+              {group}
+            </span>
+            <ul aria-labelledby={labelId}>
+              {inGroup.map((area) => (
+                <li key={area.id} className="nav-item">
+                  <NavLink to={area.path} onClick={onNavigate}>
+                    {({ isActive }) => (
+                      <>
+                        <Icon name={area.icon} filled={isActive} />
+                        <span>{area.title}</span>
+                      </>
+                    )}
+                  </NavLink>
+                  <AttentionPill title={area.title} count={countOf.get(area.id)} />
+                </li>
+              ))}
+            </ul>
+          </li>
+        );
+      })}
     </ul>
   );
 }

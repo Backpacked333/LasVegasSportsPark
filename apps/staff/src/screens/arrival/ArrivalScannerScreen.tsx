@@ -32,19 +32,28 @@ import { useKeyedCommands } from '../../features/operations/commands';
 import { useOperatingFacility } from '../../features/operations/context';
 import { ChooseFacility, CommandError, CommandSuccess } from '../../features/operations/feedback';
 import { CheckboxField, SelectField, TextField } from '../../features/operations/fields';
-import { formatRange, humanize } from '../../features/operations/format';
+import { formatRange, humanize, initialsOf } from '../../features/operations/format';
 import { CHECKIN_STATUS, VISITOR_CATEGORY_LABEL } from '../../features/operations/labels';
 import { useOfflineQueue } from '../../features/operations/offline/OfflineQueueProvider';
-import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
+import {
+  OfflineQueueChip,
+  OfflineQueueStatus,
+} from '../../features/operations/offline/OfflineQueueStatus';
 import { serviceClockOf, type ServiceClock } from '../../features/operations/offline/clock';
 import type { RosterSnapshot } from '../../features/operations/offline/queue';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Icon } from '../../ui/Icon';
 import { LastUpdated } from '../../ui/LastUpdated';
+import { PageHeader } from '../../ui/Page';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { CameraScanner } from './CameraScanner';
+import { CareNotesFlag } from './CareNotesFlag';
 import { CheckinOutcome } from './CheckinOutcome';
+import './arrival.css';
 import { PersonLookupArrival } from './PersonLookupArrival';
+import { SessionsNow } from './SessionsNow';
 
 type PassScan = Schema<'PassScan'>;
 type ScanPerson = Schema<'ScanPerson'>;
@@ -91,10 +100,10 @@ export function ArrivalScannerScreen() {
     enabled: facility.facilityId !== null,
   });
 
-  const openSelection = () => {
-    if (!facility.facilityId || reference.trim().length === 0) return;
+  const openSelection = (value: string = reference) => {
+    if (!facility.facilityId || value.trim().length === 0) return;
     void scanCommand
-      .submit({ body: { reference: reference.trim(), facilityId: facility.facilityId } })
+      .submit({ body: { reference: value.trim(), facilityId: facility.facilityId } })
       .then((result) => {
         // The scan's time is the service's: arrivals queued against it are dated on that clock
         // too (offline/clock.ts), so a device clock that is off moves neither.
@@ -112,10 +121,18 @@ export function ArrivalScannerScreen() {
 
   const scanError = scanCommand.error;
   const passMessage = scanError ? passErrorMessage(scanError) : null;
+  const arrivalsToday = occupancy.data?.arrivals.people;
 
   return (
-    <section aria-labelledby="arrival-title">
-      <h2 id="arrival-title">Arrival scanner</h2>
+    <section aria-labelledby="arrival-title" className="ops-screen arrival">
+      <PageHeader
+        eyebrow={`Operate · Front desk${
+          arrivalsToday !== undefined ? ` · ${arrivalsToday} arrived today` : ''
+        }`}
+        title="Arrival scanner"
+        titleId="arrival-title"
+        actions={<OfflineQueueChip />}
+      />
       <AreaTabs label="Arrival and attendance screens" tabs={ARRIVAL_TABS} />
       <OfflineQueueStatus />
       {!facility.facilityId ? (
@@ -125,78 +142,136 @@ export function ArrivalScannerScreen() {
           <ChooseFacility purpose="scan passes and record arrivals" />
         )
       ) : (
-        <>
-          {occupancy.data ? (
-            <p className="caption" data-testid="occupancy">
-              Arrivals recorded today: {occupancy.data.arrivals.people}; departures:{' '}
-              {occupancy.data.departures.people}; recorded on site: {occupancy.data.recordedOnSite}.{' '}
-              {occupancy.data.occupancy.status === 'verified'
-                ? `Verified occupancy: ${occupancy.data.occupancy.verifiedOccupancy ?? 0}.`
-                : 'Not verified occupancy.'}{' '}
-              {occupancy.data.occupancy.statement}
-            </p>
-          ) : null}
-          <div className="ops-section">
-            <h3>Scan a pass</h3>
-            <form
-              className="ops-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                openSelection();
-              }}
-            >
-              <TextField
-                label="Pass reference"
-                value={reference}
-                onChange={(value) => {
-                  setReference(value);
-                  if (scanCommand.error) scanCommand.reset();
-                }}
-                hint="Scan with a connected reader or type the reference. Nothing is recorded until you choose who is arriving."
-                error={passMessage ?? undefined}
-                disabled={!online}
-              />
-              <div className="ops-actions">
-                <Button
-                  type="submit"
-                  busy={scanCommand.isProcessing}
-                  disabled={!online || reference.trim().length === 0}
-                >
-                  Open selection
-                </Button>
+        <div className="split arrival-split">
+          <div className="split-main">
+            <section className="card card-dark scanner" aria-labelledby="scan-title">
+              <div className="scanner-head">
+                <h3 id="scan-title">Scan a pass</h3>
+                <span className={online ? 'live-chip' : 'scanner-offline'}>
+                  {online ? <span className="live-dot" aria-hidden="true" /> : null}
+                  {online ? 'Reader ready' : 'Offline'}
+                </span>
               </div>
-            </form>
-            {!online ? (
-              <p className="caption">
-                Scanning needs a connection. A pass scanned before the connection was lost stays
-                open below; arrivals for it are queued on this device.
-              </p>
+              <div className="scanner-frame" data-online={online} aria-hidden="true">
+                <span className="scanner-box">
+                  <Icon name="qr_code_scanner" size={44} />
+                  <span className="scanner-line" />
+                </span>
+                <span className="scanner-hint">
+                  {online
+                    ? 'Scan the facility pass with the reader or the camera, or type its reference below'
+                    : 'Scanning needs a connection'}
+                </span>
+              </div>
+              <CameraScanner
+                disabled={!online || scanCommand.isProcessing}
+                onDetected={(value) => {
+                  if (scanCommand.error) scanCommand.reset();
+                  setReference(value);
+                  openSelection(value);
+                }}
+              />
+              <form
+                className="ops-form scanner-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  openSelection();
+                }}
+              >
+                <TextField
+                  label="Pass reference"
+                  value={reference}
+                  onChange={(value) => {
+                    setReference(value);
+                    if (scanCommand.error) scanCommand.reset();
+                  }}
+                  hint="Scan with a connected reader or type the reference. Nothing is recorded until you choose who is arriving."
+                  error={passMessage ?? undefined}
+                  disabled={!online}
+                />
+                <div className="ops-actions">
+                  <Button
+                    type="submit"
+                    busy={scanCommand.isProcessing}
+                    disabled={!online || reference.trim().length === 0}
+                  >
+                    Open selection
+                  </Button>
+                </div>
+              </form>
+              {!online ? (
+                <p className="caption">
+                  Scanning needs a connection. A pass scanned before the connection was lost stays
+                  open below; arrivals for it are queued on this device.
+                </p>
+              ) : null}
+              {scanError && !passMessage ? (
+                <div className="scanner-error">
+                  <CommandError
+                    error={scanError}
+                    onRetry={() => openSelection()}
+                    subject="This pass"
+                  />
+                </div>
+              ) : null}
+              {scanError && passMessage ? (
+                <p className="caption">Error code: {scanError.code}</p>
+              ) : null}
+            </section>
+            {scan ? (
+              <ArrivalSelection
+                key={scan.result.pass.id + scan.result.scannedAt}
+                scan={scan.result}
+                snapshot={scan.snapshot}
+                clock={scan.clock}
+                receivedAt={scan.at}
+                facilityId={facility.facilityId}
+                timezone={facility.timezone}
+                onDone={() => setScan(null)}
+              />
             ) : null}
-            {scanError && !passMessage ? (
-              <CommandError error={scanError} onRetry={openSelection} subject="This pass" />
-            ) : null}
-            {scanError && passMessage ? (
-              <p className="caption">Error code: {scanError.code}</p>
-            ) : null}
-          </div>
-          <PersonLookupArrival
-            facilityId={facility.facilityId}
-            timezone={facility.timezone}
-            window={facility.window}
-          />
-          {scan ? (
-            <ArrivalSelection
-              key={scan.result.pass.id + scan.result.scannedAt}
-              scan={scan.result}
-              snapshot={scan.snapshot}
-              clock={scan.clock}
-              receivedAt={scan.at}
+            <PersonLookupArrival
               facilityId={facility.facilityId}
               timezone={facility.timezone}
-              onDone={() => setScan(null)}
+              window={facility.window}
             />
-          ) : null}
-        </>
+          </div>
+          <aside className="split-side" aria-label="At the facility now">
+            {occupancy.data ? (
+              <section className="card arrival-occupancy" aria-labelledby="occupancy-title">
+                <h3 id="occupancy-title">Today at the desk</h3>
+                <ul className="ops-tally" aria-hidden="true">
+                  <li data-tone="success">
+                    <span className="ops-tally-value">{occupancy.data.arrivals.people}</span>
+                    <span className="ops-tally-label">Arrivals</span>
+                  </li>
+                  <li>
+                    <span className="ops-tally-value">{occupancy.data.departures.people}</span>
+                    <span className="ops-tally-label">Departures</span>
+                  </li>
+                  <li>
+                    <span className="ops-tally-value">{occupancy.data.recordedOnSite}</span>
+                    <span className="ops-tally-label">Recorded on site</span>
+                  </li>
+                </ul>
+                <p className="caption" data-testid="occupancy">
+                  Arrivals recorded today: {occupancy.data.arrivals.people}; departures:{' '}
+                  {occupancy.data.departures.people}; recorded on site:{' '}
+                  {occupancy.data.recordedOnSite}.{' '}
+                  {occupancy.data.occupancy.status === 'verified'
+                    ? `Verified occupancy: ${occupancy.data.occupancy.verifiedOccupancy ?? 0}.`
+                    : 'Not verified occupancy.'}{' '}
+                  {occupancy.data.occupancy.statement}
+                </p>
+              </section>
+            ) : null}
+            <SessionsNow
+              facilityId={facility.facilityId}
+              timezone={facility.timezone}
+              window={facility.window}
+            />
+          </aside>
+        </div>
       )}
     </section>
   );
@@ -323,87 +398,97 @@ function ArrivalSelection({
   const visitsOutcome = commands.outcome('visits');
 
   return (
-    <section className="ops-section" aria-labelledby="selection-title">
-      <h3 id="selection-title">Who is arriving?</h3>
-      <p>
-        Tick only the people arriving now and the sessions they attend. Nobody is marked present by
-        the scan.
-      </p>
-      <LastUpdated at={receivedAt} now={now} prefix="Scanned" />
-      {!online ? (
-        <StateView
-          variant="offline-stale"
-          offline
-          updatedAt={receivedAt}
-          now={now}
-          unavailableActions={[
-            'session check-in',
-            'payments',
-            'capacity',
-            'guardian changes',
-            'roster transfers',
-            'pickup permission',
-          ]}
-        />
-      ) : null}
-      {!online && rosterTooOld ? (
-        <StateView
-          variant="unavailable"
-          title="Roster too old to queue against"
-          description="This scan is older than the configured maximum roster age. Reconnect and scan the pass again."
-        />
-      ) : null}
-      {!online && maxAge === null ? (
-        <StateView
-          variant="pending-decision"
-          subject="A maximum roster age for offline queuing"
-          decisions={['DEC-033']}
-          owner="Operations"
-        />
-      ) : null}
-      {scan.people.length === 0 ? (
-        <StateView
-          variant="empty"
-          title="Nobody to select"
-          description="This pass resolves to nobody with an active record at this facility today."
-        />
-      ) : (
-        <ul className="ops-cards" aria-label="People on this pass">
-          {scan.people.map((person) => (
-            <PersonSelection
-              key={person.personId}
-              person={person}
-              timezone={timezone}
-              online={online}
-              arriving={!!arriving[person.personId]}
-              onArriving={(value) => setArriving((prev) => ({ ...prev, [person.personId]: value }))}
-              category={categoryOf(person)}
-              onCategory={(value) =>
-                setCategories((prev) => ({ ...prev, [person.personId]: value as Category | '' }))
-              }
-              categoryMissing={missing.includes(person.personId)}
-              checkinSelected={(a) => !!checkins[checkinKey(person.personId, a)]}
-              onCheckin={(a, value) =>
-                setCheckins((prev) => ({ ...prev, [checkinKey(person.personId, a)]: value }))
-              }
-              commands={commands}
-              arrivalRecorded={visitIds[person.personId] !== undefined}
-            />
-          ))}
-        </ul>
-      )}
-      {visitsOutcome.status === 'error' && visitsOutcome.error ? (
-        <CommandError error={visitsOutcome.error} onRetry={() => void submit()} />
-      ) : null}
-      {queued !== null ? (
-        <CommandSuccess
-          tone="warning"
-          label={`${queued} arrival${queued === 1 ? '' : 's'} queued on this device: not yet recorded`}
-        >
-          <span className="caption">They synchronise once when the connection returns.</span>
-        </CommandSuccess>
-      ) : null}
-      <div className="ops-actions">
+    <section className="card card-flush selection" aria-labelledby="selection-title">
+      <div className="selection-band">
+        <Icon name="qr_code" size={22} />
+        <span className="selection-band-text">
+          <span className="selection-band-title">Pass scanned · nothing recorded yet</span>
+          <LastUpdated at={receivedAt} now={now} prefix="Scanned" />
+        </span>
+      </div>
+      <div className="selection-body">
+        <h3 id="selection-title">Who is arriving?</h3>
+        <p>
+          Tick only the people arriving now and the sessions they attend. Nobody is marked present
+          by the scan.
+        </p>
+        {!online ? (
+          <StateView
+            variant="offline-stale"
+            offline
+            updatedAt={receivedAt}
+            now={now}
+            unavailableActions={[
+              'session check-in',
+              'payments',
+              'capacity',
+              'guardian changes',
+              'roster transfers',
+              'pickup permission',
+            ]}
+          />
+        ) : null}
+        {!online && rosterTooOld ? (
+          <StateView
+            variant="unavailable"
+            title="Roster too old to queue against"
+            description="This scan is older than the configured maximum roster age. Reconnect and scan the pass again."
+          />
+        ) : null}
+        {!online && maxAge === null ? (
+          <StateView
+            variant="pending-decision"
+            subject="A maximum roster age for offline queuing"
+            decisions={['DEC-033']}
+            owner="Operations"
+          />
+        ) : null}
+        {scan.people.length === 0 ? (
+          <StateView
+            variant="empty"
+            title="Nobody to select"
+            description="This pass resolves to nobody with an active record at this facility today."
+          />
+        ) : (
+          <ul className="ops-cards" aria-label="People on this pass">
+            {scan.people.map((person) => (
+              <PersonSelection
+                key={person.personId}
+                person={person}
+                timezone={timezone}
+                online={online}
+                arriving={!!arriving[person.personId]}
+                onArriving={(value) =>
+                  setArriving((prev) => ({ ...prev, [person.personId]: value }))
+                }
+                category={categoryOf(person)}
+                onCategory={(value) =>
+                  setCategories((prev) => ({ ...prev, [person.personId]: value as Category | '' }))
+                }
+                categoryMissing={missing.includes(person.personId)}
+                checkinSelected={(a) => !!checkins[checkinKey(person.personId, a)]}
+                onCheckin={(a, value) =>
+                  setCheckins((prev) => ({ ...prev, [checkinKey(person.personId, a)]: value }))
+                }
+                commands={commands}
+                arrivalRecorded={visitIds[person.personId] !== undefined}
+              />
+            ))}
+          </ul>
+        )}
+        {visitsOutcome.status === 'error' && visitsOutcome.error ? (
+          <CommandError error={visitsOutcome.error} onRetry={() => void submit()} />
+        ) : null}
+        {queued !== null ? (
+          <CommandSuccess
+            tone="warning"
+            label={`${queued} arrival${queued === 1 ? '' : 's'} queued on this device: not yet recorded`}
+          >
+            <span className="caption">They synchronise once when the connection returns.</span>
+          </CommandSuccess>
+        ) : null}
+      </div>
+      <div className="ops-actions selection-actions">
         <Button
           onClick={() => void submit()}
           busy={commands.anyPending}
@@ -449,13 +534,19 @@ function PersonSelection({
   const name = `${person.givenName} ${person.familyName}`.trim();
   const onSite = person.onSite || arrivalRecorded;
   return (
-    <li aria-label={name}>
-      <div className="ops-row">
-        <span className="row-title">{name}</span>
-        <span className="caption">
-          {person.kind === 'child' ? 'Child' : 'Adult'} · {RELATION_LABEL[person.relation]}
+    <li aria-label={name} className="arrival-person" data-on-site={onSite}>
+      <div className="arrival-person-head">
+        <span className="ops-avatar" aria-hidden="true">
+          {initialsOf(name)}
+        </span>
+        <span className="arrival-person-text">
+          <span className="arrival-person-name">{name}</span>
+          <span className="caption">
+            {person.kind === 'child' ? 'Child' : 'Adult'} · {RELATION_LABEL[person.relation]}
+          </span>
         </span>
       </div>
+      <CareNotesFlag notes={person.careNotes} name={name} />
       {onSite ? (
         <StatusBadge tone="success" label="Arrived" />
       ) : (
@@ -537,6 +628,7 @@ function ActivityCheckin({
         checkinId={activity.checkin.id}
         title={activity.title}
         when={when}
+        timezone={timezone}
         commands={commands}
         recheckKey={recheckKey}
       />
@@ -564,6 +656,7 @@ function ActivityCheckin({
         <CheckinOutcome
           checkin={fromCommand}
           title={activity.title}
+          timezone={timezone}
           busy={recheck.status === 'pending'}
           onRecheck={() =>
             void commands.run(recheckKey, 'post', '/session-checkins/{id}/recheck', {
@@ -603,12 +696,14 @@ function HeldCheckin({
   checkinId,
   title,
   when,
+  timezone,
   commands,
   recheckKey,
 }: {
   checkinId: string;
   title: string;
   when: string;
+  timezone: string | null;
   commands: ReturnType<typeof useKeyedCommands>;
   recheckKey: string;
 }) {
@@ -640,6 +735,7 @@ function HeldCheckin({
       <CheckinOutcome
         checkin={current}
         title={title}
+        timezone={timezone}
         busy={recheck.status === 'pending'}
         onRecheck={() =>
           void commands.run(recheckKey, 'post', '/session-checkins/{id}/recheck', {

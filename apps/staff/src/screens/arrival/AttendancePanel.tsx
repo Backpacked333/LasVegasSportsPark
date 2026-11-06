@@ -29,7 +29,7 @@ import { useKeyedCommands } from '../../features/operations/commands';
 import { nameOf, usePersonNames } from '../../features/operations/context';
 import { CommandError } from '../../features/operations/feedback';
 import { TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
-import { formatInstant } from '../../features/operations/format';
+import { formatInstant, initialsOf } from '../../features/operations/format';
 import { OBSERVED_STATE, OBSERVED_STATES } from '../../features/operations/labels';
 import { serviceClockOf } from '../../features/operations/offline/clock';
 import { useOfflineQueue } from '../../features/operations/offline/OfflineQueueProvider';
@@ -38,6 +38,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import './arrival.css';
 
 type ObservedState = Schema<'ObservedState'>;
 type PersonAttendance = Schema<'PersonAttendance'>;
@@ -182,7 +183,7 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
   }, [people]);
 
   return (
-    <section className="ops-section" aria-labelledby="attendance-panel-title">
+    <section className="ops-section attendance-panel" aria-labelledby="attendance-panel-title">
       <h3 id="attendance-panel-title">{title}</h3>
       <QueryBoundary
         query={attendance}
@@ -199,7 +200,31 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
       >
         {() => (
           <>
-            <p data-testid="attendance-counts">
+            <ul className="ops-tally" aria-hidden="true">
+              <li data-tone="success">
+                <span className="ops-tally-value">{counts.present}</span>
+                <span className="ops-tally-label">Present</span>
+              </li>
+              <li data-tone="warning">
+                <span className="ops-tally-value">{counts.late}</span>
+                <span className="ops-tally-label">Late</span>
+              </li>
+              <li data-tone="warning">
+                <span className="ops-tally-value">{counts.left_early}</span>
+                <span className="ops-tally-label">Left early</span>
+              </li>
+              <li>
+                <span className="ops-tally-value">{counts.absent}</span>
+                <span className="ops-tally-label">Absent</span>
+              </li>
+              <li data-tone={counts.conflict > 0 ? 'danger' : undefined}>
+                <span className="ops-tally-value">{counts.none + counts.conflict}</span>
+                <span className="ops-tally-label">
+                  {counts.conflict > 0 ? 'To record or review' : 'Still to record'}
+                </span>
+              </li>
+            </ul>
+            <p className="caption" data-testid="attendance-counts">
               Present {counts.present}, late {counts.late}, left early {counts.left_early}, absent{' '}
               {counts.absent}, not recorded {counts.none}
               {counts.conflict > 0 ? `, conflicting ${counts.conflict}` : ''}. Observed attendance,
@@ -226,7 +251,7 @@ export function AttendancePanel({ activity, facilityId, timezone, title }: Atten
                 owner="Operations"
               />
             ) : null}
-            <ul className="list" aria-label="Participants">
+            <ul className="list attendance-list" aria-label="Participants">
               {sorted.map(({ personId, record: rec }) => (
                 <AttendanceRow
                   key={personId}
@@ -302,7 +327,14 @@ function AttendanceRow({
   };
 
   return (
-    <li aria-label={name}>
+    <li
+      aria-label={name}
+      className="attendance-row"
+      data-state={conflict ? 'conflict' : (record?.effectiveState ?? 'none')}
+    >
+      <span className="ops-avatar" aria-hidden="true">
+        {initialsOf(name)}
+      </span>
       <div className="row-text">
         <span className="row-title">{name}</span>
         {conflict ? (
@@ -324,7 +356,11 @@ function AttendanceRow({
         ))}
       </div>
       {!conflict ? (
-        <div className="ops-actions" role="group" aria-label={`Record attendance for ${name}`}>
+        <div
+          className="attendance-states"
+          role="group"
+          aria-label={`Record attendance for ${name}`}
+        >
           {OBSERVED_STATES.map((state) => (
             <Button
               key={state}

@@ -7,7 +7,7 @@
 import type { Schema } from '@sportspark/api-client';
 import { StyleSheet, Text, View } from 'react-native';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 import { formatMoney } from './format';
 
 type Totals = Schema<'ObligationTotals'>;
@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
   rows: { gap: spacing.xs },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   label: { ...type.body, color: colors.textMuted },
-  value: { ...type.body, color: colors.text, fontWeight: '600' },
+  value: { ...type.body, color: colors.text, ...fonts.semibold },
   excess: { gap: spacing.xs },
   caption: { ...type.caption, color: colors.textMuted },
 });

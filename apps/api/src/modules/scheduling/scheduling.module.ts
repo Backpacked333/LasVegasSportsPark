@@ -27,6 +27,7 @@ import { EventWriter } from './services/event-writer';
 import { EventsService } from './services/events.service';
 import { ResourcesService } from './services/resources.service';
 import { ScheduleDraftsService } from './services/schedule-drafts.service';
+import { ScheduleInsightsService } from './services/schedule-insights.service';
 
 /**
  * Resolves the competition module's fixture-obligation implementation lazily (no import cycle);
@@ -76,6 +77,7 @@ const providers: Provider[] = [
   ClosureImpactContributors,
   ClosuresService,
   ScheduleDraftsService,
+  ScheduleInsightsService,
   { provide: EVENT_SCHEDULING_PORT, useExisting: EventsService },
   { provide: AVAILABILITY_PORT, useExisting: EventsService },
   { provide: RESERVATION_QUERY_PORT, useExisting: EventsService },
@@ -106,6 +108,7 @@ const providers: Provider[] = [
     ClosureImpactContributors,
     EventSeriesService,
     ScheduleDraftsService,
+    ScheduleInsightsService,
     EVENT_SCHEDULING_PORT,
     AVAILABILITY_PORT,
     RESERVATION_QUERY_PORT,

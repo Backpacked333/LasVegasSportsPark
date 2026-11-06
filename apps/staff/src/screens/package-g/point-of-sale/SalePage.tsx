@@ -3,7 +3,8 @@
  * its lines at the product's price with the approved taxes and fees the API applied, its totals,
  * tenders and returns (`GET /v1/pos-sales/{id}`), and the commands its state allows:
  *
- * - open: add a line (only while `point_of_sale` is on), take a cash, external or card tender
+ * - open: add a line and change a line's quantity with − and + (only while `point_of_sale` is on),
+ *   take a cash, external or card tender
  *   (SaleForms; never gated, a tender settles an existing sale, DEC-016), void it with a reason
  *   while it holds no card tender (`POST /v1/pos-sales/{id}/void`, never gated);
  * - paid or partially returned: return lines within what was paid (ReturnForm), and the receipt.
@@ -12,9 +13,14 @@
  * leaves the sale open: the page says recovery is required, that the card must not be taken again,
  * and links to the payment attempt to reconcile from the provider's evidence (SPK-PAY-007). A card
  * payment still processing is "not paid yet", never success. Times are in the facility's zone.
+ *
+ * The ticket names the customer's household account: the open balance and credits from
+ * `GET /v1/people/{id}/money-summary` (protected; shown only to roles that read it), and lists the
+ * configured tax and fee lines the API applied (`charges`, approved `tax_fee` versions).
  */
 import type { Schema } from '@sportspark/api-client';
 import { Link } from 'react-router';
+import { usePermissions } from '../../../api/permissions';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiQuery } from '../../../api/useApiQuery';
 import { CommandError } from '../../../features/pos-access-accounting/CommandError';
@@ -39,12 +45,16 @@ import {
 import { PersonName } from '../../../features/registration-finance/names';
 import { useOnline } from '../../../features/registration-finance/offline';
 import { Facts } from '../../../ui/FormFields';
+import { Icon } from '../../../ui/Icon';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { POS_PATHS, SALE_QUERY_PREFIX } from './paths';
-import { AddLineForm, ReturnForm, TenderForm } from './SaleForms';
+import { AddLineForm, LineQuantity, ReturnForm, TenderForm } from './SaleForms';
+import './pos.css';
 
 type Sale = Schema<'PosSale'>;
+
+const READ_PERSON_MONEY = 'finance.read_person_money';
 
 export function SalePage() {
   const saleId = useRecordParam('saleId');
@@ -55,7 +65,7 @@ export function SalePage() {
 function SaleView({ saleId }: { saleId: string }) {
   const sale = useApiQuery({ path: '/pos-sales/{id}', request: { path: { id: saleId } } });
   return (
-    <section aria-labelledby="pos-sale-title">
+    <section aria-labelledby="pos-sale-title" className="pos-sale">
       <h3 id="pos-sale-title">Sale {sale.data?.saleNumber ?? shortRef(saleId)}</h3>
       <QueryBoundary
         query={sale}
@@ -98,91 +108,171 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
   const hasReceipt =
     sale.status === 'paid' || sale.status === 'partially_returned' || sale.status === 'returned';
   return (
-    <>
-      <p>
-        <StatusBadge {...POS_SALE_STATUS[sale.status]} />
-      </p>
-      {cards.unknown.length > 0 ? <UnknownCardRecovery tenders={cards.unknown} /> : null}
-      {cards.inProgress.length > 0 ? (
-        <section className="state" aria-live="polite" data-testid="state-processing">
-          <StatusBadge tone="pending" label="Card payment in progress: not paid yet" />
-          <p>
-            The sale is paid only once the provider confirms the card payment. Reload to see its
-            outcome; do not take the card again.
-          </p>
-        </section>
-      ) : null}
-      <Facts
-        label="Sale"
-        items={[
-          ['Sale number', sale.saleNumber],
-          ['Facility', directory.nameOf(sale.facilityId)],
-          [
-            'Customer',
-            sale.customerPersonId ? (
-              <PersonName key="c" id={sale.customerPersonId} fallback="Customer" />
-            ) : (
-              'Not named'
-            ),
-          ],
-          [
-            'Register session',
-            <Link key="s" to={POS_PATHS.session(sale.registerSessionId)}>
-              Session {shortRef(sale.registerSessionId)}
-            </Link>,
-          ],
-          ['Started at', formatInstant(sale.createdAt, zone)],
-          ['Paid at', sale.paidAt ? formatInstant(sale.paidAt, zone) : 'Not paid'],
-          ...(sale.voidReason
-            ? ([
-                ['Voided at', formatInstant(sale.voidedAt, zone)],
-                ['Void reason', sale.voidReason],
-              ] as [string, string][])
-            : []),
-        ]}
-      />
-      <Facts
-        label="Sale totals"
-        items={[
-          ['Subtotal', formatMoney(sale.subtotalMinor, c)],
-          ['Taxes and fees', formatMoney(sale.chargesMinor, c)],
-          ['Total', formatMoney(sale.totalMinor, c)],
-          ['Paid (settled tenders)', formatMoney(sale.settledMinor, c)],
-          ['Card payments not final', formatMoney(sale.pendingMinor, c)],
-          ['Remaining to pay', formatMoney(sale.remainingMinor, c)],
-          ['Returned', formatMoney(sale.returnedMinor, c)],
-        ]}
-      />
-      <Lines sale={sale} />
-      <Tenders sale={sale} zone={zone} />
-      <Returns sale={sale} zone={zone} />
-      {selling ? <AddLineForm sale={sale} onReload={onReload} /> : null}
-      {tendering && !switchOn ? (
-        <p className="caption">
-          Point of sale is turned off: no line is added to this sale, but what it already holds can
-          still be paid, or the sale voided.
+    <div className="pos-register">
+      <div className="pos-main">
+        <p className="pos-status">
+          <StatusBadge {...POS_SALE_STATUS[sale.status]} />
         </p>
-      ) : null}
-      {tendering && sale.lines.length > 0 && sale.remainingMinor > 0 ? (
-        <TenderForm sale={sale} onReload={onReload} />
-      ) : null}
-      {sale.status === 'open' && operate ? (
-        cards.blocksVoid ? (
+        {cards.unknown.length > 0 ? <UnknownCardRecovery tenders={cards.unknown} /> : null}
+        {cards.inProgress.length > 0 ? (
+          <section className="state" aria-live="polite" data-testid="state-processing">
+            <StatusBadge tone="pending" label="Card payment in progress: not paid yet" />
+            <p>
+              The sale is paid only once the provider confirms the card payment. Reload to see its
+              outcome; do not take the card again.
+            </p>
+          </section>
+        ) : null}
+        {selling ? <AddLineForm sale={sale} onReload={onReload} /> : null}
+        {tendering && !switchOn ? (
           <p className="caption">
-            A card was charged or is being charged for this sale, so it cannot be voided: complete
-            it, then return what was bought.
+            Point of sale is turned off: no line is added to this sale, but what it already holds
+            can still be paid, or the sale voided.
           </p>
-        ) : (
-          <VoidSale sale={sale} onReload={onReload} />
-        )
-      ) : null}
-      {returnable ? <ReturnForm sale={sale} onReload={onReload} /> : null}
-      {hasReceipt ? (
-        <p>
-          <Link to={POS_PATHS.receipt(sale.id)}>Open the receipt of sale {sale.saleNumber}</Link>
-        </p>
-      ) : null}
-    </>
+        ) : null}
+        <Lines sale={sale} />
+        <Tenders sale={sale} zone={zone} />
+        <Returns sale={sale} zone={zone} />
+        {returnable ? <ReturnForm sale={sale} onReload={onReload} /> : null}
+        <Facts
+          label="Sale"
+          items={[
+            ['Sale number', sale.saleNumber],
+            ['Facility', directory.nameOf(sale.facilityId)],
+            [
+              'Customer',
+              sale.customerPersonId ? (
+                <PersonName key="c" id={sale.customerPersonId} fallback="Customer" />
+              ) : (
+                'Not named'
+              ),
+            ],
+            [
+              'Register session',
+              <Link key="s" to={POS_PATHS.session(sale.registerSessionId)}>
+                Session {shortRef(sale.registerSessionId)}
+              </Link>,
+            ],
+            ['Started at', formatInstant(sale.createdAt, zone)],
+            ['Paid at', sale.paidAt ? formatInstant(sale.paidAt, zone) : 'Not paid'],
+            ...(sale.voidReason
+              ? ([
+                  ['Voided at', formatInstant(sale.voidedAt, zone)],
+                  ['Void reason', sale.voidReason],
+                ] as [string, string][])
+              : []),
+          ]}
+        />
+      </div>
+      <aside className="pos-ticket" aria-label={`Ticket of sale ${sale.saleNumber}`}>
+        <div className="pos-ticket-head">
+          <Icon name="person" size={20} />
+          <span className="pos-ticket-customer">
+            {sale.customerPersonId ? (
+              <>
+                <PersonName id={sale.customerPersonId} fallback="Customer" />{' '}
+                <span className="caption">· household account</span>
+                <HouseholdAccount personId={sale.customerPersonId} />
+              </>
+            ) : (
+              <span className="caption">Walk-in sale, no customer named</span>
+            )}
+          </span>
+        </div>
+        <ul className="pos-ticket-lines" aria-label="Ticket lines">
+          {sale.lines.length === 0 ? (
+            <li className="pos-ticket-empty">Add products to start the ticket</li>
+          ) : (
+            sale.lines.map((line) => (
+              <li key={line.id}>
+                {selling ? (
+                  <LineQuantity sale={sale} line={line} onReload={onReload} />
+                ) : (
+                  <span className="pos-qty">{line.quantity}×</span>
+                )}
+                <span className="pos-ticket-name">{line.name}</span>
+                <span className="pos-ticket-amount">{formatMoney(line.lineTotalMinor, c)}</span>
+              </li>
+            ))
+          )}
+        </ul>
+        <div className="pos-ticket-totals">
+          {(sale.charges ?? []).length > 0 ? (
+            <ul className="pos-ticket-charges" aria-label="Taxes and fees on this ticket">
+              {(sale.charges ?? []).map((charge) => (
+                <li key={`${charge.kind}:${charge.code}:${charge.label}`}>
+                  <span>{charge.label}</span>
+                  <span>{formatMoney(charge.amountMinor, c)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <Facts
+            label="Sale totals"
+            items={[
+              ['Subtotal', formatMoney(sale.subtotalMinor, c)],
+              ['Taxes and fees', formatMoney(sale.chargesMinor, c)],
+              ['Total', formatMoney(sale.totalMinor, c)],
+              ['Paid (settled tenders)', formatMoney(sale.settledMinor, c)],
+              ['Card payments not final', formatMoney(sale.pendingMinor, c)],
+              ['Remaining to pay', formatMoney(sale.remainingMinor, c)],
+              ['Returned', formatMoney(sale.returnedMinor, c)],
+            ]}
+          />
+        </div>
+        <div className="pos-ticket-actions">
+          {tendering && sale.lines.length > 0 && sale.remainingMinor > 0 ? (
+            <TenderForm sale={sale} onReload={onReload} />
+          ) : null}
+          {sale.status === 'open' && operate ? (
+            cards.blocksVoid ? (
+              <p className="caption">
+                A card was charged or is being charged for this sale, so it cannot be voided:
+                complete it, then return what was bought.
+              </p>
+            ) : (
+              <VoidSale sale={sale} onReload={onReload} />
+            )
+          ) : null}
+          {hasReceipt ? (
+            <p>
+              <Link className="button button-secondary" to={POS_PATHS.receipt(sale.id)}>
+                <Icon name="receipt_long" size={18} />
+                Open the receipt of sale {sale.saleNumber}
+              </Link>
+            </p>
+          ) : null}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+/**
+ * The customer's household account on the ticket: open balance and available credits per currency
+ * (finance.read_person_money, protected). Roles that do not read it see only the name; a failed or
+ * refused read shows nothing more (never a zero balance it did not read).
+ */
+function HouseholdAccount({ personId }: { personId: string }) {
+  const permissions = usePermissions();
+  const permitted = permissions.isPermitted(READ_PERSON_MONEY) === true;
+  const money = useApiQuery({
+    path: '/people/{id}/money-summary',
+    request: { path: { id: personId } },
+    enabled: permitted,
+  });
+  if (!permitted || !money.data) return null;
+  const balance = money.data.accountBalance;
+  const credits = money.data.creditsAvailable;
+  return (
+    <span className="pos-ticket-account" data-testid="pos-household-account">
+      {balance.length === 0
+        ? 'Nothing owed'
+        : `Owes ${balance.map((b) => formatMoney(b.amountMinor, b.currency)).join(' + ')}`}
+      {credits.length > 0
+        ? ` · credit ${credits.map((b) => formatMoney(b.amountMinor, b.currency)).join(' + ')}`
+        : ''}
+    </span>
   );
 }
 

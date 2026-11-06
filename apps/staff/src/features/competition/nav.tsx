@@ -51,7 +51,7 @@ export function TeamsNav() {
 /** Links from a season to its screens in both areas. */
 export function SeasonLinks({ seasonId }: { seasonId: string }) {
   return (
-    <nav aria-label="Season screens" className="subnav">
+    <nav aria-label="Season screens" className="compete-tabs">
       <ul>
         <li>
           <NavLink to={`/leagues/seasons/${seasonId}`} end>

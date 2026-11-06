@@ -28,6 +28,8 @@ export interface ResourcesTable {
   parent_resource_id: string | null;
   dimensions: GeneratedJson<Record<string, unknown>>;
   compatible_formats: Generated<string[]>;
+  /** Sports the space supports (migration 0304); empty supports every sport. */
+  compatible_sports: Generated<string[]>;
   default_setup_minutes: Generated<number>;
   default_cleanup_minutes: Generated<number>;
   required_equipment: GeneratedJson<unknown[]>;
@@ -126,6 +128,8 @@ export interface EventSeriesTable {
   facility_id: string;
   kind: EventKind;
   title: string;
+  /** Sport slug from the scheduling policy vocabulary (migration 0304); null = not stated. */
+  sport: Generated<string | null>;
   timezone: string;
   recurrence: Json<Record<string, unknown>>;
   local_start_time: LocalTime;
@@ -152,6 +156,8 @@ export interface EventsTable {
   kind: EventKind;
   title: string;
   format: string | null;
+  /** Sport slug from the scheduling policy vocabulary (migration 0304); null = not stated. */
+  sport: Generated<string | null>;
   series_id: string | null;
   occurrence_index: number | null;
   scheduled_start: Timestamp;

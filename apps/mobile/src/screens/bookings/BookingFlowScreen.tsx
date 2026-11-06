@@ -80,6 +80,7 @@ import {
   displayZone,
   formatDay,
   formatRange,
+  formatTime,
   formatWhen,
   startOfLocalDay,
   zoneAbbreviation,
@@ -89,6 +90,7 @@ import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { CapabilityGate } from '../../ui/CapabilityGate';
+import { Hero } from '../../ui/Hero';
 import { LastUpdated } from '../../ui/LastUpdated';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -423,11 +425,13 @@ function BookingForm({
           <>
             {timesNotice}
             {/* A required choice: its error is each time's hint too (SPK-UX-009). */}
-            <ChoiceGroup label="Start time" error={errors.time}>
+            <ChoiceGroup label="Start time" error={errors.time} layout="grid">
               {times.map((t) => (
                 <ChoiceRow
                   key={t.start}
                   mode="radio"
+                  tile
+                  shortLabel={`${formatTime(t.start, zone.zone)} to ${formatTime(t.end, zone.zone)}`}
                   label={formatRange(t.start, t.end, zone.zone)}
                   detail={`${t.resources.length} free: ${t.resources.map((r) => resourceName(r.name)).join(', ')}`}
                   checked={start === t.start}
@@ -616,12 +620,10 @@ function OfferingBooking({ offeringId }: { offeringId: string }) {
         const kind = bookingKindOf(o.kind);
         return (
           <View>
-            <View style={styles.header}>
-              <Text style={styles.title} accessibilityRole="header">
-                {o.name}
-              </Text>
-              <Caption>{`${kind ? KIND_LABELS[kind] : 'Activity'} at ${o.facility.name}`}</Caption>
-            </View>
+            <Hero
+              eyebrow={`${kind ? KIND_LABELS[kind] : 'Activity'} at ${o.facility.name}`}
+              title={o.name}
+            />
             {kind === null ? (
               <StateView
                 variant="unavailable"
@@ -674,8 +676,6 @@ export function BookingFlowRoute() {
 }
 
 const styles = StyleSheet.create({
-  header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
-  title: { ...type.title, color: colors.text },
   dayRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
-  day: { ...type.body, color: colors.text, fontWeight: '600' },
+  day: { ...type.title, fontSize: 22, lineHeight: 26, color: colors.text, flexShrink: 1 },
 });

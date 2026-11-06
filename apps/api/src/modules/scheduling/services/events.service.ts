@@ -115,6 +115,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         facility.id,
         input.resourceIds,
       );
+      this.writer.assertSport(facility, input.sport);
       // SPK-SCHED-003: the reserved resources' turnover requirement is the minimum buffer
       const buffers = this.writer.effectiveBuffers(resources, input);
       const status = input.status ?? 'published';
@@ -125,6 +126,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
         kind: input.kind,
         title: input.title,
         format: input.format ?? null,
+        sport: input.sport ?? null,
         scheduledStart,
         scheduledEnd,
         setupMinutes: buffers.setupMinutes,
@@ -142,6 +144,7 @@ export class EventsService implements EventSchedulingPort, AvailabilityPort, Res
             eventId: null,
             kind: data.kind,
             format: data.format,
+            sport: data.sport,
             scheduledStart,
             scheduledEnd,
             setupMinutes: data.setupMinutes,

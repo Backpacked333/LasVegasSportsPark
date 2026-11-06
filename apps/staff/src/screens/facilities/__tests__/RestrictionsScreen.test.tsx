@@ -671,4 +671,33 @@ describe('SCR-S-42 restriction withdrawal (FAC-01, SPK-FAC-004)', () => {
     expect(list).toHaveTextContent('withdrawn: Repair postponed');
     expect(within(list).getByText('withdrawn: never took effect')).toBeInTheDocument();
   });
+  it('SPK-FAC-004: an active restriction leads the screen with a release checklist read from the task, inspection and closure', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(app.at('/facilities/restrictions'));
+    const hero = await screen.findByTestId('active-restriction-r-1');
+    expect(
+      within(hero).getByRole('heading', { name: 'Pitch 1 North · Turf repair' }),
+    ).toBeInTheDocument();
+    const checks = within(hero).getByRole('list', { name: 'Release to service checklist' });
+    expect(await within(checks).findByText('Work finished (task resolved)')).toBeInTheDocument();
+    expect(
+      within(checks).getByText('A passed inspection is still needed (none recorded)'),
+    ).toBeInTheDocument();
+    expect(
+      await within(checks).findByText('2 affected bookings still need a resolution'),
+    ).toBeInTheDocument();
+    // Each check says its state in text, not by the glyph alone (SPK-UX-009).
+    expect(checks).toHaveTextContent('Not yet: A passed inspection is still needed');
+    expect(
+      within(hero).getByRole('link', { name: 'Release Pitch 1 North to service: Turf repair' }),
+    ).toHaveAttribute('href', '/facilities/restrictions/r-1');
+  });
+
+  it('the release section on the detail screen leads with the same checklist', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(app.at('/facilities/restrictions/r-1'));
+    await screen.findByRole('button', { name: 'Release to service' });
+    const checks = screen.getByRole('list', { name: 'Release to service checklist' });
+    expect(await within(checks).findByText('You may release to service')).toBeInTheDocument();
+  });
 });

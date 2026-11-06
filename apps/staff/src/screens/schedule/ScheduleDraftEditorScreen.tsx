@@ -716,7 +716,7 @@ export function ScheduleDraftEditorScreen() {
   });
   const facility = useFacilityById(draft.data?.facilityId);
   return (
-    <section aria-labelledby="draft-editor-title">
+    <section aria-labelledby="draft-editor-title" className="detail-screen">
       <h3 id="draft-editor-title">Schedule draft</h3>
       <Link to="/schedule/drafts">All drafts</Link>
       <QueryBoundary

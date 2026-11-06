@@ -249,6 +249,38 @@ export class QualificationsService {
   }
 
   /**
+   * One kind as a candidate is described with (SPK-STAFF-001, SPK-STAFF-003): the {@link check}
+   * status at the instant, plus the level and expiry of the qualification that decides it (the
+   * held one valid longest; else the latest verified, pending or other record). WRK-05: a merged
+   * person's evidence counts for the survivor.
+   */
+  async describe(
+    db: Db | Trx,
+    organizationId: string,
+    personId: string,
+    kind: string,
+    at: Date,
+  ): Promise<QualificationCheck & { level: string | null; validTo: Date | null }> {
+    const [check] = await this.check(db, organizationId, personId, [kind], at);
+    const status = check ?? { kind, status: 'missing' as const, qualificationIds: [] };
+    if (status.qualificationIds.length === 0) return { ...status, level: null, validTo: null };
+    const rows = await db
+      .selectFrom('qualifications')
+      .select(['id', 'level', 'valid_to'])
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', status.qualificationIds)
+      .execute();
+    const endOf = (r: { valid_to: Date | string | null }) =>
+      r.valid_to === null ? Number.POSITIVE_INFINITY : new Date(r.valid_to).getTime();
+    const best = [...rows].sort((a, b) => endOf(b) - endOf(a) || a.id.localeCompare(b.id))[0];
+    return {
+      ...status,
+      level: best?.level ?? null,
+      validTo: best?.valid_to ? new Date(best.valid_to) : null,
+    };
+  }
+
+  /**
    * People holding every kind, verified and valid at the instant (replacement pool). WRK-05: a
    * merged person's evidence counts for the survivor, so holders are the canonical persons.
    */

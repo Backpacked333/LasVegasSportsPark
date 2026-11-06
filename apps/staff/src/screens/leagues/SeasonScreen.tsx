@@ -24,16 +24,24 @@ import { NumberField, TextField, parseWholeNumber } from '../../features/competi
 import { useFacilityDirectory } from '../../features/competition/facilities';
 import { formatDateOnly, formatInstant } from '../../features/competition/format';
 import {
+  COMPETITION_KIND,
   IRREVERSIBLE_MOVES,
   SEASON_STATUS,
   SEASON_TRANSITIONS,
+  SPORT_FORMAT,
 } from '../../features/competition/labels';
-import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
+import { SeasonLinks } from '../../features/competition/nav';
+import { Chip, CompeteHeader, localDay, seasonProgress } from '../../features/competition/page';
 import { RuleSetLabel } from '../../features/competition/names';
 import { PENDING } from '../../features/competition/pending';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Icon } from '../../ui/Icon';
+import { CardHead } from '../../ui/Page';
+import { useNow } from '../../providers/AppProviders';
+import { NeedsYourCall } from './NeedsYourCall';
+import { GameReadinessCard, SeasonStandingsCard } from './SeasonHome';
 
 type Season = Schema<'Season'>;
 type Division = Schema<'Division'>;
@@ -235,66 +243,163 @@ function Divisions({ season }: { season: Season }) {
   const [creating, setCreating] = useState(false);
   const facilities = useFacilityDirectory();
   return (
-    <section className="panel" aria-labelledby="divisions-title">
-      <h3 id="divisions-title">Divisions</h3>
-      <PendingNote decision={PENDING.divisionCombinations} />
-      <Button
-        variant="secondary"
-        aria-expanded={creating}
-        onClick={() => setCreating((open) => !open)}
+    <section className="card card-flush" aria-labelledby="divisions-title">
+      <CardHead
+        aside={
+          <Button
+            variant="secondary"
+            className="button-sm"
+            aria-expanded={creating}
+            onClick={() => setCreating((open) => !open)}
+          >
+            {creating ? 'Close the new division form' : 'New division'}
+          </Button>
+        }
       >
-        {creating ? 'Close the new division form' : 'New division'}
-      </Button>
-      {creating ? <CreateDivisionForm season={season} /> : null}
-      <QueryBoundary
-        query={divisions}
-        label="divisions"
-        isEmpty={(data) => data.length === 0}
-        empty={{
-          title: 'No divisions',
-          description: 'Divisions of this season appear here. Use "New division" to add one.',
-        }}
-        unavailableOffline={['creating divisions', 'generating fixtures']}
-      >
-        {(data) => (
-          <ul className="list" aria-label="Divisions">
-            {data.map((division) => (
-              <li key={division.id}>
-                <div className="row-text">
-                  <span className="row-title">{division.name}</span>
-                  <span className="caption">{describeCriteria(division.criteria)}</span>
-                  <span className="caption">
-                    Teams placed: {division.entryCount}
-                    {division.capacityTeamEntries !== null
-                      ? ` of ${division.capacityTeamEntries}`
-                      : ' (no division limit)'}
-                    {division.facilityId ? ` · ${facilities.name(division.facilityId)}` : ''}
-                  </span>
-                </div>
-                <div className="actions">
-                  <Link to={`/leagues/divisions/${division.id}/fixture-generation`}>
-                    Generate fixtures for {division.name}
-                  </Link>
-                  <Link to={`/leagues/divisions/${division.id}/pools`}>
-                    Tournament pools of {division.name}
-                  </Link>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </QueryBoundary>
+        <h3 id="divisions-title">Divisions</h3>
+      </CardHead>
+      <div className="card-body">
+        <PendingNote decision={PENDING.divisionCombinations} />
+        {creating ? <CreateDivisionForm season={season} /> : null}
+        <QueryBoundary
+          query={divisions}
+          label="divisions"
+          isEmpty={(data) => data.length === 0}
+          empty={{
+            title: 'No divisions',
+            description: 'Divisions of this season appear here. Use "New division" to add one.',
+          }}
+          unavailableOffline={['creating divisions', 'generating fixtures']}
+        >
+          {(data) => (
+            <ul className="list division-list" aria-label="Divisions">
+              {data.map((division) => (
+                <li key={division.id}>
+                  <div className="row-text">
+                    <span className="row-title">{division.name}</span>
+                    <span className="caption">{describeCriteria(division.criteria)}</span>
+                    <span className="division-fill">
+                      {division.capacityTeamEntries !== null ? (
+                        <span className="season-bar" aria-hidden="true">
+                          <span
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.round(
+                                  (division.entryCount /
+                                    Math.max(1, division.capacityTeamEntries)) *
+                                    100,
+                                ),
+                              )}%`,
+                            }}
+                          />
+                        </span>
+                      ) : null}
+                      <span>
+                        Teams placed: {division.entryCount}
+                        {division.capacityTeamEntries !== null
+                          ? ` of ${division.capacityTeamEntries}`
+                          : ' (no division limit)'}
+                        {division.facilityId ? ` · ${facilities.name(division.facilityId)}` : ''}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="actions-row">
+                    <Link
+                      className="button button-secondary button-sm"
+                      to={`/leagues/divisions/${division.id}/fixture-generation`}
+                    >
+                      <Icon name="autorenew" size={16} />
+                      Generate fixtures for {division.name}
+                    </Link>
+                    <Link
+                      className="button button-secondary button-sm"
+                      to={`/leagues/divisions/${division.id}/pools`}
+                    >
+                      Tournament pools of {division.name}
+                    </Link>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </QueryBoundary>
+      </div>
     </section>
+  );
+}
+
+function SeasonEyebrowText({ competitionId }: { competitionId: string }) {
+  const competition = useApiQuery({
+    path: '/competitions/{id}',
+    request: { path: { id: competitionId } },
+    staleTime: 5 * 60_000,
+  });
+  const c = competition.data;
+  return (
+    <>
+      {c
+        ? `${COMPETITION_KIND[c.kind]} · ${SPORT_FORMAT[c.sportFormat]} · ${c.name}`
+        : 'Compete · Season'}
+    </>
   );
 }
 
 export function SeasonScreen() {
   const { seasonId = '' } = useParams();
+  const now = useNow(60_000);
   const season = useApiQuery({ path: '/seasons/{id}', request: { path: { id: seasonId } } });
+  // The same read as the divisions card (one request): divisions feed the chips, the standings
+  // picker and the facility time zones of the readiness card.
+  const divisions = useApiQuery({
+    path: '/divisions',
+    request: { query: { seasonId } },
+    enabled: !!season.data,
+  });
+  const data = season.data;
+  const progress = data ? seasonProgress(data, localDay(now)) : null;
+  const badge = data ? SEASON_STATUS[data.status] : null;
+  const teams = (divisions.data ?? []).reduce((sum, d) => sum + d.entryCount, 0);
   return (
-    <section aria-labelledby="season-title">
-      <h2 id="season-title">{season.data?.name ?? 'Season'}</h2>
-      <LeaguesNav />
+    <section aria-labelledby="season-title" className="compete">
+      <CompeteHeader
+        eyebrow={
+          data ? <SeasonEyebrowText competitionId={data.competitionId} /> : 'Compete · Season'
+        }
+        title={data?.name ?? 'Season'}
+        titleId="season-title"
+        titleClassName="season-title"
+        chips={
+          data && badge ? (
+            <>
+              <StatusBadge tone={badge.tone} label={`Season ${badge.label}`} />
+              {progress ? <Chip icon="calendar_month">{progress.label}</Chip> : null}
+              {divisions.data ? (
+                <Chip icon="groups">
+                  {divisions.data.length} {divisions.data.length === 1 ? 'division' : 'divisions'} ·{' '}
+                  {teams} {teams === 1 ? 'team' : 'teams'} placed
+                </Chip>
+              ) : null}
+            </>
+          ) : null
+        }
+        actions={
+          data ? (
+            <>
+              <Link
+                className="button button-secondary"
+                to={`/leagues/seasons/${seasonId}/fixtures`}
+              >
+                <Icon name="event" size={18} />
+                Fixtures and readiness
+              </Link>
+              <Link className="button button-primary" to="/leagues/results-review">
+                Review results
+              </Link>
+            </>
+          ) : null
+        }
+      />
       <SeasonLinks seasonId={seasonId} />
       <QueryBoundary
         query={season}
@@ -302,47 +407,61 @@ export function SeasonScreen() {
         empty={{ title: '', description: '' }}
         unavailableOffline={['changing the season', 'creating divisions']}
       >
-        {(data) => {
-          const badge = SEASON_STATUS[data.status];
-          return (
-            <>
-              <dl className="facets" aria-label="Season details">
-                <div>
-                  <dt>Status</dt>
-                  <dd>
-                    <StatusBadge tone={badge.tone} label={`Season ${badge.label}`} />
-                  </dd>
-                </div>
-                <div>
-                  <dt>Dates</dt>
-                  <dd>
-                    {formatDateOnly(data.startsOn)} to {formatDateOnly(data.endsOn)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Rule set</dt>
-                  <dd>
-                    <RuleSetLabel ruleSetId={data.ruleSetId} />
-                  </dd>
-                </div>
-                <div>
-                  <dt>Registration</dt>
-                  <dd>
-                    {data.registrationOpensAt || data.registrationClosesAt
-                      ? `${formatInstant(data.registrationOpensAt)} to ${formatInstant(data.registrationClosesAt)}`
-                      : 'No registration window set'}
-                  </dd>
-                </div>
-              </dl>
-              <p className="caption">
-                The rule set can change only while the season is a draft. Renewal creates new season
-                records and never rewrites this one.
-              </p>
-              <SeasonLifecycle season={data} />
+        {(data) => (
+          <div className="season-grid">
+            <div className="season-main">
+              <SeasonStandingsCard
+                seasonId={data.id}
+                ruleSetId={data.ruleSetId}
+                divisions={divisions.data}
+              />
+              <GameReadinessCard seasonId={data.id} divisions={divisions.data} />
               <Divisions season={data} />
-            </>
-          );
-        }}
+            </div>
+            <aside className="season-side" aria-label="Season decisions and details">
+              <NeedsYourCall seasonId={data.id} />
+              <section className="card" aria-labelledby="season-details-title">
+                <h3 id="season-details-title">Season details</h3>
+                <dl className="facets" aria-label="Season details">
+                  <div>
+                    <dt>Status</dt>
+                    <dd>
+                      <StatusBadge
+                        tone={SEASON_STATUS[data.status].tone}
+                        label={`Season ${SEASON_STATUS[data.status].label}`}
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Dates</dt>
+                    <dd>
+                      {formatDateOnly(data.startsOn)} to {formatDateOnly(data.endsOn)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Rule set</dt>
+                    <dd>
+                      <RuleSetLabel ruleSetId={data.ruleSetId} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Registration</dt>
+                    <dd>
+                      {data.registrationOpensAt || data.registrationClosesAt
+                        ? `${formatInstant(data.registrationOpensAt)} to ${formatInstant(data.registrationClosesAt)}`
+                        : 'No registration window set'}
+                    </dd>
+                  </div>
+                </dl>
+                <p className="caption">
+                  The rule set can change only while the season is a draft. Renewal creates new
+                  season records and never rewrites this one.
+                </p>
+                <SeasonLifecycle season={data} />
+              </section>
+            </aside>
+          </div>
+        )}
       </QueryBoundary>
     </section>
   );

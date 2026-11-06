@@ -3,7 +3,14 @@ import { CommandMetaSchema, Revision, withCommandMeta } from '../commands';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
 import { Instant, IntervalSchema } from '../time';
-import { LocalTime, RecurrenceRuleSchema, ResourceKind, ResourceStatus } from './scheduling';
+import {
+  LocalDate,
+  LocalTime,
+  RecurrenceRuleSchema,
+  ResourceKind,
+  ResourceStatus,
+  ScheduleWindowSummarySchema,
+} from './scheduling';
 
 /**
  * Facilities API contract (specification §3.17 SPK-FAC-001..005, §4.4 Facilities, §4.8
@@ -513,6 +520,116 @@ export const ListPreventiveSchedulesQuery = z.object({
 export type ListPreventiveSchedulesQuery = z.infer<typeof ListPreventiveSchedulesQuery>;
 
 // ---------------------------------------------------------------------------------------------
+// Release checklist (migration 0909, SPK-FAC-004) and the facility day summary
+// ---------------------------------------------------------------------------------------------
+
+export const ReleaseChecklistItemSchema = z
+  .object({
+    id: z.uuid(),
+    restrictionId: z.uuid(),
+    position: z.number().int(),
+    label: z.string(),
+    createdBy: ActorSnapshotSchema,
+    /** null until confirmed. */
+    completedAt: Instant.nullable(),
+    completedBy: ActorSnapshotSchema.nullable(),
+    completionNote: z.string().nullable(),
+    revision: Revision,
+    createdAt: Instant,
+    updatedAt: Instant,
+  })
+  .openapi('ReleaseChecklistItem');
+export type ReleaseChecklistItem = z.infer<typeof ReleaseChecklistItemSchema>;
+
+/**
+ * `GET /v1/maintenance-restrictions/{id}/release-checklist`: the restriction's own checklist items
+ * and the linked task's owner by name (staff directory facts only: a name, never contacts, §4.14).
+ * `complete` is true when every item is confirmed (true for an empty list): a release is refused
+ * while it is false (ELIGIBILITY_FAILED `checklist_incomplete`), in the service and the database.
+ */
+export const ReleaseChecklistSchema = z
+  .object({
+    restrictionId: z.uuid(),
+    restrictionStatus: z.string(),
+    items: z.array(ReleaseChecklistItemSchema),
+    complete: z.boolean(),
+    taskOwner: z
+      .object({
+        personId: z.uuid(),
+        /** null: the name is not available. */
+        displayName: z.string().nullable(),
+      })
+      .nullable(),
+  })
+  .openapi('ReleaseChecklist');
+export type ReleaseChecklist = z.infer<typeof ReleaseChecklistSchema>;
+
+export const AddChecklistItemBody = withCommandMeta({
+  label: z.string().trim().min(1).max(200),
+}).openapi('AddChecklistItemBody');
+export type AddChecklistItemBody = z.infer<typeof AddChecklistItemBody>;
+
+export const CompleteChecklistItemBody = withCommandMeta({
+  note: z.string().trim().max(2000).optional(),
+})
+  .extend({ expectedRevision: Revision })
+  .openapi('CompleteChecklistItemBody');
+export type CompleteChecklistItemBody = z.infer<typeof CompleteChecklistItemBody>;
+
+/** Reopening a confirmed item or removing one is explained (`reason` required). */
+export const ReopenChecklistItemBody = z
+  .object({
+    ...CommandMetaSchema.shape,
+    expectedRevision: Revision,
+    reason: z.string().trim().min(1).max(2000),
+  })
+  .openapi('ReopenChecklistItemBody');
+export type ReopenChecklistItemBody = z.infer<typeof ReopenChecklistItemBody>;
+
+export const RemoveChecklistItemBody = ReopenChecklistItemBody.openapi('RemoveChecklistItemBody');
+export type RemoveChecklistItemBody = z.infer<typeof RemoveChecklistItemBody>;
+
+export const FacilityDaySummaryQuery = z.object({
+  /** The facility-local day (YYYY-MM-DD); default: today in the facility zone. */
+  date: LocalDate.optional(),
+});
+export type FacilityDaySummaryQuery = z.infer<typeof FacilityDaySummaryQuery>;
+
+/**
+ * `GET /v1/facilities/{id}/day-summary` (page headers: "41 activities, 1 restriction"): counts for
+ * one facility-local day, midnight to midnight in the facility zone (SPK-SCHED-008). A section the
+ * viewer's roles may not read is null (not available), never 0: schedule counts need
+ * `scheduling.read_schedule`, restriction and task counts `facilities.view_maintenance`.
+ */
+export const FacilityDaySummarySchema = z
+  .object({
+    facilityId: z.uuid(),
+    date: LocalDate,
+    timezone: z.string(),
+    window: IntervalSchema,
+    schedule: ScheduleWindowSummarySchema.nullable(),
+    restrictions: z
+      .object({
+        /** Restrictions overlapping the day, by status. */
+        active: z.number().int(),
+        approved: z.number().int(),
+        proposed: z.number().int(),
+        /** Active ones whose interval ended without a release (SPK-FAC-004). */
+        unreleasedAfterEnd: z.number().int(),
+      })
+      .nullable(),
+    maintenance: z
+      .object({
+        /** Tasks of the facility not resolved or closed (not limited to the day). */
+        openTasks: z.number().int(),
+        overdueTasks: z.number().int(),
+      })
+      .nullable(),
+  })
+  .openapi('FacilityDaySummary');
+export type FacilityDaySummary = z.infer<typeof FacilityDaySummarySchema>;
+
+// ---------------------------------------------------------------------------------------------
 // OpenAPI registration
 // ---------------------------------------------------------------------------------------------
 
@@ -675,6 +792,58 @@ command(
   RestrictionSchema,
   200,
 );
+query(
+  '/facilities/{id}/day-summary',
+  'Counts for one facility-local day: activities, closures, restrictions, open tasks (page headers)',
+  FacilityDaySummaryQuery,
+  FacilityDaySummarySchema,
+);
+query(
+  '/maintenance-restrictions/{id}/release-checklist',
+  "A restriction's release checklist items and the linked task owner's name (SPK-FAC-004)",
+  null,
+  ReleaseChecklistSchema,
+);
+command(
+  'post',
+  '/maintenance-restrictions/{id}/checklist-items',
+  'Add a release checklist item to an open restriction (SPK-FAC-004)',
+  AddChecklistItemBody,
+  ReleaseChecklistItemSchema,
+);
+const ItemParams = z.object({ id: z.uuid(), itemId: z.uuid() });
+for (const [verb, body, summary] of [
+  [
+    'complete',
+    CompleteChecklistItemBody,
+    'Confirm a release checklist item (who and when are recorded)',
+  ],
+  ['reopen', ReopenChecklistItemBody, 'Reopen a confirmed release checklist item, with a reason'],
+  [
+    'remove',
+    RemoveChecklistItemBody,
+    'Remove a release checklist item that is not confirmed, with a reason',
+  ],
+] as const) {
+  openApiRegistry.registerPath({
+    method: 'post',
+    path: `/maintenance-restrictions/{id}/checklist-items/{itemId}/${verb}`,
+    summary,
+    tags: [TAG],
+    request: {
+      params: ItemParams,
+      headers: idempotencyHeader,
+      body: { content: { 'application/json': { schema: body } } },
+    },
+    responses: {
+      200: ok('Command outcome', ReleaseChecklistSchema),
+      400: err('Validation failed'),
+      403: err('Access denied'),
+      404: err('Not found or not visible'),
+      409: err('Conflict (STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)'),
+    },
+  });
+}
 query(
   '/facilities/{id}/operating-status',
   'Operating status per resource: in service, or restricted with reasons and intervals',

@@ -29,6 +29,7 @@ import {
 import { ENROLLMENT_PORT, type EnrollmentPort } from '../../enrollment';
 import {
   AUTHORITY_LOOKUP_PORT,
+  CareNotesService,
   HouseholdsService,
   PeopleService,
   PERSON_DIRECTORY_PORT,
@@ -78,6 +79,7 @@ export class PassesService {
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
     private readonly resolver: ActivityResolver,
+    private readonly careNotes: CareNotesService,
   ) {}
 
   async issue(
@@ -375,8 +377,12 @@ export class PassesService {
         visitId: visit?.id ?? null,
         holderMayCollect,
         activities,
+        careNotes: null,
       });
     }
+    // §1.7, §4.14, SPK-ENTRY-004: operational care notes for the desk, only for a staff role that
+    // may read them at this facility (identity decides; decided outside the transaction).
+    const mayReadCareNotes = await this.careNotes.mayReadAtFacility(principal, facility.id);
 
     await this.uow.run(async ({ trx }) => {
       await this.audit.record(trx, {
@@ -388,6 +394,22 @@ export class PassesService {
         correlationId,
         details: { facilityId: facility.id, people: people.length, recorded: 'nothing' },
       });
+      if (mayReadCareNotes) {
+        // Every note shown is recorded in identity's audit of care-note reads (§4.14).
+        const notes = await this.careNotes.readForArrivalIn(
+          trx,
+          principal,
+          people.map((p) => p.personId),
+          {
+            via: EntryActions.scanPass.id,
+            facilityId: facility.id,
+            referenceType: 'pass',
+            referenceId: pass.id,
+          },
+          correlationId,
+        );
+        for (const person of people) person.careNotes = notes.get(person.personId) ?? [];
+      }
     });
     return {
       pass: { id: pass.id, holderKind: pass.holder_kind },

@@ -47,6 +47,40 @@ describe('SCR-S-13 StandingsScreen (SPK-RESULT-003)', () => {
     );
   });
 
+  it('SPK-FIX-001: draws the playoff line from the division’s fixture specification, in words', async () => {
+    const app = createTestApp({
+      routes: {
+        ...base,
+        'GET /seasons/{id}/standings': ok(
+          standings({
+            playoffLine: {
+              specificationId: ID.ruleSet,
+              kind: 'single_elimination',
+              qualifyingTeams: 1,
+              cutPosition: 1,
+            },
+          }),
+        ),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/standings`));
+    const table = await screen.findByRole('table', { name: 'Standings' });
+    const rows = within(table).getAllByRole('row');
+    // Header, Red, the line, Blue.
+    expect(rows[2]).toHaveTextContent('Playoff line: top 1 qualify');
+    expect(
+      within(rows[3] as HTMLElement).getByRole('rowheader', { name: 'Blue' }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('playoff-note')).toHaveTextContent('Top 1 qualify for the playoff');
+  });
+
+  it('shows no playoff line when no specification names a playoff', async () => {
+    const app = createTestApp({ routes: base });
+    render(app.at(`/leagues/seasons/${ID.season}/standings`));
+    const table = await screen.findByRole('table', { name: 'Standings' });
+    expect(within(table).queryByText(/Playoff line/)).toBeNull();
+  });
+
   it('explains how a tie on points was decided, step by step', async () => {
     const app = createTestApp({ routes: base });
     render(app.at(`/leagues/seasons/${ID.season}/standings`));

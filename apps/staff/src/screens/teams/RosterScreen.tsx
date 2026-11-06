@@ -404,7 +404,8 @@ export function RosterScreen() {
     },
   });
   return (
-    <section aria-labelledby="roster-title">
+    <section aria-labelledby="roster-title" className="compete">
+      <span className="eyebrow">Compete · Teams and placement</span>
       <h2 id="roster-title">Roster{workspace.data ? `: ${workspace.data.team.name}` : ''}</h2>
       <TeamsNav />
       {workspace.data ? (

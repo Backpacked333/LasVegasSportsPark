@@ -4,7 +4,13 @@
  */
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { page } from '../../../features/insight-admin/__tests__/fixtures';
+import {
+  capability,
+  integrations,
+  ok,
+  page,
+  staffMembershipView,
+} from '../../../features/insight-admin/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 
 describe('Administration and Reports areas', () => {
@@ -34,6 +40,34 @@ describe('Administration and Reports areas', () => {
     expect(within(nav).getByRole('link', { name: 'Provider events' })).toHaveAttribute(
       'href',
       '/admin/provider-events',
+    );
+  });
+
+  it('SPK-UX-008: previews active staff roles, capability switches (written on or off) and provider gates', async () => {
+    render(
+      createTestApp({
+        routes: {
+          'GET /staff-memberships': page([staffMembershipView({ roles: ['scheduler'] })]),
+          'GET /admin/capabilities': ok({
+            items: [capability('rentals', { enabled: true }), capability('parties')],
+          }),
+          'GET /admin/integrations': ok(integrations()),
+        },
+      }).at('/admin'),
+    );
+    const people = await screen.findByRole('list', { name: 'Active staff roles' });
+    expect(people).toHaveTextContent('Alex Rivera');
+    expect(people).toHaveTextContent('Scheduler');
+    const switches = await screen.findByRole('list', { name: 'Capability switches' });
+    const [rentals, parties] = within(switches).getAllByRole('listitem');
+    expect(rentals).toHaveTextContent('RentalsDescription of rentals');
+    expect(rentals).toHaveTextContent('On');
+    expect(parties).toHaveTextContent('Off');
+    const gates = await screen.findByRole('list', { name: 'Provider gates' });
+    expect(gates).toHaveTextContent('Waiting on DEC-019');
+    expect(screen.getByRole('link', { name: /Switches/ })).toHaveAttribute(
+      'href',
+      '/admin/capabilities',
     );
   });
 

@@ -4,6 +4,7 @@ import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
 import { Instant } from '../time';
 import { ActorSnapshotSchema } from './facilities';
+import { ScanCareNoteSchema } from './identity-staff-access';
 
 /**
  * Entry API contract (specification §3.14 SPK-ENTRY-001..008, §4.4 Arrival, §4.5 "Attendance must
@@ -198,6 +199,12 @@ export const ScanPersonSchema = z
     /** For a person pass: whether the holder currently holds `collect` over this person (informational; release re-checks). */
     holderMayCollect: z.boolean().nullable(),
     activities: z.array(ScanActivitySchema),
+    /**
+     * Operational care notes (an allergy, a care instruction; never a diagnosis, §1.7) for the
+     * desk to act on. Null when the scanning staff role may not read care notes (identity's
+     * `identity.read_care_notes`); every shown note is recorded in the audit log (§4.14).
+     */
+    careNotes: z.array(ScanCareNoteSchema).nullable(),
   })
   .openapi('ScanPerson');
 export type ScanPerson = z.infer<typeof ScanPersonSchema>;

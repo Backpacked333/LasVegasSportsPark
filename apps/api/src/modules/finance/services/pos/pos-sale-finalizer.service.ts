@@ -18,6 +18,7 @@ import {
 } from '../../finance.shared';
 import { PosSaleMachine, PosTenderMachine } from '../../finance.state-machines';
 import { LedgerService, type PostingLine } from '../../ledger/ledger.service';
+import { liveLines } from './pos-views';
 
 export type PosSaleRow = Selectable<PosSalesTable>;
 
@@ -275,13 +276,16 @@ export class PosSaleFinalizer {
     actor: Principal,
     correlationId: string | null,
   ): Promise<void> {
-    const lines = await trx
-      .selectFrom('pos_sale_lines')
-      .select(['kind', 'base_minor', 'charges'])
-      .where('organization_id', '=', sale.organization_id)
-      .where('sale_id', '=', sale.id)
-      .orderBy('line_number')
-      .execute();
+    // 0686: only the lines in effect are paid for (a superseded line was corrected before payment).
+    const lines = liveLines(
+      await trx
+        .selectFrom('pos_sale_lines')
+        .select(['id', 'quantity', 'supersedes_line_id', 'kind', 'base_minor', 'charges'])
+        .where('organization_id', '=', sale.organization_id)
+        .where('sale_id', '=', sale.id)
+        .orderBy('line_number')
+        .execute(),
+    );
     const cardAttempts = tenders
       .filter((t) => t.kind === 'card' && t.payment_attempt_id)
       .map((t) => t.payment_attempt_id as string);

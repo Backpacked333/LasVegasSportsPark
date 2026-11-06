@@ -53,6 +53,7 @@ import { formatDateTime, inputZoneHint, localInputToIso } from '../../ui/time';
 import { AuditHistory } from '../today/AuditHistory';
 import { REVIEW_OWNER_ROLES, type ReviewOwnerRole } from './OpenAccessReviewScreen';
 import { DECISION_KINDS, REVIEW_STATUS_TONE, type DecisionKind } from './review-vocabulary';
+import '../../features/grow/grow.css';
 
 type AccessReview = Schema<'AccessReview'>;
 
@@ -556,7 +557,8 @@ function ReviewQuery({ id }: { id: string }) {
 export function AccessReviewScreen() {
   const { reviewId = '' } = useParams();
   return (
-    <section aria-labelledby="review-title">
+    <section aria-labelledby="review-title" className="grow">
+      <span className="eyebrow">Grow · People and families</span>
       <h2 id="review-title">Access review</h2>
       <PeopleNav />
       <p>

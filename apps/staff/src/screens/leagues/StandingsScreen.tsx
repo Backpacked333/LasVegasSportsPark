@@ -11,7 +11,7 @@
  * shown as the API holds them. Team names come with each node and table row (CMP-01).
  */
 import type { Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -19,9 +19,19 @@ import { CommandButton } from '../../features/competition/CommandButton';
 import { CommandError } from '../../features/competition/CommandError';
 import { keys, useRefetch } from '../../features/competition/feedback';
 import { SelectField } from '../../features/competition/fields';
+import {
+  FORM_LENGTH,
+  OUTCOME_WORD,
+  useSeasonForm,
+  type FormOutcome,
+  type SeasonForm,
+} from '../../features/competition/form';
 import { formatInstant, shortRef } from '../../features/competition/format';
 import { humanizeCode } from '../../features/competition/labels';
-import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
+import { SeasonLinks } from '../../features/competition/nav';
+import { CompeteHeader } from '../../features/competition/page';
+import { SeasonEyebrow } from '../../features/competition/season-context';
+import { CardHead } from '../../ui/Page';
 import { EntryName, useSeasonEntries, type EntryNames } from '../../features/competition/names';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -39,10 +49,35 @@ const OUTCOME_TEXT: Record<Schema<'TiebreakExplanation'>['steps'][number]['outco
   unresolved: 'left the tie unresolved',
 };
 
-/** A league or pool table (SPK-RESULT-003); the pool screen shows its own with this. */
+/** The last results of one team as letters, read out as words (SPK-UX-009: not colour alone). */
+export function FormRun({ outcomes }: { outcomes: readonly FormOutcome[] }) {
+  if (outcomes.length === 0) return <span className="caption">No results</span>;
+  return (
+    <span
+      className="form-run"
+      role="img"
+      aria-label={`Last ${outcomes.length}, oldest first: ${outcomes.map((o) => OUTCOME_WORD[o]).join(', ')}`}
+    >
+      {outcomes.map((o, i) => (
+        <span key={i} className="form-cell" data-outcome={o} aria-hidden="true">
+          {o}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * A league or pool table (SPK-RESULT-003) in the condensed scoreboard type; the pool screen shows
+ * its own with this. `form` adds each team's last results (derived from official results only);
+ * `compact` keeps the scoring columns for the season home and leaves fair-play points, forfeits
+ * and the tiebreak explanations to the standings screen.
+ */
 export function StandingsTable({
   standings,
   caption = 'Standings',
+  form,
+  compact = false,
 }: {
   standings: Pick<
     Standings,
@@ -52,11 +87,18 @@ export function StandingsTable({
     | 'ruleSetVersion'
     | 'computedAt'
     | 'sourceResultIds'
-  > & { id?: string | null };
+  > & { id?: string | null; playoffLine?: Standings['playoffLine'] };
   caption?: string;
+  form?: SeasonForm;
+  compact?: boolean;
 }) {
   const names = new Map(standings.rows.map((r) => [r.teamEntryId, r.teamName]));
   const nameOf = (id: string) => names.get(id);
+  const showForm = !!form?.ready;
+  // The playoff line from the division's fixture specification (SPK-FIX-001): a ruled row after
+  // the last qualifying position, said in words, never colour alone.
+  const line = standings.playoffLine ?? null;
+  const columns = 10 + (compact ? 0 : 2) + (showForm ? 1 : 0);
   return (
     <>
       <p className="caption" data-testid="standings-provenance">
@@ -69,13 +111,17 @@ export function StandingsTable({
             ? ` · standings revision ${shortRef(standings.id)}`
             : ' · live computation (no stored revision yet)'}
       </p>
-      <div className="table-scroll">
-        <table className="data-table">
-          <caption>{caption}</caption>
+      <div className="scoreboard-wrap">
+        <table className="scoreboard">
+          <caption className="sr-only-caption">{caption}</caption>
           <thead>
             <tr>
-              <th scope="col">Position</th>
-              <th scope="col">Team</th>
+              <th scope="col" className="col-pos">
+                <abbr title="Position">#</abbr>
+              </th>
+              <th scope="col" className="col-team">
+                Team
+              </th>
               <th scope="col">
                 <abbr title="Played">P</abbr>
               </th>
@@ -97,32 +143,78 @@ export function StandingsTable({
               <th scope="col">
                 <abbr title="Goal difference">GD</abbr>
               </th>
-              <th scope="col">Points</th>
-              <th scope="col">Fair-play points</th>
-              <th scope="col">Forfeits</th>
+              <th scope="col" aria-label="Points">
+                Pts
+              </th>
+              {compact ? null : (
+                <>
+                  <th scope="col" aria-label="Fair-play points">
+                    <abbr title="Fair-play points">FP</abbr>
+                  </th>
+                  <th scope="col" aria-label="Forfeits">
+                    <abbr title="Forfeits">FF</abbr>
+                  </th>
+                </>
+              )}
+              {showForm ? (
+                <th scope="col" className="col-form">
+                  Last {FORM_LENGTH}
+                </th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
             {standings.rows.map((row) => (
-              <tr key={row.teamEntryId}>
-                <td>{row.position}</td>
-                <th scope="row">{row.teamName}</th>
-                <td>{row.played}</td>
-                <td>{row.won}</td>
-                <td>{row.drawn}</td>
-                <td>{row.lost}</td>
-                <td>{row.goalsFor}</td>
-                <td>{row.goalsAgainst}</td>
-                <td>{row.goalDifference}</td>
-                <td>{row.points}</td>
-                <td>{row.fairPlayPoints}</td>
-                <td>{row.forfeits}</td>
-              </tr>
+              <Fragment key={row.teamEntryId}>
+                <tr data-qualifies={line ? String(row.position <= line.cutPosition) : undefined}>
+                  <td className="col-pos">{row.position}</td>
+                  <th scope="row" className="col-team">
+                    {row.teamName}
+                  </th>
+                  <td className="col-num">{row.played}</td>
+                  <td className="col-num">{row.won}</td>
+                  <td className="col-num">{row.drawn}</td>
+                  <td className="col-num">{row.lost}</td>
+                  <td className="col-num">{row.goalsFor}</td>
+                  <td className="col-num">{row.goalsAgainst}</td>
+                  <td className="col-num">
+                    {row.goalDifference > 0 ? `+${row.goalDifference}` : row.goalDifference}
+                  </td>
+                  <td className="col-pts">{row.points}</td>
+                  {compact ? null : (
+                    <>
+                      <td className="col-num">{row.fairPlayPoints}</td>
+                      <td className="col-num">{row.forfeits}</td>
+                    </>
+                  )}
+                  {showForm ? (
+                    <td className="col-form">
+                      <FormRun outcomes={form?.of(row.teamEntryId) ?? []} />
+                    </td>
+                  ) : null}
+                </tr>
+                {line && row.position === line.cutPosition && row !== standings.rows.at(-1) ? (
+                  <tr className="playoff-line">
+                    <td colSpan={columns}>Playoff line: top {line.qualifyingTeams} qualify</td>
+                  </tr>
+                ) : null}
+              </Fragment>
             ))}
           </tbody>
         </table>
       </div>
-      {standings.tiebreakExplanations.length > 0 ? (
+      {line ? (
+        <p className="caption" data-testid="playoff-note">
+          Top {line.qualifyingTeams} qualify for the playoff (single elimination), from the
+          division&apos;s fixture specification.
+        </p>
+      ) : null}
+      {showForm && form?.partial ? (
+        <p className="caption">
+          Form reads the latest 200 official results and fixtures; earlier games are not included.
+        </p>
+      ) : null}
+      {!compact && standings.tiebreakExplanations.length > 0 ? (
         <section aria-labelledby="tiebreaks-title">
           <h4 id="tiebreaks-title">How ties were decided</h4>
           <ul className="list" aria-label="Tiebreak explanations">
@@ -371,41 +463,53 @@ export function StandingsScreen() {
     path: '/seasons/{id}/standings',
     request: { path: { id: seasonId }, query: { ...(divisionId ? { divisionId } : {}) } },
   });
+  const form = useSeasonForm(seasonId, divisionId || undefined);
   return (
-    <section aria-labelledby="standings-title">
-      <h2 id="standings-title">Standings and brackets</h2>
-      <LeaguesNav />
-      <SeasonLinks seasonId={seasonId} />
-      <SelectField
-        label="Division"
-        value={divisionId}
-        onChange={setDivisionId}
-        options={divisionOptions}
-        placeholder="Whole season"
+    <section aria-labelledby="standings-title" className="compete">
+      <CompeteHeader
+        eyebrow={<SeasonEyebrow seasonId={seasonId} />}
+        title="Standings and brackets"
+        titleId="standings-title"
+        intro="Only official results count. Standings recalculate when a result is published; every tie on points shows how it was decided."
       />
-      {divisionId ? (
-        <p>
-          <Link to={`/leagues/divisions/${divisionId}/pools`}>
-            Tournament pools of this division
-          </Link>
-        </p>
-      ) : null}
-      <section className="panel" aria-labelledby="table-title">
-        <h3 id="table-title">League table</h3>
-        <p className="caption">
-          Only official results count. Standings recalculate when a result is published.
-        </p>
-        <QueryBoundary
-          query={standings}
-          label="standings"
-          isEmpty={(data) => !data || data.sourceResultIds.length === 0}
-          empty={{
-            title: 'No official results yet',
-            description: 'The table appears once a result of this season is published as official.',
-          }}
+      <SeasonLinks seasonId={seasonId} />
+      <section className="card card-flush" aria-labelledby="table-title">
+        <CardHead
+          aside={
+            <div className="toolbar">
+              <SelectField
+                label="Division"
+                value={divisionId}
+                onChange={setDivisionId}
+                options={divisionOptions}
+                placeholder="Whole season"
+              />
+            </div>
+          }
         >
-          {(data) => (data ? <StandingsTable standings={data} /> : null)}
-        </QueryBoundary>
+          <h3 id="table-title">League table</h3>
+        </CardHead>
+        <div className="card-body">
+          {divisionId ? (
+            <p>
+              <Link to={`/leagues/divisions/${divisionId}/pools`}>
+                Tournament pools of this division
+              </Link>
+            </p>
+          ) : null}
+          <QueryBoundary
+            query={standings}
+            label="standings"
+            isEmpty={(data) => !data || data.sourceResultIds.length === 0}
+            empty={{
+              title: 'No official results yet',
+              description:
+                'The table appears once a result of this season is published as official.',
+            }}
+          >
+            {(data) => (data ? <StandingsTable standings={data} form={form} /> : null)}
+          </QueryBoundary>
+        </div>
       </section>
       <Bracket
         seasonId={seasonId}

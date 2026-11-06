@@ -421,7 +421,8 @@ export function FixtureSpecificationScreen() {
   });
   const { byId } = useSeasonEntries(spec.data?.seasonId);
   return (
-    <section aria-labelledby="specification-title">
+    <section aria-labelledby="specification-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Fixture generation</span>
       <h2 id="specification-title">{spec.data?.name ?? 'Fixture specification'}</h2>
       <LeaguesNav />
       <QueryBoundary
@@ -456,7 +457,8 @@ export function SolverRunScreen() {
   });
   const { byId } = useSeasonEntries(spec.data?.seasonId);
   return (
-    <section aria-labelledby="solver-run-title">
+    <section aria-labelledby="solver-run-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Fixture generation</span>
       <h2 id="solver-run-title">Solver run</h2>
       <LeaguesNav />
       <QueryBoundary query={run} label="the solver run" empty={{ title: '', description: '' }}>

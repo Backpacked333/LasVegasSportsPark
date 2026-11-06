@@ -1,59 +1,195 @@
 /*
- * Layout for the competition, placement and youth screens (SCR-S-08 to SCR-S-13, SCR-S-16 to
- * SCR-S-19). Uses the dashboard tokens from ui/styles.css; dense tables scroll horizontally inside
- * their own container rather than the page (SPK-UX-010), and targets keep the 44 px minimum.
+ * Compete group (SCR-S-08 to SCR-S-13 leagues and tournaments, SCR-S-16 to SCR-S-19 teams and
+ * placement, SCR-S-33 staff and officials) on the night-pitch design system (ui/styles.css,
+ * SPK-UX-010). Everything here is scoped to the `.compete` page root so other areas keep the
+ * shared styles. Scores and standings use the condensed scoreboard type; status is never colour
+ * alone (SPK-UX-009); dense tables scroll inside their own card, never the page.
  */
-.subnav ul {
+
+/* ---------- Page frame ---------- */
+.compete {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.compete > h2:first-child {
+  margin-bottom: -4px;
+}
+.compete > .eyebrow + h2 {
+  margin-top: -10px;
+}
+.compete .card > .button,
+.compete .panel > .button,
+.compete .card > a.button {
+  align-self: flex-start;
+}
+.compete-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.compete-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.compete-head-text > p {
+  margin: 0;
+  color: var(--muted);
+  max-width: 68ch;
+}
+.compete .subnav ul,
+.compete-tabs ul {
   list-style: none;
-  margin: 0 0 var(--space-3);
+  margin: 0;
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: 4px;
 }
-.subnav a {
+
+/* Season screens: underline tabs, like the design's season tabs. */
+.compete-tabs {
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.compete-tabs ul {
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+.compete-tabs a {
   display: inline-flex;
   align-items: center;
-  min-height: var(--touch);
-  padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  color: var(--color-text);
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
   text-decoration: none;
 }
-.subnav a[aria-current='page'] {
+.compete-tabs a:hover {
+  color: var(--ink);
+  text-decoration: none;
+}
+.compete-tabs a[aria-current='page'] {
+  color: var(--ink);
+  font-weight: 700;
+  border-bottom-color: var(--pitch);
+}
+
+/* Chips: neutral facts beside a title (week, divisions, teams). */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--tone-neutral-bg);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.chip-outline {
+  height: 28px;
+  padding: 0 11px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: 12.5px;
   font-weight: 600;
-  border: 2px solid var(--color-primary);
 }
-.panel {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: var(--space-3) var(--space-4);
-  margin: var(--space-3) 0;
+
+/* Cards in this area: the design system's card with a flush list inside. */
+.compete .card-head h3,
+.compete .card-head h4 {
+  margin: 0;
 }
-.panel > h3,
-.panel > h4 {
-  margin-top: 0;
+.compete .card-flush > .list > li,
+.compete .card-flush > div > .list > li {
+  padding: 12px 18px;
 }
-.field {
+.compete .card-flush > .state,
+.compete .card-flush > div > .state,
+.compete .card-flush > p,
+.compete .card-flush > .card-pad {
+  margin: 0;
+  padding: 4px 18px 16px;
+}
+.card-pad {
+  padding: 4px 18px 16px;
+}
+.card-note {
+  padding: 9px 18px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--sand-2);
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+/* A list straight on the page (inside its query boundary) reads as a card of rows. */
+.compete > div > ul.list,
+.compete > ul.list {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.compete > div > ul.list > li,
+.compete > ul.list > li {
+  padding: 12px 18px;
+}
+.compete .panel > .list > li:first-child {
+  border-top: 0;
+}
+
+/* Forms and facts inside the area. */
+.compete fieldset {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 10px;
+  min-width: 0;
 }
-.field input,
-.field select,
-.field textarea {
-  min-height: var(--touch);
-  font: inherit;
-  padding: 0 var(--space-3);
-  border: 2px solid var(--color-border);
-  border-radius: 6px;
+.compete fieldset[disabled] {
+  opacity: 0.6;
 }
-.field textarea {
-  padding: var(--space-2) var(--space-3);
+.compete legend {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 0 6px;
 }
-.field [aria-invalid='true'] {
-  border-color: var(--tone-danger);
+.compete .form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 44rem;
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-3);
 }
 .field-check {
   flex-direction: row;
@@ -62,82 +198,584 @@
   gap: var(--space-2);
 }
 .field-check input {
-  min-height: 24px;
-  min-width: 24px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--pitch);
 }
-.field-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
-  gap: var(--space-3);
-}
-fieldset {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: var(--space-3);
-  margin: 0 0 var(--space-3);
-}
-fieldset[disabled] {
-  opacity: 0.6;
-}
-legend {
-  font-weight: 600;
-  padding: 0 var(--space-1);
-}
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
-}
-.table-scroll {
-  overflow-x: auto;
-  max-width: 100%;
-}
-.data-table {
-  border-collapse: collapse;
-  width: 100%;
-}
-.data-table th,
-.data-table td {
-  text-align: left;
-  padding: var(--space-2);
-  border-bottom: 1px solid var(--color-border);
-  vertical-align: top;
-}
-.data-table th {
-  font-weight: 600;
-}
-.facets {
+.compete dl.facets {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
-  gap: var(--space-2);
+  gap: 10px 20px;
   margin: 0;
 }
-.facets > div {
+.compete dl.facets > div {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
+  min-width: 0;
 }
-.facets dt {
-  font-weight: 600;
+.compete dl.facets dt {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
-.facets dd {
+.compete dl.facets dd {
   margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.compete .table-scroll {
+  max-width: 100%;
+}
+.compete table caption {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 10px 12px 6px;
+  background: var(--card);
 }
 .restricted {
   border: 2px dashed var(--tone-warning);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: var(--space-3);
 }
 .constraint-group {
-  border-left: 4px solid var(--color-border);
+  border-left: 4px solid var(--line-strong);
   padding-left: var(--space-3);
 }
 .constraint-group[data-kind='hard'] {
-  border-left-style: solid;
   border-left-color: var(--tone-danger);
 }
 .constraint-group[data-kind='preference'] {
   border-left-style: dotted;
   border-left-color: var(--tone-info);
+}
+
+/* ---------- Competitions (SCR-S-08) ---------- */
+.comp-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+.comp-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px 15px 15px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+}
+.comp-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 2px 8px rgba(16, 24, 20, 0.06);
+}
+.comp-card:focus-within {
+  border-color: var(--pitch);
+}
+.comp-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.comp-name {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--ink);
+}
+/* The whole card is the link's target; the link text stays the competition name. */
+.comp-name::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.comp-card .badge {
+  align-self: flex-start;
+}
+.comp-meta {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.season-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.season-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--pitch);
+}
+
+/* ---------- Season home (SCR-S-08 / SCR-S-10 / SCR-S-11 / SCR-S-13) ---------- */
+.season-title {
+  font-size: 40px !important;
+  line-height: 0.95 !important;
+}
+.season-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+.season-grid > .season-main {
+  flex: 1 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.season-grid > .season-side {
+  flex: 1 1 300px;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (min-width: 1200px) {
+  .season-grid > .season-side {
+    max-width: 400px;
+  }
+}
+
+/* Segmented picker (division filter). */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  padding: 3px;
+  gap: 2px;
+  background: #eeece6;
+  border-radius: 8px;
+  max-width: 100%;
+}
+.segmented button {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.segmented button[aria-pressed='true'] {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
+}
+
+/* Scoreboard: standings and scores in the condensed type. */
+.scoreboard-wrap {
+  overflow-x: auto;
+}
+.shell-main table.scoreboard {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.shell-main table.scoreboard th,
+.shell-main table.scoreboard td {
+  padding: 8px 6px;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.shell-main table.scoreboard thead th {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  border-top: 1px solid var(--line-soft);
+}
+.shell-main table.scoreboard th:first-child,
+.shell-main table.scoreboard td:first-child {
+  padding-left: 16px;
+}
+.shell-main table.scoreboard th:last-child,
+.shell-main table.scoreboard td:last-child {
+  padding-right: 16px;
+}
+.shell-main table.scoreboard abbr {
+  text-decoration: none;
+  cursor: help;
+}
+.shell-main table.scoreboard .col-team {
+  text-align: left;
+  width: 100%;
+  min-width: 9rem;
+}
+.season-standings > .caption,
+.season-standings > p {
+  padding: 0 18px 8px;
+  margin: 0;
+}
+.shell-main table.scoreboard tbody th {
+  border-top: 1px solid var(--line-soft);
+}
+.scoreboard tbody th.col-team {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  background: transparent;
+  border-bottom: 0;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scoreboard .col-pos {
+  font-weight: 800;
+  font-stretch: 75%;
+  font-size: 17px;
+  color: var(--faint);
+  width: 2.2rem;
+}
+.scoreboard tr[data-qualifies='true'] .col-pos {
+  color: var(--pitch);
+}
+.scoreboard .col-num {
+  color: var(--ink-2);
+  min-width: 2.1rem;
+}
+.scoreboard .col-pts {
+  font-weight: 800;
+  font-stretch: 75%;
+  font-size: 18px;
+  color: var(--ink);
+}
+.scoreboard tr[data-cut='true'] td,
+.scoreboard tr[data-cut='true'] th {
+  border-top: 2px dashed #c9d6cf;
+}
+.scoreboard .col-form {
+  text-align: left !important;
+}
+.form-run {
+  display: inline-flex;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sr-only-caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.form-run > span {
+  width: 19px;
+  height: 19px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 800;
+}
+.form-run [data-outcome='W'] {
+  background: var(--tone-success-bg);
+  color: var(--tone-success);
+}
+.form-run [data-outcome='D'] {
+  background: var(--tone-neutral-bg);
+  color: var(--tone-neutral);
+}
+.form-run [data-outcome='L'] {
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger);
+}
+
+/* "Needs your call" queue. */
+.call-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.call-list > li {
+  padding: 12px 18px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+}
+.call-title {
+  font-weight: 700;
+}
+.call-list .caption {
+  line-height: 1.4;
+}
+.call-list .actions-row {
+  margin-top: 2px;
+}
+
+/* Game readiness rows. */
+.ready-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ready-list > li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.ready-time {
+  font-weight: 800;
+  font-stretch: 75%;
+  font-size: 17px;
+  line-height: 1.05;
+}
+.ready-time small {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  font-stretch: 100%;
+  color: var(--muted);
+}
+.ready-match {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ready-match a {
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ready-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+}
+@media (max-width: 640px) {
+  .ready-list > li {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+  .ready-checks {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+/* Division rows on the season home. */
+.division-list > li {
+  align-items: flex-start;
+}
+.division-fill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.division-fill .season-bar {
+  width: 110px;
+}
+
+/* ---------- Placement board (SCR-S-18) ---------- */
+.place-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.place-board {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.15fr) minmax(0, 3fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .place-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.place-col {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.place-col-unplaced {
+  background: var(--sand-2);
+  border-color: var(--line-strong);
+}
+.place-col-head {
+  padding: 12px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid var(--line-soft);
+  box-shadow: inset 0 4px 0 var(--team-color, var(--faint));
+}
+.place-col-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.place-col-title h3,
+.place-col-title h4 {
+  margin: 0;
+  font-size: 18px !important;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.place-count {
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.place-col-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.place-col-body > .list > li,
+.place-requests > li {
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 10px 11px !important;
+  margin-bottom: 6px;
+  align-items: flex-start;
+}
+.place-requests {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.place-requests > li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.compete .place-requests dl.facets {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+.compete .place-requests dl.facets dd {
+  font-size: 13px;
+}
+.place-requests > li > .badge {
+  align-self: flex-start;
+}
+.place-move[data-eligible='false'] {
+  border-color: var(--line-strong);
+  background: var(--sand-2);
+}
+.place-move .list > li {
+  padding: 6px 0;
+}
+.place-requests > li[data-selected='true'] {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.place-player {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  width: 100%;
+}
+.place-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--pitch);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  flex: none;
+}
+.place-teams {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  align-items: start;
+}
+.place-teams > li {
+  min-width: 0;
+}
+.place-team[data-candidate='true'] {
+  border-color: var(--pitch);
+}
+.place-team[data-candidate='false'] {
+  opacity: 0.72;
+}
+.place-move {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1.5px dashed var(--pitch);
+  border-radius: 9px;
+  background: var(--tone-success-bg);
+}
+.place-move .actions-row .button {
+  flex: 1 1 auto;
+}
+.place-empty {
+  padding: 14px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* Playoff line on standings (SPK-FIX-001 playoff structure): a ruled, labelled row. */
+.shell-main table.scoreboard tr.playoff-line td {
+  padding: 4px 12px;
+  border-top: 2px dashed var(--pitch);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pitch);
+  background: transparent;
+}
+.shell-main table.scoreboard tr[data-qualifies='true'] .col-pos {
+  box-shadow: inset 3px 0 0 var(--pitch);
 }

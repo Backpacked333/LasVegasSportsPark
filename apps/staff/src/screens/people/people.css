@@ -1,0 +1,195 @@
+/*
+ * People and families (SCR-S-20 to SCR-S-23): search with avatars, and the person record with
+ * household and pickup authority, activities, money and history in one place.
+ */
+.form.people-search {
+  max-width: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: start;
+}
+.form.people-search > :first-child {
+  grid-column: 1 / -1;
+}
+.people-search > .button {
+  align-self: start;
+  margin-top: 24px;
+}
+@media (max-width: 900px) {
+  .form.people-search {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.people-lookup > h3 {
+  margin: 0;
+}
+.list.person-results > li {
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  padding: 10px 4px;
+}
+.list.person-results > li > .badge {
+  margin-left: auto;
+  flex: none;
+}
+.list.people-links > li {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 18px;
+}
+
+/* Person record */
+.card.person-hero {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+.person-hero-text {
+  flex: 1 1 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.shell-main .person-hero-text h3 {
+  font-size: 36px;
+  line-height: 0.95;
+  margin: 0;
+}
+.person-hero .actions-row {
+  flex-wrap: wrap;
+}
+.person-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.person-grid > .card,
+.person-grid > .panel {
+  min-width: 0;
+}
+.person-card .list > li {
+  padding: 10px 18px;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+.person-card .list > li > .badge,
+.person-card .list > li > .actions-row {
+  margin-left: auto;
+  flex: none;
+}
+.person-card > .caption,
+.person-card > p {
+  padding: 0 18px 14px;
+  margin: 0;
+}
+.person-grid .facts {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 9rem), 1fr));
+}
+.person-grid .fact {
+  overflow-wrap: anywhere;
+}
+.person-grid .fact:has(code) {
+  grid-column: 1 / -1;
+}
+.activity-strip {
+  flex: none;
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--sport, var(--kind-program));
+}
+.money-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.money-row .money-amount {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.money-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.money-list .caption {
+  display: block;
+}
+.person-timeline .list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+/* Care notes card (migration 0181): protected, operational notes only. */
+.care-card .card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.care-protected {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+.care-card .card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.care-notes > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-left: 3px solid var(--tone-danger);
+  padding-left: 10px;
+}
+.care-notes > li[data-kind='care_instruction'] {
+  border-left-color: var(--tone-warning);
+}
+.care-retire,
+.care-add {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
+
+/* Money card: the account summary (GET /v1/people/{id}/money-summary). */
+.money-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.money-summary dt {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.money-summary dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+}
+.money-summary dd.caption {
+  font-weight: 400;
+}
+@media (max-width: 600px) {
+  .money-summary {
+    grid-template-columns: 1fr;
+  }
+}

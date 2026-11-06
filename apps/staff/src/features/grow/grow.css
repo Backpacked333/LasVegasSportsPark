@@ -1,0 +1,380 @@
+/*
+ * "Grow" screens (programs and camps, registrations and waitlists, people and families, bookings,
+ * parties, memberships, session packages): the night-pitch redesign (SPK-UX-010) applied to the
+ * older `rf-` and `pg-` building blocks. Every rule here is scoped under `.grow`, the class each
+ * Grow screen puts on its root, so the Finance and other screens that share those building blocks
+ * keep their own look. Status is always StatusBadge glyph and text; colour only accompanies it
+ * (SPK-UX-009).
+ */
+.grow {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.grow > .eyebrow + h2 {
+  margin-top: -10px;
+}
+.grow > p,
+.grow > .caption {
+  margin: 0;
+}
+
+/* A row text nested in a row text is stacked, not a 280px-tall flex item. */
+.grow .row-text .row-text {
+  flex: none;
+}
+
+/* Panels read as cards. */
+.grow .rf-panel,
+.grow .pg-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.grow .rf-panel > h3,
+.grow .rf-panel > h4,
+.grow .pg-panel > h4,
+.grow .pg-panel > h5 {
+  margin: 0;
+}
+.grow details.rf-panel > summary {
+  font-weight: 700;
+}
+.grow .rf-panel .rf-panel {
+  background: var(--sand-2);
+  border-radius: var(--radius);
+}
+
+/* In-area navigation as segmented tabs. */
+.grow .rf-section-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  padding: 4px;
+  margin: 0;
+  background: #ebe9e2;
+  border-radius: 10px;
+  width: fit-content;
+  max-width: 100%;
+}
+.grow .rf-section-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.grow .rf-section-nav a:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+.grow .rf-section-nav a[aria-current='page'] {
+  border: 0;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
+}
+
+.grow .rf-actions,
+.grow .pg-actions {
+  margin: 4px 0 0;
+  align-items: center;
+}
+.grow .rf-facts dt {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.grow .rf-facts dd {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.grow .rf-fieldset {
+  border-color: var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.grow .rf-table th {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom-color: var(--line);
+}
+.grow .rf-table td {
+  border-bottom-color: var(--line-soft);
+}
+.grow .pg-toolbar,
+.grow .rf-grid {
+  margin: 0;
+}
+
+/* ---------- Segmented filter buttons (aria-pressed) ---------- */
+.seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  background: #e9e7e0;
+  border-radius: 9px;
+  max-width: 100%;
+}
+.seg button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.seg button:hover {
+  color: var(--ink);
+}
+.seg button[aria-pressed='true'] {
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
+}
+
+/* ---------- Meter: a fill bar beside its numbers (the numbers are the information) ---------- */
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.meter-bar {
+  display: flex;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.meter-bar > span {
+  display: block;
+  height: 100%;
+}
+.meter-bar > .meter-committed {
+  background: var(--meter, var(--pitch));
+}
+.meter-bar > .meter-held {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--meter, var(--pitch)) 0 3px,
+    transparent 3px 6px
+  );
+  opacity: 0.55;
+}
+.meter[data-full='true'] {
+  --meter: var(--tone-warning);
+}
+.meter-text {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.meter-text strong {
+  color: var(--ink);
+}
+.meter-text .meter-note {
+  color: var(--muted);
+  font-weight: 600;
+}
+.meter[data-full='true'] .meter-note {
+  color: var(--tone-warning);
+}
+
+/* ---------- Avatar (initials; decorative, the name is always written beside it) ---------- */
+.grow-avatar {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--avatar, var(--pitch));
+  text-transform: uppercase;
+}
+.grow-avatar[data-size='lg'] {
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  font-size: 26px;
+  font-stretch: 75%;
+  color: var(--floodlight);
+}
+.grow-avatar[data-size='sm'] {
+  width: 30px;
+  height: 30px;
+  font-size: 11px;
+  background: var(--tone-neutral-bg);
+  color: var(--ink-2);
+}
+
+/* ---------- Icon tile (a request's type) ---------- */
+.icon-tile {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--tile-bg, var(--tone-neutral-bg));
+  color: var(--tile, var(--tone-neutral));
+}
+.icon-tile[data-tone='success'] {
+  --tile: var(--tone-success);
+  --tile-bg: var(--tone-success-bg);
+}
+.icon-tile[data-tone='warning'] {
+  --tile: var(--tone-warning);
+  --tile-bg: var(--tone-warning-bg);
+}
+.icon-tile[data-tone='danger'] {
+  --tile: var(--tone-danger);
+  --tile-bg: var(--tone-danger-bg);
+}
+.icon-tile[data-tone='info'] {
+  --tile: var(--tone-info);
+  --tile-bg: var(--tone-info-bg);
+}
+.icon-tile[data-tone='pending'] {
+  --tile: var(--tone-pending);
+  --tile-bg: var(--tone-pending-bg);
+}
+.type-caps {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tile, var(--muted));
+}
+
+/* ---------- Readiness checklist (glyph circle, label, value) ---------- */
+.checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.checks > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.check-glyph {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  background: var(--tone-neutral-bg);
+  color: var(--tone-neutral);
+}
+.check-glyph[data-tone='success'] {
+  background: var(--tone-success-bg);
+  color: var(--tone-success);
+}
+.check-glyph[data-tone='warning'] {
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+}
+.check-glyph[data-tone='danger'] {
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger);
+}
+.check-glyph[data-tone='info'] {
+  background: var(--tone-info-bg);
+  color: var(--tone-info);
+}
+.check-glyph[data-tone='pending'] {
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+}
+.checks .check-label {
+  flex: 1;
+  min-width: 0;
+}
+.checks .check-value {
+  font-weight: 700;
+  font-size: 12.5px;
+  text-align: right;
+}
+
+/* Rail section inside a flush card. */
+.rail-section {
+  padding: 14px 18px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rail-section:first-child {
+  border-top: 0;
+}
+.rail-hero {
+  padding: 18px 18px 16px;
+  background: var(--night);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rail-hero .eyebrow {
+  color: var(--floodlight);
+  font-size: 11px;
+}
+.rail-hero .rail-title {
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  color: #fff;
+  margin: 0;
+}
+.rail-hero .caption {
+  color: #b9cbc1;
+}
+.rail-hero a {
+  color: #fff;
+}
+.rail-actions {
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

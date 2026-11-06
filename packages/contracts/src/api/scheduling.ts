@@ -67,6 +67,17 @@ export const LocalDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'local date mus
 export type LocalDate = z.infer<typeof LocalDate>;
 export const Weekday = z.number().int().min(0).max(6);
 
+/**
+ * A sport slug (migration 0304): lower-case letters, digits and underscores. Which sports exist is
+ * the scheduling policy's vocabulary (`DEFAULT_SPORTS`, an engineering placeholder pending the
+ * operator's list of offered sports); the API refuses a sport outside it with VALIDATION_FAILED
+ * `details.code = unknown_sport`.
+ */
+export const SportSlug = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]{0,39}$/, 'sport must be a lower-case slug (letters, digits, _)');
+export type SportSlug = z.infer<typeof SportSlug>;
+
 const Minutes = z
   .number()
   .int()
@@ -86,6 +97,8 @@ export const ResourceSchema = z
     parentResourceId: z.uuid().nullable(),
     dimensions: z.record(z.string(), z.unknown()),
     compatibleFormats: z.array(z.string()),
+    /** Sports the space supports (empty: every sport). An event naming another sport conflicts. */
+    compatibleSports: z.array(SportSlug),
     defaultSetupMinutes: z.number().int(),
     defaultCleanupMinutes: z.number().int(),
     requiredEquipment: z.array(z.unknown()),
@@ -106,6 +119,7 @@ export const CreateResourceBody = withCommandMeta({
   parentResourceId: z.uuid().optional(),
   dimensions: z.record(z.string(), z.unknown()).optional(),
   compatibleFormats: z.array(z.string().min(1).max(50)).max(50).optional(),
+  compatibleSports: z.array(SportSlug).max(20).optional(),
   defaultSetupMinutes: Minutes.optional(),
   defaultCleanupMinutes: Minutes.optional(),
   requiredEquipment: z.array(z.unknown()).max(100).optional(),
@@ -119,6 +133,7 @@ export const UpdateResourceBody = withCommandMeta({
   name: z.string().min(1).max(200).optional(),
   dimensions: z.record(z.string(), z.unknown()).optional(),
   compatibleFormats: z.array(z.string().min(1).max(50)).max(50).optional(),
+  compatibleSports: z.array(SportSlug).max(20).optional(),
   defaultSetupMinutes: Minutes.optional(),
   defaultCleanupMinutes: Minutes.optional(),
   requiredEquipment: z.array(z.unknown()).max(100).optional(),
@@ -249,6 +264,8 @@ export const EventSchema = z
     kind: EventKind,
     title: z.string(),
     format: z.string().nullable(),
+    /** The sport the event is played as (null: not stated); drives the sport colour on schedules. */
+    sport: SportSlug.nullable(),
     seriesId: z.uuid().nullable(),
     occurrenceIndex: z.number().int().nullable(),
     scheduledStart: Instant,
@@ -367,6 +384,7 @@ export const ConflictDetailSchema = z
       'outside_operating_hours',
       'resource_unavailable',
       'incompatible_format',
+      'incompatible_sport',
       'configuration_not_permitted',
       'intra_draft_overlap',
     ]),
@@ -412,6 +430,7 @@ export const EventSeriesSchema = z
     facilityId: z.uuid(),
     kind: EventKind,
     title: z.string(),
+    sport: SportSlug.nullable(),
     timezone: IanaTimezone,
     recurrence: RecurrenceRuleSchema,
     localStartTime: LocalTime,
@@ -438,6 +457,8 @@ export const CreateEventSeriesBody = withCommandMeta({
   facilityId: z.uuid(),
   kind: EventKind,
   title: z.string().min(1).max(200),
+  /** Every occurrence is played as this sport (checked against the vocabulary and the resources). */
+  sport: SportSlug.optional(),
   recurrence: RecurrenceRuleSchema,
   localStartTime: LocalTime,
   durationMinutes: z
@@ -723,6 +744,8 @@ export const ProposedEventFieldsSchema = z
     kind: EventKind.optional(),
     title: z.string().min(1).max(200).optional(),
     format: z.string().min(1).max(50).nullable().optional(),
+    /** The sport (null clears it); checked against the vocabulary and the resources. */
+    sport: SportSlug.nullable().optional(),
     scheduledStart: Instant.optional(),
     scheduledEnd: Instant.optional(),
     setupMinutes: Minutes.optional(),
@@ -886,10 +909,206 @@ export const PublicationSchema = z
   .openapi('Publication');
 export type Publication = z.infer<typeof PublicationSchema>;
 
+/**
+ * Direct timeline commands (SPK-SCHED-005/006, SPK-COMMS-005). A move or a cancel of one published
+ * event is written as a single-change schedule draft and published in the same transaction, so it
+ * keeps every publication guarantee: authorization to draft and to publish, the event's
+ * `expectedRevision`, the full conflict detection, fixture obligations, one change notice with the
+ * old and new practical details, a publication record and a `scheduling.publish_schedule`
+ * operation. A refusal publishes nothing and leaves no draft behind.
+ */
+export const DirectMoveEventBody = withCommandMeta({
+  scheduledStart: Instant,
+  scheduledEnd: Instant,
+  /** Omitted: the event keeps its spaces. */
+  resourceIds: z.array(z.uuid()).min(1).max(20).optional(),
+})
+  .extend({ expectedRevision: Revision })
+  .refine((b) => Date.parse(b.scheduledStart) < Date.parse(b.scheduledEnd), {
+    message: 'scheduledStart must be before scheduledEnd',
+    path: ['scheduledEnd'],
+  })
+  .openapi('DirectMoveEventBody');
+export type DirectMoveEventBody = z.infer<typeof DirectMoveEventBody>;
+
+/** `reason` is the cancellation reason customers are told (required, SPK-COMMS-005). */
+export const DirectCancelEventBody = z
+  .object({
+    ...CommandMetaSchema.shape,
+    expectedRevision: Revision,
+    reason: z.string().trim().min(1).max(2000),
+  })
+  .openapi('DirectCancelEventBody');
+export type DirectCancelEventBody = z.infer<typeof DirectCancelEventBody>;
+
+export const DirectEventChangeSchema = z
+  .object({
+    /** The event after the change. */
+    event: EventSchema,
+    /** The single-change publication group (its draft is kept as the record of the change). */
+    publication: PublicationSchema,
+  })
+  .openapi('DirectEventChange');
+export type DirectEventChange = z.infer<typeof DirectEventChangeSchema>;
+
 export const ListScheduleDraftsQuery = z.object({
   facilityId: z.uuid(),
   status: ScheduleDraftStatus.optional(),
 });
+
+// ---------------------------------------------------------------------------------------------
+// Composed reads for staff screens (schedule detail rail, page headers, availability finders)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `GET /v1/events/{id}/detail` (SPK-SCHED-003, SPK-SCHED-009, SPK-READY-001): one event with what
+ * the modules that own the participation answer for it, read-only. Teams are the event's team
+ * commitments (named by competition); staff are the live assignments workforce holds on the event
+ * (named by identity: names only, §4.14); attendees are counts of distinct participants from the
+ * modules that own them (enrollment, bookings, rosters, committed persons), never names. A section
+ * no module answered says so (`identified: false`, a null name); it never reads as none.
+ */
+export const EventDetailSchema = z
+  .object({
+    event: EventSchema,
+    teams: z.array(
+      z.object({
+        teamEntryId: z.uuid(),
+        /** home_team, away_team … as committed. */
+        role: z.string(),
+        /** null: competition did not name the entry (not visible or not answered). */
+        teamName: z.string().nullable(),
+        /** Players on the entry's effective roster at the event's start; null when not answered. */
+        rosterSize: z.number().int().nullable(),
+      }),
+    ),
+    staff: z.object({
+      /** false: no module that owns staff assignments answered (never "no staff"). */
+      identified: z.boolean(),
+      assignments: z.array(
+        z.object({
+          assignmentId: z.uuid(),
+          personId: z.uuid(),
+          /** null: the name is not available. */
+          displayName: z.string().nullable(),
+          kind: z.string(),
+          role: z.string(),
+          status: z.string(),
+        }),
+      ),
+    }),
+    /** Committed persons by role (officials, coaches, participants), counts only. */
+    committedPeople: z.array(z.object({ role: z.string(), count: z.number().int() })),
+    attendees: z.object({
+      /** Distinct participants of the event across every source. */
+      total: z.number().int(),
+      byVia: z.object({
+        commitment: z.number().int(),
+        enrollment: z.number().int(),
+        booking: z.number().int(),
+        roster: z.number().int(),
+      }),
+    }),
+    /**
+     * The fixture the event belongs to (sourceType `fixture`), or null. Its readiness is
+     * competition's evaluation, read at `GET /v1/fixtures/{fixtureId}/readiness` under the
+     * fixture's own authorization (competition depends on scheduling, so scheduling does not
+     * evaluate it).
+     */
+    fixtureId: z.uuid().nullable(),
+    /**
+     * The audience the communications module resolves for "message attendees"
+     * (`POST /v1/notifications` with `subject: { type: 'event', id }`): the committed team entries
+     * and the participants as subject persons. Ids only; recipients are resolved from current
+     * permissions by communications (SPK-COMMS-003), channel policy pending DEC-012/DEC-062.
+     */
+    messageAudience: z.object({
+      teamEntryIds: z.array(z.uuid()),
+      subjectPersonIds: z.array(z.uuid()),
+    }),
+  })
+  .openapi('EventDetail');
+export type EventDetail = z.infer<typeof EventDetailSchema>;
+
+/** Counts of a facility's activities and closures in a window (page headers, no names). */
+export const ScheduleWindowSummarySchema = z
+  .object({
+    facilityId: z.uuid(),
+    window: IntervalSchema,
+    activities: z.object({
+      /** Published and draft events overlapping the window (canceled ones are counted apart). */
+      total: z.number().int(),
+      published: z.number().int(),
+      draft: z.number().int(),
+      canceled: z.number().int(),
+      byKind: z.record(z.string(), z.number().int()),
+      /** Not-canceled events by sport; events that state none are under `unspecified`. */
+      bySport: z.record(z.string(), z.number().int()),
+    }),
+    closures: z.object({
+      active: z.number().int(),
+      pending: z.number().int(),
+    }),
+  })
+  .openapi('ScheduleWindowSummary');
+export type ScheduleWindowSummary = z.infer<typeof ScheduleWindowSummarySchema>;
+
+/** At most this many days per cross-resource availability read (a week grid plus a margin). */
+export const FACILITY_AVAILABILITY_MAX_SPAN_DAYS = 14;
+/** At most this many resources are searched by one cross-resource availability read. */
+export const FACILITY_AVAILABILITY_MAX_RESOURCES = 40;
+
+export const FacilityAvailabilityQuery = z
+  .object({
+    facilityId: z.uuid(),
+    /** Only resources of this kind (the resource type of a booking finder). */
+    resourceKind: ResourceKind.optional(),
+    /** Only resources supporting this sport (an empty compatible list supports every sport). */
+    sport: SportSlug.optional(),
+    start: Instant,
+    end: Instant,
+    durationMinutes: z.coerce
+      .number()
+      .int()
+      .min(5)
+      .max(24 * 60),
+    /** Candidate start times step (default 60 here: a grid, not a minute picker). */
+    stepMinutes: z.coerce.number().int().min(5).max(240).optional(),
+  })
+  .refine(startBeforeEnd, { message: 'start must be before end', path: ['end'] })
+  .refine(
+    (v) =>
+      Date.parse(v.end) - Date.parse(v.start) <= FACILITY_AVAILABILITY_MAX_SPAN_DAYS * 86_400_000,
+    {
+      message: `the window is at most ${FACILITY_AVAILABILITY_MAX_SPAN_DAYS} days`,
+      path: ['end'],
+    },
+  );
+export type FacilityAvailabilityQuery = z.infer<typeof FacilityAvailabilityQuery>;
+
+/**
+ * `GET /v1/resource-availability` (SPK-SCHED-002/003, SPK-COND-003): free start times per active resource
+ * of a facility, with the same rules as one resource's availability (conflict units, buffers,
+ * closures, operating hours). Free here is not a hold: the booking command checks again.
+ */
+export const FacilityAvailabilitySchema = z
+  .object({
+    facilityId: z.uuid(),
+    window: IntervalSchema,
+    durationMinutes: z.number().int(),
+    stepMinutes: z.number().int(),
+    resources: z.array(
+      z.object({
+        resourceId: z.uuid(),
+        name: z.string(),
+        kind: ResourceKind,
+        parentResourceId: z.uuid().nullable(),
+        slots: z.array(IntervalSchema),
+      }),
+    ),
+  })
+  .openapi('FacilityAvailability');
+export type FacilityAvailability = z.infer<typeof FacilityAvailabilitySchema>;
 
 // ---------------------------------------------------------------------------------------------
 // OpenAPI registration
@@ -1082,6 +1301,42 @@ query(
 
 query('/events', 'List events in a facility window', ListEventsQuery, pageSchema(EventSchema));
 query('/events/{id}', 'Read an event', null, EventSchema);
+query(
+  '/events/{id}/detail',
+  'Read an event with its teams, staff, attendee counts and message audience (staff)',
+  null,
+  EventDetailSchema,
+);
+command(
+  'post',
+  '/events/{id}/move',
+  'Move a published event directly: a single-change draft published at once (SPK-SCHED-005/006)',
+  DirectMoveEventBody,
+  DirectEventChangeSchema,
+  200,
+);
+command(
+  'post',
+  '/events/{id}/cancel',
+  'Cancel a published event directly: a single-change draft published at once (SPK-SCHED-005/006)',
+  DirectCancelEventBody,
+  DirectEventChangeSchema,
+  200,
+);
+openApiRegistry.registerPath({
+  method: 'get',
+  path: '/resource-availability',
+  summary:
+    'Free start times per resource of a facility (cross-resource availability, SPK-SCHED-003)',
+  tags: [TAG],
+  request: { query: FacilityAvailabilityQuery },
+  responses: {
+    200: ok('Result', FacilityAvailabilitySchema),
+    400: err('Validation failed'),
+    403: err('Access denied'),
+    404: err('Not found or not visible'),
+  },
+});
 query(
   '/reservations',
   'List reservations by resource or facility and interval',

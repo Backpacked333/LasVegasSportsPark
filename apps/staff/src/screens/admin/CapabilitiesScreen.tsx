@@ -51,6 +51,7 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type Capability = Schema<'Capability'>;
 
 const CAPABILITIES_KEY = ['api', '/admin/capabilities'] as const;
@@ -348,7 +349,11 @@ export function CapabilitiesScreen() {
   const capabilities = useApiQuery({ path: '/admin/capabilities' });
   return (
     <section aria-labelledby="capabilities-title" className="ia-screen">
-      <h2 id="capabilities-title">Capability switches</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Capability switches"
+        titleId="capabilities-title"
+      />
       <AdminNav />
       <PendingNote decisions={DECISIONS.capabilities.ids} owner={DECISIONS.capabilities.owner}>
         Which conditional capabilities the complex uses, and when each is turned on, is not decided.

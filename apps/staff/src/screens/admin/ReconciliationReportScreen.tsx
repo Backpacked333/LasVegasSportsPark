@@ -11,6 +11,7 @@ import { InsightQueryBoundary } from '../../features/insight-admin/feedback';
 import { ReconciliationReportView } from '../../features/insight-admin/migration';
 import { MigrationNav } from '../../features/insight-admin/nav';
 
+import { PageHeader } from '../../ui/Page';
 export function ReconciliationReportScreen() {
   const { reportId = '' } = useParams();
   const report = useApiQuery({
@@ -20,7 +21,11 @@ export function ReconciliationReportScreen() {
   });
   return (
     <section aria-labelledby="reconciliation-title" className="ia-screen">
-      <h2 id="reconciliation-title">Migration reconciliation</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Migration reconciliation"
+        titleId="reconciliation-title"
+      />
       <MigrationNav />
       <InsightQueryBoundary
         query={report}

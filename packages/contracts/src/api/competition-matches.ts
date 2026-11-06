@@ -350,6 +350,20 @@ export const StandingsSchema = z
     sourceResultIds: z.array(z.uuid()),
     rows: z.array(StandingsRowSchema),
     tiebreakExplanations: z.array(TiebreakExplanationSchema),
+    /**
+     * The playoff line from the division's fixture specification (its playoff structure): the
+     * teams at or above `cutPosition` qualify if the table ends as it stands. Null when no
+     * specification of the division names a playoff (or the season has no divisions).
+     */
+    playoffLine: z
+      .object({
+        specificationId: z.uuid(),
+        kind: z.literal('single_elimination'),
+        qualifyingTeams: z.number().int(),
+        /** The last qualifying position: the playoff team count, at most the table's size. */
+        cutPosition: z.number().int(),
+      })
+      .nullable(),
   })
   .openapi('Standings');
 export type Standings = z.infer<typeof StandingsSchema>;
@@ -846,7 +860,14 @@ export const SeasonReadinessSchema = z
   .object({
     seasonId: z.uuid(),
     evaluatedAt: Instant,
-    items: z.array(ReadinessCountsSchema.extend({ fixtureId: z.uuid() })),
+    items: z.array(
+      ReadinessCountsSchema.extend({
+        fixtureId: z.uuid(),
+        warningCount: z.number().int(),
+        /** Each check's outcome, as the fixture readiness read gives it (names and counts only). */
+        checks: z.array(ReadinessCheckOutcomeSchema),
+      }),
+    ),
   })
   .openapi('SeasonReadiness');
 export type SeasonReadiness = z.infer<typeof SeasonReadinessSchema>;
@@ -918,10 +939,16 @@ export const MatchSheetSchema = z
             jerseyNumber: z.number().int().nullable(),
             playingStatus: RosterPlayingStatusSchema.nullable(),
             roles: z.array(TeamRoleSchema),
+            /** The player's latest check-in mark (fixture attendance); null when unmarked or in the captain view. */
+            attendance: z.enum(['present', 'absent']).nullable(),
           }),
         ),
+        /** Players of the side marked present. */
+        presentCount: z.number().int(),
       }),
     ),
+    /** Whether the viewer may mark players present or absent (POST /v1/fixtures/{id}/attendance). */
+    canRecordAttendance: z.boolean(),
   })
   .openapi('MatchSheet');
 export type MatchSheet = z.infer<typeof MatchSheetSchema>;

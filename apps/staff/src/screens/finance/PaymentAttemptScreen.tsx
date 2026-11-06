@@ -31,6 +31,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 const PAYMENT_KEY = ['api', '/payments/{id}'] as const;
 
 export function PaymentAttemptScreen() {
@@ -43,7 +44,7 @@ export function PaymentAttemptScreen() {
   });
   return (
     <section aria-labelledby="payment-title">
-      <h2 id="payment-title">Payment attempt</h2>
+      <PageHeader eyebrow="Business · Finance" title="Payment attempt" titleId="payment-title" />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <QueryBoundary
         query={payment}

@@ -1,0 +1,198 @@
+/* SCR-S-14 Programs and camps: capacity-first program cards and the readiness rail. */
+.program-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.program-card {
+  --sport: var(--kind-league);
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.program-card[data-selected='true'] {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+[data-sport='soccer'] {
+  --sport: var(--kind-league);
+}
+[data-sport='basketball'] {
+  --sport: var(--kind-basketball);
+}
+[data-sport='camp'] {
+  --sport: var(--kind-program);
+}
+[data-sport='futsal'] {
+  --sport: #0e7c74;
+}
+[data-sport='other'] {
+  --sport: var(--kind-dropin);
+}
+.program-card::before {
+  content: '';
+  display: block;
+  height: 6px;
+  background: var(--sport);
+}
+.program-card-body {
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+.program-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.sport-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sport);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.program-card .badge {
+  font-size: 11px;
+  min-height: 20px;
+  padding: 0 7px;
+  flex: none;
+}
+.program-name {
+  font-size: 19px;
+  line-height: 1.05;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.program-name:hover {
+  color: var(--pitch);
+  text-decoration: underline;
+}
+.program-meta {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.program-where {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.program-card .meter {
+  margin-top: 4px;
+  --meter: var(--sport);
+}
+.program-card .meter[data-full='true'] {
+  --meter: var(--tone-warning);
+}
+.program-card-foot {
+  margin-top: auto;
+  padding: 8px 10px 8px 14px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--sand-2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.program-card-foot strong {
+  font-weight: 700;
+}
+.program-card-foot .button-sm {
+  min-height: 28px;
+}
+.programs-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Readiness rail */
+.card.readiness-rail {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.readiness-week {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.readiness-week-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.readiness-week-head a,
+.readiness-week-head span:first-child {
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.readiness-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.program-new {
+  scroll-margin-top: 90px;
+}
+
+/* One program: offerings as rows with their state and capacity. */
+.offering-rows > li {
+  align-items: flex-start;
+}
+.offering-rows .offering-cap {
+  flex: 0 1 220px;
+  min-width: 160px;
+}
+
+/* Enrollment by age (whole years on the reference date) and waitlist counts per offering. */
+.age-split {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.age-bar {
+  display: flex;
+  gap: 2px;
+  height: 9px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--line-soft);
+}
+.age-bar > span {
+  display: block;
+  min-width: 3px;
+}
+.readiness-waitlist a {
+  font-weight: 600;
+}

@@ -15,7 +15,10 @@ import { formatInstant, humanize } from '../../features/operations/format';
 import { NOTIFICATION_STATUS } from '../../features/operations/labels';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { Icon } from '../../ui/Icon';
+import { PageHeader } from '../../ui/Page';
 import { StatusBadge } from '../../ui/StatusBadge';
+import './communications.css';
 
 type Status = Schema<'NotificationStatus'>;
 
@@ -37,22 +40,35 @@ export function NotificationsScreen() {
     enabled: !facility.loading,
   });
   return (
-    <section aria-labelledby="notifications-title">
-      <h2 id="notifications-title">Delivery status</h2>
-      <AreaTabs label="Communications screens" tabs={COMMUNICATIONS_TABS} />
-      <SelectField
-        label="Show"
-        value={status}
-        onChange={(v) => {
-          setStatus(v as Status | '');
-          setCursor(undefined);
-        }}
-        placeholder="Every state"
-        options={(Object.keys(NOTIFICATION_STATUS) as Status[]).map((s) => ({
-          value: s,
-          label: NOTIFICATION_STATUS[s].label,
-        }))}
+    <section aria-labelledby="notifications-title" className="cm-list">
+      <PageHeader
+        eyebrow="Business · Communications"
+        title="Delivery status"
+        titleId="notifications-title"
+        intro="Every notice, newest first, with where it is in delivery. Open one for its preview or per-recipient status."
+        actions={
+          <Link className="button button-primary" to="/communications/compose">
+            <Icon name="edit" size={18} />
+            New message
+          </Link>
+        }
       />
+      <AreaTabs label="Communications screens" tabs={COMMUNICATIONS_TABS} />
+      <div className="cm-list-filters">
+        <SelectField
+          label="Show"
+          value={status}
+          onChange={(v) => {
+            setStatus(v as Status | '');
+            setCursor(undefined);
+          }}
+          placeholder="Every state"
+          options={(Object.keys(NOTIFICATION_STATUS) as Status[]).map((s) => ({
+            value: s,
+            label: NOTIFICATION_STATUS[s].label,
+          }))}
+        />
+      </div>
       <QueryBoundary
         query={list}
         label="messages"
@@ -66,7 +82,7 @@ export function NotificationsScreen() {
       >
         {(data) => (
           <>
-            <ul className="list" aria-label="Messages">
+            <ul className="cm-messages" aria-label="Messages">
               {data.items.map((n) => (
                 <NotificationRow key={n.id} notification={n} />
               ))}
@@ -89,6 +105,9 @@ function NotificationRow({ notification: n }: { notification: Schema<'Notificati
   const badge = NOTIFICATION_STATUS[n.status];
   return (
     <li>
+      <span className="cm-msg-icon" data-category={n.category} aria-hidden="true">
+        <Icon name={n.category === 'operational' ? 'campaign' : 'sell'} size={20} />
+      </span>
       <div className="row-text">
         <Link className="row-title" to={`/communications/notifications/${n.id}`}>
           {n.title}
@@ -97,8 +116,8 @@ function NotificationRow({ notification: n }: { notification: Schema<'Notificati
           {humanize(n.kind)} · {n.category === 'operational' ? 'Essential' : 'Promotional'} ·
           created {formatInstant(n.createdAt, zone)}
         </span>
-        <StatusBadge tone={badge.tone} label={badge.label} />
       </div>
+      <StatusBadge tone={badge.tone} label={badge.label} />
     </li>
   );
 }

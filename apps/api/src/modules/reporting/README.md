@@ -249,6 +249,24 @@ Technical bounds stay constants (`REPORTING_LIMITS`): at most 366 days per reque
 start-time bands; at most 100 fixtures per match-readiness request (the competition module's
 `SEASON_READINESS_MAX_FIXTURES`, R3-PERFORMANCE-03).
 
+## Park UI redesign gaps — verified 2026-11-06
+
+Verified by `__tests__/redesign-reports.spec.ts`:
+
+- `utilization_heatmap` (`GET /v1/reports/utilization-heatmap`, MET-106 to MET-108): the
+  utilization report's unit-hours split at facility-local clock hours (`hourCells`, DST-safe) and
+  summed per weekday and hour.
+- `sales_by_product_line` (`GET /v1/reports/sales-by-product-line`, MET-109, MET-110): fulfilled
+  registration order lines by offering kind and POS lines in effect by product kind (views of
+  migration 1309), per currency; POS returns shown apart; sales, not revenue (SPK-PAY-011).
+  Registration refunds are not split by product line (proposed follow-up).
+- `GET /v1/me/attention` (`AttentionService`): per navigation area, the first page (cap 99) of each
+  owning module's exported list read with the viewer's principal: open exceptions (support),
+  applications awaiting review (enrollment), unknown payment and refund outcomes (finance),
+  composed unsent notices (communications), open cases the viewer owns (support). An area whose
+  list the viewer may not read is omitted. Facilities, schedule, competition and workforce areas
+  have no count yet (their modules export no suitable list here).
+
 ## Known gaps
 
 - §1.2 success measures MET-091..MET-105 (benchmark task metrics, staff exception resolution,

@@ -4,6 +4,7 @@ import {
   DecisionReferenceSchema,
 } from '../capabilities';
 import { Revision, withCommandMeta } from '../commands';
+import { CurrencyCode } from '../money';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { pageSchema, PageRequestSchema } from '../pagination';
 import { StaffRole } from '../principal';
@@ -78,6 +79,11 @@ export const AdminOrganizationSettingsSchema = z
     status: z.enum(['active', 'suspended', 'archived']),
     revision: z.number().int(),
     settings: z.record(z.string(), z.unknown()),
+    /**
+     * ISO 4217 default currency; null until a system administrator sets it (SPK-PAY-001). Always
+     * sent; optional only so clients built on the earlier contract keep compiling.
+     */
+    defaultCurrency: CurrencyCode.nullable().optional(),
   })
   .openapi('AdminOrganizationSettings');
 
@@ -127,6 +133,58 @@ openApiRegistry.registerPath({
     404: err('Not found'),
   },
 });
+// ---------------------------------------------------------------------------------------------
+// Organization profile and default currency (SPK-PAY-001, §2.1 configuration)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What every signed-in principal may know about their organization: its name and the default
+ * currency screens use before a record names one. `defaultCurrency` is null until configured; a
+ * client then shows amounts only in the currency each record carries and never assumes one.
+ */
+export const OrganizationProfileSchema = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    defaultCurrency: CurrencyCode.nullable(),
+    revision: z.number().int(),
+  })
+  .openapi('OrganizationProfile');
+export type OrganizationProfile = z.infer<typeof OrganizationProfileSchema>;
+
+/** §4.9: the organization's current revision; the reason is recorded in the audit. */
+export const SetDefaultCurrencyBody = withCommandMeta({ currency: CurrencyCode })
+  .extend({ expectedRevision: Revision, reason: z.string().trim().min(1).max(2000) })
+  .strict()
+  .openapi('SetDefaultCurrencyRequest');
+export type SetDefaultCurrencyInput = z.infer<typeof SetDefaultCurrencyBody>;
+
+openApiRegistry.registerPath({
+  method: 'get',
+  path: '/organization',
+  summary:
+    "The signed-in principal's organization: name and default currency (null until configured; SPK-PAY-001)",
+  tags: [TAG],
+  responses: {
+    200: ok('Organization profile', OrganizationProfileSchema),
+    401: err('Authentication required'),
+  },
+});
+openApiRegistry.registerPath({
+  method: 'post',
+  path: '/admin/settings/default-currency',
+  summary:
+    'Set the organization default currency (core.set_default_currency; expected revision; no record is converted)',
+  tags: [TAG],
+  request: { body: { content: { 'application/json': { schema: SetDefaultCurrencyBody } } } },
+  responses: {
+    200: ok('Organization profile', OrganizationProfileSchema),
+    400: err('Validation failed'),
+    403: err('Access denied'),
+    409: err('Stale revision (STALE_REVISION) or idempotency conflict'),
+  },
+});
+
 openApiRegistry.registerPath({
   method: 'get',
   path: '/admin/settings',

@@ -339,6 +339,20 @@ export const PosRegisterSessionClosed = defineEvent(
   }),
 );
 
+/** A payment reminder was requested for a past-due obligation (SPK-COMMS-002 payment attention). */
+export const PaymentReminderRequested = defineEvent(
+  'finance.payment_reminder_requested',
+  z.object({
+    ...Org,
+    reminderId: z.uuid(),
+    obligationId: z.uuid(),
+    recipientPersonId: z.uuid(),
+    remainingMinor: z.number().int(),
+    currency: z.string(),
+    dueAt: z.string(),
+  }),
+);
+
 export const FinanceEvents = {
   quoteCreated: QuoteCreated,
   checkoutStarted: CheckoutStarted,
@@ -361,6 +375,7 @@ export const FinanceEvents = {
   obligationCreated: ObligationCreated,
   obligationSettled: ObligationSettled,
   contributionRequested: ContributionRequested,
+  paymentReminderRequested: PaymentReminderRequested,
   installmentPaid: InstallmentPaid,
   installmentFailed: InstallmentFailed,
   installmentNoticeDue: InstallmentNoticeDue,

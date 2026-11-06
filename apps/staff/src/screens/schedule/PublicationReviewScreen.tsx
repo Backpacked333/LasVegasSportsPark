@@ -468,7 +468,7 @@ export function PublicationReviewScreen() {
   const draft = useApiQuery({ path: '/schedule-drafts/{id}', request: { path: { id: draftId } } });
   const facility = useFacilityById(draft.data?.facilityId);
   return (
-    <section aria-labelledby="publication-title">
+    <section aria-labelledby="publication-title" className="detail-screen">
       <h3 id="publication-title">Publication review</h3>
       <Link to={`/schedule/drafts/${draftId}`}>Back to the draft</Link>
       <QueryBoundary

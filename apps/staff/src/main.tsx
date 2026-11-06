@@ -5,6 +5,8 @@ import { BrowserRouter } from 'react-router';
 import { AppRoutes } from './App';
 import { AppProviders } from './providers/AppProviders';
 import { createBrowserServices } from './providers/services';
+// Archivo with its width axis: condensed headings and scoreboard numbers (redesign type system).
+import '@fontsource-variable/archivo/wdth.css';
 import './ui/styles.css';
 
 const root = document.getElementById('root');

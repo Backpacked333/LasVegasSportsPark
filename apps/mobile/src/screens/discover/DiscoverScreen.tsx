@@ -19,33 +19,42 @@
  * with "Load more activities". A signed-out visitor browses the organization configured for this
  * build (deployment setting); without one they are asked to sign in. Signed in, "In progress"
  * lists what the customer can come back to, from the API (SPK-UX-001).
+ *
+ * Look (park system): kind chips with an icon (the selected one on night pitch, marked "✓" too),
+ * the format and date filters in a card, and each activity as a card with a tile in its kind's
+ * colour.
+ *
+ * Search: free text (`q`, at least 2 characters; every word must appear in the offering's name,
+ * description, activity type, format, location or program name, as the API matches it), applied
+ * with "Search" like the other filters. Promotions: each activity shows the automatic discounts
+ * the API lists for it now (`promotions`, never promo codes) as labelled pills; the quote decides
+ * what is applied. Signed in, "Picked for <child>" (PickedFor.tsx) lists offerings whose age band
+ * fits a family member (`GET /v1/me/offering-suggestions`), by age only, never as eligibility.
  */
-import type { CapabilityId, Schema } from '@sportspark/api-client';
+import type { CapabilityId } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
-import {
-  OFFERING_KIND_LABELS,
-  ageBandLabel,
-  formatMoney,
-  type OfferingKind,
-} from '../../features/registration/format';
+import { OFFERING_KIND_LABELS, type OfferingKind } from '../../features/registration/format';
 import { InProgressCard } from '../../features/registration/InProgressCard';
 import { registrationRoutes } from '../../features/registration/routes';
-import { offeringDates, registrationWindowStatus } from '../../features/registration/status';
+import { promotionBadges } from '../../features/registration/promotions';
+import { registrationWindowStatus } from '../../features/registration/status';
 import { Body, ButtonRow, TextField } from '../../features/registration/ui';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { Icon } from '../../ui/Icon';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
-
-type PublicOffering = Schema<'PublicOffering'>;
+import { KIND_LOOK, offeringSummary } from './offering-look';
+import { PickedFor } from './PickedFor';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 export const DISCOVER_PAGE_SIZE = 50;
 
@@ -69,20 +78,7 @@ export const CONDITIONAL_FILTER_KINDS: readonly { kind: OfferingKind; capability
     { kind: 'membership', capability: 'memberships' },
   ];
 
-export function offeringSummary(offering: PublicOffering): string {
-  return [
-    OFFERING_KIND_LABELS[offering.kind],
-    offering.format,
-    ageBandLabel(offering.ageBand),
-    offeringDates(offering),
-    offering.locationLabel,
-    offering.price
-      ? `From ${formatMoney(offering.price.basePriceMinor, offering.price.currency)}`
-      : null,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join(' · ');
-}
+export { KIND_LOOK, offeringSummary };
 
 export interface DiscoverFilter {
   format: string;
@@ -119,6 +115,50 @@ export function filterProblems(
   return out;
 }
 
+/** Field message for a search as typed; null when it can be sent (the API takes 2 to 100). */
+export function searchProblem(text: string): string | null {
+  const q = text.trim();
+  if (q.length === 1) return 'Type at least 2 characters.';
+  if (q.length > 100) return 'Use at most 100 characters.';
+  return null;
+}
+
+function SearchBox({ applied, onApply }: { applied: string; onApply: (q: string) => void }) {
+  const [draft, setDraft] = useState(applied);
+  const [problem, setProblem] = useState<string | null>(null);
+  const search = () => {
+    const found = searchProblem(draft);
+    setProblem(found);
+    if (!found) onApply(draft.trim());
+  };
+  return (
+    <Card testID="discover-search">
+      <TextField
+        label="Search activities"
+        hint="Leagues, camps, classes, fields…"
+        value={draft}
+        onChangeText={setDraft}
+        error={problem ?? undefined}
+        testID="discover-q"
+      />
+      <ButtonRow>
+        <Button label="Search" variant="secondary" onPress={search} />
+        {applied ? (
+          <Button
+            label="Clear search"
+            variant="secondary"
+            onPress={() => {
+              setDraft('');
+              setProblem(null);
+              onApply('');
+            }}
+          />
+        ) : null}
+      </ButtonRow>
+    </Card>
+  );
+}
+
 function KindFilter({
   kinds,
   value,
@@ -146,6 +186,11 @@ function KindFilter({
             style={[styles.chip, checked && styles.chipOn]}
             testID={`discover-filter-${option.kind ?? 'all'}`}
           >
+            <Icon
+              name={option.kind ? KIND_LOOK[option.kind][0] : 'apps'}
+              size={18}
+              color={checked ? colors.floodlight : colors.text}
+            />
             <Text style={[styles.chipText, checked && styles.chipTextOn]}>
               {checked ? `✓ ${option.label}` : option.label}
             </Text>
@@ -175,7 +220,7 @@ function MoreFilters({
   };
   const active = applied.format || applied.from || applied.to;
   return (
-    <View style={styles.more} testID="discover-more-filters">
+    <Card testID="discover-more-filters">
       <TextField
         label="Format"
         hint="As the facility writes it, for example 7v7"
@@ -216,7 +261,7 @@ function MoreFilters({
         Filtering by age is not available yet: it depends on DEC-003, which has not been decided
         (owner: Product and operations). Each activity shows its age band.
       </Body>
-    </View>
+    </Card>
   );
 }
 
@@ -225,6 +270,7 @@ export function DiscoverScreen() {
   const router = useRouter();
   const [kind, setKind] = useState<OfferingKind | null>(null);
   const [filter, setFilter] = useState<DiscoverFilter>(EMPTY_FILTER);
+  const [q, setQ] = useState('');
   const signedIn = session.status === 'signed_in';
   const permissions = usePermissions({ enabled: signedIn });
   const slug = services.config.organizationSlug ?? null;
@@ -239,6 +285,7 @@ export function DiscoverScreen() {
     ...(filter.format ? { format: filter.format } : {}),
     ...(filter.from ? { from: filter.from } : {}),
     ...(filter.to ? { to: filter.to } : {}),
+    ...(q ? { q } : {}),
     ...(!signedIn && slug ? { organization: slug } : {}),
   };
   const pages = useApiPages({
@@ -246,7 +293,8 @@ export function DiscoverScreen() {
     request: { query },
     enabled: session.status !== 'loading' && canBrowse,
   });
-  const filtered = kind !== null || filter.format !== '' || filter.from !== '' || filter.to !== '';
+  const filtered =
+    kind !== null || filter.format !== '' || filter.from !== '' || filter.to !== '' || q !== '';
 
   if (session.status === 'loading') {
     return (
@@ -271,6 +319,9 @@ export function DiscoverScreen() {
   return (
     <Screen>
       {signedIn ? <InProgressCard /> : null}
+      {/* Keyed like the filters below: the field always shows the search that is applied. */}
+      <SearchBox key={`q:${q}`} applied={q} onApply={setQ} />
+      {signedIn && !filtered ? <PickedFor /> : null}
       <KindFilter kinds={kinds} value={kind} onChange={setKind} />
       {/* Keyed by the applied filter: whenever it changes (applied, cleared, or "Show all
           activities"), the fields show exactly what is applied, never stale text. */}
@@ -280,9 +331,11 @@ export function DiscoverScreen() {
         label="activities"
         isEmpty={(items) => items.length === 0}
         empty={{
-          title: kind
-            ? `No ${OFFERING_KIND_LABELS[kind].toLowerCase()} activities`
-            : 'No activities',
+          title: q
+            ? `No activities match "${q}"`
+            : kind
+              ? `No ${OFFERING_KIND_LABELS[kind].toLowerCase()} activities`
+              : 'No activities',
           description: filtered
             ? 'Nothing matching this filter is published right now. Show all activities to see everything.'
             : 'Leagues, programs, camps and other activities appear here when the facility publishes them.',
@@ -292,6 +345,7 @@ export function DiscoverScreen() {
                 onAction: () => {
                   setKind(null);
                   setFilter(EMPTY_FILTER);
+                  setQ('');
                 },
               }
             : {}),
@@ -306,6 +360,9 @@ export function DiscoverScreen() {
                 title={offering.name}
                 detail={offeringSummary(offering)}
                 status={registrationWindowStatus(offering)}
+                badges={promotionBadges(offering)}
+                icon={KIND_LOOK[offering.kind][0]}
+                iconTone={[KIND_LOOK[offering.kind][1], colors.primaryText]}
                 onPress={() => router.push(registrationRoutes.offering(offering.id))}
                 accessibilityHint="Opens the activity details"
                 testID={`offering-${offering.id}`}
@@ -335,15 +392,17 @@ const styles = StyleSheet.create({
   },
   chip: {
     minHeight: MIN_TOUCH_SIZE,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-    borderRadius: 22,
-    borderWidth: 1.5,
-    borderColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 13,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
   },
-  chipOn: { backgroundColor: colors.primary },
-  chipText: { ...type.caption, color: colors.primary, fontWeight: '600' },
+  chipOn: { backgroundColor: colors.night, borderColor: colors.night },
+  chipText: { ...type.caption, ...fonts.bold, color: colors.text },
   chipTextOn: { color: colors.primaryText },
-  more: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   caption: { ...type.caption, color: colors.textMuted, padding: spacing.lg },
 });

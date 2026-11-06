@@ -44,9 +44,10 @@ import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { offeringDates, registrationWindowStatus } from '../../features/registration/status';
 import { INTENT_LABELS } from '../../features/registration/intents';
-import { Body, ButtonRow, Detail, Section, Title } from '../../features/registration/ui';
+import { Body, ButtonRow, Detail, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Hero, HeroText } from '../../ui/Hero';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { Screen } from '../../ui/Screen';
@@ -319,11 +320,15 @@ export function OfferingDetailScreen({ offeringId }: { offeringId: string }) {
       >
         {(o) => (
           <View>
-            <Section title={OFFERING_KIND_LABELS[o.kind]}>
-              <Title>{o.name}</Title>
+            <Hero
+              eyebrow={[OFFERING_KIND_LABELS[o.kind], o.locationLabel ?? o.facility.name]
+                .filter(Boolean)
+                .join(' · ')}
+              title={o.name}
+            >
               <StatusBadge {...registrationWindowStatus(o)} testID="offering-window" />
-              {o.description ? <Body>{o.description}</Body> : null}
-            </Section>
+              {o.description ? <HeroText>{o.description}</HeroText> : null}
+            </Hero>
             <Section title="About">
               <Detail label="Activity" value={o.activityType} />
               <Detail label="Facility" value={o.facility.name} />

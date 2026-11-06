@@ -16,6 +16,8 @@ export interface ProposedEvent {
   eventId: string | null;
   kind: EventKind;
   format: string | null;
+  /** The sport the event is played as (migration 0304); omitted or null: not stated. */
+  sport?: string | null;
   scheduledStart: Date;
   scheduledEnd: Date;
   setupMinutes: number;
@@ -53,6 +55,7 @@ interface ResourceRow {
   status: ResourceStatus;
   parent_resource_id: string | null;
   compatible_formats: string[];
+  compatible_sports: string[];
 }
 
 /**
@@ -96,7 +99,15 @@ export class ConflictDetector {
     if (resourceIds.length > 0) {
       const rows = await trx
         .selectFrom('resources')
-        .select(['id', 'facility_id', 'name', 'status', 'parent_resource_id', 'compatible_formats'])
+        .select([
+          'id',
+          'facility_id',
+          'name',
+          'status',
+          'parent_resource_id',
+          'compatible_formats',
+          'compatible_sports',
+        ])
         .where('organization_id', '=', organizationId)
         .where('id', 'in', resourceIds)
         .execute();
@@ -196,6 +207,19 @@ export class ConflictDetector {
           push('error', {
             code: 'incompatible_format',
             message: `${resource.name} does not support the ${p.format} format.`,
+            resourceId,
+            conflictingEventIds: [],
+          });
+        }
+        // SPK-SCHED-001 compatible activities: a space that lists its sports supports only those
+        if (
+          p.sport &&
+          resource.compatible_sports.length > 0 &&
+          !resource.compatible_sports.includes(p.sport)
+        ) {
+          push('error', {
+            code: 'incompatible_sport',
+            message: `${resource.name} does not support ${p.sport.replace(/_/g, ' ')}.`,
             resourceId,
             conflictingEventIds: [],
           });

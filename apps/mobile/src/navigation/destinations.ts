@@ -11,8 +11,8 @@ export interface Destination {
   screenId: string;
   /** Read by VoiceOver and TalkBack on the tab button. */
   accessibilityLabel: string;
-  /** Decorative glyph; hidden from screen readers. */
-  glyph: string;
+  /** Decorative Material Symbols icon of the tab; hidden from screen readers. */
+  icon: string;
 }
 
 export const DESTINATIONS: readonly Destination[] = [
@@ -21,34 +21,34 @@ export const DESTINATIONS: readonly Destination[] = [
     title: 'Home',
     screenId: 'SCR-C-03',
     accessibilityLabel: 'Home: next activity, required actions and urgent changes',
-    glyph: '⌂',
+    icon: 'home',
   },
   {
     name: 'discover',
     title: 'Discover',
     screenId: 'SCR-C-07',
     accessibilityLabel: 'Discover: leagues, programs, camps and other activities',
-    glyph: '◎',
+    icon: 'explore',
   },
   {
     name: 'schedule',
     title: 'Schedule',
     screenId: 'SCR-C-18',
     accessibilityLabel: 'Schedule: your and your family’s activities',
-    glyph: '▦',
+    icon: 'calendar_month',
   },
   {
     name: 'teams',
     title: 'Teams',
     screenId: 'SCR-C-21',
     accessibilityLabel: 'Teams: team workspaces, fixtures and standings',
-    glyph: '◆',
+    icon: 'shield',
   },
   {
     name: 'account',
     title: 'Account',
     screenId: 'SCR-C-30',
     accessibilityLabel: 'Account: family, enrollments, payments and preferences',
-    glyph: '●',
+    icon: 'person',
   },
 ];

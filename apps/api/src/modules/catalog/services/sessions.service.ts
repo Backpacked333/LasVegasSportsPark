@@ -11,8 +11,11 @@ import {
   type DomainEvent,
   type CreateOfferingSessionInput,
   type Event,
+  type CapacityUnit,
   type FacilitySession,
+  type FacilitySessionLocation,
   type ListFacilitySessionsQuery,
+  type OfferingLocation,
   type OfferingSession,
   type Page,
   type Principal,
@@ -34,6 +37,7 @@ import {
 import {
   BOOKING_SOURCE_TYPE,
   EVENT_SCHEDULING_PORT,
+  ResourcesService,
   type EventSchedulingPort,
 } from '../../scheduling';
 import { CatalogActions } from '../catalog.actions';
@@ -44,6 +48,7 @@ import {
   organizationOf,
   toOfferingSession,
   toPublicOfferingSession,
+  type OfferingRow,
 } from '../catalog.shared';
 import { EDITABLE_PUBLICATION_STATES, OfferingSessionMachine } from '../catalog.state-machines';
 import { OfferingsService } from './offerings.service';
@@ -97,6 +102,7 @@ export class SessionsService {
     private readonly offerings: OfferingsService,
     private readonly facilities: FacilityDirectory,
     @Inject(EVENT_SCHEDULING_PORT) private readonly events: EventSchedulingPort,
+    private readonly resources: ResourcesService,
   ) {}
 
   /**
@@ -136,8 +142,13 @@ export class SessionsService {
         's.scheduled_start',
         's.scheduled_end',
         's.status',
+        's.scheduling_event_id',
+        's.location',
+        's.capacity_override',
         'o.name as offering_name',
         'o.facility_id',
+        'o.location as offering_location',
+        'o.capacity_units',
       ])
       .where('s.organization_id', '=', organizationId)
       .where('o.facility_id', '=', query.facilityId)
@@ -153,18 +164,27 @@ export class SessionsService {
       );
     }
     const rows = await q.execute();
-    const items = rows.slice(0, query.limit).map((r): FacilitySession => ({
-      sessionId: r.id,
-      offeringId: r.offering_id,
-      offeringName: r.offering_name,
-      sequence: r.sequence,
-      title: r.title,
-      scheduledStart: new Date(r.scheduled_start).toISOString(),
-      scheduledEnd: new Date(r.scheduled_end).toISOString(),
-      status: r.status,
-      facilityId: r.facility_id,
-      timezone: facility.timezone,
-    }));
+    const page = rows.slice(0, query.limit);
+    const places = await this.sessionPlaces(organizationId, query.facilityId, page);
+    const items = page.map((r): FacilitySession => {
+      const override = (r.capacity_override as CapacityUnit[] | null) ?? null;
+      return {
+        sessionId: r.id,
+        offeringId: r.offering_id,
+        offeringName: r.offering_name,
+        sequence: r.sequence,
+        title: r.title,
+        scheduledStart: new Date(r.scheduled_start).toISOString(),
+        scheduledEnd: new Date(r.scheduled_end).toISOString(),
+        status: r.status,
+        facilityId: r.facility_id,
+        timezone: facility.timezone,
+        location: places.get(r.id)!,
+        capacity: override
+          ? { source: 'session', units: override }
+          : { source: 'offering', units: capacityUnitsOf(r) },
+      };
+    });
     const last = rows.length > query.limit ? rows[query.limit - 1] : undefined;
     return {
       items,
@@ -175,6 +195,93 @@ export class SessionsService {
           })
         : null,
     };
+  }
+
+  /**
+   * Where each listed session takes place (arrival "Sessions now", SPK-CAT-001 location): the
+   * resources its scheduling event reserves (scheduling is the authority for reserved space), else
+   * the session's own location (0210), else the offering's; resource names from the scheduling
+   * module's inventory of the facility. Read as the catalog itself after the caller was authorized
+   * for the facility's sessions; an event or resource scheduling no longer knows degrades to the
+   * next source or a null name, never an error.
+   */
+  private async sessionPlaces(
+    organizationId: string,
+    facilityId: string,
+    rows: ReadonlyArray<{
+      id: string;
+      scheduling_event_id: string | null;
+      location: unknown;
+      offering_location: unknown;
+    }>,
+  ): Promise<Map<string, FacilitySessionLocation>> {
+    const out = new Map<string, FacilitySessionLocation>();
+    if (rows.length === 0) return out;
+    const reader = systemPrincipal(organizationId, 'catalog.session_location');
+    const names = new Map(
+      (await this.resources.listResources(reader, facilityId)).map((r) => [r.id, r.name]),
+    );
+    const eventResources = new Map<string, string[]>();
+    for (const eventId of new Set(rows.map((r) => r.scheduling_event_id).filter((e) => !!e))) {
+      const event = await this.currentEvent(organizationId, eventId!);
+      if (event && event.resourceIds.length > 0) eventResources.set(eventId!, event.resourceIds);
+    }
+    const named = (ids: readonly string[]) =>
+      ids.map((id) => ({ id, name: names.get(id) ?? null }));
+    for (const row of rows) {
+      const own = row.location as OfferingLocation | null;
+      const offering = row.offering_location as OfferingLocation;
+      const reserved = row.scheduling_event_id
+        ? eventResources.get(row.scheduling_event_id)
+        : undefined;
+      const label = own?.label ?? offering.label ?? null;
+      if (reserved) {
+        out.set(row.id, { source: 'scheduling_event', label, resources: named(reserved) });
+      } else if (own) {
+        out.set(row.id, {
+          source: 'session',
+          label: own.label ?? null,
+          resources: named(own.resourceIds ?? []),
+        });
+      } else if (offering.label || (offering.resourceIds?.length ?? 0) > 0) {
+        out.set(row.id, {
+          source: 'offering',
+          label: offering.label ?? null,
+          resources: named(offering.resourceIds ?? []),
+        });
+      } else {
+        out.set(row.id, { source: 'none', label: null, resources: [] });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A session's own location names resources of the offering's facility (SPK-CAT-001 location,
+   * §4.3 facility boundaries); scheduling's inventory decides, read as the catalog itself.
+   */
+  private async assertLocationResources(
+    organizationId: string,
+    offering: OfferingRow,
+    location: OfferingLocation,
+  ): Promise<void> {
+    const ids = location.resourceIds ?? [];
+    if (ids.length === 0) return;
+    const known = new Set(
+      (
+        await this.resources.listResources(
+          systemPrincipal(organizationId, 'catalog.session_location'),
+          offering.facility_id,
+        )
+      ).map((r) => r.id),
+    );
+    const unknown = ids.filter((id) => !known.has(id));
+    if (unknown.length > 0) {
+      throw errors.validation(
+        "A session location names resources of the offering's facility (SPK-CAT-001).",
+        { path: 'location.resourceIds', unknownResourceIds: unknown },
+      );
+    }
   }
 
   async create(
@@ -205,6 +312,8 @@ export class SessionsService {
       if (body.schedulingEventId) {
         await this.assertSessionMatchesEvent(trx, organizationId, body.schedulingEventId, body);
       }
+      if (body.location)
+        await this.assertLocationResources(organizationId, offering, body.location);
       const latest = await trx
         .selectFrom('offering_sessions')
         .select((eb) => eb.fn.max('sequence').as('sequence'))
@@ -228,6 +337,7 @@ export class SessionsService {
             scheduling_event_id: body.schedulingEventId ?? null,
             capacity_override:
               body.capacityOverride === undefined ? null : json(body.capacityOverride),
+            location: body.location ? json(normalizedLocation(body.location)) : null,
             canceled_at: null,
             cancel_reason: null,
           })
@@ -250,9 +360,14 @@ export class SessionsService {
         afterRevision: row.revision,
         reason: body.reason ?? null,
         correlationId,
-        details: overrideStaffing
-          ? { offeringId, sequence, capacityOverride: body.capacityOverride, ...overrideStaffing }
-          : { offeringId, sequence },
+        details: {
+          offeringId,
+          sequence,
+          ...(overrideStaffing
+            ? { capacityOverride: body.capacityOverride, ...overrideStaffing }
+            : {}),
+          ...(body.location ? { location: normalizedLocation(body.location) } : {}),
+        },
       });
       await this.outbox.enqueue(trx, CatalogEvents.sessionCreated, {
         organizationId,
@@ -773,4 +888,14 @@ export class SessionsService {
       .execute();
     return rows.map(staff ? toOfferingSession : toPublicOfferingSession);
   }
+}
+
+/** A session location as stored: a trimmed label when given, distinct resource ids when given. */
+function normalizedLocation(location: OfferingLocation): OfferingLocation {
+  const out: OfferingLocation = {};
+  if (location.label && location.label.trim().length > 0) out.label = location.label.trim();
+  if (location.resourceIds && location.resourceIds.length > 0) {
+    out.resourceIds = [...new Set(location.resourceIds)];
+  }
+  return out;
 }

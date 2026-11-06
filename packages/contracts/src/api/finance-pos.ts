@@ -311,6 +311,22 @@ export const PosSaleSchema = z
     /** Total − settled − pending: what a further tender may still cover. */
     remainingMinor: z.number().int(),
     returnedMinor: z.number().int(),
+    /**
+     * The approved taxes and fees on the ticket, one entry per configured charge (code, label and
+     * kind as the approved `tax_fee` version states them, DEC-057) with the amount over every line.
+     * Always sent; optional only so clients built on the earlier contract keep compiling.
+     */
+    charges: z
+      .array(
+        z.object({
+          code: z.string(),
+          label: z.string(),
+          kind: z.enum(['tax', 'fee']),
+          amountMinor: z.number().int(),
+        }),
+      )
+      .optional(),
+    /** Lines in effect: a line whose quantity was changed or removed is replaced by its correction. */
     lines: z.array(PosSaleLineSchema),
     tenders: z.array(PosTenderSchema),
     returns: z.array(PosReturnSchema),
@@ -340,6 +356,20 @@ export const AddPosSaleLineBody = withCommandMeta({
   .strict()
   .openapi('AddPosSaleLineRequest');
 export type AddPosSaleLineInput = z.infer<typeof AddPosSaleLineBody>;
+
+/**
+ * §4.9: change the quantity of an open sale's line (0 removes it). The line is priced again from
+ * the product and the approved charges in effect now (SPK-PAY-001/002); the earlier line is kept as
+ * superseded (append-only, SPK-PAY-010). Refused once tenders already cover more than the new
+ * total would be.
+ */
+export const ChangePosLineQuantityBody = withCommandMeta({
+  quantity: z.number().int().min(0).max(999),
+})
+  .extend({ expectedRevision: Revision })
+  .strict()
+  .openapi('ChangePosLineQuantityRequest');
+export type ChangePosLineQuantityInput = z.infer<typeof ChangePosLineQuantityBody>;
 
 export const AddPosTenderBody = z
   .discriminatedUnion('kind', [
@@ -581,6 +611,30 @@ register({
   summary: 'Add a product line at its price with approved taxes and fees (SPK-PAY-002)',
   body: AddPosSaleLineBody,
   response: PosSaleSchema,
+});
+openApiRegistry.registerPath({
+  method: 'post',
+  path: '/pos-sales/{id}/lines/{lineId}/quantity',
+  summary:
+    'Change the quantity of an open sale line, or remove it with 0 (priced again; the earlier line is kept as superseded)',
+  description:
+    'FIN-06, §3.16 POS row, SPK-PAY-001/002/010. Needs the point_of_sale capability (DEC-016) like adding a line.',
+  tags: ['Finance'],
+  request: {
+    params: z.object({ id: z.uuid(), lineId: z.uuid() }),
+    body: { content: { 'application/json': { schema: ChangePosLineQuantityBody } } },
+  },
+  responses: {
+    200: { description: 'Success', content: { 'application/json': { schema: PosSaleSchema } } },
+    400: errorResponse('Validation failed (LINE_NOT_ON_SALE)'),
+    401: errorResponse('Authentication required'),
+    403: errorResponse('Access denied or the point_of_sale capability is disabled'),
+    404: errorResponse('Not found or not visible'),
+    409: errorResponse(
+      'Conflict (LINE_ALREADY_CHANGED, BELOW_TENDERED, CHARGE_POLICY_NOT_APPROVED, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)',
+    ),
+    503: errorResponse('Paused while the organization recovers from a restore'),
+  },
 });
 register({
   method: 'post',

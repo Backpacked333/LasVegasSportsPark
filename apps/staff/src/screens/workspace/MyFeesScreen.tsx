@@ -65,7 +65,7 @@ export function MyFeesScreen() {
     request: { query: { status: 'completed', from } },
   });
   return (
-    <section aria-labelledby="my-fees-title">
+    <section aria-labelledby="my-fees-title" className="ops-screen">
       <h2 id="my-fees-title">Hours and fees</h2>
       <AreaTabs label="Workspace screens" tabs={WORKSPACE_TABS} />
       <OfflineQueueStatus reviewPath="/workspace/offline" />

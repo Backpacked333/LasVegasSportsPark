@@ -772,7 +772,7 @@ export function AssistantPanel({ facilityId }: { facilityId: string | null }) {
     );
   }
   return (
-    <section id="assistant-panel" className="panel" aria-labelledby="assistant-title">
+    <section id="assistant-panel" className="panel assistant" aria-labelledby="assistant-title">
       <h3 id="assistant-title">Operational assistant (optional)</h3>
       <p className="caption">
         Answers name their supporting records and how fresh they are. Nothing it proposes runs until

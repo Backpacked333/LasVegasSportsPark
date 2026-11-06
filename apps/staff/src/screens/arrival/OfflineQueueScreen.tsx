@@ -29,11 +29,13 @@ import { useMemo, useState } from 'react';
 import { ARRIVAL_TABS, AreaTabs, type AreaTab } from '../../features/operations/AreaTabs';
 import { nameOf, usePersonNames } from '../../features/operations/context';
 import { CommandError } from '../../features/operations/feedback';
-import { formatInstant, shortRef } from '../../features/operations/format';
+import { formatClock, formatInstant, shortRef } from '../../features/operations/format';
 import { OBSERVED_STATE, VISITOR_CATEGORY_LABEL } from '../../features/operations/labels';
 import { useOfflineQueue } from '../../features/operations/offline/OfflineQueueProvider';
 import type { OfflineItem, QueuedItem } from '../../features/operations/offline/queue';
 import { useApp, useNow } from '../../providers/AppProviders';
+import { Kpi, KpiRow, PageHeader } from '../../ui/Page';
+import './arrival.css';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -81,9 +83,36 @@ export function OfflineQueueScreen({
   const last = state.lastSync;
 
   return (
-    <section aria-labelledby="offline-title">
-      <h2 id="offline-title">Offline queue</h2>
+    <section aria-labelledby="offline-title" className="ops-screen">
+      <PageHeader
+        eyebrow={online ? 'This device · connected' : 'This device · offline'}
+        title="Offline queue"
+        titleId="offline-title"
+        intro="Arrivals and attendance observed without a connection wait here, on this device only, until they are synchronised once."
+      />
       <AreaTabs label={tabsLabel} tabs={tabs} />
+      <KpiRow label="Offline queue at a glance">
+        <Kpi
+          icon={mine.length > 0 ? 'sync' : 'cloud_done'}
+          tone={mine.length > 0 ? 'warning' : 'success'}
+          label="Waiting to sync"
+          value={mine.length}
+          sub="not yet recorded"
+        />
+        <Kpi
+          icon="rule"
+          tone={state.review.length > 0 ? 'danger' : 'neutral'}
+          label="For review"
+          value={state.review.length}
+        />
+        <Kpi
+          icon="history"
+          tone="info"
+          label="Last synchronised"
+          value={last ? formatClock(last.at) : '–'}
+          sub={last ? `${last.synchronised} synchronised` : 'not yet from this device'}
+        />
+      </KpiRow>
       <div className="ops-section">
         <h3>This device</h3>
         <p>

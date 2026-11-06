@@ -54,6 +54,10 @@ const SESSION = {
   timezone: 'America/Los_Angeles',
 };
 
+/** The per-space text list (the timeline above repeats titles in its blocks). */
+const bySpace = () => within(screen.getByTestId('bookings-by-space'));
+const bySpaceAsync = async () => within(await screen.findByTestId('bookings-by-space'));
+
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     ...oneFacilityRoutes(),
@@ -176,9 +180,9 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     );
     await app.queryClient.invalidateQueries({ queryKey: ['api', '/events'] });
     expect(await screen.findByTestId('schedule-changed')).toHaveTextContent('Schedule changed');
-    expect(screen.getByText('U12 Red v Blue')).toBeInTheDocument();
+    expect(bySpace().getByText('U12 Red v Blue')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Show the latest' }));
-    expect(await screen.findByText('U12 Red v Blue (moved)')).toBeInTheDocument();
+    expect(await (await bySpaceAsync()).findByText('U12 Red v Blue (moved)')).toBeInTheDocument();
     expect(screen.queryByTestId('schedule-changed')).toBeNull();
   });
 
@@ -195,9 +199,9 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
       ]),
     );
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
-    expect(await screen.findByText('U12 Red v Blue (moved)')).toBeInTheDocument();
+    expect(await (await bySpaceAsync()).findByText('U12 Red v Blue (moved)')).toBeInTheDocument();
     expect(screen.queryByTestId('schedule-changed')).toBeNull();
-    expect(screen.queryByText('U12 Red v Blue')).toBeNull();
+    expect(bySpace().queryByText('U12 Red v Blue')).toBeNull();
   });
 
   it('empty: says nothing is booked and still shows the spaces', async () => {
@@ -254,8 +258,10 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     });
     render(app.at('/schedule/calendar'));
     const row = await screen.findByTestId(`calendar-resource-${PITCH}`);
-    expect(row.querySelector('.track-closure-pending')).not.toBeNull();
-    expect(row.querySelector('.track-closure')).toBeNull();
+    // The timeline draws it outlined, never hatched like an applied closure.
+    const track = screen.getByTestId(`timeline-row-${PITCH}`);
+    expect(track.querySelector('.track-closure-pending')).not.toBeNull();
+    expect(track.querySelector('.track-closure')).toBeNull();
     expect(row).toHaveTextContent(
       'Free for the whole range (a planned closure is not applied yet).',
     );
@@ -439,7 +445,7 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Load more events' })).toBeNull(),
     );
-    expect(screen.getByText('U12 Red v Blue')).toBeInTheDocument();
+    expect(bySpace().getByText('U12 Red v Blue')).toBeInTheDocument();
     expect(screen.getByTestId('events-truncated')).toHaveTextContent(
       'Show the latest schedule above to see them.',
     );
@@ -447,7 +453,7 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
       'Free for the whole range.',
     );
     await user.click(screen.getByRole('button', { name: 'Show the latest' }));
-    expect(await screen.findByText('U12 Red v Blue (moved)')).toBeInTheDocument();
+    expect(await (await bySpaceAsync()).findByText('U12 Red v Blue (moved)')).toBeInTheDocument();
     expect(screen.queryByTestId('events-truncated')).toBeNull();
     expect(screen.getByTestId(`calendar-resource-${ROOM}`)).toHaveTextContent(
       'Free for the whole range.',
@@ -495,7 +501,7 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     expect(screen.getByTestId(`calendar-resource-${ROOM}`)).not.toHaveTextContent(
       'Free for the whole range.',
     );
-    expect(screen.getByText('U12 Red v Blue (moved)')).toBeInTheDocument();
+    expect(bySpace().getByText('U12 Red v Blue (moved)')).toBeInTheDocument();
     expect(screen.queryByTestId('schedule-changed')).toBeNull();
     expect(screen.queryByTestId('events-truncated')).toBeNull();
   });
@@ -559,6 +565,70 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
     act(() => app.connectivity.set(false));
     expect((await screen.findAllByText('You are offline')).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
-    expect(screen.getByText('U12 Red v Blue')).toBeInTheDocument();
+    expect(bySpace().getByText('U12 Red v Blue')).toBeInTheDocument();
+  });
+  it('SPK-SCHED-001/SPK-UX-009: the resource timeline names each block in full, dashes drafts and opens details on selection', async () => {
+    const user = userEvent.setup();
+    const DRAFT = event({
+      id: 'e-draft',
+      title: 'U9 practice (planned)',
+      kind: 'practice',
+      status: 'draft',
+      publishedRevision: null,
+      resourceIds: [HALF_B],
+      scheduledStart: '2026-10-24T19:00:00.000Z',
+      scheduledEnd: '2026-10-24T20:00:00.000Z',
+    });
+    const app = createTestApp({ routes: routes({ 'GET /events': page([GAME, SMALL, DRAFT]) }) });
+    render(app.at('/schedule/calendar'));
+    const pitchRow = await screen.findByRole('group', { name: 'Timeline, Pitch 1' });
+    const block = within(pitchRow).getByRole('button', {
+      name: /^U12 Red v Blue, Game, .*18:00 to 19:30 PDT, published/,
+    });
+    const south = screen.getByTestId(`timeline-row-${HALF_B}`);
+    expect(
+      within(south).getByRole('button', {
+        name: /U9 practice \(planned\), Practice, .*draft: not published/,
+      }),
+    ).toHaveAttribute('data-status', 'draft');
+    // The rail summarizes the day until a block is chosen.
+    const rail = screen.getByRole('complementary', { name: 'Selected on the timeline' });
+    expect(within(rail).getByRole('heading', { name: 'At a glance' })).toBeInTheDocument();
+    await user.click(block);
+    expect(block).toHaveAttribute('aria-pressed', 'true');
+    expect(within(rail).getByRole('heading', { name: 'U12 Red v Blue' })).toBeInTheDocument();
+    expect(
+      within(rail).getByText(/17:45 to 19:40 PDT \(setup 15 min, cleanup 10 min\)/),
+    ).toBeVisible();
+    expect(within(rail).getByRole('link', { name: 'Change in a draft' })).toHaveAttribute(
+      'href',
+      '/schedule/drafts',
+    );
+    // The maintenance restriction on the north half is a block too, leading to its impact.
+    const north = screen.getByTestId(`timeline-row-${HALF_A}`);
+    await user.click(
+      within(north).getByRole('button', { name: /^Maintenance restriction: Goal mouth repair/ }),
+    );
+    expect(within(rail).getByRole('link', { name: 'Review closure impact' })).toHaveAttribute(
+      'href',
+      '/schedule/closures/c-1',
+    );
+    await user.click(within(rail).getByRole('button', { name: 'Clear selection' }));
+    expect(within(rail).getByRole('heading', { name: 'At a glance' })).toBeInTheDocument();
+  });
+
+  it('kind chips dim the other kinds on the timeline without hiding any text', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: routes() });
+    render(app.at('/schedule/calendar'));
+    const chip = await screen.findByRole('button', { name: 'Game' });
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    await user.click(chip);
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /^U12 Red v Blue, Game/ })).toHaveAttribute(
+      'data-dim',
+      'true',
+    );
+    expect(bySpace().getByText('U12 Red v Blue')).toBeInTheDocument();
   });
 });

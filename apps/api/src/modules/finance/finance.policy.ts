@@ -68,3 +68,11 @@ export const DEFAULT_FINANCE_POLICY: FinancePolicyConfig = {
   actionRequiredCancelAfterMinutes: 60,
   rounding: 'half_up',
 };
+
+/**
+ * Payment reminders (SPK-COMMS-002 payment attention; park UI redesign): the shortest time between
+ * two reminders for the same obligation, so a "remind all" pressed twice does not message a family
+ * twice. An engineering placeholder: reminder frequency is part of the communication policy, which
+ * is pending (DEC-012, DEC-062).
+ */
+export const PAYMENT_REMINDER_MIN_INTERVAL_HOURS = 24;

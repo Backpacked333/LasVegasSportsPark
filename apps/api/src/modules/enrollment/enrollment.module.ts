@@ -24,6 +24,7 @@ import { MeRegistrationsController } from './controllers/me.controller';
 import { PackagesMembershipsController } from './controllers/packages-memberships.controller';
 import { PlacementController } from './controllers/placement.controller';
 import { RegistrationOptionsController } from './controllers/registration-options.controller';
+import { EnrollmentOverviewController } from './controllers/overview.controller';
 import { SessionBookingsController } from './controllers/session-bookings.controller';
 import { WaitlistController } from './controllers/waitlist.controller';
 import { YouthController } from './controllers/youth.controller';
@@ -67,6 +68,7 @@ import { MembershipsService } from './services/memberships.service';
 import { MergeFollowUp } from './services/merge-follow-up';
 import { MyRegistrationsService } from './services/my-registrations.service';
 import { RegistrationOptionsService } from './services/registration-options.service';
+import { EnrollmentOverviewService } from './services/enrollment-overview.service';
 import { EnrollmentsService } from './services/enrollments.service';
 import { EnrollmentFacilityScope } from './services/facility-scope';
 import { FamilyCalendarService } from './services/family-calendar.service';
@@ -120,6 +122,8 @@ const providers: Provider[] = [
   CustomerScope,
   MyRegistrationsService,
   RegistrationOptionsService,
+  // Park UI overview reads (programs overview, registrations home, person activities, discover).
+  EnrollmentOverviewService,
   MergeFollowUp,
   EnrollmentNotices,
   EnrollmentJobs,
@@ -181,6 +185,7 @@ const providers: Provider[] = [
     CapacityController,
     MeRegistrationsController,
     RegistrationOptionsController,
+    EnrollmentOverviewController,
     PackagesMembershipsController,
     BookingsController,
     YouthProgressionController,

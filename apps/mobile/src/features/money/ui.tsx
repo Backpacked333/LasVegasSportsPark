@@ -6,10 +6,12 @@
  */
 import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SectionCard } from '../../ui/Card';
 import { LiveText } from '../../ui/announce';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import type { AccountPerson } from './people';
 
+/** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
 export function Section({
   title,
   children,
@@ -20,12 +22,9 @@ export function Section({
   testID?: string;
 }) {
   return (
-    <View style={styles.section} testID={testID}>
-      <Text style={styles.heading} accessibilityRole="header">
-        {title}
-      </Text>
+    <SectionCard title={title} testID={testID}>
       {children}
-    </View>
+    </SectionCard>
   );
 }
 
@@ -76,12 +75,15 @@ export function ChoiceGroup({
   role = 'radiogroup',
   error,
   children,
+  layout = 'list',
   testID,
 }: {
   label: string;
   role?: 'radiogroup' | 'list';
   error?: string | null;
   children: ReactNode;
+  /** `grid`: the choices are tiles side by side (start times), wrapping as text grows. */
+  layout?: 'list' | 'grid';
   testID?: string;
 }) {
   return (
@@ -89,6 +91,7 @@ export function ChoiceGroup({
       accessibilityRole={role}
       accessibilityLabel={label}
       accessibilityHint={error ? `Error: ${error}` : undefined}
+      style={layout === 'grid' ? styles.grid : null}
       testID={testID}
     >
       <ChoiceErrorContext.Provider value={error ?? null}>{children}</ChoiceErrorContext.Provider>
@@ -99,6 +102,9 @@ export function ChoiceGroup({
 /**
  * One radio or checkbox row; the label is the whole row and the state is announced. While its
  * `ChoiceGroup` shows an error, the error is the row's hint.
+ *
+ * `tile` draws it as a time tile (Book a space): `shortLabel` is shown, the full `label` is read;
+ * a chosen tile is floodlight with "✓" before its text, so the choice never rests on colour.
  */
 export function ChoiceRow({
   label,
@@ -107,6 +113,8 @@ export function ChoiceRow({
   onPress,
   mode,
   disabled = false,
+  tile = false,
+  shortLabel,
   testID,
 }: {
   label: string;
@@ -115,9 +123,33 @@ export function ChoiceRow({
   onPress: () => void;
   mode: 'radio' | 'checkbox';
   disabled?: boolean;
+  tile?: boolean;
+  shortLabel?: string;
   testID?: string;
 }) {
   const groupError = useContext(ChoiceErrorContext);
+  if (tile) {
+    return (
+      <Pressable
+        accessibilityRole={mode}
+        accessibilityLabel={detail ? `${label}, ${detail}` : label}
+        accessibilityHint={groupError ? `Error: ${groupError}` : undefined}
+        accessibilityState={{ checked, disabled }}
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.tile,
+          checked && styles.tileOn,
+          pressed && styles.pressed,
+          disabled && styles.dim,
+        ]}
+        testID={testID}
+      >
+        <Text style={styles.tileLabel}>{`${checked ? '✓ ' : ''}${shortLabel ?? label}`}</Text>
+        {detail ? <Text style={styles.tileDetail}>{detail}</Text> : null}
+      </Pressable>
+    );
+  }
   return (
     <Pressable
       accessibilityRole={mode}
@@ -153,7 +185,7 @@ export function PersonPicker({
 }) {
   if (people.length < 2) return null;
   return (
-    <View style={styles.section}>
+    <View style={styles.picker}>
       <Text style={styles.caption}>{label}</Text>
       <View accessibilityRole="radiogroup" accessibilityLabel={label}>
         {people.map((person) => (
@@ -228,8 +260,7 @@ export function FieldError({ error, testID }: { error?: string | null; testID?: 
 }
 
 const styles = StyleSheet.create({
-  section: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.sm },
-  heading: { ...type.heading, color: colors.text },
+  picker: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.xs },
   field: { gap: 2 },
   fieldBox: { gap: spacing.xs },
   fieldLabel: { ...type.caption, color: colors.textMuted },
@@ -245,6 +276,23 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   choiceText: { flex: 1, gap: 2 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.xs },
+  tile: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    minHeight: 56,
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.sm + 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    gap: 2,
+  },
+  tileOn: { backgroundColor: colors.floodlight, borderColor: colors.night },
+  tileLabel: { ...type.body, ...fonts.extrabold, color: colors.text },
+  tileDetail: { ...type.caption, fontSize: 12, lineHeight: 16, color: colors.textMuted },
   pressed: { opacity: 0.8 },
   dim: { opacity: 0.55 },
   mark: {
@@ -252,22 +300,23 @@ const styles = StyleSheet.create({
     height: 24,
     borderWidth: 2,
     borderColor: colors.primary,
-    borderRadius: 4,
+    borderRadius: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
   round: { borderRadius: 12 },
   markChecked: { backgroundColor: colors.primary },
-  markGlyph: { color: colors.primaryText, fontWeight: '700' },
+  markGlyph: { color: colors.primaryText, ...fonts.bold },
   input: {
     ...type.body,
     color: colors.text,
-    minHeight: MIN_TOUCH_SIZE,
+    minHeight: 48,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 6,
-    paddingHorizontal: spacing.md,
+    borderColor: colors.control,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
     paddingVertical: spacing.sm,
+    backgroundColor: colors.background,
   },
   multiline: { minHeight: 88, textAlignVertical: 'top' },
   inputError: { borderColor: colors.danger, borderWidth: 2 },

@@ -16,6 +16,7 @@ import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/S
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 
+import { PageHeader } from '../../ui/Page';
 const OPEN_REFUND = new Set(['requested', 'processing', 'unknown']);
 
 export function RefundScreen() {
@@ -31,7 +32,11 @@ export function RefundScreen() {
   const run = () => reconcile.submit({ path: { id: refundId } }).catch(() => undefined);
   return (
     <section aria-labelledby="refund-title">
-      <h2 id="refund-title">Refund {shortRef(refundId)}</h2>
+      <PageHeader
+        eyebrow="Business · Finance"
+        title={`Refund ${shortRef(refundId)}`}
+        titleId="refund-title"
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <QueryBoundary
         query={refund}

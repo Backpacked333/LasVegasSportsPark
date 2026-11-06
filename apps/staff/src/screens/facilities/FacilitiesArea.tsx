@@ -2,7 +2,10 @@
  * Facilities and maintenance area (SPK-UX-005): SCR-S-41 assets and maintenance tasks, SCR-S-42
  * operating restrictions and release to service.
  */
-import { Navigate, Route, Routes } from 'react-router';
+import { Link, Navigate, Route, Routes } from 'react-router';
+import { Icon } from '../../ui/Icon';
+import { PageHeader } from '../../ui/Page';
+import { DaySummaryLine } from '../../features/schedule-facilities/DaySummary';
 import { SubNav } from '../../features/schedule-facilities/SubNav';
 import '../../features/schedule-facilities/schedule-facilities.css';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
@@ -18,8 +21,23 @@ const SECTIONS = [
 
 export function FacilitiesArea() {
   return (
-    <section aria-labelledby="area-facilities">
-      <h2 id="area-facilities">Facilities and maintenance</h2>
+    <section aria-labelledby="area-facilities" className="area-stack">
+      <PageHeader
+        eyebrow={
+          <>
+            Operate · Restrictions, work orders and assets
+            <DaySummaryLine include={{ activities: false, tasks: true }} />
+          </>
+        }
+        title="Facilities and maintenance"
+        titleId="area-facilities"
+        actions={
+          <Link className="button button-primary" to="/facilities/maintenance#report">
+            <Icon name="add" size={19} />
+            Report a problem
+          </Link>
+        }
+      />
       <SubNav label="Facilities sections" items={SECTIONS} />
       <Routes>
         <Route index element={<Navigate to="maintenance" replace />} />

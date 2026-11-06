@@ -311,7 +311,20 @@ active device of the facility; an unregistered or retired reference still yields
 once the organization keeps an inventory, one `entry.unregistered_access_device` exception per
 reference. Access events are never attendance, check-in or pickup authority (SPK-COND-004).
 
+## Care notes on a scan (identity migration 0181) — verified
+
+`POST /v1/passes/scan` returns each person's `careNotes` (operational notes only, §1.7) when the
+scanning staff role may read them at the facility (identity's `identity.read_care_notes`), and
+`null` otherwise; identity audits every shown note in the scan's transaction
+(`__tests__/scan-care-notes.spec.ts`). The scan still records nobody.
+
 ## Known gaps
+
+- Waiver actions on a held check-in (`missing_acknowledgment`): forms and acknowledgments belong to
+  catalog. "Sign on this tablet" uses catalog's existing `POST /v1/acknowledgments` with the
+  named signer (staff never sign, SPK-REG-009). "Send a form link" waits on a messaging channel
+  (DEC-012, DEC-062) and a catalog link command. A staff "override with reason" is not built: no
+  approved policy lets a check-in be admitted without a required form.
 
 - Device approval and roster snapshot issuance (§4.15 "approved staff devices", "encrypted,
   scoped roster"; the runbook's proposed `entry.download_offline_roster`) are not implemented: the

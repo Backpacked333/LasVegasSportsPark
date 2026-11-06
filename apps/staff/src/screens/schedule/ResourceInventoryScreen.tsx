@@ -835,7 +835,7 @@ function Inventory({ facility }: { facility: FacilityContext }) {
   });
   const unitNames = new Map((units.data ?? []).map((u) => [u.id, u.name]));
   return (
-    <div>
+    <div className="inventory">
       <StateView
         variant="pending-decision"
         subject="Confirmation of the actual facilities, spaces, subdivisions and hours"
@@ -843,43 +843,65 @@ function Inventory({ facility }: { facility: FacilityContext }) {
         owner="Operations"
       />
       <p className="caption">What is shown here is what has been entered, not an assumed layout.</p>
-      <FacilityFacts facility={facility} />
-      <QueryBoundary
-        query={resources}
-        label="the resource inventory"
-        isEmpty={(list) => list.length === 0}
-        empty={{
-          title: 'No spaces yet',
-          description:
-            'This is the first setup: add the facility’s pitches, their subdivisions and other spaces below.',
-        }}
-        unavailableOffline={['adding or editing spaces']}
-      >
-        {(list) => (
-          <ul className="list" aria-label="Spaces">
-            {orderedInventory(list).map(({ resource, depth }) => (
-              <ResourceCard
-                key={resource.id}
-                resource={resource}
-                depth={depth}
-                all={list}
-                units={unitNames}
-                canManage={canManage}
+      <div className="split">
+        <div className="split-main">
+          <div className="card">
+            <FacilityFacts facility={facility} />
+          </div>
+          <QueryBoundary
+            query={resources}
+            label="the resource inventory"
+            isEmpty={(list) => list.length === 0}
+            empty={{
+              title: 'No spaces yet',
+              description:
+                'This is the first setup: add the facility’s pitches, their subdivisions and other spaces below.',
+            }}
+            unavailableOffline={['adding or editing spaces']}
+          >
+            {(list) => (
+              <ul className="list list-card" aria-label="Spaces">
+                {orderedInventory(list).map(({ resource, depth }) => (
+                  <ResourceCard
+                    key={resource.id}
+                    resource={resource}
+                    depth={depth}
+                    all={list}
+                    units={unitNames}
+                    canManage={canManage}
+                  />
+                ))}
+              </ul>
+            )}
+          </QueryBoundary>
+        </div>
+        <div className="split-side">
+          <div className="card">
+            {canManage ? (
+              <NewResourceForm facility={facility} resources={resources.data ?? []} />
+            ) : (
+              <NotAvailableToYou
+                what="Changing the resource inventory"
+                action="scheduling.manage_inventory"
               />
-            ))}
-          </ul>
-        )}
-      </QueryBoundary>
-      {canManage ? (
-        <NewResourceForm facility={facility} resources={resources.data ?? []} />
-      ) : (
-        <NotAvailableToYou
-          what="Changing the resource inventory"
-          action="scheduling.manage_inventory"
-        />
-      )}
-      <Configurations facility={facility} resources={resources.data ?? []} canManage={canManage} />
-      <OperatingHours facility={facility} resources={resources.data ?? []} canManage={canManage} />
+            )}
+          </div>
+          <div className="card">
+            <Configurations
+              facility={facility}
+              resources={resources.data ?? []}
+              canManage={canManage}
+            />
+          </div>
+          <div className="card">
+            <OperatingHours
+              facility={facility}
+              resources={resources.data ?? []}
+              canManage={canManage}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

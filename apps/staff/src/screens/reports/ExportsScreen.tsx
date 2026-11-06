@@ -58,6 +58,7 @@ import { SecretWithheldNotice } from '../../ui/CommandOutcome';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type ReportRunSummary = Schema<'ReportRunSummary'>;
 type ReportExportCreated = Schema<'ReportExportCreated'>;
 type ExportFormat = Schema<'ReportExportFormat'>;
@@ -743,7 +744,11 @@ export function ExportsScreen() {
 
   return (
     <section aria-labelledby="exports-title" className="ia-screen">
-      <h2 id="exports-title">Stored runs and exports</h2>
+      <PageHeader
+        eyebrow="Business · Reports"
+        title="Stored runs and exports"
+        titleId="exports-title"
+      />
       <ReportsNav />
       <p className="caption">
         Exports contain the stored run’s aggregate figures only: reports carry no person-level rows

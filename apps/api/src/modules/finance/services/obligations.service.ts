@@ -174,6 +174,19 @@ export class ObligationsService {
       }));
     }
     const live = await this.visibleLiveAttempt(db, principal, obligation);
+    // Park UI redesign: when finance staff last reminded the debtor (staff readers only).
+    let lastReminderAt: string | null = null;
+    if (await this.financeReader(principal, obligation)) {
+      const last = await db
+        .selectFrom('payment_reminders')
+        .select('requested_at')
+        .where('organization_id', '=', obligation.organization_id)
+        .where('obligation_id', '=', obligation.id)
+        .orderBy('requested_at', 'desc')
+        .limit(1)
+        .executeTakeFirst();
+      lastReminderAt = last ? iso(last.requested_at) : null;
+    }
     return {
       id: obligation.id,
       debtor: {
@@ -191,6 +204,7 @@ export class ObligationsService {
       totals: await this.facts.obligationTotals(db, obligation),
       contributions,
       liveAttempt: live ? toLiveAttempt(live) : null,
+      lastReminderAt,
       revision: obligation.revision,
       createdAt: iso(obligation.created_at),
     };

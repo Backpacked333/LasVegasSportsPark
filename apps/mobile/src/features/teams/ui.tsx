@@ -17,16 +17,18 @@ import {
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
+import { SectionCard } from '../../ui/Card';
 import { LiveRegion, LiveText, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import { roleWords } from './format';
 import { severityStatus } from './status';
 
+/** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
 export function Section({
   title,
   children,
@@ -37,12 +39,9 @@ export function Section({
   testID?: string;
 }) {
   return (
-    <View style={styles.section} testID={testID}>
-      <Text style={styles.heading} accessibilityRole="header">
-        {title}
-      </Text>
+    <SectionCard title={title} testID={testID}>
       {children}
-    </View>
+    </SectionCard>
   );
 }
 
@@ -458,26 +457,26 @@ export function OfflineNotice({ what }: { what: string }) {
 }
 
 const styles = StyleSheet.create({
-  section: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    gap: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  heading: { ...type.heading, color: colors.text },
   title: {
-    ...type.title,
+    ...type.display,
+    fontSize: 30,
+    lineHeight: 32,
     color: colors.text,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
   },
   body: { ...type.body, color: colors.text },
-  subheading: { ...type.body, color: colors.text, fontWeight: '700' },
+  subheading: { ...type.body, color: colors.text, ...fonts.bold },
   caption: { ...type.caption, color: colors.textMuted },
-  detail: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  detailLabel: { ...type.body, color: colors.textMuted, minWidth: 120 },
-  detailValue: { ...type.body, color: colors.text, flexShrink: 1, fontWeight: '600' },
+  detail: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    paddingVertical: 2,
+  },
+  detailLabel: { ...type.caption, color: colors.textMuted, minWidth: 120, paddingTop: 1 },
+  detailValue: { ...type.body, color: colors.text, flexShrink: 1, ...fonts.semibold },
   buttonRow: { gap: spacing.sm, paddingTop: spacing.xs },
   group: { gap: spacing.xs },
   choice: {
@@ -489,18 +488,18 @@ const styles = StyleSheet.create({
   },
   choiceText: { flex: 1 },
   choiceLabel: { ...type.body, color: colors.text },
-  mark: { ...type.heading, color: colors.primary },
+  mark: { ...type.heading, fontSize: 22, color: colors.primary },
   pressed: { opacity: 0.7 },
   inactive: { opacity: 0.55 },
   field: { gap: spacing.xs },
-  fieldLabel: { ...type.body, color: colors.text, fontWeight: '600' },
+  fieldLabel: { ...type.body, color: colors.text, ...fonts.semibold },
   input: {
     ...type.body,
-    minHeight: MIN_TOUCH_SIZE,
+    minHeight: 48,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 6,
-    paddingHorizontal: spacing.md,
+    borderColor: colors.control,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
     paddingVertical: spacing.sm,
     color: colors.text,
     backgroundColor: colors.background,

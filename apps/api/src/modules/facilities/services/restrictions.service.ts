@@ -46,6 +46,7 @@ import { FACILITIES_POLICY, type FacilitiesPolicy } from '../facilities.policy';
 import { AssetMachine, RestrictionMachine } from '../facilities.state-machines';
 import type { OperatingStatusPort } from '../ports';
 import { FacilitiesReader, iso, organizationOf, type RestrictionRow } from './facilities-reader';
+import { ReleaseChecklistService } from './release-checklist.service';
 
 /** R4-OPS-MODULES-02 (SPK-FAC-004): one open exception per active restriction reaching its end unreleased. */
 export const RESTRICTION_UNRELEASED_AT_END = 'facilities.restriction_unreleased_at_end';
@@ -200,6 +201,7 @@ export class RestrictionsService implements OperatingStatusPort {
     private readonly reader: FacilitiesReader,
     private readonly closures: ClosuresService,
     private readonly resources: ResourcesService,
+    private readonly checklist: ReleaseChecklistService,
   ) {}
 
   /** `POST /v1/maintenance-restrictions`: propose and (by default) approve in the same request. */
@@ -617,6 +619,8 @@ export class RestrictionsService implements OperatingStatusPort {
       assertExpectedRevision(input.expectedRevision, current.revision);
       RestrictionMachine.next(current.status, 'release');
       await this.assertInspectionPassed(trx, organizationId, current);
+      // migration 0909 (SPK-FAC-004): every release checklist item confirmed
+      await this.checklist.assertComplete(trx, organizationId, restrictionId);
       const opId = await this.operations.create(trx, {
         organizationId,
         kind: 'facilities.release_restriction',

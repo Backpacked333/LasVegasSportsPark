@@ -7,24 +7,32 @@
  *   anything is recorded (`POST /v1/releases/collector-checks`), then the release;
  * - children on site without a session: the collector identified by the desk pass scan.
  *
+ * The desk may arrive with `?session=<id>` (an opaque session id) to start from that session.
+ *
  * Either way the API verifies current pickup authority online when the release is recorded.
  * Whether supervised release applies to a program is DEC-075 (pending): the API treats every child
  * participant of a session as released through this flow.
  */
 import { useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { ARRIVAL_TABS, AreaTabs } from '../../features/operations/AreaTabs';
 import { useOperatingFacility } from '../../features/operations/context';
 import { ChooseFacility } from '../../features/operations/feedback';
 import { SelectField } from '../../features/operations/fields';
 import { formatRange } from '../../features/operations/format';
-import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
+import {
+  OfflineQueueChip,
+  OfflineQueueStatus,
+} from '../../features/operations/offline/OfflineQueueStatus';
 import {
   sessionActivity,
   sessionTitle,
   useTodaySessions,
 } from '../../features/operations/sessions';
 import { LoadMore } from '../../ui/LoadMore';
+import { PageHeader } from '../../ui/Page';
 import { StateView } from '../../ui/StateView';
+import './arrival.css';
 import { ReleasePanel } from './ReleasePanel';
 
 const ON_SITE = 'on-site';
@@ -32,8 +40,13 @@ const ON_SITE = 'on-site';
 export function SupervisedReleaseScreen() {
   const facility = useOperatingFacility();
   return (
-    <section aria-labelledby="release-title">
-      <h2 id="release-title">Supervised release</h2>
+    <section aria-labelledby="release-title" className="ops-screen">
+      <PageHeader
+        eyebrow="Operate · Arrival and attendance · pickup"
+        title="Supervised release"
+        titleId="release-title"
+        actions={<OfflineQueueChip />}
+      />
       <AreaTabs label="Arrival and attendance screens" tabs={ARRIVAL_TABS} />
       <OfflineQueueStatus />
       {!facility.facilityId ? (
@@ -62,7 +75,10 @@ function DeskRelease({
   timezone: string | null;
   window: { start: string; end: string } | null;
 }) {
-  const [from, setFrom] = useState(ON_SITE);
+  // `?session=<id>` (from the arrival desk's "Supervised release" rail) preselects that session;
+  // an id that is not among today's sessions falls back to children on site.
+  const [params] = useSearchParams();
+  const [from, setFrom] = useState(params.get('session') ?? ON_SITE);
   const sessions = useTodaySessions({ facilityId, window });
   const session = (sessions.data ?? []).find((s) => s.sessionId === from);
   const sessionsUnavailable =
@@ -107,6 +123,10 @@ function DeskRelease({
           timezone={session.timezone ?? timezone}
           activity={sessionActivity(session)}
         />
+      ) : from !== ON_SITE && sessions.data === undefined && !sessions.error ? (
+        // A session asked for by the link: wait for today's sessions rather than reading the
+        // on-site children first.
+        <StateView variant="loading" label="today's sessions" />
       ) : (
         <ReleasePanel key={ON_SITE} facilityId={facilityId} timezone={timezone} />
       )}

@@ -1,0 +1,806 @@
+/*
+ * Coach and referee workspace (SCR-W-01 to SCR-W-10, SPK-UX-007): made for a phone beside a field
+ * under floodlights. Night-pitch hero boards, scoreboard-style condensed numbers, 52 to 56 px
+ * targets for the field actions. Status is always written with its glyph (SPK-UX-009).
+ */
+
+/* ---------- "Now" board ---------- */
+.ws-now {
+  padding: 18px 20px 20px;
+  gap: 10px;
+}
+.ws-now-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.shell-main .ws-now .ws-now-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  font-stretch: 100%;
+  letter-spacing: 0.14em;
+  color: var(--floodlight);
+}
+.ws-now-clock {
+  font-size: 56px;
+  line-height: 0.9;
+  font-weight: 800;
+  font-stretch: 75%;
+  color: #fff;
+}
+.ws-now-zone {
+  font-size: 18px;
+  color: var(--night-muted);
+  font-weight: 700;
+}
+.ws-now-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ws-now-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--night-2);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #e8f0eb;
+}
+.ws-now-chip[data-attention='true'] {
+  background: #3b2a5e;
+  color: #e3d8ff;
+}
+.ws-now-chip[data-attention='true']::before {
+  content: '◷';
+  margin-right: 5px;
+}
+.ws-now-next {
+  margin-top: 6px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #122c21;
+  border: 1px solid var(--night-line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ws-now-title {
+  font-size: 22px;
+  line-height: 1.05;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  color: #fff;
+}
+.ws-now-meta,
+.ws-now-until {
+  font-size: 13.5px;
+  color: #b9cbc1;
+}
+.ws-now-until {
+  color: var(--floodlight);
+  font-weight: 700;
+}
+.ws-now-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--night-muted);
+  white-space: nowrap;
+}
+.ws-now-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--night-3);
+  overflow: hidden;
+}
+.ws-now-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--floodlight);
+}
+.card-dark a.ws-now-open,
+a.ws-now-open {
+  margin-top: 6px;
+  min-height: 48px;
+  border-radius: 12px;
+  color: var(--night);
+  font-size: 15px;
+  font-weight: 800;
+  align-self: flex-start;
+  padding: 0 20px;
+}
+a.ws-now-open:hover {
+  color: var(--night);
+  text-decoration: none;
+  background: #d4f78c;
+}
+
+/* ---------- Assignment cards ---------- */
+.ws-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ws-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 12px 16px 12px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.ws-card:hover {
+  border-color: var(--line-strong);
+}
+.ws-card[data-status='offered'] {
+  border: 2px solid var(--tone-pending-line);
+  background: #fbf9ff;
+  padding: 11px 15px 11px 11px;
+}
+.ws-card[data-status='declined'],
+.ws-card[data-status='withdrawn'] {
+  opacity: 0.78;
+}
+.ws-when {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 10px;
+  background: var(--night);
+  color: #fff;
+  padding: 8px 4px;
+}
+.ws-card[data-status='offered'] .ws-when {
+  background: var(--tone-pending);
+}
+.ws-when-day {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--floodlight);
+}
+.ws-card[data-status='offered'] .ws-when-day {
+  color: #e3d8ff;
+}
+.ws-when-time {
+  font-size: 21px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+}
+.ws-card .row-text {
+  flex: none;
+  gap: 4px;
+}
+.ws-card .row-text .badge {
+  align-self: flex-start;
+}
+.ws-card a.row-title {
+  font-size: 16px;
+  color: var(--ink);
+}
+/* The whole card opens the assignment; the accept button sits above the stretched link. */
+.ws-card a.row-title::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.ws-card .ws-accept,
+.ws-card > .caption,
+.ws-card-error {
+  position: relative;
+  z-index: 1;
+}
+.ws-accept.button {
+  min-height: 48px;
+  padding: 0 22px;
+  border-radius: 12px;
+  background: var(--floodlight);
+  color: var(--night);
+  font-weight: 800;
+  font-size: 15px;
+}
+.ws-accept.button:hover:not([disabled]) {
+  background: #d4f78c;
+}
+.ws-card-error {
+  grid-column: 1 / -1;
+}
+
+/* ---------- Assignment page ---------- */
+.ws-back {
+  margin-bottom: -8px;
+}
+.ws-hero {
+  padding: 18px 20px 20px;
+  gap: 10px;
+}
+.ws-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.shell-main .ws-hero h3 {
+  font-size: 22px;
+  color: var(--floodlight);
+}
+.ws-hero-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+}
+.ws-hero-clock {
+  font-size: 46px;
+  line-height: 0.95;
+  font-weight: 800;
+  font-stretch: 75%;
+  color: #fff;
+}
+.ws-hero-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #e8f0eb;
+}
+.ws-hero-place .icon {
+  color: var(--floodlight);
+}
+.ws-hero > p {
+  color: #e8f0eb;
+}
+.ws-hero-actions .button {
+  min-height: 52px;
+  padding: 0 22px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+.ws-hero-actions .button-primary {
+  background: var(--floodlight);
+  color: var(--night);
+  font-weight: 800;
+}
+.ws-hero-actions .button-primary:hover:not([disabled]) {
+  background: #d4f78c;
+}
+.ws-hero-actions .button-secondary {
+  background: transparent;
+  color: #fff;
+  border-color: var(--night-3);
+}
+.ws-hero-actions .button-secondary:hover:not([disabled]) {
+  background: var(--night-2);
+}
+.ws-hero-form,
+.ws-hero-feedback {
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 12px 14px;
+  max-width: none;
+}
+.ws-hero-feedback .state {
+  border: 0;
+  padding: 4px 0;
+}
+.ws-hero-form .caption {
+  color: var(--muted);
+}
+
+/* Tool tiles */
+.ws-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+.ws-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 96px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--sand-2);
+}
+.ws-tile:hover {
+  border-color: var(--line-strong);
+  background: var(--card);
+}
+.ws-tile .icon {
+  color: var(--pitch);
+}
+.ws-tile a {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ws-tile a::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.ws-tile a:hover {
+  text-decoration: none;
+}
+.ws-tile[data-primary] {
+  background: var(--night);
+  border-color: var(--night);
+}
+.ws-tile[data-primary] a {
+  color: #fff;
+}
+.ws-tile[data-primary] .icon {
+  color: var(--floodlight);
+}
+.ws-tile[data-primary] .caption {
+  color: var(--night-muted);
+}
+
+/* Activity detail */
+.ws-matchup {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+}
+.ws-matchup-v {
+  font-size: 16px;
+  color: var(--faint);
+}
+.ws-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Match sheet roster */
+.ws-sheet-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ws-roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ws-roster > li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 4px 12px;
+  border-radius: 10px;
+  background: var(--sand-2);
+  border: 1px solid var(--line-soft);
+}
+.ws-roster > li[data-status='flagged'] {
+  border-color: var(--tone-danger-line);
+  background: var(--tone-danger-bg);
+}
+.ws-jersey {
+  width: 30px;
+  font-size: 20px;
+  font-weight: 800;
+  font-stretch: 75%;
+  color: var(--muted);
+  text-align: right;
+}
+.ws-roster-name {
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+}
+.ws-roster-status {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--tone-danger);
+}
+
+/* ---------- Match report ---------- */
+.ops-fieldset.ws-chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ws-chips legend {
+  margin-bottom: 6px;
+}
+.ws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--card);
+  cursor: pointer;
+  font-weight: 700;
+}
+.ws-chip:has(input:checked) {
+  background: var(--night);
+  color: #fff;
+  border-color: var(--night);
+}
+.shell-main .ws-chip input {
+  accent-color: var(--floodlight);
+}
+.ws-chips .error-text {
+  flex-basis: 100%;
+}
+.ops-fieldset.ws-scoreboard {
+  background: var(--night);
+  border-color: var(--night);
+  border-radius: 20px;
+  padding: 14px 12px 18px;
+  color: #fff;
+}
+.ws-scoreboard legend {
+  color: var(--floodlight);
+  background: var(--night);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.ws-scoreboard .error-text {
+  color: #ff9c92;
+}
+.ws-score-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.ws-score-dash {
+  font-size: 48px;
+  font-weight: 800;
+  font-stretch: 75%;
+  color: var(--night-3);
+}
+.ws-score-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ws-score-team {
+  font-size: 16px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #b9cbc1;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.ws-score-side .ops-field {
+  align-items: center;
+  width: 100%;
+}
+/* The team is written above; the field keeps its label for assistive technology. */
+.ws-score-side .ops-field > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.shell-main .ops-screen .ws-score-side .ops-field input:not([type='checkbox']) {
+  width: 100%;
+  max-width: 150px;
+  min-height: 96px;
+  padding: 0;
+  border: 1px solid var(--night-3);
+  border-radius: 14px;
+  background: #122c21;
+  color: #fff;
+  text-align: center;
+  font-size: 84px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+}
+.ws-score-steps {
+  display: flex;
+  gap: 8px;
+}
+.ws-step {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  border: 1px solid #2f5444;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 28px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ws-step-up {
+  border: 0;
+  background: var(--floodlight);
+  color: var(--night);
+  font-weight: 800;
+}
+.ws-step[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ws-quick .button {
+  min-height: 44px;
+}
+.ws-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--muted);
+}
+.ws-swatch[data-kind='yellow'] {
+  background: #f2c230;
+}
+.ws-swatch[data-kind='red'] {
+  background: #e5483b;
+}
+.ws-swatch[data-kind='injury'] {
+  background: #7fa8ff;
+  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+}
+.ws-submit .button-primary {
+  min-height: 56px;
+  padding: 0 28px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+/* ---------- Phones beside a field ---------- */
+@media (max-width: 600px) {
+  .ws-now-clock {
+    font-size: 52px;
+  }
+  .ws-card {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+  .ws-card .ws-accept {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 52px;
+  }
+  .ws-card > .caption {
+    grid-column: 1 / -1;
+  }
+  a.ws-now-open {
+    align-self: stretch;
+  }
+  .ws-hero-clock {
+    font-size: 40px;
+  }
+  .ws-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ws-chip {
+    flex: 1 1 calc(50% - 6px);
+    justify-content: flex-start;
+  }
+  .shell-main .ops-screen .ws-score-side .ops-field input:not([type='checkbox']) {
+    min-height: 88px;
+    font-size: 76px;
+  }
+  .ws-score-dash {
+    font-size: 36px;
+  }
+  .ws-submit {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    margin: 0 -14px -14px;
+    padding: 10px 14px 14px;
+    background: linear-gradient(rgba(255, 255, 255, 0), var(--card) 30%);
+  }
+  .ws-submit .button {
+    width: 100%;
+  }
+}
+
+/* Desktop: the list beside a sticky "now" board. */
+.ws-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.ws-sheet {
+  gap: 14px;
+}
+@media (min-width: 1100px) {
+  .ws-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 20px;
+    align-items: start;
+  }
+  .ws-layout > .ws-now {
+    grid-column: 2;
+    grid-row: 1;
+    position: sticky;
+    top: 86px;
+  }
+  .ws-layout > .ws-list {
+    grid-column: 1;
+    grid-row: 1;
+  }
+}
+
+/* Player check-in on the match sheet (fixture attendance, SPK-UX-007): large toggles. */
+.ws-checkin {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.ws-checkin-btn {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ws-checkin-btn[aria-pressed='true'][data-state='present'] {
+  background: var(--tone-success-bg);
+  border-color: var(--pitch);
+}
+.ws-checkin-btn[aria-pressed='true'][data-state='absent'] {
+  background: var(--tone-danger-bg);
+}
+.ws-checkin-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* ---------- Report a problem (SPK-FAC-002), big tap targets beside a field ---------- */
+.ws-report .ws-pick {
+  border: 0;
+  margin: 0 0 14px;
+  padding: 0;
+}
+.ws-report .ws-pick legend {
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.ws-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ws-chips-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.ws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ws-chip[aria-pressed='true'] {
+  background: var(--night);
+  border-color: var(--night);
+  color: var(--floodlight);
+}
+.ws-chip[aria-pressed='true']::before {
+  content: '✓';
+}
+.ws-chip-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px 14px;
+  gap: 0;
+}
+.ws-chip[aria-pressed='true'] .caption {
+  color: var(--night-muted);
+}
+.ws-report-send .button {
+  width: 100%;
+  min-height: 52px;
+}
+
+/* ---------- Phone bottom tab bar (SPK-UX-007) ---------- */
+.ws-tabbar {
+  display: none;
+}
+@media (max-width: 900px) {
+  .ws-tabbar {
+    display: block;
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    background: var(--night);
+    border-top: 1px solid var(--night-2);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .ws-tabbar ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .ws-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-height: 58px;
+    justify-content: center;
+    color: var(--night-muted);
+    text-decoration: none;
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .ws-tab[aria-current='page'] {
+    color: var(--floodlight);
+  }
+}

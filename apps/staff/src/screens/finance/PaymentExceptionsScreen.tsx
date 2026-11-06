@@ -40,6 +40,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type OperationalException = Schema<'OperationalException'>;
 type ExceptionStatus = Schema<'ExceptionStatus'>;
 
@@ -414,7 +415,11 @@ export function PaymentExceptionsScreen() {
   const view: View = VIEWS.some((v) => v.id === requested) ? (requested as View) : 'exceptions';
   return (
     <section aria-labelledby="payments-title">
-      <h2 id="payments-title">Payment attempts and unknown outcomes</h2>
+      <PageHeader
+        eyebrow="Business · Finance"
+        title="Payment attempts and unknown outcomes"
+        titleId="payments-title"
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <p>
         A timeout is not proof of failure. Reconcile an unknown outcome from the provider&apos;s

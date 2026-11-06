@@ -21,6 +21,7 @@ import {
   CHANGE_NOTICE_CHECK_IMPL,
   CompetitionEvents,
   CompetitionModule,
+  FieldEvents,
   MatchEvents,
 } from '../competition';
 import { IdentityEvents, IdentityModule } from '../identity';
@@ -35,7 +36,10 @@ import { COMMUNICATIONS_POLICY, DEFAULT_COMMUNICATIONS_POLICY } from './communic
 import { CalendarFeedController } from './controllers/calendar-feed.controller';
 import { DeliveryAttemptsController } from './controllers/delivery-attempts.controller';
 import { MeCommunicationsController } from './controllers/me.controller';
-import { NotificationsController } from './controllers/notifications.controller';
+import {
+  AudienceCountsController,
+  NotificationsController,
+} from './controllers/notifications.controller';
 import { MessagingWebhooksController } from './controllers/webhooks.controller';
 import {
   CHANNEL_PROVIDERS,
@@ -129,6 +133,7 @@ const providers: Provider[] = [
   providers,
   controllers: [
     NotificationsController,
+    AudienceCountsController,
     DeliveryAttemptsController,
     MeCommunicationsController,
     CalendarFeedController,
@@ -311,6 +316,12 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
       CompetitionEvents.availabilityRequested.type,
       'communications.notify_availability_request',
       (event, ctx) => this.competitionNotices.onAvailabilityRequested(ctx.trx, event),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof FieldEvents.resultReminderRequested>>(
+      FieldEvents.resultReminderRequested.type,
+      'communications.notify_result_reminder',
+      (event, ctx) => this.competitionNotices.onResultReminderRequested(ctx.trx, event),
       { failureOwner: 'league_manager' },
     );
     // Provider receipts resolve accepted/unknown attempts; duplicates are ignored (SPK-COMMS-004).

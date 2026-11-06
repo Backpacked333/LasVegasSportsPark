@@ -113,7 +113,10 @@ export class StandingsService {
       correlationId: input.correlationId,
       operationId: input.operationId,
     });
-    return toStandings(row);
+    return toStandings(
+      row,
+      await playoffLineOf(trx, organizationId, divisionId, computed.computation.rows.length),
+    );
   }
 
   /** `GET /v1/seasons/{id}/standings`: the latest projection, or a live computation when none exists. */
@@ -154,7 +157,13 @@ export class StandingsService {
       .limit(1);
     q = divisionId ? q.where('division_id', '=', divisionId) : q.where('division_id', 'is', null);
     const latest = await q.executeTakeFirst();
-    if (latest) return toStandings(latest);
+    if (latest) {
+      const rows = latest.rows as StandingsRow[];
+      return toStandings(
+        latest,
+        await playoffLineOf(this.db, organizationId, divisionId, rows.length),
+      );
+    }
     const computed = await this.compute(this.db, organizationId, seasonId, { divisionId });
     return {
       id: null,
@@ -166,6 +175,12 @@ export class StandingsService {
       sourceResultIds: computed.computation.countedResultIds,
       rows: computed.computation.rows,
       tiebreakExplanations: computed.computation.tiebreakExplanations,
+      playoffLine: await playoffLineOf(
+        this.db,
+        organizationId,
+        divisionId,
+        computed.computation.rows.length,
+      ),
     };
   }
 
@@ -448,4 +463,39 @@ export class StandingsService {
       ruleSetVersion: ruleSet.version,
     };
   }
+}
+
+/**
+ * The playoff line of a division's table (SPK-FIX-001 playoff structure, SPK-RESULT-003): the
+ * most recently changed fixture specification of the division that names a playoff decides how
+ * many teams qualify; the cut is that count, at most the table's size. Null without a division
+ * or without a specification naming a playoff. Derived on every read, never stored.
+ */
+export async function playoffLineOf(
+  db: Reader,
+  organizationId: string,
+  divisionId: string | null,
+  tableSize: number,
+): Promise<Standings['playoffLine']> {
+  if (!divisionId) return null;
+  const spec = await db
+    .selectFrom('fixture_specifications')
+    .select(['id', 'playoff_structure'])
+    .where('organization_id', '=', organizationId)
+    .where('division_id', '=', divisionId)
+    .where('playoff_structure', 'is not', null)
+    .orderBy('updated_at', 'desc')
+    .orderBy('id', 'desc')
+    .limit(1)
+    .executeTakeFirst();
+  const structure = spec?.playoff_structure as { kind?: string; teams?: number } | null | undefined;
+  if (!spec || !structure || structure.kind !== 'single_elimination' || !structure.teams) {
+    return null;
+  }
+  return {
+    specificationId: spec.id,
+    kind: 'single_elimination',
+    qualifyingTeams: structure.teams,
+    cutPosition: Math.min(structure.teams, tableSize),
+  };
 }

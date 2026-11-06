@@ -487,6 +487,18 @@ module's route classification counts once MIG-00 lands.
   exception for `support_operator` (per event revision), its mark is not claimed so the next run
   tries it again, and the other entries are reminded (same test file).
 
+## Park UI redesign gaps — verified 2026-11-06
+
+Verified by `__tests__/composer-counts.spec.ts`:
+
+- `POST /v1/notification-audience-counts` (a read; `communications.preview_recipients`, audience
+  authorized as for a preview): the count of people the audience resolves to now and, per channel,
+  reachable / opted out (a stored choice) / off by the policy default / without a provider. No
+  name, id or contact detail is returned. The defaults remain the engineering placeholder pending
+  DEC-012 and DEC-062.
+- `GET /v1/me/inbox/unread-count`: delivered, unread in-app notices not replaced by a newer one
+  and still entitled (protected re-check), capped at 99 (`capped`).
+
 ## Known gaps
 
 - Pending: a per-person authority basis for protected notices to explicitly chosen people (an

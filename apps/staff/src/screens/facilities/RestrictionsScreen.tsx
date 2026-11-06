@@ -48,6 +48,7 @@ import {
   TASKS_KEY,
   useFacilityNames,
 } from './maintenance-shared';
+import { ActiveRestrictions } from './ReleaseReadiness';
 
 type RestrictionStatus = Schema<'Restriction'>['status'];
 type ResolutionMode = 'cancel_affected' | 'leave_for_resolution';
@@ -375,21 +376,34 @@ function RestrictionList({ facility }: { facility: FacilityContext }) {
 
 export function RestrictionsScreen() {
   return (
-    <section aria-labelledby="restrictions-title">
+    <section aria-labelledby="restrictions-title" className="facilities-screen">
       <h3 id="restrictions-title">Operating restrictions and release to service</h3>
       <FacilityGate purpose="see its operating restrictions">
         {(facility) => (
           <>
             <ZoneCaption facility={facility} />
-            <OperatingStatusNow facility={facility} />
-            <RestrictionList facility={facility} />
-            <ActionGate
-              action="facilities.apply_restriction"
-              facilityId={facility.id}
-              what="Applying operating restrictions"
-            >
-              <ApplyRestrictionForm facility={facility} />
-            </ActionGate>
+            <ActiveRestrictions facility={facility} />
+            <div className="split">
+              <div className="split-main">
+                <div className="card">
+                  <RestrictionList facility={facility} />
+                </div>
+                <div className="card">
+                  <OperatingStatusNow facility={facility} />
+                </div>
+              </div>
+              <div className="split-side">
+                <div className="card">
+                  <ActionGate
+                    action="facilities.apply_restriction"
+                    facilityId={facility.id}
+                    what="Applying operating restrictions"
+                  >
+                    <ApplyRestrictionForm facility={facility} />
+                  </ActionGate>
+                </div>
+              </div>
+            </div>
           </>
         )}
       </FacilityGate>

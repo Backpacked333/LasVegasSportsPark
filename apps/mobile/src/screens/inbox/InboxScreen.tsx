@@ -33,6 +33,7 @@ import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
+import { UNREAD_COUNT_KEY } from '../../api/inbox-unread';
 import { useApiQuery } from '../../api/useApiQuery';
 import { ChangeDetails } from '../../features/today/ChangeDetails';
 import { categoryLabel, scheduleChangeOf } from '../../features/today/notices';
@@ -54,7 +55,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
 
 type InboxItem = Schema<'InboxItem'>;
@@ -92,9 +93,12 @@ function NoticeDetail({
   const queryClient = useQueryClient();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const read = useApiCommand('post', '/me/inbox/{id}/read', { invalidate: [INBOX_KEY] });
+  // The header badge (UNREAD_COUNT_KEY) is read again with the list (SPK-UX-003).
+  const read = useApiCommand('post', '/me/inbox/{id}/read', {
+    invalidate: [INBOX_KEY, UNREAD_COUNT_KEY],
+  });
   const acknowledge = useApiCommand('post', '/me/inbox/{id}/acknowledge', {
-    invalidate: [INBOX_KEY],
+    invalidate: [INBOX_KEY, UNREAD_COUNT_KEY],
   });
   const sentRead = useRef(false);
   const withdrawn =
@@ -374,7 +378,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   pressed: { backgroundColor: colors.surface },
-  title: { ...type.body, fontWeight: '600', color: colors.text },
+  title: { ...type.body, ...fonts.semibold, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
   detail: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, gap: spacing.sm },

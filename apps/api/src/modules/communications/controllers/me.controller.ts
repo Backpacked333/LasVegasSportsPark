@@ -13,6 +13,7 @@ import {
   type CalendarFeedCreated,
   type CommunicationPreferences,
   type InboxItem,
+  type InboxUnreadCount,
   type Page,
   type Principal,
   type PushDevice,
@@ -54,6 +55,12 @@ export class MeCommunicationsController {
     @ZodQuery(InboxQuery) query: InboxQuery,
   ): Promise<Page<InboxItem>> {
     return this.inbox.list(principal, query);
+  }
+
+  /** The customer app's inbox badge (SPK-UX-003). */
+  @Get('inbox/unread-count')
+  unreadCount(@CurrentPrincipal() principal: Principal): Promise<InboxUnreadCount> {
+    return this.inbox.unreadCount(principal);
   }
 
   @Post('inbox/:id/read')

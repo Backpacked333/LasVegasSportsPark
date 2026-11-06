@@ -477,7 +477,8 @@ function Suspensions() {
 
 export function DisciplineScreen() {
   return (
-    <section aria-labelledby="discipline-title">
+    <section aria-labelledby="discipline-title" className="compete">
+      <span className="eyebrow">Compete · Leagues and tournaments</span>
       <h2 id="discipline-title">Discipline</h2>
       <LeaguesNav />
       <p className="caption">

@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
@@ -246,6 +247,7 @@ export class AccountsService {
     accountId: string;
     sessionId?: string;
     ttlSeconds?: number;
+    passcode?: string;
   }): Promise<{ token: string; accountId: string; expiresAt: string }> {
     if (
       this.config.AUTH_MODE !== 'local' ||
@@ -253,6 +255,11 @@ export class AccountsService {
       !(this.identityProvider instanceof LocalJwtIdentityProvider)
     ) {
       throw errors.notFound('route');
+    }
+    // A protected staging host: the passcode is required and compared in constant time.
+    const required = this.config.DEV_TOKENS_PASSCODE;
+    if (required !== undefined && !passcodeMatches(required, input.passcode)) {
+      throw errors.authenticationRequired('The staging passcode is missing or wrong.');
     }
     const account = await this.db
       .selectFrom('accounts')
@@ -283,4 +290,12 @@ export class AccountsService {
     }
     return errors.resourceConflict('An account already exists for this provider identity.');
   }
+}
+
+/** Constant-time comparison of a staging passcode (no early exit on the first differing byte). */
+function passcodeMatches(required: string, given: string | undefined): boolean {
+  if (given === undefined) return false;
+  const a = createHash('sha256').update(required).digest();
+  const b = createHash('sha256').update(given).digest();
+  return timingSafeEqual(a, b);
 }

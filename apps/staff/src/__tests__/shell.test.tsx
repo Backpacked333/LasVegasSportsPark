@@ -36,8 +36,26 @@ const SPEC_ORDER = [
   'Administration',
 ];
 
+/** The sidebar shows the same fourteen areas grouped by job: Operate, Compete, Grow, Business. */
+const SIDEBAR_ORDER = [
+  'Today',
+  'Schedule',
+  'Arrival and attendance',
+  'Facilities and maintenance',
+  'Leagues and tournaments',
+  'Teams and placement',
+  'Staff and officials',
+  'Programs and camps',
+  'People and families',
+  'Registrations and waitlists',
+  'Finance',
+  'Communications',
+  'Reports',
+  'Administration',
+];
+
 describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
-  it('lists the fourteen navigation areas in specification order, then the workspace', async () => {
+  it('lists the fourteen navigation areas grouped in the sidebar, then the workspace', async () => {
     const app = createTestApp();
     render(app.at('/today'));
     const nav = await screen.findByRole('navigation', { name: 'Main' });
@@ -46,7 +64,11 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
       .getAllByRole('link')
       .map((a) => a.textContent);
     expect(STAFF_AREAS.map((a) => a.title)).toEqual(SPEC_ORDER);
-    expect(links).toEqual([...SPEC_ORDER, 'My assignments']);
+    expect([...SIDEBAR_ORDER].sort()).toEqual([...SPEC_ORDER].sort());
+    expect(links).toEqual([...SIDEBAR_ORDER, 'My assignments']);
+    for (const group of ['Operate', 'Compete', 'Grow', 'Business']) {
+      expect(within(nav).getByRole('list', { name: group })).toBeInTheDocument();
+    }
   });
 
   it('opens on Today: "/" redirects there and the link is marked current', async () => {
@@ -114,6 +136,42 @@ describe('navigation from GET /v1/me/permissions (SPK-UX-005, K-05)', () => {
     ]);
     expect(nav.getByRole('list', { name: 'Areas' })).toBeInTheDocument();
     expect(app.fake.requests.filter((r) => r.route === '/me/permissions')).toHaveLength(1);
+  });
+
+  it('SPK-UX-005: attention counts show as pills beside the areas; link names stay the area titles', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ areas: ['finance', 'today', 'communications'] }),
+        'GET /me/attention': {
+          status: 200,
+          body: {
+            computedAt: '2026-11-06T12:00:00.000Z',
+            cap: 99,
+            areas: [
+              {
+                area: 'finance',
+                count: 3,
+                capped: false,
+                counts: 'unknown payment and refund outcomes',
+              },
+              { area: 'today', count: 99, capped: true, counts: 'open exceptions' },
+              { area: 'communications', count: 0, capped: false, counts: 'notices composed' },
+            ],
+          },
+        },
+      },
+    });
+    render(app.at('/today'));
+    const nav = await mainLinks();
+    await nav.findByText('Finance: 3 unknown payment and refund outcomes');
+    expect(nav.getByRole('link', { name: 'Finance' })).toBeInTheDocument();
+    expect(nav.getByRole('link', { name: 'Today' })).toBeInTheDocument();
+    const pill = nav.getByTestId('nav-count-finance');
+    expect(pill).toHaveTextContent('3');
+    expect(pill).toHaveAttribute('aria-hidden', 'true');
+    expect(nav.getByTestId('nav-count-today')).toHaveTextContent('99+');
+    // A zero shows no pill.
+    expect(nav.queryByTestId('nav-count-communications')).toBeNull();
   });
 
   it('a page of an area not listed still opens by address and renders ACCESS_DENIED as not available', async () => {

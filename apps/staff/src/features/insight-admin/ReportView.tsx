@@ -14,6 +14,7 @@ import type { Schema } from '@sportspark/api-client';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { formatInstant, formatQuantity, formatScalar, shortId } from './format';
 import { FRESHNESS_LABELS, POINT_IN_TIME_LABELS } from './labels';
+import { UtilizationHeatmap } from './UtilizationHeatmap';
 
 type ReportResponse = Schema<'ReportResponse'>;
 type MetricDefinition = Schema<'MetricDefinition'>;
@@ -353,6 +354,8 @@ export function ReportView({
           </ul>
         </section>
       ) : null}
+
+      {report.report.key === 'utilization_heatmap' ? <UtilizationHeatmap report={report} /> : null}
 
       <ReportTable report={report} title={report.report.title} />
 

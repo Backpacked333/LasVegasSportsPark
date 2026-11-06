@@ -416,6 +416,9 @@ export async function createOfferingSessionFixture(
     scheduledEnd: Date;
     schedulingEventId?: string | null;
     status?: 'scheduled' | 'canceled' | 'completed';
+    /** 0210: the session's own place; null (default) = where the offering is. */
+    location?: { label?: string; resourceIds?: string[] } | null;
+    capacityOverride?: CapacityUnit[] | null;
     organizationId?: string;
   },
 ): Promise<string> {
@@ -439,7 +442,8 @@ export async function createOfferingSessionFixture(
       scheduled_start: input.scheduledStart,
       scheduled_end: input.scheduledEnd,
       scheduling_event_id: input.schedulingEventId ?? null,
-      capacity_override: null,
+      capacity_override: input.capacityOverride ? json(input.capacityOverride) : null,
+      location: input.location ? json(input.location) : null,
       status,
       canceled_at: status === 'canceled' ? ctx.clock.now() : null,
       cancel_reason: status === 'canceled' ? 'fixture' : null,

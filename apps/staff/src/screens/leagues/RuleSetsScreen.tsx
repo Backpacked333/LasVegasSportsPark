@@ -154,7 +154,8 @@ export function RuleSetsScreen() {
     request: { query: { latestOnly: allVersions ? 'false' : 'true' } },
   });
   return (
-    <section aria-labelledby="rule-sets-title">
+    <section aria-labelledby="rule-sets-title" className="compete">
+      <span className="eyebrow">Compete · Leagues and tournaments</span>
       <h2 id="rule-sets-title">Rule sets</h2>
       <LeaguesNav />
       <PendingNote decision={PENDING.ruleSets} />

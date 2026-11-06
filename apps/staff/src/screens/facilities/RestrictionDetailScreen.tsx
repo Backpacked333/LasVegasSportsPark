@@ -43,6 +43,7 @@ import { OPERATION_BADGE, RESTRICTION_BADGE } from '../../features/schedule-faci
 import { formatInstant, formatRange } from '../../features/schedule-facilities/time';
 import { useFacilityNames } from './maintenance-shared';
 import { RESTRICTION_INVALIDATES } from './RestrictionsScreen';
+import { ChecklistItemsEditor, ReleaseChecklist } from './ReleaseReadiness';
 
 type Restriction = Schema<'Restriction'>;
 type ResolutionMode = 'cancel_affected' | 'leave_for_resolution';
@@ -345,7 +346,15 @@ function WithdrawRestriction({
   );
 }
 
-function Actions({ restriction, timezone }: { restriction: Restriction; timezone: string }) {
+function Actions({
+  restriction,
+  timezone,
+  facility,
+}: {
+  restriction: Restriction;
+  timezone: string;
+  facility: FacilityContext;
+}) {
   const { online } = useApp();
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'' | ResolutionMode>('');
@@ -454,10 +463,18 @@ function Actions({ restriction, timezone }: { restriction: Restriction; timezone
   return (
     <section aria-labelledby="release-title">
       <h4 id="release-title">Release to service</h4>
-      <p>
-        Releasing lifts the closure so the area can be booked again. It needs release authority and,
-        when the task requires one, a passed inspection.
-      </p>
+      <div className="release-gate">
+        <p>
+          Releasing lifts the closure so the area can be booked again. It needs release authority
+          and, when the task requires one, a passed inspection.
+        </p>
+        <ReleaseChecklist restriction={restriction} facility={facility} />
+        <p className="caption">
+          The checklist is read from the task, its inspection and the closure; the API makes the
+          final check when you release.
+        </p>
+        <ChecklistItemsEditor restriction={restriction} facility={facility} />
+      </div>
       <label htmlFor="release-reason">Reason for the release</label>
       <input
         id="release-reason"
@@ -511,7 +528,7 @@ function RestrictionView({
   );
   const badge = RESTRICTION_BADGE[restriction.status];
   return (
-    <div>
+    <div className="card restriction-detail">
       <ZoneCaption facility={facility} />
       <p>
         <strong>
@@ -586,7 +603,12 @@ function RestrictionView({
           facilityId={restriction.facilityId}
           what="Approving or withdrawing restrictions"
         >
-          <Actions key={restriction.revision} restriction={restriction} timezone={tz} />
+          <Actions
+            key={restriction.revision}
+            restriction={restriction}
+            timezone={tz}
+            facility={facility}
+          />
         </ActionGate>
       ) : restriction.status === 'active' ? (
         <ActionGate
@@ -594,10 +616,20 @@ function RestrictionView({
           facilityId={restriction.facilityId}
           what="Releasing areas to service"
         >
-          <Actions key={restriction.revision} restriction={restriction} timezone={tz} />
+          <Actions
+            key={restriction.revision}
+            restriction={restriction}
+            timezone={tz}
+            facility={facility}
+          />
         </ActionGate>
       ) : (
-        <Actions key={restriction.revision} restriction={restriction} timezone={tz} />
+        <Actions
+          key={restriction.revision}
+          restriction={restriction}
+          timezone={tz}
+          facility={facility}
+        />
       )}
     </div>
   );
@@ -611,7 +643,7 @@ export function RestrictionDetailScreen() {
   });
   const facility = useFacilityById(restriction.data?.facilityId);
   return (
-    <section aria-labelledby="restriction-title">
+    <section aria-labelledby="restriction-title" className="facilities-screen">
       <h3 id="restriction-title">Operating restriction</h3>
       <Link to="/facilities/restrictions">All restrictions</Link>
       <QueryBoundary

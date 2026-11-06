@@ -52,7 +52,7 @@ export function AssessmentsScreen() {
   const keepTemplate = (t: AssessmentTemplate) =>
     setTemplates((prev) => [t, ...prev.filter((x) => x.id !== t.id)]);
   return (
-    <section aria-labelledby="assessments-title">
+    <section aria-labelledby="assessments-title" className="ops-screen">
       <h2 id="assessments-title">Assessments</h2>
       <AreaTabs label="Workspace screens" tabs={WORKSPACE_TABS} />
       <CapabilityGate

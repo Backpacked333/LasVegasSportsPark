@@ -12,6 +12,7 @@ import { useEffect, useId, useMemo } from 'react';
 import { hasAnswered, useFacilityDirectory } from '../api/facility-directory';
 import { useApiQuery } from '../api/useApiQuery';
 import { useApp } from '../providers/AppProviders';
+import { Icon } from '../ui/Icon';
 
 export function facilityLabel(id: string, names: ReadonlyMap<string, string>): string {
   return names.get(id) ?? `Facility ${id.slice(0, 8)}`;
@@ -51,11 +52,15 @@ export function FacilitySwitcher() {
   if (!isStaff) return null;
   if (options.length === 1 && scoped.length === 1) {
     return (
-      <p className="facility-switcher">Facility: {facilityLabel(options[0] as string, names)}</p>
+      <p className="facility-switcher">
+        <Icon name="location_on" size={18} />
+        Facility: {facilityLabel(options[0] as string, names)}
+      </p>
     );
   }
   return (
     <div className="facility-switcher">
+      <Icon name="location_on" size={18} />
       <label htmlFor={selectId}>Facility</label>
       <select
         id={selectId}

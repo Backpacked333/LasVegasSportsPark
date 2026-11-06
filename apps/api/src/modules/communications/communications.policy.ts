@@ -64,6 +64,8 @@ export const DEFAULT_COMMUNICATIONS_POLICY: CommunicationsPolicy = {
     // SPK-CAP-001 "request availability, remind" (COM-06): both concern a scheduled activity.
     availability_request: 'operational',
     activity_reminder: 'operational',
+    // SPK-RESULT-001: league staff remind captains of a missing result.
+    result_reminder: 'operational',
     renewal_opportunity: 'promotional',
     staff_broadcast: 'choose',
   },

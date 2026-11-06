@@ -171,9 +171,14 @@ export class ReadinessService {
     const items: SeasonReadiness['items'] = [];
     for (const row of rows) {
       const detail = await this.fixtures.detail(db, principal, row);
+      const readiness = await this.assess(organizationId, detail, { viewer: principal });
+      // Per-check outcomes (names, status and counts only) so the season home needs no read per
+      // fixture; the issues themselves stay on the fixture readiness read (SPK-READY-003).
       items.push({
         fixtureId: row.id,
-        ...countsOf(await this.assess(organizationId, detail, { viewer: principal })),
+        ...countsOf(readiness),
+        warningCount: readiness.issues.filter((i) => i.severity === 'warning').length,
+        checks: readiness.checks,
       });
     }
     return { seasonId, evaluatedAt, items };

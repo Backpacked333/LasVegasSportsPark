@@ -103,6 +103,7 @@ export function resource(
     parentResourceId: null,
     dimensions: {},
     compatibleFormats: [],
+    compatibleSports: [],
     defaultSetupMinutes: 0,
     defaultCleanupMinutes: 0,
     requiredEquipment: [],
@@ -153,6 +154,7 @@ export function event(
     facilityId: FACILITY_A,
     kind: 'game',
     format: null,
+    sport: null,
     seriesId: null,
     occurrenceIndex: null,
     // 18:00 to 19:30 in Los Angeles (PDT).

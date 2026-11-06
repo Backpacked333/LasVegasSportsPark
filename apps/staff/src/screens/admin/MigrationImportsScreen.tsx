@@ -40,6 +40,7 @@ import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { inputZoneHint } from '../../ui/time';
 
+import { PageHeader } from '../../ui/Page';
 type ImportBatch = Schema<'ImportBatch'>;
 
 const SOURCE_SYSTEM = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -306,7 +307,11 @@ export function MigrationImportsScreen() {
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
   return (
     <section aria-labelledby="migration-title" className="ia-screen">
-      <h2 id="migration-title">Migration imports and reconciliation</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Migration imports and reconciliation"
+        titleId="migration-title"
+      />
       <MigrationNav />
       <PendingNote decisions={DECISIONS.migrationScope.ids} owner={DECISIONS.migrationScope.owner}>
         Which record categories are migrated from which sources, and which system writes each during

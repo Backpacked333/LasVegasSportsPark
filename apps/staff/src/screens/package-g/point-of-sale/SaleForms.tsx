@@ -5,6 +5,8 @@
  * - AddLineForm: a product and a quantity (`POST /v1/pos-sales/{id}/lines`). No price is sent: the
  *   product's price and the approved taxes and fees in effect apply (CHARGE_POLICY_NOT_APPROVED is
  *   shown as a validation failure naming the tax or fee).
+ * - LineQuantity: − and + on a ticket line (`POST /v1/pos-sales/{id}/lines/{lineId}/quantity`, 0
+ *   removes it). The line is priced again by the API; the earlier line is kept as superseded.
  * - TenderForm: cash, an external tender with its evidence, or a card
  *   (`POST /v1/pos-sales/{id}/tenders`). The card processor is pending (DEC-019): release builds
  *   offer no card tender and say so; development builds pick a fake provider scenario. A card
@@ -36,6 +38,7 @@ import { MoneyField } from '../../../features/pos-access-accounting/fields';
 import { useIntentForm } from '../../../features/pos-access-accounting/intent';
 import {
   CARD_PAYMENT_STATUS,
+  POS_PRODUCT_KIND,
   POS_TENDER_KIND,
   RETURN_REFUND_STATUS,
 } from '../../../features/pos-access-accounting/labels';
@@ -45,6 +48,7 @@ import { Button } from '../../../ui/Button';
 import { RadioGroup, SelectField, TextField } from '../../../ui/FormFields';
 import { isUuid } from '../../../ui/RecordRef';
 import { StateView } from '../../../ui/StateView';
+import { Icon, type IconName } from '../../../ui/Icon';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { SALE_QUERY_PREFIX } from './paths';
 
@@ -52,6 +56,12 @@ type Sale = Schema<'PosSale'>;
 type TenderKind = Schema<'PosTenderKind'>;
 
 const SALE_COMMAND = { invalidate: [SALE_QUERY_PREFIX] } as const;
+
+const KIND_ICON: Record<Schema<'PosProductKind'>, IconName> = {
+  merchandise: 'apparel',
+  concession: 'fastfood',
+  service: 'sports',
+};
 
 // ---------------------------------------------------------------------------------------------
 // Lines
@@ -66,6 +76,7 @@ export function AddLineForm({ sale, onReload }: { sale: Sale; onReload: () => vo
   const [productId, setProductId] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [touched, setTouched] = useState(false);
+  const [kindFilter, setKindFilter] = useState<Schema<'PosProductKind'> | null>(null);
   const command = useApiCommand('post', '/pos-sales/{id}/lines', SALE_COMMAND);
   const intent = useIntentForm(command);
   // Only products the API could add: active, sold here, priced in the sale's currency.
@@ -94,45 +105,109 @@ export function AddLineForm({ sale, onReload }: { sale: Sale; onReload: () => vo
       setTouched(false);
     }
   };
+  // Tap to add: one unit of a product, the same command and intent as the form below.
+  const quickAdd = (id: string) =>
+    void intent.send({
+      path: { id: sale.id },
+      body: { productId: id, quantity: 1, expectedRevision: sale.revision },
+    });
+  const sellable = (products.data ?? []).filter((p) => p.currency === sale.currency);
+  const kinds = [...new Set(sellable.map((p) => p.kind))];
+  const shown = kindFilter ? sellable.filter((p) => p.kind === kindFilter) : sellable;
+  const inSale = (id: string) =>
+    sale.lines.filter((l) => l.productId === id).reduce((n, l) => n + l.quantity, 0);
   return (
-    <form className="rf-panel" aria-label="Add a line" onSubmit={(e) => void submit(e)} noValidate>
-      <h4>Add a line</h4>
+    <form
+      className="rf-panel pos-add"
+      aria-label="Add a line"
+      onSubmit={(e) => void submit(e)}
+      noValidate
+    >
+      <div className="pos-add-head">
+        <h4>Add a line</h4>
+        {kinds.length > 1 ? (
+          <div className="pos-kinds" role="group" aria-label="Show products by kind">
+            {[null, ...kinds].map((k) => (
+              <button
+                key={k ?? 'all'}
+                type="button"
+                aria-pressed={kindFilter === k}
+                onClick={() => setKindFilter(k)}
+              >
+                {k ? POS_PRODUCT_KIND[k] : 'All'}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
       <p className="caption">
         The product&apos;s price and its approved taxes and fees apply; no price is typed here
         (SPK-PAY-001, DEC-057).
       </p>
-      {products.data === undefined && products.error ? (
-        <StateView variant="error" error={products.error} onRetry={() => void products.refetch()} />
-      ) : (
-        <SelectField
-          label="Product"
+      {shown.length > 0 ? (
+        <ul className="pos-tiles" aria-label="Tap to add one of a product">
+          {shown.map((p) => {
+            const count = inSale(p.id);
+            return (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className="pos-tile"
+                  data-kind={p.kind}
+                  disabled={!online || intent.locked || command.isProcessing}
+                  onClick={() => quickAdd(p.id)}
+                  aria-label={`Add one ${p.name} (${p.sku}), ${formatMoney(p.priceMinor, p.currency)}${count ? `, ${count} in the sale` : ''}`}
+                >
+                  <Icon name={KIND_ICON[p.kind]} size={24} />
+                  <span className="pos-tile-text">
+                    <span className="pos-tile-name">{p.name}</span>
+                    <span className="pos-tile-price">{formatMoney(p.priceMinor, p.currency)}</span>
+                  </span>
+                  {count > 0 ? <span className="pos-tile-count">{count}</span> : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <div className="pos-add-row">
+        {products.data === undefined && products.error ? (
+          <StateView
+            variant="error"
+            error={products.error}
+            onRetry={() => void products.refetch()}
+          />
+        ) : (
+          <SelectField
+            label="Product"
+            required
+            value={productId}
+            onChange={setProductId}
+            options={options}
+            placeholder={
+              products.data === undefined
+                ? 'Loading products…'
+                : options.length === 0
+                  ? 'No active product is sold here in this currency'
+                  : 'Choose a product'
+            }
+            error={touched && !productId ? 'Choose a product.' : null}
+            disabled={intent.locked}
+          />
+        )}
+        <TextField
+          label="Quantity"
           required
-          value={productId}
-          onChange={setProductId}
-          options={options}
-          placeholder={
-            products.data === undefined
-              ? 'Loading products…'
-              : options.length === 0
-                ? 'No active product is sold here in this currency'
-                : 'Choose a product'
-          }
-          error={touched && !productId ? 'Choose a product.' : null}
+          hint="1 to 999."
+          value={quantity}
+          onChange={setQuantity}
+          error={touched && qty < 1 ? 'Enter a quantity from 1 to 999.' : null}
           disabled={intent.locked}
         />
-      )}
-      <TextField
-        label="Quantity"
-        required
-        hint="1 to 999."
-        value={quantity}
-        onChange={setQuantity}
-        error={touched && qty < 1 ? 'Enter a quantity from 1 to 999.' : null}
-        disabled={intent.locked}
-      />
-      <Button type="submit" busy={command.isProcessing} disabled={!online || intent.locked}>
-        Add to the sale
-      </Button>
+        <Button type="submit" busy={command.isProcessing} disabled={!online || intent.locked}>
+          Add to the sale
+        </Button>
+      </div>
       <OfflineCaption action="adding a line" />
       <CommandError
         error={command.error}
@@ -144,6 +219,69 @@ export function AddLineForm({ sale, onReload }: { sale: Sale; onReload: () => vo
         currency={sale.currency}
       />
     </form>
+  );
+}
+
+/**
+ * − and + for one ticket line (park UI redesign). Each press is its own intent, sent with the
+ * sale's revision; the API prices the changed line again and refuses it when tenders already cover
+ * more than the new total (BELOW_TENDERED, shown with Reload).
+ */
+export function LineQuantity({
+  sale,
+  line,
+  onReload,
+}: {
+  sale: Sale;
+  line: Schema<'PosSaleLine'>;
+  onReload: () => void;
+}) {
+  const online = useOnline();
+  const command = useApiCommand('post', '/pos-sales/{id}/lines/{lineId}/quantity', SALE_COMMAND);
+  const intent = useIntentForm(command);
+  const change = (quantity: number) =>
+    void intent.send({
+      path: { id: sale.id, lineId: line.id },
+      body: { quantity, expectedRevision: sale.revision },
+    });
+  const disabled = !online || intent.locked || command.isProcessing;
+  return (
+    <span className="pos-stepper">
+      <button
+        type="button"
+        className="pos-step"
+        aria-label={line.quantity === 1 ? `Remove ${line.name}` : `One fewer ${line.name}`}
+        disabled={disabled}
+        onClick={() => change(line.quantity - 1)}
+      >
+        −
+      </button>
+      <span className="pos-qty" aria-label={`Quantity ${line.quantity}`}>
+        {line.quantity}
+      </span>
+      <button
+        type="button"
+        className="pos-step"
+        aria-label={`One more ${line.name}`}
+        disabled={disabled || line.quantity >= 999}
+        onClick={() => change(line.quantity + 1)}
+      >
+        +
+      </button>
+      {command.error ? (
+        <span className="pos-step-error">
+          <CommandError
+            error={command.error}
+            onRetry={intent.retry}
+            onReload={() => {
+              intent.restart();
+              onReload();
+            }}
+            currency={sale.currency}
+          />
+        </span>
+      ) : null}
+    </span>
   );
 }
 

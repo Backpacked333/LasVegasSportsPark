@@ -39,13 +39,14 @@ import {
   TextField,
   fieldErrorsOf,
 } from '../../features/operations/fields';
-import { formatInstant, shortRef } from '../../features/operations/format';
+import { formatInstant, initialsOf, shortRef } from '../../features/operations/format';
 import { VERIFICATION_OUTCOME } from '../../features/operations/labels';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary, type QueryLike } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import './arrival.css';
 
 type PassScan = Schema<'PassScan'>;
 type RecordedRelease = Schema<'RecordedRelease'>;
@@ -166,7 +167,11 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
   const withRecords = [...new Set([...children, ...recorded])];
 
   return (
-    <div className="ops-release">
+    <div className="ops-release ops-stack">
+      <p className="caption release-online">
+        <span className="release-online-dot" aria-hidden="true" />
+        Connected: current pickup authority is checked online when you record a release.
+      </p>
       {activity ? null : (
         <CollectorByPassScan
           facilityId={facilityId}
@@ -199,18 +204,23 @@ function OnlineRelease({ facilityId, timezone, activity }: ReleasePanelProps) {
           {() => (
             <fieldset className="ops-fieldset">
               <legend>Choose the child being collected</legend>
-              {awaiting.map((id) => (
-                <label key={id} className="ops-check">
-                  <input
-                    type="radio"
-                    name="release-child"
-                    value={id}
-                    checked={childId === id}
-                    onChange={() => setChildId(id)}
-                  />
-                  {childName(id)}
-                </label>
-              ))}
+              <div className="release-children">
+                {awaiting.map((id) => (
+                  <label key={id} className="release-child">
+                    <input
+                      type="radio"
+                      name="release-child"
+                      value={id}
+                      checked={childId === id}
+                      onChange={() => setChildId(id)}
+                    />
+                    <span className="ops-avatar" aria-hidden="true">
+                      {initialsOf(childName(id))}
+                    </span>
+                    {childName(id)}
+                  </label>
+                ))}
+              </div>
             </fieldset>
           )}
         </QueryBoundary>
@@ -626,7 +636,7 @@ function ReleaseForm({
           onChange={setEscalationNotes}
         />
       ) : null}
-      <div className="ops-actions">
+      <div className="ops-actions release-submit">
         <Button busy={outcome.status === 'pending'} onClick={() => void submit()}>
           Check authority and release
         </Button>
@@ -691,7 +701,11 @@ function ReleaseRecordView({
   const verification = VERIFICATION_OUTCOME[r.verificationOutcome];
   const withheld = r.verificationOutcome === 'verified' && r.outcome === 'not_released';
   return (
-    <li aria-label={`Release record for ${name}`}>
+    <li
+      aria-label={`Release record for ${name}`}
+      className="release-record"
+      data-outcome={r.outcome}
+    >
       <div className="row-text">
         <span className="row-title">{name}</span>
         {r.outcome === 'released' ? (

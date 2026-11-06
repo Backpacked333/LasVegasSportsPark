@@ -19,6 +19,7 @@ import {
   PartyCommitmentSources,
   SchedulingModule,
 } from '../scheduling';
+import { AssignedStaffController } from './controllers/assigned-staff.controller';
 import { AssignmentsController } from './controllers/assignments.controller';
 import { AvailabilityController } from './controllers/availability.controller';
 import { FeesController } from './controllers/fees.controller';
@@ -33,6 +34,7 @@ import {
   type WorkforceStaffingPort,
 } from './ports';
 import { AssignmentNotices } from './services/assignment-notices';
+import { AssignedStaffService } from './services/assigned-staff.service';
 import { AssignmentsService } from './services/assignments.service';
 import { AvailabilityService } from './services/availability.service';
 import { CommitmentChecker } from './services/commitment-checker';
@@ -79,6 +81,7 @@ const providers: Provider[] = [
   FeesService,
   WorkspaceService,
   StaffingService,
+  AssignedStaffService,
   AssignmentNotices,
   PersonMergeFollowUp,
   // Competition resolves these lazily by token (results by accepted officials, SPK-STAFF-005).
@@ -131,6 +134,7 @@ const providers: Provider[] = [
     AssignmentsController,
     FeesController,
     WorkspaceController,
+    AssignedStaffController,
   ],
   exports: [
     AvailabilityService,
@@ -141,6 +145,7 @@ const providers: Provider[] = [
     ReplacementsService,
     FeesService,
     WorkspaceService,
+    AssignedStaffService,
     WORKFORCE_POLICY,
     ASSIGNMENT_CHECK_IMPL,
     ASSIGNMENT_COVERAGE_PORT,

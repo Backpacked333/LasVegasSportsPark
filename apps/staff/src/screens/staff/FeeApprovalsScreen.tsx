@@ -17,6 +17,8 @@ import { useMemo, useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, STAFF_TABS } from '../../features/operations/AreaTabs';
+import { CompeteHeader } from '../../features/competition/page';
+import './staff.css';
 import { useKeyedCommands } from '../../features/operations/commands';
 import { nameOf, usePersonNames } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
@@ -115,9 +117,14 @@ export function FeeApprovalsScreen() {
     useMemo(() => (list.data?.items ?? []).map((f) => f.personId), [list.data]),
   );
   return (
-    <section aria-labelledby="fees-title">
-      <h2 id="fees-title">Fee and hours approvals</h2>
-      <AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />
+    <section aria-labelledby="fees-title" className="compete staff-area">
+      <CompeteHeader
+        eyebrow="Compete · Staff and officials"
+        title="Fee and hours approvals"
+        titleId="fees-title"
+        intro="Fee and hours claims from completed assignments: approve, adjust with a reason, or reject, then export the approved fees."
+        actions={<AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />}
+      />
       <StateView
         variant="pending-decision"
         subject="Fee rates and the payroll boundary"

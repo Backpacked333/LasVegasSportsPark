@@ -339,6 +339,27 @@ Handlers registered in `onModuleInit`: `facilities.escalate_overdue_task` (own t
 `facilities.raise_overdue_task_exceptions` (FAC-03) and
 `facilities.raise_unreleased_restriction_exceptions` (R4-OPS-MODULES-02).
 
+## Release checklist and day summary (park UI redesign) — verified
+
+Verified by `__tests__/release-checklist.spec.ts`.
+
+- **Release checklist** (migration `0909_facilities_release_checklist.sql`, SPK-FAC-004): a
+  restriction's own checks (`restriction_checklist_items`: label, position, author, confirmation
+  with who and when and an optional note, revision). `GET
+/v1/maintenance-restrictions/{id}/release-checklist` (`facilities.view_maintenance`) returns the
+  items, `complete`, and the linked task's owner by name (identity person directory, names only).
+  `POST .../checklist-items` adds; `.../checklist-items/{itemId}/complete`, `/reopen` (reason) and
+  `/remove` (reason; only an unconfirmed item) change one item with its `expectedRevision`; all
+  under `facilities.manage_release_checklist` (facilities operator, general manager), audited
+  `facilities.checklist_item_*`. Every command locks the restriction row the release locks. The
+  release refuses while an item is open (`ELIGIBILITY_FAILED details.code checklist_incomplete`,
+  naming the open items); the database refuses the status change to `released` with an open item
+  and any change to the checklist of a released or withdrawn restriction.
+- **Facility day summary** (`GET /v1/facilities/{id}/day-summary?date=`): the facility-local day
+  (midnight to midnight in the facility zone, SPK-SCHED-008); schedule counts from scheduling
+  (`scheduling.read_schedule`), restriction counts by status and open/overdue task counts
+  (`facilities.view_maintenance`). A section the viewer may not read is `null`, never 0.
+
 ## Known gaps / pending decisions
 
 - Due lead time per severity (critical 4 h, high 24 h, medium 72 h, low 168 h), the escalating

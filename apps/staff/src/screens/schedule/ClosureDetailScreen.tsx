@@ -638,7 +638,7 @@ export function ClosureDetailScreen() {
   const closure = useApiQuery({ path: '/closures/{id}', request: { path: { id: closureId } } });
   const facility = useFacilityById(closure.data?.facilityId);
   return (
-    <section aria-labelledby="closure-title">
+    <section aria-labelledby="closure-title" className="detail-screen">
       <h3 id="closure-title">Closure impact and resolution</h3>
       <Link to="/schedule/closures">All closures</Link>
       <QueryBoundary

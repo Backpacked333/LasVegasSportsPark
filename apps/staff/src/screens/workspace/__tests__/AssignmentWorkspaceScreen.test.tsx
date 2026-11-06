@@ -310,24 +310,104 @@ describe('SCR-W-02 / SCR-W-03 AssignmentWorkspaceScreen', () => {
                     jerseyNumber: 7,
                     playingStatus: 'guest',
                     roles: ['captain', 'member'],
+                    attendance: null,
                   },
                 ],
+                presentCount: 0,
               },
-              { entryId: '0192f1a0-0000-7000-8000-0000000004a2', teamName: 'Blue', players: [] },
+              {
+                entryId: '0192f1a0-0000-7000-8000-0000000004a2',
+                teamName: 'Blue',
+                players: [],
+                presentCount: 0,
+              },
             ],
+            canRecordAttendance: false,
           },
         },
       }),
     });
     render(app.at(PATH));
     const players = await screen.findByRole('list', { name: 'Players: Red' });
-    expect(within(players).getByText('#7 Jo Park (Captain, Guest)')).toBeInTheDocument();
+    // The roster row is named by the whole phrase (number, name, roles and status).
+    expect(
+      within(players).getByRole('listitem', { name: '#7 Jo Park (Captain, Guest)' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('No player listed.')).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/fixtures/{id}/match-sheet')?.params).toEqual(
       { id: FIXTURE_1 },
     );
     // WRK-01 / SPK-SCHED-008: the activity's time in its facility's zone.
     expect(screen.getByText(/11:00 (GMT-7|PDT)/)).toBeInTheDocument();
+  });
+
+  it('SPK-UX-007: the accepted official checks players in on the match sheet; pressing again clears', async () => {
+    const user = userEvent.setup();
+    const accepted = workspaceItem(assignmentRecord({ status: 'accepted', revision: 6 }), [
+      'withdraw',
+    ]);
+    const sheet = (attendance: 'present' | null) => ({
+      fixtureId: FIXTURE_1,
+      scheduledStart: '2026-10-24T18:00:00.000Z',
+      status: 'scheduled',
+      venue: null,
+      view: 'full',
+      sides: [
+        {
+          entryId: '0192f1a0-0000-7000-8000-0000000004a1',
+          teamName: 'Red',
+          players: [
+            {
+              personId: '0192f1a0-0000-7000-8000-0000000007a1',
+              displayName: 'Jo Park',
+              jerseyNumber: 7,
+              playingStatus: 'active',
+              roles: [],
+              attendance,
+            },
+          ],
+          presentCount: attendance ? 1 : 0,
+        },
+      ],
+      canRecordAttendance: true,
+    });
+    let marked: 'present' | null = null;
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/assignments': myAssignments([accepted]),
+        'GET /fixtures/{id}/match-sheet': () => fakeResponse(200, sheet(marked)),
+        'POST /fixtures/{id}/attendance': (req: { body: unknown }) => {
+          const state = (req.body as { state: string }).state;
+          marked = state === 'present' ? 'present' : null;
+          return fakeResponse(201, {
+            id: '0192f1a0-0000-7000-8000-0000000009a1',
+            fixtureId: FIXTURE_1,
+            teamEntryId: '0192f1a0-0000-7000-8000-0000000004a1',
+            personId: '0192f1a0-0000-7000-8000-0000000007a1',
+            state,
+            recordedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Ref' },
+            recordedAt: '2026-10-24T17:50:00.000Z',
+          });
+        },
+      }),
+    });
+    render(app.at(PATH));
+    const group = await screen.findByRole('group', { name: 'Check-in: #7 Jo Park' });
+    expect(screen.getByText(/0 of 1 checked in/)).toBeInTheDocument();
+    const here = within(group).getByRole('button', { name: 'Here' });
+    expect(here).toHaveAttribute('aria-pressed', 'false');
+    await user.click(here);
+    await waitFor(() => expect(here).toHaveAttribute('aria-pressed', 'true'));
+    expect(screen.getByText(/1 of 1 checked in/)).toBeInTheDocument();
+    await user.click(here);
+    await waitFor(() => expect(here).toHaveAttribute('aria-pressed', 'false'));
+    const posts = app.fake.requests.filter((r) => r.route === '/fixtures/{id}/attendance');
+    expect(posts.map((r) => (r.body as { state: string }).state)).toEqual(['present', 'cleared']);
+    expect(posts[0]?.body).toEqual({
+      teamEntryId: '0192f1a0-0000-7000-8000-0000000004a1',
+      personId: '0192f1a0-0000-7000-8000-0000000007a1',
+      state: 'present',
+    });
   });
 
   it('reads no player list before the official has accepted, and shows a refused one as not available', async () => {

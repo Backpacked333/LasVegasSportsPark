@@ -27,6 +27,12 @@
  * permission view says. Until `GET /v1/me/permissions` answers, a gated intent is not usable
  * (never a guess); a failed read shows its code and "Try again".
  *
+ * A camp (park UI "pick weeks, see the price"): with a basket intent, the camp's weeks are listed
+ * with places left (features/registration/CampWeeks.tsx); the opened week is chosen first, and
+ * each chosen week is added as its own line for each chosen person. A night price bar shows the
+ * informational total from `POST /v1/discounts/evaluate`; the binding price stays the quote
+ * (SCR-C-12). Nothing else about the flow changes, and an offering of another kind shows no weeks.
+ *
  * The API checks again on every line (PARTICIPANT_AUTHORITY_REQUIRED, eligibility reasons on the
  * line, DUPLICATE_ENTITLEMENT without revealing who else registered, SPK-AT-004).
  *
@@ -50,6 +56,12 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { moneyRoutes } from '../../features/money/routes';
 import { packageGRoutes } from '../../features/package-g/routes';
+import {
+  CampPriceBar,
+  CampWeekPicker,
+  useCampWeeks,
+  weekChoosable,
+} from '../../features/registration/CampWeeks';
 import { CommandError } from '../../features/registration/CommandError';
 import type { RegistrationIntent } from '../../features/registration/format';
 import {
@@ -75,10 +87,11 @@ import { useParticipants } from '../../features/registration/participants';
 import { SessionBookingFlow } from '../../features/registration/SessionBooking';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { registrationWindowStatus } from '../../features/registration/status';
-import { Body, ButtonRow, ChoiceRow, Section, Title } from '../../features/registration/ui';
+import { Body, ButtonRow, ChoiceRow, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { Hero } from '../../ui/Hero';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
@@ -134,8 +147,14 @@ function IntentChooser({ offering }: { offering: Offering }) {
   const [chosen, setChosen] = useState<RegistrationIntent | null>(null);
   const intent = chosen !== null && switchKnownOn(chosen) ? chosen : firstUsable;
   const [selection, setSelection] = useState<Selection>({ intent: null, ids: [] });
-  /** Participants already added, per intent, so a retry never adds them twice. */
+  /**
+   * Lines already added, per intent, as `<offeringId>:<personId>`, so a retry never adds one twice
+   * (a camp adds one line per chosen week and person).
+   */
   const [added, setAdded] = useState<Partial<Record<RegistrationIntent, readonly string[]>>>({});
+  const isCamp = offering.kind === 'camp';
+  /** The camp weeks chosen (the opened week first); for any other kind only this offering. */
+  const [chosenWeeks, setChosenWeeks] = useState<readonly string[]>([offering.id]);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const [working, setWorking] = useState(false);
   /** The basket as the API last answered (its revision is the next expected one). */
@@ -147,6 +166,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
   const addLine = useApiCommand('post', '/baskets/{id}/lines', {
     invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
+  const camp = useCampWeeks(offering, isCamp);
 
   if (me.isPending || namesLoading) {
     return <StateView variant="loading" label="your family" />;
@@ -189,10 +209,18 @@ function IntentChooser({ offering }: { offering: Offering }) {
   // meantime (that would orphan the open one).
   const basketUnknown = openBasket === undefined && lastBasket === null;
   const addedHere = intent ? (added[intent] ?? []) : [];
+  /** The offerings each chosen person gets a line for: the chosen camp weeks, or this one. */
+  const weekIds = isCamp
+    ? camp.weeks.filter((w) => chosenWeeks.includes(w.id) && weekChoosable(w)).map((w) => w.id)
+    : [offering.id];
+  const lineKey = (offeringId: string, personId: string) => `${offeringId}:${personId}`;
+  /** Every line of this person under the current intent is in the basket already. */
+  const isAdded = (personId: string) =>
+    weekIds.length > 0 && weekIds.every((w) => addedHere.includes(lineKey(w, personId)));
   /** Whether this participant can be added under the current intent (SPK-REG-002). */
   const selectable = (personId: string) => {
     if (!intent || !mayRegister(registrationOptions, personId)) return false;
-    if (addedHere.includes(personId)) return false;
+    if (isAdded(personId)) return false;
     const result = eligibilityOf(registrationOptions, personId, intent);
     return result ? blockingEligibilityReasons(result).length === 0 : true;
   };
@@ -224,19 +252,25 @@ function IntentChooser({ offering }: { offering: Offering }) {
         });
         setLastBasket(basket);
       }
-      for (const personId of toAdd) {
-        basket = await addLine.submit({
-          path: { id: basket.id },
-          body: {
-            participantPersonId: personId,
-            offeringId: offering.id,
-            intent,
-            quantity: 1,
-            expectedRevision: basket.revision,
-          },
-        });
-        setLastBasket(basket);
-        setAdded((all) => ({ ...all, [intent]: [...(all[intent] ?? []), personId] }));
+      const done = new Set(addedHere);
+      for (const offeringId of weekIds) {
+        for (const personId of toAdd) {
+          const key = lineKey(offeringId, personId);
+          if (done.has(key)) continue;
+          basket = await addLine.submit({
+            path: { id: basket.id },
+            body: {
+              participantPersonId: personId,
+              offeringId,
+              intent,
+              quantity: 1,
+              expectedRevision: basket.revision,
+            },
+          });
+          setLastBasket(basket);
+          done.add(key);
+          setAdded((all) => ({ ...all, [intent]: [...(all[intent] ?? []), key] }));
+        }
       }
       router.push(registrationRoutes.basket(basket.id));
     } catch (error) {
@@ -331,14 +365,25 @@ function IntentChooser({ offering }: { offering: Offering }) {
         />
       ) : null}
 
+      {basketIntent && isCamp ? (
+        <CampWeekPicker
+          camp={camp}
+          chosen={chosenWeeks}
+          onToggle={(weekId) =>
+            setChosenWeeks((weeks) =>
+              weeks.includes(weekId) ? weeks.filter((w) => w !== weekId) : [...weeks, weekId],
+            )
+          }
+        />
+      ) : null}
       {basketIntent ? (
         <Section title="Who are you registering?">
           {participants.map((p) => {
             const allowed = mayRegister(registrationOptions, p.personId);
-            const isAdded = addedHere.includes(p.personId);
+            const personAdded = isAdded(p.personId);
             const result = intent ? eligibilityOf(registrationOptions, p.personId, intent) : null;
             const messages = result ? eligibilityMessages(result) : null;
-            const detail = isAdded
+            const detail = personAdded
               ? 'Added to your basket'
               : !allowed
                 ? 'Not available: your account can view this person but not register them.'
@@ -381,6 +426,16 @@ function IntentChooser({ offering }: { offering: Offering }) {
           }}
         />
       ) : null}
+      {basketIntent && isCamp ? (
+        <CampPriceBar
+          weeks={camp.weeks}
+          chosenWeekIds={weekIds}
+          personIds={pending}
+          personNames={participants
+            .filter((p) => pending.includes(p.personId))
+            .map((p) => (p.self ? 'You' : p.displayName))}
+        />
+      ) : null}
       {basketIntent ? (
         <ButtonRow>
           <Button
@@ -390,7 +445,12 @@ function IntentChooser({ offering }: { offering: Offering }) {
                 : 'Add to your basket'
             }
             onPress={() => void submit()}
-            disabled={pending.length === 0 || offline || (basketUnknown && !baskets.error)}
+            disabled={
+              pending.length === 0 ||
+              weekIds.length === 0 ||
+              offline ||
+              (basketUnknown && !baskets.error)
+            }
             busy={working || (basketUnknown && baskets.fetchStatus === 'fetching')}
           />
           {offline ? (
@@ -420,10 +480,9 @@ export function RegistrationIntentScreen({ offeringId }: { offeringId: string })
         >
           {(o) => (
             <View>
-              <Section title="Register for">
-                <Title>{o.name}</Title>
+              <Hero eyebrow="Register for" title={o.name}>
                 <StatusBadge {...registrationWindowStatus(o)} />
-              </Section>
+              </Hero>
               {o.publicationState === 'registration_open' ? (
                 <IntentChooser offering={o} />
               ) : (

@@ -71,6 +71,7 @@ export function offering(overrides: Partial<Schema<'Offering'>> = {}): Schema<'O
     requiredFormPolicyVersionIds: [],
     entitlementDefinitionId: null,
     bookingTermsPolicyVersionId: G.terms,
+    promotions: [],
     staff: null,
     ...overrides,
   } as Schema<'Offering'>;
@@ -362,6 +363,7 @@ export function seasonSession(
     scheduledEnd: new Date(new Date(scheduledStart).getTime() + 3_600_000).toISOString(),
     schedulingEventId: null,
     capacityOverride: null,
+    location: null,
     status: 'scheduled',
     canceledAt: null,
     cancelReason: null,

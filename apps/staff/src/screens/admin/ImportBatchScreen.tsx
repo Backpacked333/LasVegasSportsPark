@@ -64,6 +64,7 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type ImportBatch = Schema<'ImportBatch'>;
 type ApiErrorLike = { details?: unknown } | null;
 
@@ -835,7 +836,11 @@ export function ImportBatchScreen() {
   const [outcome, setOutcome] = useState<string | null>(null);
   return (
     <section aria-labelledby="import-batch-title" className="ia-screen">
-      <h2 id="import-batch-title">Import batch</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Import batch"
+        titleId="import-batch-title"
+      />
       <MigrationNav />
       <InsightQueryBoundary
         query={batch}
