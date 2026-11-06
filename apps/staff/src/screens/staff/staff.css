@@ -1,0 +1,259 @@
+/*
+ * Staff and officials (SCR-S-33 assignments and replacement, availability and qualifications, fee
+ * approvals) on the night-pitch design system (SPK-UX-010). The screens use the operations
+ * feature's shared pieces (`ops-*` classes); they are restyled here only inside `.staff-area`,
+ * so the other operations screens keep their own look. Status is never colour alone (SPK-UX-009).
+ */
+/* ---------- Staff and officials (SCR-S-33) ---------- */
+/* The operations stylesheet's classes, shown with this design inside staff screens only. */
+.staff-area .ops-tabs ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: #ebe9e2;
+  border-radius: 10px;
+  width: fit-content;
+  max-width: 100%;
+}
+.staff-area .ops-tabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.staff-area .ops-tabs a:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+.staff-area .ops-tabs a[aria-current='page'] {
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 700;
+  border: 0;
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
+}
+.staff-area .ops-section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin: 0;
+  gap: 12px;
+}
+.staff-area .ops-section .ops-section {
+  background: var(--sand-2);
+  border-radius: var(--radius);
+}
+.staff-area .ops-section > h3 {
+  font-size: 20px;
+  letter-spacing: 0.03em;
+}
+.staff-area .ops-field input,
+.staff-area .ops-field select,
+.staff-area .ops-field textarea {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--card);
+}
+.staff-area .ops-fieldset {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.staff-area .ops-history {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+}
+.staff-area .ops-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+}
+.staff-area .card-flush > .ops-actions,
+.staff-area .card-flush > div > .ops-actions {
+  padding: 0 18px 14px;
+}
+
+/* Coverage rows: time, activity, role, person. */
+.cover-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cover-list > li {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) minmax(90px, 130px) minmax(150px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.cover-list > li[data-selected='true'] {
+  background: #f4f8f5;
+  box-shadow: inset 3px 0 0 var(--pitch);
+}
+.cover-list > li[data-tone='danger'] {
+  box-shadow: inset 3px 0 0 var(--tone-danger);
+}
+.cover-time {
+  font-weight: 800;
+  font-stretch: 75%;
+  font-size: 17px;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+.cover-time small {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  font-stretch: 100%;
+  color: var(--muted);
+}
+.cover-what {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cover-what .row-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cover-role {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.cover-who {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.cover-detail {
+  grid-column: 2 / -1;
+}
+@media (max-width: 760px) {
+  .cover-list > li {
+    grid-template-columns: 60px minmax(0, 1fr);
+  }
+  .cover-role,
+  .cover-who,
+  .cover-detail {
+    grid-column: 2 / -1;
+  }
+}
+.cand-head {
+  padding: 16px 18px;
+  background: #fff8f7;
+  border-bottom: 1px solid #f4d3cf;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cand-head[data-tone='neutral'] {
+  background: var(--sand-2);
+  border-bottom-color: var(--line);
+}
+.cand-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tone-danger);
+}
+.cand-title {
+  font-size: 22px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  line-height: 1.05;
+}
+.cand-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cand-list > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.cand-list > li:first-child {
+  border-top: 0;
+}
+.cand-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--pitch);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  flex: none;
+}
+.cand-list > li[data-eligible='false'] .cand-avatar {
+  background: var(--faint);
+}
+.cand-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  min-width: 0;
+}
+.cand-meta {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.cand-list > li[data-eligible='false'] .cand-meta {
+  color: var(--tone-danger);
+}
+.rank {
+  font-weight: 800;
+  font-stretch: 75%;
+  font-size: 15px;
+  color: var(--faint);
+  width: 1.2rem;
+  flex: none;
+}
+.staff-area .card-body > div > .cover-list {
+  margin: 0 -18px;
+}
+.staff-area .card-flush > div > [data-testid='last-updated'] {
+  padding: 8px 18px 0;
+  margin: 0;
+}
+.staff-area .card-flush > div > .state {
+  margin: 0 18px 12px;
+}
+.fee-summary-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fee-summary-head strong {
+  font-size: 18px;
+  font-weight: 800;
+}
+@media (max-width: 900px) {
+  .staff-area .compete-head > .actions-row {
+    width: 100%;
+  }
+}

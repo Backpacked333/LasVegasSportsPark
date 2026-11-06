@@ -30,6 +30,8 @@ import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, STAFF_TABS } from '../../features/operations/AreaTabs';
+import { CompeteHeader } from '../../features/competition/page';
+import './staff.css';
 import { nameOf, useFacilityZone, usePersonNames } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import {
@@ -69,9 +71,13 @@ export function AssignmentDetailScreen() {
     request: { path: { id: assignmentId } },
   });
   return (
-    <section aria-labelledby="assignment-title">
-      <h2 id="assignment-title">Assignment</h2>
-      <AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />
+    <section aria-labelledby="assignment-title" className="compete staff-area">
+      <CompeteHeader
+        eyebrow="Compete · Staff and officials"
+        title="Assignment"
+        titleId="assignment-title"
+        actions={<AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />}
+      />
       <p>
         <Link to="/staff">All assignments</Link>
       </p>

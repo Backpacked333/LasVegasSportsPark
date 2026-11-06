@@ -21,7 +21,9 @@ import { keys, SuccessNote, useRefetch } from '../../features/competition/feedba
 import { SelectField, TextAreaField } from '../../features/competition/fields';
 import { formatInstant, shortRef } from '../../features/competition/format';
 import { ENTRY_ELIGIBILITY, TEAM_ENTRY_STATUS } from '../../features/competition/labels';
-import { SeasonLinks, TeamsNav } from '../../features/competition/nav';
+import { SeasonLinks } from '../../features/competition/nav';
+import { CompeteHeader } from '../../features/competition/page';
+import { SeasonEyebrow } from '../../features/competition/season-context';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -314,11 +316,15 @@ export function TeamEntryReviewScreen() {
     },
   });
   return (
-    <section aria-labelledby="entries-title">
-      <h2 id="entries-title">Team entries</h2>
-      <TeamsNav />
+    <section aria-labelledby="entries-title" className="compete">
+      <CompeteHeader
+        eyebrow={<SeasonEyebrow seasonId={seasonId} extra="Teams and placement" />}
+        title="Team entries"
+        titleId="entries-title"
+        intro="Approve or decline the teams that applied for this season. Eligibility is evaluated by the service and every reason is shown."
+      />
       <SeasonLinks seasonId={seasonId} />
-      <div className="actions">
+      <div className="toolbar">
         <SelectField
           label="Approval"
           value={status}

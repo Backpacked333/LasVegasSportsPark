@@ -741,7 +741,8 @@ export function FixtureGenerationScreen() {
     enabled: !!division.data,
   });
   return (
-    <section aria-labelledby="fixture-generation-title">
+    <section aria-labelledby="fixture-generation-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Division</span>
       <h2 id="fixture-generation-title">
         Fixture generation{division.data ? `: ${division.data.name}` : ''}
       </h2>

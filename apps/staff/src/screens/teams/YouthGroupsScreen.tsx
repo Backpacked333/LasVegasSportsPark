@@ -388,7 +388,8 @@ export function YouthGroupsScreen() {
     },
   });
   return (
-    <section aria-labelledby="youth-title">
+    <section aria-labelledby="youth-title" className="compete">
+      <span className="eyebrow">Compete · Teams and placement</span>
       <h2 id="youth-title">Youth group placement</h2>
       <TeamsNav />
       <PendingNote decision={PENDING.youthGroups} />

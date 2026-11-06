@@ -364,7 +364,8 @@ export function FixtureDisputesScreen() {
   });
   const { byId } = useSeasonEntries(fixture.data?.seasonId);
   return (
-    <section aria-labelledby="disputes-title">
+    <section aria-labelledby="disputes-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Fixture</span>
       <h2 id="disputes-title">Disputes{fixture.data ? `: ${fixtureTitle(fixture.data)}` : ''}</h2>
       <LeaguesNav />
       <p>

@@ -120,7 +120,8 @@ export function DivisionPoolsScreen() {
   const permissions = usePermissions();
   const division = useApiQuery({ path: '/divisions/{id}', request: { path: { id: divisionId } } });
   return (
-    <section aria-labelledby="division-pools-title">
+    <section aria-labelledby="division-pools-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Tournament</span>
       <h2 id="division-pools-title">
         Tournament pools{division.data ? `: ${division.data.name}` : ''}
       </h2>
@@ -435,7 +436,8 @@ export function PoolScreen() {
     enabled: !!pool.data,
   });
   return (
-    <section aria-labelledby="pool-title">
+    <section aria-labelledby="pool-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Tournament</span>
       <h2 id="pool-title">{pool.data ? `Pool: ${pool.data.name}` : 'Pool'}</h2>
       <LeaguesNav />
       <QueryBoundary
