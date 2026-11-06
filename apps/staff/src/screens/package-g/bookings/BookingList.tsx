@@ -8,10 +8,17 @@
  * names the booker (names only, §4.14), the times in the booking's facility zone (SPK-SCHED-008),
  * its status in the machine's words and what is still outstanding. Bookings stay listed while the
  * capability is off (reads are never gated, DEC-016).
+ *
+ * Each card shows its price from finance (`GET /v1/basket-prices/{basketId}`): the order's total
+ * once checked out, else an estimate from the price rules in effect now, before discounts and
+ * credits (the quote at checkout is what is charged, SPK-PAY-002). A booking without a basket, an
+ * unpriced line or a price the viewer may not read shows no amount, never a zero.
  */
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useApiPages } from '../../../api/useApiPages';
+import { useApiQuery } from '../../../api/useApiQuery';
+import { formatMoney } from '../../../features/registration-finance/format';
 import { useApp } from '../../../providers/AppProviders';
 import { SelectField } from '../../../ui/FormFields';
 import { LoadMore } from '../../../ui/LoadMore';
@@ -43,6 +50,23 @@ function needsAttention(booking: Booking): boolean {
   );
 }
 
+/** The booking's price (basket price): ordered, or an estimate before discounts and credits. */
+function BookingPrice({ basketId }: { basketId: string }) {
+  const price = useApiQuery({ path: '/basket-prices/{id}', request: { path: { id: basketId } } });
+  const p = price.data;
+  if (!p || p.totalMinor === null || p.currency === null) return null;
+  const total = formatMoney(p.totalMinor, p.currency);
+  return (
+    <span className="booking-price" data-testid="booking-price">
+      {total}
+      <span className="caption">
+        {' '}
+        {p.basis === 'order' ? (p.paymentStatus === 'paid' ? 'paid' : 'ordered') : 'estimate'}
+      </span>
+    </span>
+  );
+}
+
 function BookingRow({ booking, booker }: { booking: Booking; booker: string }) {
   const status = BOOKING_STATUS[booking.status];
   const words = KIND_WORDS[booking.kind];
@@ -61,6 +85,7 @@ function BookingRow({ booking, booker }: { booking: Booking; booker: string }) {
         {booking.guestCount !== null ? (
           <span className="booking-guests">{plural(booking.guestCount, 'guest')}</span>
         ) : null}
+        {booking.basketId ? <BookingPrice basketId={booking.basketId} /> : null}
       </span>
       <Link className="booking-title" to={`${KIND_PATH[booking.kind]}/${booking.id}`}>
         {booking.offeringName ?? `${words.title} booking`}

@@ -71,6 +71,24 @@ export const INSIGHT_REPORTS: readonly ReportCatalogEntry[] = [
     requirement: 'SPK-REPORT-003',
   },
   { ...r('economics', 'Economics', 'economics', 'facility_range'), requirement: 'SPK-REPORT-004' },
+  {
+    ...r(
+      'utilization_heatmap',
+      'Utilization by weekday and hour',
+      'utilization-heatmap',
+      'facility_range',
+    ),
+    requirement: 'SPK-REPORT-003',
+  },
+  {
+    ...r(
+      'sales_by_product_line',
+      'Sales by product line',
+      'sales-by-product-line',
+      'facility_range',
+    ),
+    requirement: 'SPK-REPORT-004',
+  },
   { ...r('demand', 'Demand', 'demand', 'facility_range'), requirement: 'SPK-REPORT-006' },
   {
     ...r('retention', 'Retention', 'retention', 'organization_now'),

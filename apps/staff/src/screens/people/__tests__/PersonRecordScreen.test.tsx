@@ -272,6 +272,65 @@ describe('SCR-S-20 PersonRecordScreen', () => {
     );
   });
 
+  it('SPK-PAY-004/009/011: the money card states the account balance, credits and paid this year from the protected summary', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['finance.read_person_money'] }),
+        'GET /people/{id}': { status: 200, body: person() },
+        'GET /customers/{personId}/timeline': { status: 200, body: timeline() },
+        'GET /people/{id}/money-summary': {
+          status: 200,
+          body: {
+            personId: PERSON_ID,
+            accountBalance: [{ currency: 'USD', amountMinor: 12500 }],
+            openObligations: 2,
+            pastDueObligations: 1,
+            creditsAvailable: [{ currency: 'USD', amountMinor: 1500 }],
+            creditsPendingApproval: [],
+            paidThisYear: [{ currency: 'USD', amountMinor: 48000 }],
+            refundedThisYear: [],
+            paidSince: '2026-01-01T08:00:00.000Z',
+            yearTimeZone: 'America/Los_Angeles',
+            asOf: '2026-10-24T12:00:00.000Z',
+          },
+        },
+      },
+    });
+    render(app.at(`/people/${PERSON_ID}`));
+    const summary = await screen.findByLabelText('Account summary');
+    expect(summary).toHaveTextContent('Account balance$125.00');
+    expect(summary).toHaveTextContent('1 of 2 open past due');
+    expect(summary).toHaveTextContent('Credits$15.00');
+    expect(summary).toHaveTextContent('Paid this year$480.00');
+  });
+
+  it('the money card says the account balance is not available to a role without the read, and on a protected NOT_FOUND', async () => {
+    const without = createTestApp({
+      routes: {
+        'GET /people/{id}': { status: 200, body: person() },
+        'GET /customers/{personId}/timeline': { status: 200, body: timeline() },
+      },
+    });
+    const { unmount } = render(without.at(`/people/${PERSON_ID}`));
+    expect(
+      await screen.findByText('The account balance is not available to you.'),
+    ).toBeInTheDocument();
+    expect(without.fake.requests.some((r) => r.route === '/people/{id}/money-summary')).toBe(false);
+    unmount();
+    const hidden = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['finance.read_person_money'] }),
+        'GET /people/{id}': { status: 200, body: person() },
+        'GET /customers/{personId}/timeline': { status: 200, body: timeline() },
+        'GET /people/{id}/money-summary': { status: 404, body: apiErrorBody('NOT_FOUND') },
+      },
+    });
+    render(hidden.at(`/people/${PERSON_ID}`));
+    expect(
+      await screen.findByText('The account balance is not available to you.'),
+    ).toBeInTheDocument();
+  });
+
   it('pages older timeline entries with the API cursor', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

@@ -264,6 +264,51 @@ describe('SCR-S-39 MessageComposerScreen', () => {
     expect(app.fake.requests.some((r) => r.route === '/notifications/{id}/recipients')).toBe(false);
   });
 
+  it('SPK-COMMS-006: while composing, the rail counts the audience by channel with opt-outs, never naming anyone', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'POST /notification-audience-counts': {
+          status: 200,
+          body: {
+            resolvedAt: '2026-10-24T12:00:00.000Z',
+            category: 'promotional',
+            count: 12,
+            unreachable: 1,
+            channels: [
+              { channel: 'in_app', reachable: 12, optedOut: 0, offByDefault: 0, noProvider: 0 },
+              { channel: 'push', reachable: 0, optedOut: 0, offByDefault: 12, noProvider: 0 },
+              { channel: 'email', reachable: 9, optedOut: 3, offByDefault: 0, noProvider: 0 },
+              { channel: 'sms', reachable: 0, optedOut: 0, offByDefault: 12, noProvider: 0 },
+            ],
+            pendingDecisions: ['DEC-012', 'DEC-062'],
+          },
+        },
+      }),
+    });
+    render(app.at('/communications/compose'));
+    const form = await screen.findByRole('form', { name: 'Compose a message' });
+    const rail = screen.getByRole('complementary', { name: 'Live preview' });
+    await user.click(within(form).getByRole('checkbox', { name: 'Front desk' }));
+    // Nothing is counted until the category is chosen.
+    expect(app.fake.requests.some((r) => r.route === '/notification-audience-counts')).toBe(false);
+    await user.click(within(form).getByRole('radio', { name: /Promotional/ }));
+    const count = await within(rail).findByTestId('audience-count');
+    expect(count).toHaveTextContent('12 recipients now');
+    const channels = within(count).getByRole('list', { name: 'Recipients by channel' });
+    expect(channels).toHaveTextContent('Email 9 · 3 opted out');
+    expect(channels).toHaveTextContent('Push 0 · 12 off by default');
+    expect(count).toHaveTextContent('DEC-012, DEC-062');
+    const call = app.fake.requests.find((r) => r.route === '/notification-audience-counts');
+    expect(call?.body).toMatchObject({
+      kind: 'staff_broadcast',
+      category: 'promotional',
+      audience: { staffRoles: ['front_desk'] },
+    });
+    // The preview step (names) has not run.
+    expect(app.fake.requests.some((r) => r.route === '/notifications/{id}/recipients')).toBe(false);
+  });
+
   it('explains an audience that resolves to nobody', async () => {
     const app = createTestApp({
       routes: routes({

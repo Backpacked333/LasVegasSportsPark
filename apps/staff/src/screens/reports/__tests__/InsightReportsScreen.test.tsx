@@ -76,6 +76,68 @@ describe('SCR-S-44 InsightReportsScreen', () => {
     expect(notes[0]).toHaveTextContent('DEC-045');
   });
 
+  it('SPK-REPORT-003/006: the weekday and hour report shows a heatmap with the rate written in every cell', async () => {
+    const user = userEvent.setup();
+    const test = app({
+      'GET /reports/utilization-heatmap': ok(
+        reportResponse('utilization_heatmap', {
+          report: {
+            ...reportResponse('utilization_heatmap').report,
+            key: 'utilization_heatmap',
+            title: 'Utilization by weekday and hour',
+          },
+          values: [],
+          columns: [
+            { key: 'weekday', label: 'Weekday (0 = Sunday)', type: 'count' },
+            { key: 'hour', label: 'Local hour (start)', type: 'count' },
+            { key: 'utilizationRate', label: 'Utilization rate', type: 'ratio' },
+          ],
+          rows: [
+            {
+              weekday: 3,
+              weekdayName: 'wednesday',
+              hour: 10,
+              reservedUnitHours: 2,
+              availableUnitHours: 2,
+              utilizationRate: 1,
+            },
+            {
+              weekday: 3,
+              weekdayName: 'wednesday',
+              hour: 11,
+              reservedUnitHours: 0.5,
+              availableUnitHours: 2,
+              utilizationRate: 0.25,
+            },
+          ],
+        }),
+      ),
+    });
+    render(test.at('/reports/insight?report=utilization_heatmap'));
+    await ready();
+    await user.click(screen.getByRole('button', { name: 'Show report' }));
+    const grid = await screen.findByRole('table', {
+      name: 'Utilization rate by weekday and hour',
+    });
+    const wednesday = within(grid).getByRole('row', { name: /^Wed/ });
+    expect(wednesday).toHaveTextContent('100%');
+    expect(wednesday).toHaveTextContent('25%');
+    expect(within(grid).getByRole('columnheader', { name: '10:00' })).toBeInTheDocument();
+    const call = test.fake.requests.find((r) => r.route === '/reports/utilization-heatmap');
+    expect(call?.query).toEqual({ facilityId: FACILITY_A, from: '2026-10-24', to: '2026-10-24' });
+  });
+
+  it('SPK-REPORT-004: sales by product line is offered among the insight reports', async () => {
+    render(app().at('/reports/insight?report=sales_by_product_line'));
+    await ready();
+    expect(
+      screen.getByRole('option', { name: 'Sales by product line (SPK-REPORT-004)' }),
+    ).toHaveProperty('selected', true);
+    expect(
+      screen.getByRole('option', { name: 'Sales by product line (SPK-REPORT-004)' }),
+    ).toBeInTheDocument();
+  });
+
   it('SPK-REPORT-003: leaves weighting and buffers to the disclosed default unless chosen', async () => {
     const user = userEvent.setup();
     const test = app({

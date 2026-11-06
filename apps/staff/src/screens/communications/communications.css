@@ -399,3 +399,36 @@
     justify-self: start;
   }
 }
+
+/* Live recipient count (POST /v1/notification-audience-counts): numbers only, no names. */
+.cm-count {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cm-count-value {
+  font-size: 20px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  color: var(--floodlight);
+}
+.cm-count-channels {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+.cm-count-channel {
+  display: inline-block;
+  min-width: 56px;
+  font-weight: 700;
+}
+.cm-count .caption,
+.cm-count-state {
+  color: var(--night-muted);
+  margin: 0;
+}
