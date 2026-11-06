@@ -190,6 +190,58 @@ describe('SCR-S-51 Rentals', () => {
     );
   });
 
+  it('SPK-PAY-002: a booking card shows its price from finance: an estimate before checkout, nothing when unpriced', async () => {
+    const BASKET = '0192f1a0-0000-7000-8000-00000000bb01';
+    const app = createTestApp({
+      routes: routes({
+        'GET /bookings': page([booking({ basketId: BASKET })]),
+        'GET /basket-prices/{id}': {
+          status: 200,
+          body: {
+            basketId: BASKET,
+            basis: 'estimate',
+            currency: 'USD',
+            subtotalMinor: 45000,
+            taxMinor: 0,
+            feeMinor: 0,
+            totalMinor: 45000,
+            orderId: null,
+            paymentStatus: null,
+            asOf: '2026-10-24T12:00:00.000Z',
+          },
+        },
+      }),
+    });
+    render(app.at('/schedule/rentals'));
+    const list = await screen.findByRole('list', { name: 'Rental bookings' });
+    expect(await within(list).findByTestId('booking-price')).toHaveTextContent('$450.00 estimate');
+    const unpriced = createTestApp({
+      routes: routes({
+        'GET /bookings': page([booking({ basketId: BASKET })]),
+        'GET /basket-prices/{id}': {
+          status: 200,
+          body: {
+            basketId: BASKET,
+            basis: 'unpriced',
+            currency: null,
+            subtotalMinor: null,
+            taxMinor: null,
+            feeMinor: null,
+            totalMinor: null,
+            orderId: null,
+            paymentStatus: null,
+            asOf: '2026-10-24T12:00:00.000Z',
+          },
+        },
+      }),
+    });
+    render(unpriced.at('/schedule/rentals'));
+    await waitFor(() =>
+      expect(unpriced.fake.requests.some((r) => r.route === '/basket-prices/{id}')).toBe(true),
+    );
+    expect(screen.getAllByTestId('booking-price')).toHaveLength(1);
+  });
+
   it('says when the loaded pages hold no rentals and offers Load more', async () => {
     const app = createTestApp({
       routes: routes({ 'GET /bookings': page([partyBooking()], 'cursor-2') }),

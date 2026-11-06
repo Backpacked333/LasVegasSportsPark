@@ -5,6 +5,8 @@
  * - AddLineForm: a product and a quantity (`POST /v1/pos-sales/{id}/lines`). No price is sent: the
  *   product's price and the approved taxes and fees in effect apply (CHARGE_POLICY_NOT_APPROVED is
  *   shown as a validation failure naming the tax or fee).
+ * - LineQuantity: − and + on a ticket line (`POST /v1/pos-sales/{id}/lines/{lineId}/quantity`, 0
+ *   removes it). The line is priced again by the API; the earlier line is kept as superseded.
  * - TenderForm: cash, an external tender with its evidence, or a card
  *   (`POST /v1/pos-sales/{id}/tenders`). The card processor is pending (DEC-019): release builds
  *   offer no card tender and say so; development builds pick a fake provider scenario. A card
@@ -217,6 +219,69 @@ export function AddLineForm({ sale, onReload }: { sale: Sale; onReload: () => vo
         currency={sale.currency}
       />
     </form>
+  );
+}
+
+/**
+ * − and + for one ticket line (park UI redesign). Each press is its own intent, sent with the
+ * sale's revision; the API prices the changed line again and refuses it when tenders already cover
+ * more than the new total (BELOW_TENDERED, shown with Reload).
+ */
+export function LineQuantity({
+  sale,
+  line,
+  onReload,
+}: {
+  sale: Sale;
+  line: Schema<'PosSaleLine'>;
+  onReload: () => void;
+}) {
+  const online = useOnline();
+  const command = useApiCommand('post', '/pos-sales/{id}/lines/{lineId}/quantity', SALE_COMMAND);
+  const intent = useIntentForm(command);
+  const change = (quantity: number) =>
+    void intent.send({
+      path: { id: sale.id, lineId: line.id },
+      body: { quantity, expectedRevision: sale.revision },
+    });
+  const disabled = !online || intent.locked || command.isProcessing;
+  return (
+    <span className="pos-stepper">
+      <button
+        type="button"
+        className="pos-step"
+        aria-label={line.quantity === 1 ? `Remove ${line.name}` : `One fewer ${line.name}`}
+        disabled={disabled}
+        onClick={() => change(line.quantity - 1)}
+      >
+        −
+      </button>
+      <span className="pos-qty" aria-label={`Quantity ${line.quantity}`}>
+        {line.quantity}
+      </span>
+      <button
+        type="button"
+        className="pos-step"
+        aria-label={`One more ${line.name}`}
+        disabled={disabled || line.quantity >= 999}
+        onClick={() => change(line.quantity + 1)}
+      >
+        +
+      </button>
+      {command.error ? (
+        <span className="pos-step-error">
+          <CommandError
+            error={command.error}
+            onRetry={intent.retry}
+            onReload={() => {
+              intent.restart();
+              onReload();
+            }}
+            currency={sale.currency}
+          />
+        </span>
+      ) : null}
+    </span>
   );
 }
 

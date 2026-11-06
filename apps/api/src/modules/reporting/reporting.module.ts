@@ -6,9 +6,13 @@ import {
   moduleSettings,
   runWithTransaction,
 } from '../../kernel';
+import { CommunicationsModule } from '../communications';
 import { CompetitionModule } from '../competition';
 import { EnrollmentModule } from '../enrollment';
+import { FinanceModule } from '../finance';
+import { SupportModule } from '../support';
 import { WorkforceModule } from '../workforce';
+import { AttentionController } from './controllers/attention.controller';
 import { CostInputsController } from './controllers/cost-inputs.controller';
 import { ExportsController } from './controllers/exports.controller';
 import { ReportRunsController } from './controllers/report-runs.controller';
@@ -23,6 +27,8 @@ import { RegistrationReports } from './reports/registration.reports';
 import { RetentionReport } from './reports/retention.report';
 import { ScheduleReports } from './reports/schedule.reports';
 import { UtilizationReport } from './reports/utilization.report';
+import { SalesReport } from './reports/sales.report';
+import { AttentionService } from './services/attention.service';
 import { CostInputsService } from './services/cost-inputs.service';
 import { ExportsService } from './services/exports.service';
 import { MetricDefinitionsService } from './services/metric-definitions.service';
@@ -39,7 +45,15 @@ import { ReportsService } from './services/reports.service';
  * handler `reporting.expire_export`). See README.md.
  */
 @Module({
-  imports: [CompetitionModule, WorkforceModule, EnrollmentModule],
+  imports: [
+    CompetitionModule,
+    WorkforceModule,
+    EnrollmentModule,
+    // Park UI redesign attention counts: these modules' exported list services, read only.
+    FinanceModule,
+    CommunicationsModule,
+    SupportModule,
+  ],
   providers: [
     // Policy values left to operators (§6.6, K-00 (i)): module settings without defaults (REP-03).
     moduleSettings(ReportingSettings.module),
@@ -54,6 +68,8 @@ import { ReportsService } from './services/reports.service';
     RegistrationReports,
     FinanceReports,
     UtilizationReport,
+    SalesReport,
+    AttentionService,
     EconomicsReport,
     RetentionReport,
     ReportsService,
@@ -61,7 +77,13 @@ import { ReportsService } from './services/reports.service';
     ExportsService,
     CostInputsService,
   ],
-  controllers: [ReportsController, ReportRunsController, ExportsController, CostInputsController],
+  controllers: [
+    ReportsController,
+    ReportRunsController,
+    ExportsController,
+    CostInputsController,
+    AttentionController,
+  ],
   exports: [
     REPORTING_POLICY,
     MetricDefinitionsService,

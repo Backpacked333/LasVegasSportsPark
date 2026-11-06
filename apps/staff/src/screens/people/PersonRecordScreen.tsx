@@ -656,10 +656,72 @@ function ActivitiesCard({ personId }: { personId: string }) {
 
 const MONEY_CATEGORIES = new Set(['payment', 'refund', 'credit', 'obligation', 'order']);
 
+const READ_PERSON_MONEY = 'finance.read_person_money';
+
+const amounts = (list: readonly { amountMinor: number; currency: string }[], none: string) =>
+  list.length === 0 ? none : list.map((a) => formatMoney(a.amountMinor, a.currency)).join(' + ');
+
 /**
- * Money: the latest money entries of the person's scoped timeline (the same read the timeline
- * below makes). Balances and credits are not summed here: the API states no account balance for a
- * person, so none is invented.
+ * The person's money summary (`GET /v1/people/{id}/money-summary`, finance.read_person_money,
+ * protected household money, §4.10): open balance, credits and receipts this year, per currency as
+ * the API states them. A role that may not read it, or a person it does not show, says so; nothing
+ * is summed or shown as zero that the API did not state.
+ */
+function MoneySummary({ personId }: { personId: string }) {
+  const permissions = usePermissions();
+  const permitted = permissions.isPermitted(READ_PERSON_MONEY);
+  const summary = useApiQuery({
+    path: '/people/{id}/money-summary',
+    request: { path: { id: personId } },
+    enabled: permitted !== false,
+  });
+  if (permitted === false) {
+    return <p className="caption">The account balance is not available to you.</p>;
+  }
+  if (!summary.data) {
+    return (
+      <p className="caption">
+        {summary.error
+          ? presentationForError(summary.error) === 'unavailable'
+            ? 'The account balance is not available to you.'
+            : `The account balance could not load (${summary.error.code}).`
+          : 'Loading the account balance…'}
+      </p>
+    );
+  }
+  const m = summary.data;
+  return (
+    <dl className="money-summary" aria-label="Account summary">
+      <div>
+        <dt>Account balance</dt>
+        <dd>{amounts(m.accountBalance, 'Nothing owed')}</dd>
+        {m.pastDueObligations > 0 ? (
+          <dd className="caption">
+            {m.pastDueObligations} of {m.openObligations} open past due
+          </dd>
+        ) : null}
+      </div>
+      <div>
+        <dt>Credits</dt>
+        <dd>{amounts(m.creditsAvailable, 'None')}</dd>
+        {m.creditsPendingApproval.length > 0 ? (
+          <dd className="caption">{amounts(m.creditsPendingApproval, '')} awaiting approval</dd>
+        ) : null}
+      </div>
+      <div>
+        <dt>Paid this year</dt>
+        <dd>{amounts(m.paidThisYear, 'Nothing yet')}</dd>
+        {m.refundedThisYear.length > 0 ? (
+          <dd className="caption">{amounts(m.refundedThisYear, '')} refunded</dd>
+        ) : null}
+      </div>
+    </dl>
+  );
+}
+
+/**
+ * Money: the account summary (MoneySummary) and the latest money entries of the person's scoped
+ * timeline (the same read the timeline below makes).
  */
 function MoneyCard({ personId }: { personId: string }) {
   const facilities = useFacilityDirectory();
@@ -674,6 +736,7 @@ function MoneyCard({ personId }: { personId: string }) {
         <h4 id="money-title">Money</h4>
         <Link to="/finance">Finance</Link>
       </div>
+      <MoneySummary personId={personId} />
       {!page.data ? (
         <p className="caption">
           {page.error ? 'Money entries are shown with the timeline.' : 'Loading money entries…'}

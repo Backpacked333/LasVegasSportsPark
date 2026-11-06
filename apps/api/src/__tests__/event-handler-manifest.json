@@ -61,6 +61,7 @@
     "finance.payment_failed": ["finance.notify_payment_failed", "support.index_payment"],
     "finance.payment_outcome_unknown": ["support.index_payment"],
     "finance.payment_received": ["support.index_payment"],
+    "finance.payment_reminder_requested": ["finance.notify_payment_reminder"],
     "finance.refund_requested": ["support.index_refund"],
     "finance.refund_reversed": ["finance.notify_refund_reversed"],
     "finance.refund_settled": [

@@ -103,6 +103,9 @@ export function buildInsightParams(
 ): { params: ReportParams | null; errors: FieldErrors; withheld?: string } {
   const errors: FieldErrors = {};
   const params: ReportParams = { ...base };
+  if (key === 'utilization_heatmap' && extras.includeBuffers) {
+    params.includeBuffers = extras.includeBuffers;
+  }
   if (key === 'utilization') {
     if (extras.includeBuffers) params.includeBuffers = extras.includeBuffers;
     if (extras.weighting) params.weighting = extras.weighting;
@@ -171,6 +174,19 @@ function ExtraFields({
   errors: FieldErrors;
 }) {
   switch (entry.key) {
+    case 'utilization_heatmap':
+      return (
+        <SelectField
+          label="Setup and cleanup buffers"
+          value={extras.includeBuffers}
+          onChange={(v) => set({ includeBuffers: v as Extras['includeBuffers'] })}
+          placeholder="Report default (named in the disclosures)"
+          options={[
+            { value: 'true', label: 'Count buffers as reserved time' },
+            { value: 'false', label: 'Leave buffers out of reserved time' },
+          ]}
+        />
+      );
     case 'utilization':
       return (
         <>

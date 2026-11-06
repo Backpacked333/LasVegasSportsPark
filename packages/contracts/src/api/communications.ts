@@ -325,6 +325,53 @@ export const RecipientPreviewSchema = z
   .openapi('RecipientPreview');
 export type RecipientPreview = z.infer<typeof RecipientPreviewSchema>;
 
+/**
+ * SPK-COMMS-006 while composing (park UI redesign gap "live recipient count"): how many people an
+ * audience resolves to right now and how each channel would reach them, without any name, id or
+ * contact detail (names appear only in the recipient preview of a composed notice). Channels are
+ * counted from each recipient's effective preferences for the category (SPK-COMMS-007): `optedOut`
+ * is a stored choice to switch the channel off, `offByDefault` is the policy default for people who
+ * stored none (pending DEC-012 and DEC-062: an engineering placeholder, not an approved channel
+ * policy), `noProvider` counts recipients whose channel is on but has no messaging provider
+ * configured (DEC-020). Address availability is checked at delivery, not here.
+ */
+export const AudienceCountBody = z
+  .object({
+    kind: NotificationKindSchema,
+    category: NotificationCategorySchema.optional(),
+    facilityId: z.uuid().optional(),
+    audience: AudienceSchema,
+    protected: z.boolean().default(false),
+  })
+  .strict()
+  .openapi('AudienceCountRequest');
+export type AudienceCountInput = z.infer<typeof AudienceCountBody>;
+
+export const AudienceChannelCountSchema = z
+  .object({
+    channel: DeliveryChannelSchema,
+    reachable: z.number().int().min(0),
+    optedOut: z.number().int().min(0),
+    offByDefault: z.number().int().min(0),
+    noProvider: z.number().int().min(0),
+  })
+  .openapi('AudienceChannelCount');
+
+export const AudienceCountSchema = z
+  .object({
+    resolvedAt: Instant,
+    category: NotificationCategorySchema,
+    /** Distinct people the audience resolves to from current permissions (SPK-COMMS-003). */
+    count: z.number().int().min(0),
+    /** People no channel would reach (every channel off or without a provider). */
+    unreachable: z.number().int().min(0),
+    channels: z.array(AudienceChannelCountSchema),
+    /** Channel approval and the essential/promotional split are pending decisions. */
+    pendingDecisions: z.array(z.string()),
+  })
+  .openapi('AudienceCount');
+export type AudienceCount = z.infer<typeof AudienceCountSchema>;
+
 export const NotificationRecipientSchema = z
   .object({
     id: z.uuid(),
@@ -462,6 +509,20 @@ export const InboxQuery = PageRequestSchema.extend({
 export type InboxQuery = z.infer<typeof InboxQuery>;
 
 export const InboxPageSchema = pageSchema(InboxItemSchema).openapi('InboxPage');
+
+/**
+ * The customer app's inbox badge (SPK-UX-003): delivered in-app notices not yet read, excluding
+ * ones a newer notice replaced (SPK-COMMS-005) and protected ones the reader may no longer be
+ * served. Counted up to `cap`; `capped` says there are more.
+ */
+export const InboxUnreadCountSchema = z
+  .object({
+    unread: z.number().int().min(0),
+    capped: z.boolean(),
+    cap: z.number().int().min(1),
+  })
+  .openapi('InboxUnreadCount');
+export type InboxUnreadCount = z.infer<typeof InboxUnreadCountSchema>;
 export type InboxPage = z.infer<typeof InboxPageSchema>;
 
 export const MarkReadBody = withRequestMeta({}).openapi('MarkNotificationReadRequest');
@@ -774,6 +835,24 @@ register({
   requirements: 'SPK-COMMS-001, SPK-UX-003',
   query: InboxQuery,
   response: InboxPageSchema,
+});
+register({
+  method: 'get',
+  path: '/me/inbox/unread-count',
+  summary: 'How many in-app notices the authenticated person has not read (inbox badge)',
+  requirements: 'SPK-UX-003, SPK-COMMS-004, SPK-COMMS-005',
+  response: InboxUnreadCountSchema,
+});
+register({
+  method: 'post',
+  path: '/notification-audience-counts',
+  summary:
+    'Count the recipients an audience resolves to now, by channel with opt-outs (no names; staff composer)',
+  requirements:
+    'SPK-COMMS-003, SPK-COMMS-006, SPK-COMMS-007 (channel policy pending DEC-012, DEC-062)',
+  body: AudienceCountBody,
+  response: AudienceCountSchema,
+  status: 200,
 });
 register({
   method: 'post',

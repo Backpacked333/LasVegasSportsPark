@@ -122,6 +122,41 @@ export async function toPosSession(db: Reader, row: PosSessionRow): Promise<PosR
   };
 }
 
+/**
+ * The lines in effect (0686): a line superseded by a quantity change or removal is history, and a
+ * removal (quantity 0) shows nothing. Totals, payment journals and returns use these lines only.
+ */
+export function liveLines<
+  T extends { id: string; quantity: number; supersedes_line_id: string | null },
+>(rows: readonly T[]): T[] {
+  const superseded = new Set(rows.map((r) => r.supersedes_line_id).filter((id) => id !== null));
+  return rows.filter((r) => !superseded.has(r.id) && r.quantity > 0);
+}
+
+/** The approved charges over the given lines, one entry per configured charge (DEC-057). */
+export function chargeSummary(
+  lines: readonly { charges: unknown }[],
+): Array<{ code: string; label: string; kind: 'tax' | 'fee'; amountMinor: number }> {
+  const charges = new Map<
+    string,
+    { code: string; label: string; kind: 'tax' | 'fee'; amountMinor: number }
+  >();
+  for (const line of lines) {
+    for (const c of line.charges as PosLineChargeRecord[]) {
+      const key = `${c.kind}:${c.code}:${c.label}`;
+      const current = charges.get(key) ?? {
+        code: c.code,
+        label: c.label,
+        kind: c.kind,
+        amountMinor: 0,
+      };
+      current.amountMinor += c.amountMinor;
+      charges.set(key, current);
+    }
+  }
+  return [...charges.values()];
+}
+
 /** Units of each sale line returned so far, from the append-only returns. */
 export function returnedUnits(returns: PosReturnRow[]): Map<string, number> {
   const units = new Map<string, number>();
@@ -189,7 +224,7 @@ export async function loadSaleParts(db: Reader, sale: PosSaleRow): Promise<PosSa
           .where('id', 'in', refundIds)
           .execute();
   return {
-    lines,
+    lines: liveLines(lines),
     tenders,
     returns,
     attemptStatus: new Map(attempts.map((a) => [a.id, a.status])),
@@ -287,6 +322,7 @@ export function toPosSale(sale: PosSaleRow, parts: PosSaleParts): PosSale {
     pendingMinor: pending,
     remainingMinor: sale.status === 'open' ? Math.max(total - settled - pending, 0) : 0,
     returnedMinor: returned,
+    charges: chargeSummary(parts.lines),
     lines: parts.lines.map((l) => toLine(l, units.get(l.id) ?? 0)),
     tenders: parts.tenders.map((t) => toTender(t, parts.attemptStatus)),
     returns: parts.returns.map((r) => toReturn(r, parts.refundStatus, parts.refundReversedAt)),
@@ -300,23 +336,6 @@ export function toPosSale(sale: PosSaleRow, parts: PosSaleParts): PosSale {
 
 /** The customer's receipt: amounts and approved charges, never evidence or staff details. */
 export function toPosReceipt(sale: PosSaleRow, parts: PosSaleParts): PosReceipt {
-  const charges = new Map<
-    string,
-    { code: string; label: string; kind: 'tax' | 'fee'; amountMinor: number }
-  >();
-  for (const line of parts.lines) {
-    for (const c of line.charges as PosLineChargeRecord[]) {
-      const key = `${c.kind}:${c.code}:${c.label}`;
-      const current = charges.get(key) ?? {
-        code: c.code,
-        label: c.label,
-        kind: c.kind,
-        amountMinor: 0,
-      };
-      current.amountMinor += c.amountMinor;
-      charges.set(key, current);
-    }
-  }
   return {
     saleId: sale.id,
     saleNumber: sale.sale_number,
@@ -333,7 +352,7 @@ export function toPosReceipt(sale: PosSaleRow, parts: PosSaleParts): PosReceipt 
       lineTotalMinor: Number(l.line_total_minor),
     })),
     subtotalMinor: Number(sale.subtotal_minor),
-    charges: [...charges.values()],
+    charges: chargeSummary(parts.lines),
     totalMinor: Number(sale.total_minor),
     tenders: parts.tenders
       .filter((t) => t.status === 'settled')

@@ -1,7 +1,8 @@
-import { Controller, Get, Patch, Post } from '@nestjs/common';
+import { Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
 import {
   AddPosSaleLineBody,
   AddPosTenderBody,
+  ChangePosLineQuantityBody,
   CloseRegisterSessionBody,
   CreatePosProductBody,
   CreatePosRegisterBody,
@@ -38,6 +39,7 @@ import { PosSalesService } from '../services/pos/pos-sales.service';
 import { PosSetupService } from '../services/pos/pos-setup.service';
 
 const IdParams = z.object({ id: z.uuid() });
+const LineParams = z.object({ id: z.uuid(), lineId: z.uuid() });
 const NOT_A_CATEGORY = 'Not a §5.3 record category (point-of-sale setup, FIN-06).';
 
 /** Point-of-sale products and registers (FIN-06; capability point_of_sale, DEC-016, DEC-079). */
@@ -188,6 +190,19 @@ export class PosSalesController {
     @CorrelationId() correlationId: string | null,
   ): Promise<PosSale> {
     return this.sales.addLine(principal, params.id, body, correlationId);
+  }
+
+  @Post('pos-sales/:id/lines/:lineId/quantity')
+  @HttpCode(200)
+  @Idempotent()
+  @RecordAuthority('order')
+  changeLineQuantity(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(LineParams) params: z.infer<typeof LineParams>,
+    @ZodBody(ChangePosLineQuantityBody) body: z.infer<typeof ChangePosLineQuantityBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<PosSale> {
+    return this.sales.changeLineQuantity(principal, params.id, params.lineId, body, correlationId);
   }
 
   @Post('pos-sales/:id/tenders')

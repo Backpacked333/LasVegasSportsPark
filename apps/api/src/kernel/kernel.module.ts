@@ -38,7 +38,9 @@ import {
   AuditController,
   FacilitiesController,
   MePermissionsController,
+  OrganizationController,
 } from './core/core.controllers';
+import { OrganizationSettingsService } from './core/organization-settings.service';
 import { OperationalExceptions } from './exceptions/operational-exceptions.service';
 import { FacilityDirectory } from './facilities/facility-directory';
 import { HealthController } from './health/health.controller';
@@ -88,6 +90,7 @@ export const KERNEL_CONTROLLERS = [
   RecoveryController,
   FacilitiesController,
   MePermissionsController,
+  OrganizationController,
   AdminController,
   AuditController,
   DeadLettersController,
@@ -193,6 +196,7 @@ export class KernelModule implements OnModuleInit {
       AuditLogService,
       FacilityDirectory,
       CapabilityService,
+      OrganizationSettingsService,
       MePermissionsService,
       IntegrationRegistry,
       { provide: INTEGRATION_REGISTRY, useExisting: IntegrationRegistry },
@@ -237,6 +241,7 @@ export class KernelModule implements OnModuleInit {
         AuditReader,
         FacilityDirectory,
         CapabilityService,
+        OrganizationSettingsService,
         IntegrationRegistry,
         INTEGRATION_REGISTRY,
         OutboxHistory,

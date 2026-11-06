@@ -35,7 +35,10 @@ import { COMMUNICATIONS_POLICY, DEFAULT_COMMUNICATIONS_POLICY } from './communic
 import { CalendarFeedController } from './controllers/calendar-feed.controller';
 import { DeliveryAttemptsController } from './controllers/delivery-attempts.controller';
 import { MeCommunicationsController } from './controllers/me.controller';
-import { NotificationsController } from './controllers/notifications.controller';
+import {
+  AudienceCountsController,
+  NotificationsController,
+} from './controllers/notifications.controller';
 import { MessagingWebhooksController } from './controllers/webhooks.controller';
 import {
   CHANNEL_PROVIDERS,
@@ -129,6 +132,7 @@ const providers: Provider[] = [
   providers,
   controllers: [
     NotificationsController,
+    AudienceCountsController,
     DeliveryAttemptsController,
     MeCommunicationsController,
     CalendarFeedController,

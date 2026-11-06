@@ -43,6 +43,7 @@ import {
   ObligationsController,
   ReconciliationController,
 } from './controllers/accounts.controller';
+import { FinanceDeskController } from './controllers/desk.controller';
 import { PaymentWebhooksController, PaymentsController } from './controllers/payments.controller';
 import {
   CheckoutCompensated,
@@ -54,6 +55,7 @@ import {
   InstallmentNotice,
   InstallmentNoticeDue,
   PaymentFailed,
+  PaymentReminderRequested,
   RefundReversed,
   RefundSettled,
 } from './finance.events';
@@ -84,6 +86,7 @@ import { CheckoutService } from './services/checkout.service';
 import { CreditsService } from './services/credits.service';
 import { FinanceCustomerScope } from './services/customer-scope';
 import { PersonMergeMoneyFollowUp } from './services/person-merge-follow-up';
+import { FinanceDeskService } from './services/finance-desk.service';
 import { FinanceNotices } from './services/finance-notices.service';
 import { FinancialStandingService } from './services/financial-standing.service';
 import { MoneyReadsService } from './services/money-reads.service';
@@ -205,6 +208,8 @@ const providers: Provider[] = [
   MoneyReadsService,
   // FIN-05: finance-owned customer notices (IF-22).
   FinanceNotices,
+  // Park UI redesign: payment reminders, person money summary, basket prices.
+  FinanceDeskService,
   // FIN-06: point of sale (capability point_of_sale, DEC-016, DEC-079).
   PosSaleFinalizer,
   PosSetupService,
@@ -247,6 +252,7 @@ const providers: Provider[] = [
     CreditsController,
     InstallmentsController,
     ReconciliationController,
+    FinanceDeskController,
   ],
   exports: [
     PAYMENT_PROVIDER_PORT,
@@ -271,6 +277,7 @@ const providers: Provider[] = [
     ParticipationStandingService,
     FinancialStandingService,
     MoneyReadsService,
+    FinanceDeskService,
     PosSalesService,
     PosSetupService,
     AccountingExportService,
@@ -404,6 +411,14 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
       'finance.notify_contribution_requested',
       (event, ctx) =>
         runWithTransaction(ctx.trx, () => this.notices.contributionRequested(ctx.trx, event)),
+      { failureOwner: 'finance_operator' },
+    );
+    // Park UI redesign (SPK-COMMS-002 payment attention): a reminder finance staff requested.
+    this.registry.on<EventPayload<typeof PaymentReminderRequested>>(
+      PaymentReminderRequested.type,
+      'finance.notify_payment_reminder',
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, () => this.notices.paymentReminder(ctx.trx, event)),
       { failureOwner: 'finance_operator' },
     );
     // R2-JOURNEYS-04 (SPK-AT-023, SPK-COMMS-002): the payer of a checkout that could not finish is

@@ -549,3 +549,45 @@
     align-items: stretch;
   }
 }
+
+/* Utilization heatmap (MET-106 to MET-108): rate in text in every cell, shade as a second cue. */
+.ia-heatmap-scroll {
+  overflow-x: auto;
+}
+.ia-heatmap-grid {
+  border-collapse: separate;
+  border-spacing: 3px;
+  font-size: 11.5px;
+}
+.ia-heatmap-grid th {
+  font-weight: 700;
+  color: var(--muted);
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+.ia-heatmap-grid td {
+  min-width: 44px;
+  height: 30px;
+  text-align: center;
+  border-radius: 6px;
+  background: var(--sand-2);
+  color: var(--ink);
+  font-weight: 600;
+}
+.ia-heatmap-grid td[data-level='none'] {
+  background: transparent;
+}
+.ia-heatmap-grid td[data-level='1'] {
+  background: color-mix(in srgb, var(--pitch) 18%, var(--sand-2));
+}
+.ia-heatmap-grid td[data-level='2'] {
+  background: color-mix(in srgb, var(--pitch) 38%, var(--sand-2));
+}
+.ia-heatmap-grid td[data-level='3'] {
+  background: color-mix(in srgb, var(--pitch) 62%, var(--sand-2));
+  color: #fff;
+}
+.ia-heatmap-grid td[data-level='4'] {
+  background: var(--pitch);
+  color: #fff;
+}

@@ -28,7 +28,7 @@ describe('finance README lists every registered outbox handler (R3-DOCS-TRUTH-3-
       .get(EventHandlerRegistry)
       .list()
       .filter((h) => h.name.startsWith('finance.'));
-    expect(handlers.length).toBe(13);
+    expect(handlers.length).toBe(14);
     const missing = handlers
       .filter((h) => !readme.includes(`\`${h.name}\` on \`${h.eventType}\``))
       .filter((h) => !readme.includes(`\`${h.name}\` on its timer \`${h.eventType}\``))

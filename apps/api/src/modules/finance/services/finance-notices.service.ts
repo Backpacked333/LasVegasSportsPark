@@ -318,6 +318,42 @@ export class FinanceNotices {
     });
   }
 
+  /**
+   * finance.payment_reminder_requested → the debtor, or the responsible payer of a team fee
+   * (SPK-COMMS-002 payment attention, park UI redesign): an essential notice (the policy binds
+   * `payment_attention` to the operational category, SPK-COMMS-007; which channels carry it is
+   * pending DEC-062) stating the balance and due date as recorded on the reminder.
+   */
+  async paymentReminder(
+    trx: Trx,
+    event: DomainEvent<EventPayload<typeof FinanceEvents.paymentReminderRequested>>,
+  ): Promise<void> {
+    const organizationId = event.organizationId;
+    const obligation = await trx
+      .selectFrom('obligations')
+      .select(['description', 'order_id', 'status'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', event.payload.obligationId)
+      .executeTakeFirst();
+    // Settled or canceled before the notice went out: nothing is owed, so nothing is said.
+    if (!obligation || obligation.status !== 'open') return;
+    const facility = await this.facilityOfOrder(trx, organizationId, obligation.order_id);
+    await this.compose(
+      trx,
+      financeSystem(organizationId, 'finance.notify_payment_reminder'),
+      event,
+      {
+        kind: 'payment_attention',
+        facilityId: facility?.facilityId,
+        subject: { type: 'obligation', id: event.payload.obligationId },
+        audience: { subjectPersonIds: [event.payload.recipientPersonId] },
+        protected: true,
+        title: 'A payment is past due',
+        body: `${amount(event.payload.remainingMinor, event.payload.currency)} toward ${obligation.description} was due on ${localDateTime(new Date(event.payload.dueAt), facility?.timezone ?? null)}. You can review and pay it in the app.`,
+      },
+    );
+  }
+
   /** finance.installment_failed → the plan's payer (SPK-PAY-006). */
   async installmentFailed(
     trx: Trx,

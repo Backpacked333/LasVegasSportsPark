@@ -377,3 +377,47 @@
   min-height: 48px;
   font-size: 15px;
 }
+
+/* Ticket: quantity stepper, configured tax lines and the household account (park UI redesign). */
+.pos-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.pos-step {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sand);
+  color: var(--ink);
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.pos-step:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pos-step-error {
+  flex-basis: 100%;
+}
+.pos-ticket-charges {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pos-ticket-charges li {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.pos-ticket-account {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}

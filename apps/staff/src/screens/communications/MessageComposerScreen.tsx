@@ -49,6 +49,7 @@ import { PageHeader } from '../../ui/Page';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { AudienceCount } from './AudienceCount';
 import './communications.css';
 
 type Kind = Schema<'NotificationKind'>;
@@ -182,6 +183,30 @@ export function Composer({
       .then((notification) => navigate(detailPath(notification.id)))
       .catch(() => undefined);
   };
+
+  // SPK-COMMS-006: the live count needs the audience and the category the message is sent in.
+  const liveAudience = {
+    staffRoles: roles,
+    teamEntryIds: idList(teamEntries),
+    subjectPersonIds: idList(subjects),
+    personIds: idList(persons),
+    facilityId: facility.facilityId,
+  };
+  const named =
+    liveAudience.staffRoles.length +
+    liveAudience.teamEntryIds.length +
+    liveAudience.subjectPersonIds.length +
+    liveAudience.personIds.length;
+  const countRequest =
+    named > 0 && category !== '' && online
+      ? {
+          kind,
+          category,
+          ...(facility.facilityId ? { facilityId: facility.facilityId } : {}),
+          audience: liveAudience,
+          protected: isProtected,
+        }
+      : null;
 
   const audienceParts = audienceSummary({
     roles,
@@ -410,6 +435,7 @@ export function Composer({
           <span className="cm-reach-value" data-testid="audience-summary">
             {audienceParts.length === 0 ? 'Nobody yet' : audienceParts.join(' · ')}
           </span>
+          <AudienceCount request={countRequest} />
           <ul className="cm-reach-list">
             <li>
               {category === ''

@@ -200,3 +200,16 @@ span.week-cell {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* Booking price (GET /v1/basket-prices/{id}): the order's total or an estimate. */
+.booking-price {
+  margin-left: auto;
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.booking-price .caption {
+  font-weight: 500;
+  font-size: 12px;
+}

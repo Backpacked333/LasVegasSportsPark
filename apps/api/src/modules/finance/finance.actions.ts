@@ -157,6 +157,30 @@ export const FinanceActions = defineActions({
     subjectPermission: 'pay',
     requirements: ['SPK-PAY-009'],
   },
+  sendPaymentReminder: {
+    id: 'finance.send_payment_reminder',
+    description:
+      'Remind the debtor of a past-due obligation (an essential payment notice through communications)',
+    staffRoles: FINANCE,
+    requirements: ['SPK-COMMS-002', 'SPK-PAY-004', 'SPK-PAY-006'],
+  },
+  readPersonMoney: {
+    id: 'finance.read_person_money',
+    description:
+      "Read a person's money summary: account balance, credits and paid this year (protected household money)",
+    // Household money is customer-private (§4.10): the desk and finance staff who take or correct
+    // payments, and support; not league or program managers, coaches or officials.
+    staffRoles: [
+      'front_desk',
+      'finance_operator',
+      'general_manager',
+      'system_administrator',
+      'support_operator',
+    ],
+    allowSelf: true,
+    subjectPermission: 'pay',
+    requirements: ['SPK-PAY-004', 'SPK-PAY-009', 'SPK-PAY-011', '§4.10'],
+  },
   manageInstallments: {
     id: 'finance.manage_installments',
     description: 'Collect or extend installments',
