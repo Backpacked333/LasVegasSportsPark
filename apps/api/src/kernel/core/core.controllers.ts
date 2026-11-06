@@ -6,6 +6,7 @@ import {
   ListAuditRecordsQuery,
   ListFacilitiesQuery,
   ListProviderEventsQuery,
+  SetDefaultCurrencyBody,
   staffFacilityScope,
   z,
   type AdminSettings,
@@ -18,6 +19,8 @@ import {
   type ListFacilitiesQueryInput,
   type ListProviderEventsQueryInput,
   type MePermissions,
+  type OrganizationProfile,
+  type SetDefaultCurrencyInput,
   type Page,
   type Principal,
   type ProviderEventView,
@@ -36,6 +39,7 @@ import { CurrentCorrelationId } from '../http/request-context';
 import { ZodBody, ZodParams, ZodQuery } from '../http/zod-validation.pipe';
 import { IntegrationRegistry } from '../integrations/integration-registry';
 import { DATABASE } from '../tokens';
+import { OrganizationSettingsService } from './organization-settings.service';
 
 const IdParams = z.object({ id: z.uuid() });
 
@@ -89,6 +93,17 @@ export class FacilitiesController {
   }
 }
 
+/** GET /v1/organization: name and default currency for every signed-in principal (SPK-PAY-001). */
+@Controller('organization')
+export class OrganizationController {
+  constructor(private readonly settings: OrganizationSettingsService) {}
+
+  @Get()
+  profile(@CurrentPrincipal() principal: Principal): Promise<OrganizationProfile> {
+    return this.settings.profile(principal);
+  }
+}
+
 /** GET /v1/me/permissions (K-05, SPK-UX-005). */
 @Controller('me')
 export class MePermissionsController {
@@ -112,7 +127,21 @@ export class AdminController {
     private readonly authorization: AuthorizationService,
     private readonly integrations: IntegrationRegistry,
     private readonly capabilities: CapabilityService,
+    private readonly organizationSettings: OrganizationSettingsService,
   ) {}
+
+  /** SPK-PAY-001: the organization default currency (system administrator; expected revision). */
+  @Post('settings/default-currency')
+  @HttpCode(200)
+  @Idempotent()
+  @NoRecordAuthority('Organization configuration, not a §5.3 record category')
+  setDefaultCurrency(
+    @CurrentPrincipal() principal: Principal,
+    @ZodBody(SetDefaultCurrencyBody) body: SetDefaultCurrencyInput,
+    @CurrentCorrelationId() correlationId: string | null,
+  ): Promise<OrganizationProfile> {
+    return this.organizationSettings.setDefaultCurrency(principal, body, correlationId);
+  }
 
   @Get('settings')
   async settings(@CurrentPrincipal() principal: Principal): Promise<AdminSettings> {
@@ -123,7 +152,7 @@ export class AdminController {
     });
     const organization = await this.db
       .selectFrom('organizations')
-      .select(['id', 'slug', 'name', 'status', 'revision', 'settings'])
+      .select(['id', 'slug', 'name', 'status', 'revision', 'settings', 'default_currency'])
       .where('id', '=', organizationId)
       .executeTakeFirst();
     if (!organization) throw errors.notFound('organization');
@@ -134,10 +163,12 @@ export class AdminController {
       .orderBy('name')
       .orderBy('id')
       .execute();
+    const { default_currency: defaultCurrency, ...profile } = organization;
     return {
       organization: {
-        ...organization,
+        ...profile,
         settings: (organization.settings ?? {}) as Record<string, unknown>,
+        defaultCurrency,
       },
       facilities: facilities.map((f) => ({
         ...f,

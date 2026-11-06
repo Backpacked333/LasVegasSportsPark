@@ -22,6 +22,8 @@ export interface OrganizationsTable {
   name: string;
   status: Generated<OrganizationStatus>;
   settings: GeneratedJson<Record<string, unknown>>;
+  /** ISO 4217 code; null until configured (0018, SPK-PAY-001). */
+  default_currency: Generated<string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;

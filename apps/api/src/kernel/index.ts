@@ -37,6 +37,7 @@ export * from './http/route-catalog';
 export * from './recovery/recovery-mode.service';
 export * from './recovery/recovery.guard';
 export * from './authorization/core-actions';
+export * from './core/organization-settings.service';
 export * from './authorization/navigation-areas';
 export * from './authorization/me-permissions.service';
 export * from './authorization/record-authority.port';
