@@ -33,6 +33,8 @@ export const NotificationKindSchema = z
     // SPK-CAP-001 "request availability, remind" (COM-06, migration 1007)
     'availability_request',
     'activity_reminder',
+    // SPK-RESULT-001: league staff remind captains of a missing result (migration 1012)
+    'result_reminder',
   ])
   .openapi('NotificationKind');
 export type NotificationKindValue = z.infer<typeof NotificationKindSchema>;

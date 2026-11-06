@@ -17,6 +17,7 @@
     "competition.availability_requested": ["communications.notify_availability_request"],
     "competition.fixture_changed": ["workforce.follow_fixture"],
     "competition.result_published": ["communications.notify_result_published"],
+    "competition.result_reminder_requested": ["communications.notify_result_reminder"],
     "competition.team_invitation_created": ["communications.notify_team_invitation"],
     "core.capability_changed": ["enrollment.resume_after_capability_enabled"],
     "enrollment.application_decided": ["enrollment.notify_registration_outcome"],

@@ -5,6 +5,7 @@ import {
   FIXTURE_PORT,
   TEAM_ENTRY_QUERY_PORT,
   type CompetitionEvents,
+  type FieldEvents,
   type FixturePort,
   type MatchEvents,
   type TeamEntryQueryPort,
@@ -15,6 +16,7 @@ import { NotificationsService } from './notifications.service';
 type InvitationCreatedPayload = EventPayload<typeof CompetitionEvents.teamInvitationCreated>;
 type ResultPublishedPayload = EventPayload<typeof MatchEvents.resultPublished>;
 type AvailabilityRequestedPayload = EventPayload<typeof CompetitionEvents.availabilityRequested>;
+type ResultReminderPayload = EventPayload<typeof FieldEvents.resultReminderRequested>;
 
 /** The actor communications composes competition notices as (an audit label, no authority). */
 const ACTOR = 'communications.competition_notices';
@@ -35,6 +37,9 @@ const ACTOR = 'communications.competition_notices';
  *   `availability_request` notice per request to the asked players as subjects (adult players and
  *   holders of `receive_messages`, so a guardian hears about their child), with the fixture start
  *   in the facility's zone (SPK-SCHED-008).
+ * - `communications.notify_result_reminder` (SPK-RESULT-001): one protected `result_reminder`
+ *   notice to the fixture's captains and co-captains named in the reminder (subjects; whoever holds
+ *   `receive_messages` over a youth captain hears too), with league staff's note when given.
  */
 @Injectable()
 export class CompetitionNotices {
@@ -135,6 +140,43 @@ export class CompetitionNotices {
         timezone: zone,
       },
       // Who plays on which team is participant-private: re-checked before dispatch.
+      protected: true,
+      sourceEventId: event.id,
+      correlationId: event.correlationId,
+    });
+  }
+
+  async onResultReminderRequested(
+    trx: Trx,
+    event: DomainEvent<ResultReminderPayload>,
+  ): Promise<void> {
+    const payload = event.payload;
+    const subjects = uniqueStrings(payload.recipientPersonIds);
+    if (subjects.length === 0) return;
+    if (await this.alreadyComposed(trx, event)) return;
+    const fixture = await this.fixtures.findFixture(event.organizationId, payload.fixtureId, trx);
+    const entryIds = uniqueStrings(
+      fixture
+        ? [fixture.homeEntryId, fixture.awayEntryId].filter((id): id is string => id !== null)
+        : payload.teamEntryIds,
+    );
+    const names: string[] = [];
+    for (const id of entryIds) {
+      const entry = await this.entries.findTeamEntry(event.organizationId, id, trx);
+      names.push(entry?.teamName ?? 'a team');
+    }
+    const matchup = names.length > 0 ? names.join(' vs ') : 'your game';
+    const note = payload.message ? ` Note from league staff: ${payload.message}` : '';
+    await this.notifications.composeAndQueueIn(trx, systemPrincipal(event.organizationId, ACTOR), {
+      kind: 'result_reminder',
+      category: 'operational',
+      ...(payload.facilityId ? { facilityId: payload.facilityId } : {}),
+      subject: { type: 'fixture', id: payload.fixtureId },
+      audience: { subjectPersonIds: subjects },
+      title: noticeTitle('Result needed: ', matchup),
+      body: `The result of ${matchup} has not been submitted yet. Please submit it in the app.${note}`,
+      detailsAfter: { reminderId: payload.reminderId, fixtureId: payload.fixtureId },
+      // Who captains which team is participant-private: re-checked before dispatch.
       protected: true,
       sourceEventId: event.id,
       correlationId: event.correlationId,
