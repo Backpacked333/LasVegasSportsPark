@@ -4,7 +4,7 @@
  */
 import { StyleSheet, Text, View } from 'react-native';
 import { StatusBadge, type StatusBadgeProps } from '../../../ui/StatusBadge';
-import { colors, spacing, type } from '../../../ui/theme';
+import { colors, fonts, spacing, type } from '../../../ui/theme';
 
 export interface Step {
   title: string;
@@ -37,5 +37,5 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
   number: { ...type.heading, color: colors.textMuted, width: 24, textAlign: 'center' },
   text: { flex: 1, gap: spacing.xs },
-  title: { ...type.body, fontWeight: '600', color: colors.text },
+  title: { ...type.body, ...fonts.semibold, color: colors.text },
 });

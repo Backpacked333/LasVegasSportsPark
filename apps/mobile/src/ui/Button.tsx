@@ -1,21 +1,45 @@
 /**
  * Accessible button (SPK-UX-009): role, label, disabled and busy state are exposed to VoiceOver and
  * TalkBack; minimum 44 pt touch target; text scales with the OS setting.
+ *
+ * Variants of the park system: `primary` (pitch green, the one main action of a view), `secondary`
+ * (white with a line border), `lime` (floodlight, for the main action on a night card) and
+ * `ghost-dark` (line border on a night card). An optional decorative `icon` sits before the label.
  */
 import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from './theme';
+import { Icon } from './Icon';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from './theme';
+
+export type ButtonVariant = 'primary' | 'secondary' | 'lime' | 'ghost-dark';
 
 export interface ButtonProps {
   label: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary';
+  variant?: ButtonVariant;
   disabled?: boolean;
   /** A command is in flight; the button is disabled and announced as busy (SPK-UX-008 processing). */
   busy?: boolean;
   /** What happens on press, when the label alone does not say it. */
   accessibilityHint?: string;
+  /** Decorative Material Symbols name shown before the label (hidden from screen readers). */
+  icon?: string;
+  /** Stretch to the width of the parent (bottom action bars). */
+  block?: boolean;
   testID?: string;
 }
+
+const VARIANT_STYLES = {
+  primary: { box: { backgroundColor: colors.primary }, text: colors.primaryText },
+  secondary: {
+    box: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.control },
+    text: colors.text,
+  },
+  lime: { box: { backgroundColor: colors.floodlight }, text: colors.night },
+  'ghost-dark': {
+    box: { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.nightLine },
+    text: colors.primaryText,
+  },
+} as const;
 
 export function Button({
   label,
@@ -24,10 +48,12 @@ export function Button({
   disabled = false,
   busy = false,
   accessibilityHint,
+  icon,
+  block = false,
   testID,
 }: ButtonProps) {
   const inactive = disabled || busy;
-  const primary = variant === 'primary';
+  const look = VARIANT_STYLES[variant];
   return (
     <Pressable
       accessibilityRole="button"
@@ -39,42 +65,40 @@ export function Button({
       testID={testID}
       style={({ pressed }) => [
         styles.base,
-        primary ? styles.primary : styles.secondary,
+        look.box,
+        block && styles.block,
         inactive && styles.inactive,
         pressed && styles.pressed,
       ]}
     >
       {busy ? (
         <ActivityIndicator
-          color={primary ? colors.primaryText : colors.primary}
+          color={look.text}
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
         />
+      ) : icon ? (
+        <Icon name={icon} size={20} color={look.text} />
       ) : null}
-      <Text style={[styles.label, primary ? styles.primaryLabel : styles.secondaryLabel]}>
-        {label}
-      </Text>
+      <Text style={[styles.label, { color: look.text }]}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: MIN_TOUCH_SIZE,
+    minHeight: 48,
     minWidth: MIN_TOUCH_SIZE,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
-    borderRadius: 6,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: spacing.sm,
   },
-  primary: { backgroundColor: colors.primary },
-  secondary: { backgroundColor: colors.background, borderWidth: 1.5, borderColor: colors.primary },
-  inactive: { opacity: 0.55 },
-  pressed: { opacity: 0.8 },
-  label: { ...type.body, fontWeight: '600', textAlign: 'center' },
-  primaryLabel: { color: colors.primaryText },
-  secondaryLabel: { color: colors.primary },
+  block: { alignSelf: 'stretch', flexGrow: 1 },
+  inactive: { opacity: 0.5 },
+  pressed: { opacity: 0.82 },
+  label: { ...type.body, ...fonts.extrabold, textAlign: 'center', flexShrink: 1 },
 });

@@ -75,10 +75,11 @@ import { useParticipants } from '../../features/registration/participants';
 import { SessionBookingFlow } from '../../features/registration/SessionBooking';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { registrationWindowStatus } from '../../features/registration/status';
-import { Body, ButtonRow, ChoiceRow, Section, Title } from '../../features/registration/ui';
+import { Body, ButtonRow, ChoiceRow, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { Hero } from '../../ui/Hero';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
@@ -420,10 +421,9 @@ export function RegistrationIntentScreen({ offeringId }: { offeringId: string })
         >
           {(o) => (
             <View>
-              <Section title="Register for">
-                <Title>{o.name}</Title>
+              <Hero eyebrow="Register for" title={o.name}>
                 <StatusBadge {...registrationWindowStatus(o)} />
-              </Section>
+              </Hero>
               {o.publicationState === 'registration_open' ? (
                 <IntentChooser offering={o} />
               ) : (

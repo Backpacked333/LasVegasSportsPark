@@ -33,7 +33,7 @@ import { Body, Section, Title } from '../../features/teams/ui';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 
 /** The published component is nullable (reported); a null answer reads as "no official results". */
 type Standings = NonNullable<Schema<'Standings'>>;
@@ -386,14 +386,14 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   ours: { backgroundColor: colors.surface },
-  head: { fontWeight: '700', color: colors.textMuted },
+  head: { ...fonts.bold, color: colors.textMuted },
   cellPos: { ...type.body, minWidth: 28, flexShrink: 0, color: colors.text },
   cellTeam: { ...type.body, flex: 1, color: colors.text },
   cell: { ...type.body, minWidth: 34, flexShrink: 0, textAlign: 'right', color: colors.text },
-  bold: { fontWeight: '700' },
+  bold: { ...fonts.bold },
   tie: { gap: spacing.xs, paddingVertical: spacing.xs },
   step: { gap: 2, paddingLeft: spacing.sm },
-  stepTitle: { ...type.body, fontWeight: '600', color: colors.text },
+  stepTitle: { ...type.body, ...fonts.semibold, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
 });

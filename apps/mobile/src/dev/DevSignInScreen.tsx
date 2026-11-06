@@ -13,7 +13,7 @@ import { LiveText } from '../ui/announce';
 import { Button } from '../ui/Button';
 import { Screen } from '../ui/Screen';
 import { StateView } from '../ui/StateView';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../ui/theme';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -93,7 +93,7 @@ const styles = StyleSheet.create({
   form: { padding: spacing.lg, gap: spacing.md },
   title: { ...type.title, color: colors.text },
   body: { ...type.body, color: colors.text },
-  label: { ...type.body, fontWeight: '600', color: colors.text },
+  label: { ...type.body, ...fonts.semibold, color: colors.text },
   input: {
     ...type.body,
     minHeight: MIN_TOUCH_SIZE,

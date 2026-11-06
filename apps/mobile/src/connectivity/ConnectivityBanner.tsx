@@ -35,7 +35,7 @@ import { useApp, useConnectivity, useNow } from '../providers/AppProviders';
 import { LiveRegion, sentences, useAnnouncement } from '../ui/announce';
 import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
-import { colors, spacing, type } from '../ui/theme';
+import { colors, radius, spacing, toneBackgrounds, type } from '../ui/theme';
 
 /** Actions the customer app never performs offline (§4.15: no payments, no capacity commitments). */
 export const OFFLINE_UNAVAILABLE_ACTIONS = ['registration', 'payment', 'RSVP', 'account changes'];
@@ -286,11 +286,15 @@ export function ConnectivityBanner() {
 
 const styles = StyleSheet.create({
   banner: {
-    padding: spacing.md,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: 14,
     gap: spacing.xs,
-    backgroundColor: colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    backgroundColor: toneBackgrounds.warning,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+    borderRadius: radius.md,
   },
   text: { ...type.caption, color: colors.text },
 });

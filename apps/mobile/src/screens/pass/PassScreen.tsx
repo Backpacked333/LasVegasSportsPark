@@ -41,6 +41,9 @@
  *   `GET /v1/me/passes` lists the previous pass as revoked, which settles it.
  * - Every result here (a failure, the replace flow's outcomes, a withdrawal) is announced to screen
  *   readers (`ui/announce`, SPK-UX-009).
+ * - Look (park system): the pass is a night pitch card holding a white ticket with the reference
+ *   in large condensed figures. No name is printed on it (SPK-ENTRY-002), and no symbol is drawn
+ *   until DEC-023 decides the scanners.
  */
 import {
   formatAge,
@@ -50,7 +53,7 @@ import {
 } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import {
   keepsIntentAfterFailure,
   secretWithheldOf,
@@ -68,8 +71,9 @@ import { Button } from '../../ui/Button';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { Icon } from '../../ui/Icon';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, radius, spacing, type } from '../../ui/theme';
 import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
 import { usePassStore, type StoredPass } from './pass-store';
 
@@ -298,16 +302,26 @@ function PassContent() {
         </Section>
       ) : pass ? (
         <Section title="Your facility pass" testID="pass-ready">
-          <View
-            style={styles.reference}
-            accessible
-            // Spelled out, so VoiceOver and TalkBack read the reference itself (SPK-UX-009).
-            accessibilityLabel={`Facility pass reference: ${groupReference(pass.reference).split('').join(' ')}. Show this at the front desk.`}
-            testID="pass-reference"
-          >
-            <Text style={styles.referenceText} selectable>
-              {groupReference(pass.reference)}
-            </Text>
+          <View style={styles.hero}>
+            <Text style={styles.heroLabel}>Facility pass</Text>
+            <View
+              style={styles.reference}
+              accessible
+              // Spelled out, so VoiceOver and TalkBack read the reference itself (SPK-UX-009).
+              accessibilityLabel={`Facility pass reference: ${groupReference(pass.reference).split('').join(' ')}. Show this at the front desk.`}
+              testID="pass-reference"
+            >
+              <Text style={styles.referenceText} selectable>
+                {groupReference(pass.reference)}
+              </Text>
+              <Text style={styles.referenceHint}>Show at the front desk</Text>
+            </View>
+            <View style={styles.heroNote}>
+              <Icon name="location_on" size={22} color={colors.floodlight} />
+              <Text style={styles.heroNoteText}>
+                Kept on this device, so it shows without a connection.
+              </Text>
+            </View>
           </View>
           <Caption testID="pass-issued">
             Issued {formatWhen(pass.issuedAt, zone.zone)} ({formatAge(new Date(pass.issuedAt), now)}
@@ -667,20 +681,42 @@ export function PassScreen() {
 }
 
 const styles = StyleSheet.create({
-  reference: {
+  hero: {
     marginHorizontal: spacing.lg,
     padding: spacing.lg,
-    borderWidth: 2,
-    borderColor: colors.text,
-    borderRadius: 8,
+    gap: spacing.md,
+    borderRadius: radius.xl,
+    backgroundColor: colors.night,
+    alignItems: 'stretch',
+  },
+  heroLabel: { ...type.eyebrow, color: colors.nightMuted, textAlign: 'center' },
+  reference: {
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+    borderRadius: 28,
     backgroundColor: colors.background,
+    alignItems: 'center',
   },
   referenceText: {
     ...type.title,
-    fontFamily: Platform.select({ ios: 'Courier', default: 'monospace' }),
+    fontSize: 34,
+    lineHeight: 40,
     color: colors.text,
-    letterSpacing: 1,
+    letterSpacing: 2,
+    textAlign: 'center',
   },
+  referenceHint: { ...type.caption, color: colors.textMuted, textAlign: 'center' },
+  heroNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: spacing.md,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+    backgroundColor: colors.nightRaised,
+  },
+  heroNoteText: { ...type.caption, ...fonts.semibold, color: colors.primaryText, flex: 1 },
   pad: { paddingHorizontal: spacing.lg, gap: spacing.xs },
   actions: { padding: spacing.lg, gap: spacing.sm },
   confirm: { gap: spacing.sm },

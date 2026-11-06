@@ -16,6 +16,10 @@
  *   clock (calendar item `timezone`, fixture `venue.timezone`); only an activity the API gives no
  *   zone for is shown on the device clock, and the list says so.
  * - Customers never see drafts: the calendar, fixtures and notices carry published schedules.
+ *
+ * Look (park system): the next activity as the night card, then an agenda per day whose rows lead
+ * with the start time in condensed figures and carry a stripe in the activity kind's colour
+ * (league game, program session, booked session); the row's words say what it is.
  */
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
@@ -74,7 +78,7 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { ListRow } from '../../ui/ListRow';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, kindColors, spacing, type } from '../../ui/theme';
 
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
 type FixtureDetail = Schema<'FixtureDetail'>;
@@ -100,6 +104,7 @@ function NextCard({ item, participant }: { item: FamilyCalendarItem; participant
       <NextActivityCard
         model={model}
         onOpen={href ? () => router.push(href as Href) : undefined}
+        eyebrow="Next up"
         testID="schedule-next"
       />
       {notice ? <Caption testID="schedule-next-zone">{notice}</Caption> : null}
@@ -158,10 +163,28 @@ function NextFixtureCard({
           router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
         }
         openLabel="View fixture"
+        eyebrow="Next up"
         testID="schedule-next"
       />
       {notice ? <Caption testID="schedule-next-zone">{notice}</Caption> : null}
     </>
+  );
+}
+
+/** Stripe colour per kind of entry (decorative; the row's words name the activity). */
+function entryAccent(entry: TodayEntry): string {
+  if (entry.type === 'fixture') return kindColors.league;
+  return entry.item.kind === 'session_booking' ? kindColors.dropin : kindColors.program;
+}
+
+/** "6:30" over "PM" in condensed figures, on the activity's own clock (SPK-SCHED-008). */
+function StartTime({ entry }: { entry: TodayEntry }) {
+  const [clock, meridiem] = formatTime(entry.start, entry.zone.zone).split(/\s+/);
+  return (
+    <View style={styles.time}>
+      <Text style={styles.clock}>{clock}</Text>
+      {meridiem ? <Text style={styles.meridiem}>{meridiem}</Text> : null}
+    </View>
   );
 }
 
@@ -186,6 +209,8 @@ function EntryRow({
         title={item.title}
         detail={`${time}. For: ${nameOf(names, item.personId)}`}
         status={calendarItemStatus(item)}
+        accent={entryAccent(entry)}
+        leading={<StartTime entry={entry} />}
         onPress={href ? () => router.push(href as Href) : undefined}
         accessibilityHint={href ? 'Opens the activity' : undefined}
         testID={`schedule-item-${item.id}`}
@@ -201,6 +226,8 @@ function EntryRow({
         .filter(Boolean)
         .join('. ')}
       status={fixtureStatus(fixture.status)}
+      accent={entryAccent(entry)}
+      leading={<StartTime entry={entry} />}
       onPress={() =>
         router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
       }
@@ -380,5 +407,14 @@ export function ScheduleScreen() {
 const styles = StyleSheet.create({
   pad: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
   change: { paddingHorizontal: spacing.lg, gap: spacing.xs },
-  changeTitle: { ...type.body, fontWeight: '600', color: colors.text },
+  changeTitle: { ...type.body, ...fonts.semibold, color: colors.text },
+  time: { width: 50, paddingLeft: 2 },
+  clock: { ...type.title, fontSize: 21, lineHeight: 22, color: colors.text },
+  meridiem: {
+    ...type.caption,
+    ...fonts.bold,
+    fontSize: 11,
+    lineHeight: 14,
+    color: colors.textMuted,
+  },
 });

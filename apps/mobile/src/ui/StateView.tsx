@@ -36,8 +36,10 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
+import { Icon } from './Icon';
+import { useRowLayout } from './ListRow';
 import { StatusBadge } from './StatusBadge';
-import { colors, spacing, type } from './theme';
+import { colors, radius, spacing, toneBackgrounds, type } from './theme';
 
 interface ActionProps {
   /** Label of the recovery or creation action. */
@@ -97,17 +99,40 @@ export function StateView(props: StateViewProps) {
           error: props.error,
         }
       : props;
+  const icon = VARIANT_ICONS[shown.variant];
+  // Inside a card frame (a feature Section) the state is drawn flat, without a card of its own.
+  const flat = useRowLayout() === 'flat';
   return (
     <LiveRegion
-      style={styles.container}
+      style={
+        shown.variant === 'loading'
+          ? [styles.loading, flat && styles.flatLoading]
+          : [styles.container, flat && styles.flat]
+      }
       announcement={announcementFor(shown, reachable === false)}
       occurrence={shown.variant === 'error' || shown.variant === 'turned-off' ? shown.error : null}
       testID={`state-${shown.variant}`}
     >
+      {icon ? (
+        <View style={[styles.tile, { backgroundColor: icon[1] }]}>
+          <Icon name={icon[0]} size={22} color={icon[2]} />
+        </View>
+      ) : null}
       {renderBody(shown)}
     </LiveRegion>
   );
 }
+
+/** Decorative tile per state: [icon, tile, icon colour]. The words carry the state. */
+const VARIANT_ICONS: Record<StateViewProps['variant'], readonly [string, string, string] | null> = {
+  loading: null,
+  empty: ['sports_soccer', colors.floodlight, colors.night],
+  error: ['error', toneBackgrounds.danger, colors.danger],
+  'offline-stale': ['cloud_off', toneBackgrounds.warning, colors.warning],
+  unavailable: ['lock', toneBackgrounds.neutral, colors.neutral],
+  'pending-decision': ['schedule', toneBackgrounds.pending, colors.pending],
+  'turned-off': ['toggle_off', toneBackgrounds.neutral, colors.neutral],
+};
 
 const DEFAULT_UNAVAILABLE =
   'This is not available. Check the link, or contact the front desk if you expected to see something here.';
@@ -271,9 +296,34 @@ function renderBody(props: StateViewProps): ReactNode {
 }
 
 const styles = StyleSheet.create({
-  container: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
+  container: {
+    marginHorizontal: spacing.lg,
+    marginVertical: spacing.sm,
+    padding: spacing.lg,
+    gap: spacing.md,
+    alignItems: 'flex-start',
+    backgroundColor: colors.background,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  flat: {
+    marginHorizontal: 0,
+    paddingHorizontal: 0,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+  },
+  loading: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  flatLoading: { paddingHorizontal: 0 },
+  tile: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  title: { ...type.heading, color: colors.text },
+  title: { ...type.title, fontSize: 22, lineHeight: 24, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
 });

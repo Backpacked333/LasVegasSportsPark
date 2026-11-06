@@ -19,6 +19,10 @@
  * with "Load more activities". A signed-out visitor browses the organization configured for this
  * build (deployment setting); without one they are asked to sign in. Signed in, "In progress"
  * lists what the customer can come back to, from the API (SPK-UX-001).
+ *
+ * Look (park system): kind chips with an icon (the selected one on night pitch, marked "✓" too),
+ * the format and date filters in a card, and each activity as a card with a tile in its kind's
+ * colour. There is no free-text search: the API's catalog read takes no text query.
  */
 import type { CapabilityId, Schema } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
@@ -38,12 +42,14 @@ import { offeringDates, registrationWindowStatus } from '../../features/registra
 import { Body, ButtonRow, TextField } from '../../features/registration/ui';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { Icon } from '../../ui/Icon';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, kindColors, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 type PublicOffering = Schema<'PublicOffering'>;
 
@@ -68,6 +74,22 @@ export const CONDITIONAL_FILTER_KINDS: readonly { kind: OfferingKind; capability
     { kind: 'package', capability: 'session_packages' },
     { kind: 'membership', capability: 'memberships' },
   ];
+
+/** Decorative icon and tile colour per kind; the kind's name is always in the row's text. */
+export const KIND_LOOK: Record<OfferingKind, readonly [string, string]> = {
+  season: ['sports_soccer', kindColors.league],
+  term: ['school', kindColors.program],
+  camp: ['wb_sunny', kindColors.rental],
+  session: ['event', kindColors.program],
+  trial: ['sports', kindColors.league],
+  makeup: ['replay', kindColors.program],
+  pickup: ['stadium', kindColors.dropin],
+  private_coaching: ['person', kindColors.basketball],
+  rental: ['event_available', kindColors.rental],
+  package: ['confirmation_number', kindColors.dropin],
+  membership: ['card_membership', kindColors.league],
+  party: ['cake', kindColors.party],
+};
 
 export function offeringSummary(offering: PublicOffering): string {
   return [
@@ -146,6 +168,11 @@ function KindFilter({
             style={[styles.chip, checked && styles.chipOn]}
             testID={`discover-filter-${option.kind ?? 'all'}`}
           >
+            <Icon
+              name={option.kind ? KIND_LOOK[option.kind][0] : 'apps'}
+              size={18}
+              color={checked ? colors.floodlight : colors.text}
+            />
             <Text style={[styles.chipText, checked && styles.chipTextOn]}>
               {checked ? `✓ ${option.label}` : option.label}
             </Text>
@@ -175,7 +202,7 @@ function MoreFilters({
   };
   const active = applied.format || applied.from || applied.to;
   return (
-    <View style={styles.more} testID="discover-more-filters">
+    <Card testID="discover-more-filters">
       <TextField
         label="Format"
         hint="As the facility writes it, for example 7v7"
@@ -216,7 +243,7 @@ function MoreFilters({
         Filtering by age is not available yet: it depends on DEC-003, which has not been decided
         (owner: Product and operations). Each activity shows its age band.
       </Body>
-    </View>
+    </Card>
   );
 }
 
@@ -306,6 +333,8 @@ export function DiscoverScreen() {
                 title={offering.name}
                 detail={offeringSummary(offering)}
                 status={registrationWindowStatus(offering)}
+                icon={KIND_LOOK[offering.kind][0]}
+                iconTone={[KIND_LOOK[offering.kind][1], colors.primaryText]}
                 onPress={() => router.push(registrationRoutes.offering(offering.id))}
                 accessibilityHint="Opens the activity details"
                 testID={`offering-${offering.id}`}
@@ -335,15 +364,17 @@ const styles = StyleSheet.create({
   },
   chip: {
     minHeight: MIN_TOUCH_SIZE,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-    borderRadius: 22,
-    borderWidth: 1.5,
-    borderColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 13,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
   },
-  chipOn: { backgroundColor: colors.primary },
-  chipText: { ...type.caption, color: colors.primary, fontWeight: '600' },
+  chipOn: { backgroundColor: colors.night, borderColor: colors.night },
+  chipText: { ...type.caption, ...fonts.bold, color: colors.text },
   chipTextOn: { color: colors.primaryText },
-  more: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   caption: { ...type.caption, color: colors.textMuted, padding: spacing.lg },
 });

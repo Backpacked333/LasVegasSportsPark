@@ -46,9 +46,10 @@ import {
 } from '../../features/teams/status';
 import { ContactOperations, ContactThroughSupport } from '../../features/teams/ContactOperations';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import { Body, ButtonRow, Detail, ReasonList, Section, Title } from '../../features/teams/ui';
+import { Body, ButtonRow, Detail, ReasonList, Section } from '../../features/teams/ui';
 import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Hero } from '../../ui/Hero';
 import { ListRow } from '../../ui/ListRow';
 import { StatusBadge } from '../../ui/StatusBadge';
 
@@ -177,7 +178,13 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
   const games = workspace.upcomingFixtures;
   return (
     <View>
-      <Title>{workspace.team.name}</Title>
+      <Hero
+        tone="pitch"
+        eyebrow={[workspace.division?.name, workspace.season.name].filter(Boolean).join(' · ')}
+        title={workspace.team.name}
+      >
+        <StatusBadge {...teamEntryStatus(workspace.entry)} testID="entry-status" />
+      </Hero>
       <Section title="Season">
         <Detail
           label="Season"
@@ -191,7 +198,6 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
           label="Rule set"
           value={`${workspace.ruleSet.name}, version ${workspace.ruleSet.version}`}
         />
-        <StatusBadge {...teamEntryStatus(workspace.entry)} testID="entry-status" />
         <Body muted>
           Approval, team payment, roster completion and eligibility are tracked separately: an
           approved entry is not necessarily paid or complete.

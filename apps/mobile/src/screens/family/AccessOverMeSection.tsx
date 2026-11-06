@@ -12,7 +12,7 @@ import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, radius, spacing, type } from '../../ui/theme';
 import { formatDateTime, permissionLabel } from '../account/components/account-data';
 import { SectionHeader } from '../account/components/forms';
 import { grantKey, grantStatusLabel, isCurrentGrant, sourceText, type GrantView } from './grants';
@@ -101,7 +101,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
   },
   title: { ...type.heading, color: colors.text, paddingHorizontal: spacing.lg },
 });
