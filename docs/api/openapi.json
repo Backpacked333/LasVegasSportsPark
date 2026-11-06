@@ -14095,6 +14095,11 @@
             "type": "integer",
             "minimum": 60,
             "maximum": 86400
+          },
+          "passcode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "required": [

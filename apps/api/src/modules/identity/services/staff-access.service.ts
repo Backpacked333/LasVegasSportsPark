@@ -382,6 +382,10 @@ export class StaffAccessService {
             revoked_by: null,
             revocation_reason: null,
             expired_at: null,
+            // From the injected clock (CLAUDE.md): the row's check compares expires_at with
+            // created_at, so both must come from the same clock, never the database's now().
+            created_at: now,
+            updated_at: now,
           })
           .execute();
         await this.audit.record(trx, {

@@ -57109,6 +57109,7 @@ export type components = {
         DevTokenRequest: {
             /** Format: uuid */
             accountId: string;
+            passcode?: string;
             sessionId?: string;
             ttlSeconds?: number;
         };

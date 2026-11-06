@@ -17,7 +17,9 @@ export function DevSignIn() {
   const { signIn } = useApp();
   const navigate = useNavigate();
   const inputId = useId();
+  const passcodeId = useId();
   const [accountId, setAccountId] = useState('');
+  const [passcode, setPasscode] = useState('');
   const mint = useApiCommand('post', '/dev/tokens');
   const trimmed = accountId.trim();
   const valid = UUID.test(trimmed);
@@ -26,7 +28,9 @@ export function DevSignIn() {
     event.preventDefault();
     if (!valid) return;
     try {
-      const token = await mint.submit({ body: { accountId: trimmed } });
+      const token = await mint.submit({
+        body: { accountId: trimmed, ...(passcode ? { passcode } : {}) },
+      });
       await signIn({ token: token.token, expiresAt: token.expiresAt, accountId: token.accountId });
       navigate('/today', { replace: true });
     } catch {
@@ -55,6 +59,14 @@ export function DevSignIn() {
         <p id={`${inputId}-error`} className="error-text" aria-live="polite">
           {accountId.length > 0 && !valid ? 'Enter the account id as a UUID.' : ''}
         </p>
+        <label htmlFor={passcodeId}>Staging passcode (when the API asks for one)</label>
+        <input
+          id={passcodeId}
+          type="password"
+          value={passcode}
+          onChange={(e) => setPasscode(e.target.value)}
+          autoComplete="off"
+        />
         <Button type="submit" disabled={!valid} busy={mint.isProcessing}>
           Sign in
         </Button>

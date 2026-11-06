@@ -635,6 +635,8 @@ export const DevTokenBody = z
       .min(60)
       .max(24 * 3600)
       .optional(),
+    /** Required when the API sets DEV_TOKENS_PASSCODE (a protected staging host). */
+    passcode: z.string().min(1).max(200).optional(),
   })
   .openapi('DevTokenRequest');
 export const DevTokenResponse = z

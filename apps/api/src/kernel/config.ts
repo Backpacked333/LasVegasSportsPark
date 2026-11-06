@@ -34,6 +34,12 @@ export const ConfigSchema = z
     AUTH_MODE: z.enum(['local', 'oidc']).default('local'),
     AUTH_LOCAL_SECRET: z.string().min(32).optional(),
     AUTH_ISSUER: z.string().default('sportspark-local'),
+    /**
+     * A protected staging host (AUTH_MODE=local outside production, reachable from the internet):
+     * when set, `POST /v1/dev/tokens` mints a token only for a request carrying this passcode, so
+     * knowing an account id is not enough to sign in. Leave unset on a developer machine.
+     */
+    DEV_TOKENS_PASSCODE: z.string().min(16).optional(),
     AUTH_AUDIENCE: z.string().default('sportspark-api'),
     AUTH_TOKEN_TTL_SECONDS: z.coerce
       .number()

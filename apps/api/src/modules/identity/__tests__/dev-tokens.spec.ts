@@ -59,4 +59,32 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       expect(res.body.code).toBe('NOT_FOUND');
     });
   });
+  describe('on a protected staging host (DEV_TOKENS_PASSCODE set)', () => {
+    let t: TestApp;
+    const PASSCODE = 'staging-passcode-for-tests-only';
+    beforeAll(async () => {
+      t = await createTestApp({
+        imports: [IdentityModule],
+        principalResolver: 'module',
+        env: { DEV_TOKENS_PASSCODE: PASSCODE },
+      });
+    });
+    afterAll(async () => {
+      await t.close();
+    });
+
+    it('mints a token only with the right passcode; knowing an account id is not enough', async () => {
+      const people = await createOrganizationPeople(t);
+      const accountId = people.adult.accountId;
+      const none = await t.http.post('/v1/dev/tokens').send({ accountId });
+      expect(none.status).toBe(401);
+      expect(none.body.code).toBe('AUTHENTICATION_REQUIRED');
+      const wrong = await t.http.post('/v1/dev/tokens').send({ accountId, passcode: 'nope' });
+      expect(wrong.status).toBe(401);
+      expect(wrong.body.token).toBeUndefined();
+      const right = await t.http.post('/v1/dev/tokens').send({ accountId, passcode: PASSCODE });
+      expect(right.status).toBe(201);
+      expect(right.body).toMatchObject({ accountId });
+    });
+  });
 });
