@@ -20,7 +20,9 @@
  */
 import { Link, Route, Routes } from 'react-router';
 import { CapabilityGate } from '../../../ui/CapabilityGate';
+import { PageHeader } from '../../../ui/Page';
 import { StateView } from '../../../ui/StateView';
+import '../../../features/pos-access-accounting/screens.css';
 import { DevicePage } from './DevicePage';
 import { DevicesPage } from './DevicesPage';
 import { ACCESS_HARDWARE } from './meta';
@@ -28,11 +30,16 @@ import { ACCESS_HARDWARE } from './meta';
 export function AccessHardwareScreen() {
   const headingId = `package-g-${ACCESS_HARDWARE.slug}`;
   return (
-    <section aria-labelledby={headingId} data-testid={headingId}>
-      <h2 id={headingId}>{ACCESS_HARDWARE.title}</h2>
-      <p>
-        <Link to="/admin">Administration</Link>
-      </p>
+    <section aria-labelledby={headingId} data-testid={headingId} className="pg-screen">
+      <PageHeader
+        eyebrow={
+          <>
+            <Link to="/admin">Administration</Link> · Gates and turnstiles (conditional)
+          </>
+        }
+        title={ACCESS_HARDWARE.title}
+        titleId={headingId}
+      />
       <CapabilityGate
         capability={ACCESS_HARDWARE.capability}
         subject={ACCESS_HARDWARE.title}

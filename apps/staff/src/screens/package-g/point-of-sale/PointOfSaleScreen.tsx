@@ -22,6 +22,7 @@
 import { Route, Routes } from 'react-router';
 import { FINANCE_LINKS, SectionNav } from '../../../features/registration-finance/SectionNav';
 import { CapabilityGate } from '../../../ui/CapabilityGate';
+import { PageHeader } from '../../../ui/Page';
 import { StateView } from '../../../ui/StateView';
 import { POINT_OF_SALE } from './meta';
 import { POS_PATHS } from './paths';
@@ -30,6 +31,8 @@ import { ReceiptPage } from './ReceiptPage';
 import { RegistersPage } from './RegistersPage';
 import { SalePage } from './SalePage';
 import { SessionPage } from './SessionPage';
+import '../../../features/pos-access-accounting/screens.css';
+import './pos.css';
 
 const POS_LINKS = [
   { to: POS_PATHS.base, label: 'Registers and sales', end: true },
@@ -39,8 +42,12 @@ const POS_LINKS = [
 export function PointOfSaleScreen() {
   const headingId = `package-g-${POINT_OF_SALE.slug}`;
   return (
-    <section aria-labelledby={headingId} data-testid={headingId}>
-      <h2 id={headingId}>{POINT_OF_SALE.title}</h2>
+    <section aria-labelledby={headingId} data-testid={headingId} className="pg-screen pos-screen">
+      <PageHeader
+        eyebrow="Business · Finance · Front desk register"
+        title={POINT_OF_SALE.title}
+        titleId={headingId}
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <CapabilityGate
         capability={POINT_OF_SALE.capability}
