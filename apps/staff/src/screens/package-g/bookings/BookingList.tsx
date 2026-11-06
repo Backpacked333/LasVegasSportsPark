@@ -19,8 +19,11 @@ import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { formatInstant, formatRange, plural } from '../participation/format';
 import { personNameText, usePersonNames } from '../participation/names';
+import { Icon } from '../../../ui/Icon';
+import './bookings.css';
 import {
   BOOKING_STATUS,
+  CAN,
   BOOKING_STATUSES,
   KIND_PATH,
   KIND_WORDS,
@@ -30,45 +33,76 @@ import {
   type BookingStatus,
 } from './labels';
 
+/** A decision or a follow-up is still open: the card is edged so it stands out in the list. */
+function needsAttention(booking: Booking): boolean {
+  return (
+    booking.status === 'requested' ||
+    booking.status === 'awaiting_staff' ||
+    booking.status === 'held' ||
+    booking.outstanding.length > 0
+  );
+}
+
 function BookingRow({ booking, booker }: { booking: Booking; booker: string }) {
   const status = BOOKING_STATUS[booking.status];
   const words = KIND_WORDS[booking.kind];
   const resources = booking.occurrences[0]?.resources ?? [];
+  const recurring = booking.occurrences.length > 1;
   return (
-    <li>
-      <div className="row-text">
-        <Link className="row-title" to={`${KIND_PATH[booking.kind]}/${booking.id}`}>
-          {booking.offeringName ?? `${words.title} booking`}
-        </Link>
-        <span>
-          {formatRange(
-            booking.firstStart,
-            booking.occurrences[0]?.end ?? booking.lastEnd,
-            booking.timezone,
-          )}
-          {booking.occurrences.length > 1
-            ? `; weekly, ${plural(booking.occurrences.length, 'occurrence')}, the last on ${formatInstant(
-                booking.occurrences[booking.occurrences.length - 1]?.start ?? booking.lastEnd,
-                booking.timezone,
-              )}`
-            : ''}
+    <li className="booking-card" data-kind={booking.kind} data-attention={needsAttention(booking)}>
+      <span className="booking-card-top">
+        <span className="booking-type">
+          <Icon
+            name={booking.kind === 'party' ? 'cake' : recurring ? 'event_repeat' : 'event'}
+            size={16}
+          />
+          {recurring ? `Recurring ${words.one}` : words.title}
         </span>
+        {booking.guestCount !== null ? (
+          <span className="booking-guests">{plural(booking.guestCount, 'guest')}</span>
+        ) : null}
+      </span>
+      <Link className="booking-title" to={`${KIND_PATH[booking.kind]}/${booking.id}`}>
+        {booking.offeringName ?? `${words.title} booking`}
+      </Link>
+      <span className="booking-when">
+        {formatRange(
+          booking.firstStart,
+          booking.occurrences[0]?.end ?? booking.lastEnd,
+          booking.timezone,
+        )}
+        {recurring
+          ? `; weekly, ${plural(booking.occurrences.length, 'occurrence')}, the last on ${formatInstant(
+              booking.occurrences[booking.occurrences.length - 1]?.start ?? booking.lastEnd,
+              booking.timezone,
+            )}`
+          : ''}
+      </span>
+      <span className="booking-who">
         <span>Booked for {booker}</span>
         {resources.length > 0 ? (
           <span className="caption">
             {resources.map((r) => r.name ?? `Resource ${r.id.slice(0, 8)}`).join(', ')}
-            {booking.guestCount !== null ? `; ${plural(booking.guestCount, 'guest')}` : ''}
           </span>
         ) : null}
-      </div>
-      <div className="row-text">
-        <StatusBadge tone={status.tone} label={status.label} />
-        {booking.outstanding.length > 0 ? (
-          <span className="caption">
-            Outstanding: {booking.outstanding.map((o) => OUTSTANDING[o]).join(', ')}
-          </span>
-        ) : null}
-      </div>
+      </span>
+      <span className="booking-card-foot">
+        <span className="actions-row">
+          <StatusBadge tone={status.tone} label={status.label} />
+          {booking.outstanding.length > 0 ? (
+            <span className="caption">
+              Outstanding: {booking.outstanding.map((o) => OUTSTANDING[o]).join(', ')}
+            </span>
+          ) : null}
+        </span>
+        <Link
+          className={`button button-sm ${CAN.decide(booking.status) ? 'button-primary' : 'button-secondary'}`}
+          to={`${KIND_PATH[booking.kind]}/${booking.id}`}
+          aria-label={`${CAN.decide(booking.status) ? 'Review' : 'Open'}: ${booking.offeringName ?? `${words.title} booking`}`}
+        >
+          {CAN.decide(booking.status) ? 'Review request' : 'Open'}
+        </Link>
+      </span>
     </li>
   );
 }
@@ -91,8 +125,16 @@ export function BookingList({ kind }: { kind: BookingKind }) {
   const names = usePersonNames((ofKind ?? []).map((b) => b.bookerPersonId));
   const query = { ...pages, data: ofKind };
   return (
-    <section aria-labelledby={`${kind}-bookings-title`}>
-      <h4 id={`${kind}-bookings-title`}>{words.title} bookings</h4>
+    <section aria-labelledby={`${kind}-bookings-title`} className="booking-list">
+      <div className="booking-list-head">
+        <h4 id={`${kind}-bookings-title`}>{words.title} bookings</h4>
+        {ofKind ? (
+          <span className="queue-count">
+            {plural(ofKind.filter((b) => CAN.decide(b.status)).length, 'request')} to decide ·{' '}
+            {ofKind.filter((b) => b.status === 'awaiting_staff').length} waiting for staff
+          </span>
+        ) : null}
+      </div>
       <div className="pg-toolbar">
         <SelectField
           label="Status"
@@ -125,7 +167,7 @@ export function BookingList({ kind }: { kind: BookingKind }) {
         }
       >
         {(items) => (
-          <ul className="list" aria-label={`${words.title} bookings`}>
+          <ul className="booking-cards" aria-label={`${words.title} bookings`}>
             {items.map((booking) => (
               <BookingRow
                 key={booking.id}

@@ -1,0 +1,131 @@
+/*
+ * Bookings and parties (SCR-S-51, SCR-S-52): requests as cards edged by kind, the open decision
+ * or follow-up called out, and free start times as a grid of slots. Status is always the
+ * StatusBadge text; the colours only accompany it (SPK-UX-009).
+ */
+.booking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.booking-list .pg-toolbar,
+.booking-list > p {
+  margin: 0;
+}
+.booking-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.booking-list-head .queue-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.booking-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 10px;
+}
+.booking-card {
+  --edge: var(--kind-rental);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  box-shadow: inset 4px 0 0 var(--edge);
+}
+.booking-card[data-kind='party'] {
+  --edge: var(--kind-party);
+}
+.booking-card[data-attention='false'] {
+  box-shadow: inset 4px 0 0 var(--line-strong);
+}
+.booking-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.booking-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--edge);
+}
+.booking-guests {
+  font-size: 16px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+}
+.booking-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.booking-when {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.booking-who {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-size: 12.5px;
+}
+.booking-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* Free start times as slot chips (radio buttons stay real radios for the keyboard). */
+.slot-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px;
+}
+.slot-picker > legend {
+  margin-bottom: 6px;
+}
+.slot-picker > .choice {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #cbe5d4;
+  border-radius: 7px;
+  background: var(--tone-success-bg);
+  color: var(--pitch);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.slot-picker > .choice:has(input:checked) {
+  background: var(--pitch);
+  border-color: var(--pitch);
+  color: #fff;
+}
+.slot-picker > .choice:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.slot-picker > .error-text {
+  grid-column: 1 / -1;
+}

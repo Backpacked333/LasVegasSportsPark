@@ -361,7 +361,7 @@ export function NewBooking({ kind }: { kind: BookingKind }) {
                   return (
                     <>
                       <fieldset
-                        className="field fieldset"
+                        className="field fieldset slot-picker"
                         aria-invalid={fieldError('start') ? true : undefined}
                       >
                         <legend>
