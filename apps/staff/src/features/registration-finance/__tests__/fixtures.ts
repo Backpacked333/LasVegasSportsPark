@@ -94,6 +94,7 @@ export function offering(
     requiredFormPolicyVersionIds: [],
     entitlementDefinitionId: ENTITLEMENT_ID,
     bookingTermsPolicyVersionId: null,
+    promotions: [],
     facility: { id: FACILITY_A, name: 'North complex', timezone: 'America/Los_Angeles' },
     staff:
       staff === null
