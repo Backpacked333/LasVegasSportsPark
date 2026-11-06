@@ -41,6 +41,13 @@ export interface WorkforcePolicy {
     /** Staff roles granted per assignment kind; an empty list grants nothing (proposed mapping). */
     roles: Record<AssignmentKind, StaffRole[]>;
   };
+  /**
+   * Qualification kinds replacement candidates are described with (SPK-STAFF-001, SPK-STAFF-003):
+   * the official's grade (the level of a held qualification of `gradeKind`) and a safeguarding
+   * certification with its expiry (`safeguardingKind`). `null`: not described. Which kinds an
+   * operator records is pending DEC-011; the values are configuration, never defaults.
+   */
+  candidateProfile?: { gradeKind: string | null; safeguardingKind: string | null };
 }
 
 export const WORKFORCE_POLICY = Symbol('WORKFORCE_POLICY');
@@ -74,6 +81,10 @@ export function workforcePolicyFromSettings(
     temporaryAccess: {
       trailHours: settings.ACCESS_TRAILING_HOURS ?? null,
       roles: TEMPORARY_ACCESS_ROLES,
+    },
+    candidateProfile: {
+      gradeKind: settings.OFFICIAL_GRADE_QUALIFICATION_KIND ?? null,
+      safeguardingKind: settings.SAFEGUARDING_QUALIFICATION_KIND ?? null,
     },
   };
 }

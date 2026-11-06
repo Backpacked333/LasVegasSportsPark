@@ -5,9 +5,11 @@ import {
   UpdateAssignmentRequirementBody,
   z,
   type AssignmentRequirement,
+  type OpenSlotCandidates,
   type Principal,
 } from '@sportspark/contracts';
 import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import { ReplacementsService } from '../services/replacements.service';
 import { RequirementsService } from '../services/requirements.service';
 import { CorrelationId } from './correlation.decorator';
 
@@ -16,7 +18,19 @@ const IdParams = z.object({ id: z.uuid() });
 /** Assignment requirements and coverage (SPK-STAFF-001, SPK-STAFF-002, SPK-UX-006). */
 @Controller('assignment-requirements')
 export class RequirementsController {
-  constructor(private readonly requirements: RequirementsService) {}
+  constructor(
+    private readonly requirements: RequirementsService,
+    private readonly replacements: ReplacementsService,
+  ) {}
+
+  /** SPK-STAFF-003: ranked candidates for an open slot with no assignment to replace. */
+  @Get(':id/candidates')
+  candidates(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<OpenSlotCandidates> {
+    return this.replacements.openSlotCandidates(principal, params.id);
+  }
 
   @Post()
   @Idempotent()

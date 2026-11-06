@@ -35,6 +35,7 @@ import {
 } from './competition-matches.ports';
 import { BracketsController } from './controllers/brackets.controller';
 import { CompetitionOperationsController } from './controllers/competition-operations.controller';
+import { CompetitionFieldController } from './controllers/competition-field.controller';
 import { CompetitionsController } from './controllers/competitions.controller';
 import { DisciplineController } from './controllers/discipline.controller';
 import { DisputesController } from './controllers/disputes.controller';
@@ -67,13 +68,16 @@ import { DisciplineService } from './services/discipline.service';
 import { DisputesService } from './services/disputes.service';
 import { EligibilityService } from './services/eligibility.service';
 import { FixtureGenerationService } from './services/fixture-generation.service';
+import { FixtureAttendanceService } from './services/fixture-attendance.service';
 import { FixtureObligationsService } from './services/fixture-obligations.service';
 import { FixturesService } from './services/fixtures.service';
 import { MatchSheetService } from './services/match-sheet.service';
 import { MyCompetitionService } from './services/my-competition.service';
+import { PlayerProfilesService } from './services/player-profiles.service';
 import { PoolsService } from './services/pools.service';
 import { InMemoryReadinessCheckRegistry } from './services/readiness-check.registry';
 import { ReadinessService } from './services/readiness.service';
+import { ResultsAwaitingService } from './services/results-awaiting.service';
 import { ResultsService } from './services/results.service';
 import { RosterService } from './services/roster.service';
 import { SeasonsService } from './services/seasons.service';
@@ -198,6 +202,9 @@ const providers: Provider[] = [
   AvailabilityRequestsService,
   PoolsService,
   CompetitionImportService,
+  PlayerProfilesService,
+  FixtureAttendanceService,
+  ResultsAwaitingService,
   // Scheduling publication step 4 (SPK-SCHED-006, SPK-FIX-002) resolves this lazily by token.
   { provide: FIXTURE_OBLIGATION_IMPL, useExisting: FixtureObligationsService },
   { provide: TEAM_ENTRY_QUERY_PORT, useExisting: TeamEntriesService },
@@ -235,6 +242,7 @@ const providers: Provider[] = [
     DisciplineController,
     TeamWorkspaceController,
     CompetitionOperationsController,
+    CompetitionFieldController,
   ],
   exports: [
     CompetitionsService,
@@ -257,6 +265,9 @@ const providers: Provider[] = [
     AvailabilityRequestsService,
     PoolsService,
     CompetitionImportService,
+    PlayerProfilesService,
+    FixtureAttendanceService,
+    ResultsAwaitingService,
     TeamAuthority,
     TEAM_AUTHORITY_IMPL,
     FIXTURE_OBLIGATION_IMPL,

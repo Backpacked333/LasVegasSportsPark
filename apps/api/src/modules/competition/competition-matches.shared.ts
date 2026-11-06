@@ -139,7 +139,10 @@ export function toResultRevision(row: Selectable<ResultRevisionsTable>): ResultR
   };
 }
 
-export function toStandings(row: Selectable<StandingsProjectionsTable>): Standings {
+export function toStandings(
+  row: Selectable<StandingsProjectionsTable>,
+  playoffLine: Standings['playoffLine'] = null,
+): Standings {
   return {
     id: row.id,
     seasonId: row.season_id,
@@ -150,6 +153,7 @@ export function toStandings(row: Selectable<StandingsProjectionsTable>): Standin
     sourceResultIds: row.source_result_ids,
     rows: row.rows as StandingsRow[],
     tiebreakExplanations: row.tiebreak_explanations as TiebreakExplanation[],
+    playoffLine,
   };
 }
 

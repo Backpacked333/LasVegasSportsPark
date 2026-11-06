@@ -181,7 +181,7 @@ describe('team workspace (CMP-01, CMP-02, CMP-04, CMP-06, CMP-14; SPK-CAP-001/00
     expect(workspace.body.entry.teamName).toBe('Lions');
   });
 
-  it('SPK-READY-001: season readiness summarizes each fixture in one request (counts only; unknown stays unknown)', async () => {
+  it('SPK-READY-001: season readiness summarizes each fixture in one request (counts and per-check outcomes; unknown stays unknown)', async () => {
     const res = await get(`/seasons/${season.seasonId}/readiness`, leagueManager);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ seasonId: season.seasonId, evaluatedAt: NOW });
@@ -202,7 +202,12 @@ describe('team workspace (CMP-01, CMP-02, CMP-04, CMP-06, CMP-14; SPK-CAP-001/00
         status: single.body.status,
         blockingCount: issues.filter((i) => i.severity === 'blocking').length,
         unknownCount: issues.filter((i) => i.severity === 'unknown').length,
+        warningCount: issues.filter((i) => i.severity === 'warning').length,
+        // Per-check outcomes as the fixture read gives them, so the season home needs no read
+        // per fixture (names, status and counts only; the issues stay on the fixture read).
+        checks: single.body.checks,
       });
+      expect((item as unknown as { checks: unknown[] }).checks.length).toBeGreaterThan(0);
     }
     // the unscheduled bye is not ready: its readiness is never reported as ready
     const bye = res.body.items.find((i: { fixtureId: string }) => i.fixtureId === byeFixtureId);
@@ -476,7 +481,15 @@ describe('team workspace (CMP-01, CMP-02, CMP-04, CMP-06, CMP-14; SPK-CAP-001/00
     for (const side of sheet.body.sides) {
       for (const player of side.players) {
         expect(Object.keys(player).sort()).toEqual(
-          ['displayName', 'jerseyNumber', 'personId', 'playingStatus', 'roles'].sort(),
+          // `attendance` is the player's check-in mark at the field (migration 0465).
+          [
+            'attendance',
+            'displayName',
+            'jerseyNumber',
+            'personId',
+            'playingStatus',
+            'roles',
+          ].sort(),
         );
       }
     }

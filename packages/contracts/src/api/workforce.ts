@@ -389,6 +389,23 @@ export const ReplacementCandidateSchema = z
     /** Qualified, not declared unavailable and free of conflicting commitments. */
     eligible: z.boolean(),
     reasons: z.array(CandidateReasonSchema),
+    /**
+     * The level of the candidate's verified grade qualification valid at the start (the kind the
+     * workforce setting `OFFICIAL_GRADE_QUALIFICATION_KIND` names); null when none is held or no
+     * kind is configured.
+     */
+    grade: z.string().nullable(),
+    /**
+     * The candidate's safeguarding certification (the kind `SAFEGUARDING_QUALIFICATION_KIND`
+     * names) at the start, with its expiry; null when no kind is configured.
+     */
+    safeguarding: z
+      .object({
+        kind: z.string(),
+        status: z.enum(['held', 'missing', 'unverified', 'expired']),
+        validTo: Instant.nullable(),
+      })
+      .nullable(),
   })
   .openapi('ReplacementCandidate');
 export type ReplacementCandidate = z.infer<typeof ReplacementCandidateSchema>;
@@ -408,6 +425,74 @@ export const ReplacementListSchema = z
   })
   .openapi('ReplacementCandidates');
 export type ReplacementList = z.infer<typeof ReplacementListSchema>;
+
+/**
+ * Candidates for an open slot of a requirement that has no assignment to replace (SPK-STAFF-003,
+ * SPK-AT-012): the same evaluation as replacement candidates, for the requirement's activity.
+ * Offering the slot is the ordinary `POST /v1/assignments` with `offer: true`.
+ */
+export const OpenSlotCandidatesSchema = z
+  .object({
+    requirementId: z.uuid(),
+    kind: AssignmentKindSchema,
+    targetType: AssignmentTargetTypeSchema,
+    targetId: z.uuid(),
+    offeringId: z.uuid().nullable(),
+    role: z.string(),
+    requiredCount: z.number().int(),
+    /** Accepted or completed assignments of the role (proposed and offered never cover). */
+    covered: z.number().int(),
+    scheduledStart: Instant,
+    scheduledEnd: Instant,
+    requiredQualifications: z.array(z.string()),
+    evaluatedAt: Instant,
+    candidates: z.array(ReplacementCandidateSchema),
+  })
+  .openapi('OpenSlotCandidates');
+export type OpenSlotCandidates = z.infer<typeof OpenSlotCandidatesSchema>;
+
+/**
+ * Staff assigned to activities (the arrival screen's coach for a session, SPK-STAFF-002): accepted
+ * or completed assignments only; proposed and offered never count as assigned.
+ */
+export const AssignedStaffQuery = z.object({
+  targetType: AssignmentTargetTypeSchema,
+  /** 1 to 50 activity ids, `?targetIds=a,b` or repeated. */
+  targetIds: z.preprocess(
+    (value) =>
+      typeof value === 'string'
+        ? value
+            .split(',')
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0)
+        : value,
+    z.array(z.uuid()).min(1).max(50),
+  ),
+});
+export type AssignedStaffQuery = z.infer<typeof AssignedStaffQuery>;
+
+export const AssignedStaffSchema = z
+  .object({
+    targetType: AssignmentTargetTypeSchema,
+    items: z.array(
+      z.object({
+        targetId: z.uuid(),
+        staff: z.array(
+          z.object({
+            assignmentId: z.uuid(),
+            personId: z.uuid(),
+            displayName: z.string(),
+            kind: AssignmentKindSchema,
+            role: z.string(),
+            slot: z.number().int(),
+            status: z.enum(['accepted', 'completed']),
+          }),
+        ),
+      }),
+    ),
+  })
+  .openapi('AssignedStaff');
+export type AssignedStaff = z.infer<typeof AssignedStaffSchema>;
 
 export const CreateReplacementBody = withCommandMeta({
   personId: z.uuid(),
@@ -838,6 +923,18 @@ query(
   'Qualified, available, non-conflicting replacement candidates with reasons (SPK-AT-012)',
   null,
   ReplacementListSchema,
+);
+query(
+  '/assignment-requirements/{id}/candidates',
+  'Ranked candidates for an open slot of a requirement with no assignment to replace (SPK-STAFF-003)',
+  null,
+  OpenSlotCandidatesSchema,
+);
+query(
+  '/assigned-staff',
+  'Staff with an accepted assignment for each activity (arrival screen coach, SPK-STAFF-002)',
+  AssignedStaffQuery,
+  AssignedStaffSchema,
 );
 command(
   'post',

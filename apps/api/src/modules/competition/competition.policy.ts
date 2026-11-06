@@ -166,6 +166,14 @@ export const TEAM_INVITATION_DEFAULT_HOURS = 24 * 7;
 export const WORKSPACE_UPCOMING_FIXTURES = 20;
 
 /**
+ * Staff skill rating scale for placement balance (SPK-PLACE-002). Engineering placeholder: the
+ * placement model and which fields are approved are pending DEC-031 and DEC-051, so the scale is
+ * a technical value the database check (migration 0464) and the contract mirror, not an operator
+ * decision. A rating is staff-only and never public (SPK-PLACE-005).
+ */
+export const SKILL_RATING_SCALE = { min: 1, max: 5 } as const;
+
+/**
  * CMP-07 (§4.12): the team-invitation expiry sweep. Technical values (how often the sweep looks
  * and who owns it when it keeps failing), not policy: the expiry itself is the invitation's own
  * `expires_at`, chosen when it was issued.
