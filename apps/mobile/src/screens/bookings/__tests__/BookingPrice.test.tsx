@@ -62,7 +62,7 @@ describe('booking price (GET /v1/basket-prices/{id})', () => {
     );
   });
 
-  it('once checked out, the order’s figures; an unpriced line says no price is set', async () => {
+  it('once checked out, the order’s figures; an unpriced basket has no figures', async () => {
     renderDetail({ 'GET /basket-prices/{id}': ok(price({ basis: 'order', orderId: G.basket })) });
     expect(await screen.findByLabelText('Total: $102.60')).toBeOnTheScreen();
     expect(screen.getByText('From your order.')).toBeOnTheScreen();
@@ -89,6 +89,19 @@ describe('booking price (GET /v1/basket-prices/{id})', () => {
     const sections = await screen.findAllByTestId('booking-price');
     expect(
       await within(sections.at(-1)!).findByText(/Error code: INTERNAL_ERROR/),
+    ).toBeOnTheScreen();
+  });
+
+  it('an unpriced basket says no price is set yet', async () => {
+    renderDetail({
+      'GET /basket-prices/{id}': ok(
+        price({ basis: 'unpriced', currency: null, subtotalMinor: null, totalMinor: null }),
+      ),
+    });
+    expect(
+      await screen.findByText(
+        'No price is set for part of this booking yet. Your quote shows the price.',
+      ),
     ).toBeOnTheScreen();
   });
 

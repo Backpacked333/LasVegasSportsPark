@@ -15,6 +15,10 @@
  *   one.
  * - Who can act for you (`GET /v1/me/access-grants?direction=over_me`).
  * - Claim a record the front desk entered (SPK-IAM-002).
+ * - Care notes (CareNotes.tsx; §1.7, SPK-DISC-005): one's own and, for each person held with
+ *   `view`, theirs; operational notes only (an allergy, a care instruction), never medical advice.
+ *   Read only when opened (every read is audited); adding and retiring for oneself and for holders
+ *   of `complete_forms`.
  *
  * Pending decisions, shown as such: adding a child from the app (DEC-004); supervised pickup
  * (DEC-075, DEC-005); the other adults' permissions over the people one manages are not readable
@@ -54,6 +58,7 @@ import { ClaimForm } from '../account/components/ClaimForm';
 import { Paragraph, SectionHeader } from '../account/components/forms';
 import { PersonAccessCard } from '../account/components/PersonAccess';
 import { AccessOverMeSection } from './AccessOverMeSection';
+import { CareNotes } from './CareNotes';
 import { GiveUpPermission } from './GiveUpPermission';
 import {
   grantKey,
@@ -193,6 +198,7 @@ function FamilyBody({ me }: { me: MeData }) {
         </View>
       ) : null}
       <LoadMore pages={held} label="permissions" />
+      <OwnCareNotes personId={me.person?.id ?? null} />
       <HouseholdsSection candidates={householdCandidates(me, names)} />
       <SentInvitationsSection />
       <AccessOverMeSection />
@@ -227,6 +233,26 @@ function FamilyBody({ me }: { me: MeData }) {
   );
 }
 
+/** "Your care notes": the signed-in person's own (allowSelf; recording too). */
+function OwnCareNotes({ personId }: { personId: string | null }) {
+  const [open, setOpen] = useState(false);
+  if (!personId) return null;
+  return (
+    <View>
+      <SectionHeader title="Your care notes" />
+      <View style={styles.own}>
+        <Button
+          label={open ? 'Hide your care notes' : 'Show your care notes'}
+          variant="secondary"
+          onPress={() => setOpen((o) => !o)}
+          accessibilityHint="Allergies and care instructions staff need; reading them is recorded"
+        />
+        {open ? <CareNotes personId={personId} personName="you" canManage /> : null}
+      </View>
+    </View>
+  );
+}
+
 function ManagedPerson({
   authority,
   index,
@@ -244,7 +270,8 @@ function ManagedPerson({
   grants: GrantView[] | undefined;
   mayGiveUp: boolean;
 }) {
-  const [open, setOpen] = useState<'invite' | 'give-up' | null>(null);
+  const [open, setOpen] = useState<'invite' | 'give-up' | 'care' | null>(null);
+  const mayViewCare = authority.permissions.includes('view');
   // Every grant not withdrawn or ended can be given up (the API refuses only a revoked one).
   const givable = (grants ?? []).filter(isCurrentGrant);
   return (
@@ -259,6 +286,14 @@ function ManagedPerson({
                 onPress={() => setOpen('invite')}
               />
             ) : null}
+            {mayViewCare ? (
+              <Button
+                label={`Care notes for ${subject}`}
+                variant="secondary"
+                onPress={() => setOpen('care')}
+                accessibilityHint="Allergies and care instructions staff need; reading them is recorded"
+              />
+            ) : null}
             {mayGiveUp && givable.length > 0 ? (
               <Button
                 label={`Give up a permission for ${subject}`}
@@ -266,6 +301,16 @@ function ManagedPerson({
                 onPress={() => setOpen('give-up')}
               />
             ) : null}
+          </View>
+        ) : null}
+        {open === 'care' ? (
+          <View>
+            <CareNotes
+              personId={authority.subjectPersonId}
+              personName={subject}
+              canManage={authority.permissions.includes('complete_forms')}
+            />
+            <Button label="Close care notes" variant="secondary" onPress={() => setOpen(null)} />
           </View>
         ) : null}
         {open === 'give-up' ? (
@@ -286,4 +331,5 @@ function ManagedPerson({
 
 const styles = StyleSheet.create({
   action: { paddingTop: spacing.sm, gap: spacing.sm },
+  own: { paddingHorizontal: spacing.lg, gap: spacing.sm },
 });
