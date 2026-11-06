@@ -9373,7 +9373,8 @@
           "youth_feedback",
           "staff_broadcast",
           "availability_request",
-          "activity_reminder"
+          "activity_reminder",
+          "result_reminder"
         ]
       },
       "NotificationCategory": {

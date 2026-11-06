@@ -59473,7 +59473,7 @@ export type components = {
             recipients: components["schemas"]["NotificationRecipient"][];
         };
         /** @enum {string} */
-        NotificationKind: "registration_outcome" | "team_invitation" | "placement" | "waitlist_offer" | "schedule_published" | "schedule_changed" | "cancellation" | "payment_attention" | "assignment_offer" | "result_published" | "renewal_opportunity" | "youth_feedback" | "staff_broadcast" | "availability_request" | "activity_reminder";
+        NotificationKind: "registration_outcome" | "team_invitation" | "placement" | "waitlist_offer" | "schedule_published" | "schedule_changed" | "cancellation" | "payment_attention" | "assignment_offer" | "result_published" | "renewal_opportunity" | "youth_feedback" | "staff_broadcast" | "availability_request" | "activity_reminder" | "result_reminder";
         NotificationPage: {
             items: components["schemas"]["Notification"][];
             nextCursor: string | null;
