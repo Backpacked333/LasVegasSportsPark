@@ -247,6 +247,30 @@ export const EnrollmentActions = defineActions({
     staffRoles: READERS,
     requirements: ['SPK-REG-005'],
   },
+  readEnrollmentSummary: {
+    id: 'enrollment.read_enrollment_summary',
+    description:
+      'Read aggregate enrollment, age, form-completion and waitlist counts of offerings (staff, facility-scoped; counts only)',
+    staffRoles: READERS,
+    requirements: ['SPK-REG-005', 'SPK-REG-008', 'SPK-CAT-001', '§4.14'],
+  },
+  readParticipantActivity: {
+    id: 'enrollment.read_participant_activity',
+    description:
+      "Read a participant's enrollments with the attendance of their recent sessions (staff who read both, the participant, or a guardian holding view)",
+    // The attendance half is entry's record: only roles holding both enrollment.read_enrollment
+    // and entry.read_attendance (entry's desk roles and support_operator) read it this way.
+    staffRoles: [
+      'front_desk',
+      'program_manager',
+      'league_manager',
+      'general_manager',
+      'support_operator',
+    ],
+    allowSelf: true,
+    subjectPermission: 'view',
+    requirements: ['SPK-REG-003', 'SPK-ENTRY-005', 'SPK-SUPPORT-001', '§4.14'],
+  },
   readFamilyCalendar: {
     id: 'enrollment.read_family_calendar',
     description: 'Read the family calendar of all authorized children',
