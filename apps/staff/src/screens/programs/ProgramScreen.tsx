@@ -25,7 +25,10 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { OfferingForm } from './OfferingForm';
+import { CapacityMeter } from '../../features/grow/Grow';
+import { capacityOf, poolsOf, sportOf } from './program-capacity';
 import { ProgramForm, ageBandText } from './ProgramsScreen';
+import './programs.css';
 
 type ProgramStatus = Schema<'ProgramStatus'>;
 type PublicationState = Schema<'PublicationState'>;
@@ -135,10 +138,16 @@ export function ProgramScreen() {
     },
     enabled: program.data !== undefined,
   });
+  // Capacity beside each offering; shared with the programs list, silent when not available.
+  const pools = useApiQuery({
+    path: '/capacity-pools',
+    request: { query: { scopeType: 'offering' } },
+    enabled: program.data !== undefined,
+  });
   return (
-    <section aria-labelledby="program-title">
+    <section aria-labelledby="program-title" className="grow">
       <p>
-        <Link to="/programs">All programs</Link>
+        <Link to="/programs">← All programs</Link>
       </p>
       <QueryBoundary
         query={program}
@@ -148,16 +157,24 @@ export function ProgramScreen() {
       >
         {(data) => (
           <>
-            <h2 id="program-title">{data.name}</h2>
-            <p>
-              <StatusBadge {...PROGRAM_STATUS[data.status]} />{' '}
-              <span className="caption">
-                {data.activityType}
-                {data.format ? ` · ${data.format}` : ''} · {ageBandText(data.ageBand)} · revision{' '}
-                {data.revision}
-              </span>
-            </p>
-            {data.description ? <p>{data.description}</p> : null}
+            <div className="page-head" data-sport={sportOf(data, [])}>
+              <div className="page-head-text">
+                <span className="eyebrow">
+                  Program · {data.activityType}
+                  {data.format ? ` · ${data.format}` : ''}
+                </span>
+                <h2 id="program-title">{data.name}</h2>
+                <p>
+                  <StatusBadge {...PROGRAM_STATUS[data.status]} />{' '}
+                  <span className="caption">
+                    {data.activityType}
+                    {data.format ? ` · ${data.format}` : ''} · {ageBandText(data.ageBand)} ·
+                    revision {data.revision}
+                  </span>
+                </p>
+                {data.description ? <p>{data.description}</p> : null}
+              </div>
+            </div>
             <EditProgram program={data} />
             <section className="rf-panel" aria-labelledby="offerings-title">
               <h3 id="offerings-title">Offerings</h3>
@@ -182,21 +199,33 @@ export function ProgramScreen() {
                 }}
               >
                 {(items) => (
-                  <ul className="list" aria-label="Offerings">
-                    {items.map((offering) => (
-                      <li key={offering.id}>
-                        <div className="row-text">
-                          <Link className="row-title" to={`/programs/offerings/${offering.id}`}>
-                            {offering.name}
-                          </Link>
-                          <span className="caption">
-                            {OFFERING_KIND[offering.kind]} · {nameOf(offering.facilityId)} ·{' '}
-                            {formatDate(offering.startsOn)} to {formatDate(offering.endsOn)}
-                          </span>
-                        </div>
-                        <StatusBadge {...PUBLICATION_STATE[offering.publicationState]} />
-                      </li>
-                    ))}
+                  <ul className="list offering-rows" aria-label="Offerings">
+                    {items.map((offering) => {
+                      const cap = pools.data ? capacityOf(poolsOf(offering.id, pools.data)) : null;
+                      return (
+                        <li key={offering.id}>
+                          <div className="row-text">
+                            <Link className="row-title" to={`/programs/offerings/${offering.id}`}>
+                              {offering.name}
+                            </Link>
+                            <span className="caption">
+                              {OFFERING_KIND[offering.kind]} · {nameOf(offering.facilityId)} ·{' '}
+                              {formatDate(offering.startsOn)} to {formatDate(offering.endsOn)}
+                            </span>
+                          </div>
+                          {cap?.capacity ? (
+                            <span className="offering-cap">
+                              <CapacityMeter
+                                capacity={cap.capacity.capacity}
+                                committed={cap.capacity.committed}
+                                held={cap.capacity.held}
+                              />
+                            </span>
+                          ) : null}
+                          <StatusBadge {...PUBLICATION_STATE[offering.publicationState]} />
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </QueryBoundary>
