@@ -34,6 +34,7 @@ import {
   useTodaySessions,
 } from '../../features/operations/sessions';
 import { useApp } from '../../providers/AppProviders';
+import { PersonCareNotes } from './CareNotesFlag';
 import { Button } from '../../ui/Button';
 import { LoadMore } from '../../ui/LoadMore';
 import { StateView } from '../../ui/StateView';
@@ -145,6 +146,7 @@ function LookedUpPerson({
     <section className="ops-section" aria-label={`Arrival for ${name}`}>
       <h4>{name}</h4>
       <p className="caption">{person.kind === 'child' ? 'Child' : 'Adult'}</p>
+      <PersonCareNotes personId={person.id} name={name} />
       {!online ? (
         <StateView
           variant="unavailable"

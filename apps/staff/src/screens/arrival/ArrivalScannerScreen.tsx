@@ -48,6 +48,8 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { PageHeader } from '../../ui/Page';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { CameraScanner } from './CameraScanner';
+import { CareNotesFlag } from './CareNotesFlag';
 import { CheckinOutcome } from './CheckinOutcome';
 import './arrival.css';
 import { PersonLookupArrival } from './PersonLookupArrival';
@@ -98,10 +100,10 @@ export function ArrivalScannerScreen() {
     enabled: facility.facilityId !== null,
   });
 
-  const openSelection = () => {
-    if (!facility.facilityId || reference.trim().length === 0) return;
+  const openSelection = (value: string = reference) => {
+    if (!facility.facilityId || value.trim().length === 0) return;
     void scanCommand
-      .submit({ body: { reference: reference.trim(), facilityId: facility.facilityId } })
+      .submit({ body: { reference: value.trim(), facilityId: facility.facilityId } })
       .then((result) => {
         // The scan's time is the service's: arrivals queued against it are dated on that clock
         // too (offline/clock.ts), so a device clock that is off moves neither.
@@ -157,10 +159,18 @@ export function ArrivalScannerScreen() {
                 </span>
                 <span className="scanner-hint">
                   {online
-                    ? 'Scan the facility pass with the reader, or type its reference below'
+                    ? 'Scan the facility pass with the reader or the camera, or type its reference below'
                     : 'Scanning needs a connection'}
                 </span>
               </div>
+              <CameraScanner
+                disabled={!online || scanCommand.isProcessing}
+                onDetected={(value) => {
+                  if (scanCommand.error) scanCommand.reset();
+                  setReference(value);
+                  openSelection(value);
+                }}
+              />
               <form
                 className="ops-form scanner-form"
                 onSubmit={(event) => {
@@ -197,7 +207,11 @@ export function ArrivalScannerScreen() {
               ) : null}
               {scanError && !passMessage ? (
                 <div className="scanner-error">
-                  <CommandError error={scanError} onRetry={openSelection} subject="This pass" />
+                  <CommandError
+                    error={scanError}
+                    onRetry={() => openSelection()}
+                    subject="This pass"
+                  />
                 </div>
               ) : null}
               {scanError && passMessage ? (
@@ -532,6 +546,7 @@ function PersonSelection({
           </span>
         </span>
       </div>
+      <CareNotesFlag notes={person.careNotes} name={name} />
       {onSite ? (
         <StatusBadge tone="success" label="Arrived" />
       ) : (

@@ -11,6 +11,7 @@ import { formatClock, humanize } from '../../features/operations/format';
 import { CHECKIN_STATUS, ISSUE_SEVERITY } from '../../features/operations/labels';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { WaiverActions } from './WaiverActions';
 
 type SessionCheckin = Schema<'SessionCheckin'>;
 
@@ -72,6 +73,7 @@ export function CheckinOutcome({
             })}
           </ul>
         ) : null}
+        <WaiverActions checkin={checkin} onRecheck={onRecheck} />
         {checkin.status === 'held' && onRecheck ? (
           <div className="ops-actions">
             <Button variant="secondary" busy={busy} onClick={onRecheck}>

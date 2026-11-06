@@ -455,6 +455,77 @@
   padding-left: 12px;
 }
 
+/* ---------- Camera scanning (browser BarcodeDetector) ---------- */
+.camera-scanner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+}
+.camera-scanner .caption {
+  color: var(--night-muted);
+}
+.camera-video {
+  width: 100%;
+  max-height: 260px;
+  border-radius: 12px;
+  background: var(--night-2);
+  object-fit: cover;
+}
+
+/* ---------- Care notes at the desk (protected, operational only) ---------- */
+.care-flags {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.care-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger);
+}
+.care-flag[data-kind='care_instruction'] {
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+}
+
+/* ---------- Missing form: sign on this tablet ---------- */
+.waiver-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.waiver-tablet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sand);
+}
+.waiver-tablet h5 {
+  margin: 0;
+  font-size: 15px;
+}
+.waiver-text {
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+}
+
 /* ---------- Offline queue ---------- */
 .queue-device {
   display: flex;
