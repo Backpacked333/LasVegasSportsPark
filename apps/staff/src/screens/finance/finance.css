@@ -1,0 +1,321 @@
+/*
+ * Finance overview (SCR-S-35 to SCR-S-38 home): money moved but not fulfilled pinned first, unknown
+ * provider outcomes explicit, refunds and reconciliation on the side. Edge colours repeat what the
+ * badges already say in words (SPK-UX-009).
+ */
+.fin {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.fin-card .card-head h3 {
+  font-size: 20px;
+}
+.fin-head-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+}
+.fin-card > .state,
+.fin-card > p {
+  padding: 4px 18px 18px;
+}
+.fin-card > .caption {
+  padding: 0 18px 8px;
+}
+.fin-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line-soft);
+  box-shadow: inset 3px 0 0 var(--edge, transparent);
+}
+.fin-row[data-edge='danger'] {
+  --edge: var(--tone-danger);
+  background: #fffafa;
+}
+.fin-row[data-edge='warning'] {
+  --edge: #d99a1e;
+}
+.fin-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.fin-tags .badge {
+  font-size: 11px;
+  min-height: 20px;
+  padding: 0 7px;
+}
+.fin-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--sand);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 700;
+}
+.fin-amount {
+  font-size: 20px;
+  font-weight: 800;
+  font-stretch: 75%;
+  white-space: nowrap;
+}
+.fin-total {
+  font-size: 18px;
+  font-weight: 800;
+  font-stretch: 75%;
+}
+
+/* Past-due table: rows are links to the obligation. */
+.fin-table {
+  display: flex;
+  flex-direction: column;
+}
+.fin-table-head,
+.fin-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.5fr) 110px 110px;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.fin-table-head {
+  background: var(--sand-2);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.fin-table-row {
+  color: var(--ink);
+  font-weight: 400;
+}
+.fin-table-row:hover {
+  background: var(--sand-2);
+  text-decoration: none;
+  color: var(--ink);
+}
+.fin-table .num {
+  text-align: right;
+}
+.fin-table-row .fin-amount {
+  font-size: 16px;
+}
+.fin-late {
+  color: var(--tone-danger);
+  font-weight: 700;
+  font-size: 12.5px;
+}
+@media (max-width: 640px) {
+  .fin-table-head {
+    display: none;
+  }
+  .fin-table-row {
+    grid-template-columns: 1fr auto;
+  }
+  .fin-table-row > :nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+/* Reconciliation: the dark side card. */
+.fin-recon {
+  padding: 18px;
+  gap: 10px;
+}
+.fin-recon-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fin-recon-head h3 {
+  font-size: 20px;
+}
+.fin-recon-value {
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+  color: #fff;
+}
+.fin-recon-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--night-3);
+  overflow: hidden;
+}
+.fin-recon-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--floodlight);
+}
+.fin-recon-line {
+  font-size: 12.5px;
+  color: #b9cbc1;
+}
+.fin-recon-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  margin: 4px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--night-line);
+}
+.fin-recon-facts dt {
+  font-size: 11px;
+  color: var(--night-muted);
+}
+.fin-recon-facts dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+  color: #fff;
+}
+.fin-recon .button-lime {
+  width: 100%;
+}
+.fin-recon .button-lime:hover {
+  color: var(--night);
+  text-decoration: none;
+  filter: brightness(0.95);
+}
+.fin-recon .state {
+  color: #e8f0eb;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* Directory of the area's screens. */
+.fin-directory {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fin-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.fin-tile {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.fin-tile:hover,
+.fin-tile:focus-within {
+  border-color: var(--pitch);
+  box-shadow: 0 0 0 1px var(--pitch);
+}
+.fin-tile-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--tone-success-bg);
+  color: var(--pitch);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.fin-tiles-quiet .fin-tile {
+  background: var(--sand-2);
+}
+.fin-tiles-quiet .fin-tile-icon {
+  background: var(--tone-neutral-bg);
+  color: var(--ink-2);
+}
+.fin-tile-link {
+  color: var(--ink);
+}
+/* The whole tile is the link's target (the link text stays its accessible name). */
+.fin-tile-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.fin-tile-link:hover {
+  text-decoration: none;
+  color: var(--pitch);
+}
+
+/* Card bodies: the SPK-UX-008 states sit inside the card, rows bleed to its edges. */
+.fin-body {
+  padding: 0 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.fin-body > .fin-rows,
+.fin-body > .fin-table {
+  margin: 0 -18px -14px;
+}
+.fin-body > [data-testid='last-updated'] {
+  font-size: 11px;
+  color: var(--faint);
+}
+.fin-body .state h2,
+.shell-main .fin-body .state h2,
+.fin-recon .state h2 {
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+.fin-body [data-testid='state-empty'] {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 6px 0 4px;
+}
+.fin-body [data-testid='state-empty']::before {
+  content: '✓';
+  grid-row: 1 / span 2;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--tone-success-bg);
+  color: var(--tone-success);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+}
+.fin-body [data-testid='state-empty'] p {
+  color: var(--muted);
+  font-size: 13px;
+}
+.fin-recon a.button-lime {
+  color: var(--night);
+}
