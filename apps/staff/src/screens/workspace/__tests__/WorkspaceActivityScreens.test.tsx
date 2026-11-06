@@ -291,6 +291,28 @@ describe('SCR-W-05 MatchReportScreen', () => {
 describe('SCR-W-05 MatchReportScreen (SubmitResultBody rules)', () => {
   beforeEach(() => window.localStorage.clear());
 
+  it('SPK-UX-007 / SPK-RESULT-002: the scoreboard "+" and "−" set the typed score field, never below zero, and a yellow card can be started in one tap', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes([workspaceItem(FIXTURE_ASSIGNMENT, [])], {
+        'GET /fixtures/{id}/results': { status: 200, body: [] },
+      }),
+    });
+    render(app.at(`${BASE}/report`));
+    const form = await screen.findByRole('form', { name: 'Match report' });
+    await user.click(within(form).getByRole('radio', { name: 'Completed' }));
+    const lower = within(form).getByRole('button', { name: 'Lower Red score' });
+    expect(lower).toBeDisabled();
+    await user.click(within(form).getByRole('button', { name: 'Raise Red score' }));
+    await user.click(within(form).getByRole('button', { name: 'Raise Red score' }));
+    await user.click(within(form).getByRole('button', { name: 'Raise Blue score' }));
+    expect(within(form).getByLabelText('Red score')).toHaveValue('2');
+    expect(within(form).getByLabelText('Blue score')).toHaveValue('1');
+    await user.click(lower);
+    expect(within(form).getByLabelText('Red score')).toHaveValue('1');
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
   it('a forfeit report sends both scores and the forfeiting team', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

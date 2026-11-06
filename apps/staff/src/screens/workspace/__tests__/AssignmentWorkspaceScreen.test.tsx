@@ -321,7 +321,10 @@ describe('SCR-W-02 / SCR-W-03 AssignmentWorkspaceScreen', () => {
     });
     render(app.at(PATH));
     const players = await screen.findByRole('list', { name: 'Players: Red' });
-    expect(within(players).getByText('#7 Jo Park (Captain, Guest)')).toBeInTheDocument();
+    // The roster row is named by the whole phrase (number, name, roles and status).
+    expect(
+      within(players).getByRole('listitem', { name: '#7 Jo Park (Captain, Guest)' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('No player listed.')).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/fixtures/{id}/match-sheet')?.params).toEqual(
       { id: FIXTURE_1 },

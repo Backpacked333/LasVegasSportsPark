@@ -11,13 +11,20 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useLocation, useParams } from 'react-router';
+import { humanize } from '../../features/operations/format';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, WORKSPACE_TABS } from '../../features/operations/AreaTabs';
-import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
+import {
+  OfflineQueueChip,
+  OfflineQueueStatus,
+} from '../../features/operations/offline/OfflineQueueStatus';
 import { useNow } from '../../providers/AppProviders';
+import { Icon } from '../../ui/Icon';
+import { PageHeader } from '../../ui/Page';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
+import './workspace.css';
 
 export type WorkspaceAssignment = Schema<'WorkspaceAssignment'>;
 
@@ -57,6 +64,9 @@ export function MyAssignmentPage({
   children: (item: WorkspaceAssignment) => ReactNode;
 }) {
   const { assignmentId = '' } = useParams();
+  const { pathname } = useLocation();
+  // On the assignment itself the way back is the list; on its sub-screens, the assignment.
+  const onAssignment = pathname.replace(/\/$/, '') === `/workspace/assignments/${assignmentId}`;
   const now = useNow(60 * 60_000);
   const recent = useApiQuery({ path: '/me/assignments' });
   const found = recent.data?.items.find((i) => i.assignment.id === assignmentId);
@@ -70,17 +80,32 @@ export function MyAssignmentPage({
   const assignments = recent.data === undefined || found !== undefined ? recent : history;
   const item = found ?? history.data?.items.find((i) => i.assignment.id === assignmentId) ?? null;
   return (
-    <section aria-labelledby="workspace-page-title">
-      <h2 id="workspace-page-title">{title(item)}</h2>
-      <AreaTabs label="Workspace screens" tabs={WORKSPACE_TABS} />
-      <OfflineQueueStatus reviewPath="/workspace/offline" />
-      <p>
-        {item ? (
-          <Link to={`/workspace/assignments/${item.assignment.id}`}>Back to the assignment</Link>
+    <section aria-labelledby="workspace-page-title" className="ops-screen workspace ws-page">
+      <p className="ws-back">
+        {item && !onAssignment ? (
+          <Link className="back-link" to={`/workspace/assignments/${item.assignment.id}`}>
+            <Icon name="arrow_back" size={18} />
+            Back to the assignment
+          </Link>
         ) : (
-          <Link to="/workspace">My assignments</Link>
+          <Link className="back-link" to="/workspace">
+            <Icon name="arrow_back" size={18} />
+            My assignments
+          </Link>
         )}
       </p>
+      <PageHeader
+        eyebrow={
+          item
+            ? `${item.activity.facility?.name ?? 'Workspace'} · ${humanize(item.assignment.role)}`
+            : 'Workspace'
+        }
+        title={title(item)}
+        titleId="workspace-page-title"
+        actions={<OfflineQueueChip reviewPath="/workspace/offline" />}
+      />
+      <AreaTabs label="Workspace screens" tabs={WORKSPACE_TABS} />
+      <OfflineQueueStatus reviewPath="/workspace/offline" />
       <QueryBoundary
         query={assignments}
         label="your assignment"
