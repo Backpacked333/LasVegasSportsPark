@@ -3,6 +3,7 @@
 export * from './automation';
 export * from './catalog';
 export * from './communications';
+export * from './competition-field';
 export * from './competition-matches';
 export * from './competition';
 export * from './core';

@@ -373,6 +373,7 @@ export function standings(
     computedAt: '2026-10-23T20:00:00.000Z',
     sourceResultIds: [IDS.officialResult],
     rows: [row(1, IDS.opponentEntry, 'Canyon Hawks', 9), row(2, IDS.entry, 'Desert Foxes', 9)],
+    playoffLine: null,
     tiebreakExplanations: [
       {
         teamEntryIds: [IDS.opponentEntry, IDS.entry],

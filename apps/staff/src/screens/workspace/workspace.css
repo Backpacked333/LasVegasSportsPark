@@ -677,3 +677,32 @@ a.ws-now-open:hover {
     grid-row: 1;
   }
 }
+
+/* Player check-in on the match sheet (fixture attendance, SPK-UX-007): large toggles. */
+.ws-checkin {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.ws-checkin-btn {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ws-checkin-btn[aria-pressed='true'][data-state='present'] {
+  background: var(--tone-success-bg);
+  border-color: var(--pitch);
+}
+.ws-checkin-btn[aria-pressed='true'][data-state='absent'] {
+  background: var(--tone-danger-bg);
+}
+.ws-checkin-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

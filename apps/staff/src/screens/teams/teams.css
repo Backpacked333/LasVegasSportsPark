@@ -1,0 +1,26 @@
+/* Placement board: staff player profiles and team balance (SPK-PLACE-002). */
+.skill-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.skill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line);
+}
+.skill-dot[data-on='true'] {
+  background: var(--pitch);
+}
+.place-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.place-profile-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  align-items: end;
+}

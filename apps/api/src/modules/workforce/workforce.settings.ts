@@ -34,5 +34,17 @@ export const WorkforceSettings = defineModuleSettings('workforce', {
    * `OFFICIAL_DAILY_LIMIT`.
    */
   OFFICIAL_MAX_ASSIGNMENTS_PER_DAY: policySetting(z.coerce.number().int().min(1).max(50)),
+  /**
+   * The qualification kind whose `level` is an official's grade (SPK-STAFF-001 qualification
+   * evidence), shown in replacement candidate reasons. Absent: candidates name no grade.
+   */
+  OFFICIAL_GRADE_QUALIFICATION_KIND: policySetting(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)),
+  /**
+   * The qualification kind that records a safeguarding certification with its expiry
+   * (SPK-STAFF-001), shown in replacement candidate reasons: current is a positive reason,
+   * missing, unverified or expired a warning (a requirement that names the kind still blocks).
+   * Absent: candidates name no safeguarding status.
+   */
+  SAFEGUARDING_QUALIFICATION_KIND: policySetting(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/)),
 });
 export type WorkforceSettingsValue = ModuleSettingsOf<typeof WorkforceSettings>;

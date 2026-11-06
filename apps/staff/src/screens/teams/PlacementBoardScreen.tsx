@@ -15,8 +15,13 @@
  * `expectedRevision`. CAPACITY_UNAVAILABLE or a changed eligibility at assignment is shown with its
  * code, and the candidates are reloaded. The assignment's operation is shown: `recovery_required`
  * means a follow-up (roster addition or notice) was not recorded. The placement model and its
- * fields are pending DEC-031 and DEC-051; the API gives no position or skill rating for rostered
- * players, so the board does not claim keeper or skill balance.
+ * fields are pending DEC-031 and DEC-051.
+ *
+ * Keeper and skill balance come from staff player profiles (`GET /v1/seasons/{id}/player-profiles`,
+ * staff-only, SPK-PLACE-005): each team column shows its goalkeepers and skill average over the
+ * rated players on its roster now, each entrant their staff position and rating (recorded here,
+ * PlayerProfile.tsx). A friend request is the teammates the entrant asked for on the placement
+ * request; the candidates read says how many of them are on each candidate roster.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -50,6 +55,8 @@ import { CompeteHeader, initials } from '../../features/competition/page';
 import { PENDING } from '../../features/competition/pending';
 import { SeasonEyebrow } from '../../features/competition/season-context';
 import { Button } from '../../ui/Button';
+import { BalanceBadges, ProfileEditor, usePlayerProfiles } from './PlayerProfile';
+import './teams.css';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 
@@ -57,18 +64,26 @@ type PlacementRequest = Schema<'PlacementRequest'>;
 type PlacementStatus = Schema<'PlacementStatus'>;
 type PlacementCandidate = Schema<'PlacementCandidate'>;
 type TeamEntry = Schema<'TeamEntry'>;
+type SeasonPlayerProfiles = Schema<'SeasonPlayerProfiles'>;
 
 const PLACEMENT_KEYS = keys(
   '/placement-requests',
   '/placement-requests/{id}',
   '/placement-requests/{id}/candidates',
   '/team-entries',
+  '/seasons/{id}/player-profiles',
 );
 
 /** A team colour band for each column, by position only (no meaning: the name is the label). */
 const TEAM_BANDS = ['#c0392b', '#2d5bd8', '#b07a12', '#0e7c74', '#5b3fa8', '#b0306b', '#c4541c'];
 
-function PlacementInformation({ request }: { request: PlacementRequest }) {
+function PlacementInformation({
+  request,
+  names,
+}: {
+  request: PlacementRequest;
+  names: PersonNames;
+}) {
   return (
     <dl className="facets" aria-label="Placement information">
       <div>
@@ -95,7 +110,16 @@ function PlacementInformation({ request }: { request: PlacementRequest }) {
       </div>
       <div>
         <dt>Requested teammates</dt>
-        <dd>{request.requestedTeammatePersonIds.length}</dd>
+        <dd>
+          {request.requestedTeammatePersonIds.length === 0
+            ? 'None'
+            : request.requestedTeammatePersonIds.map((id, i) => (
+                <span key={id}>
+                  {i > 0 ? ', ' : ''}
+                  <PersonName personId={id} names={names} />
+                </span>
+              ))}
+        </dd>
       </div>
       {request.notes ? (
         <div>
@@ -193,12 +217,14 @@ function RequestCard({
   names,
   selected,
   onSelect,
+  profiles,
 }: {
   request: PlacementRequest;
   entries: EntryNames;
   names: PersonNames;
   selected: boolean;
   onSelect: (request: PlacementRequest | null) => void;
+  profiles: SeasonPlayerProfiles | undefined;
 }) {
   const badge = PLACEMENT_STATUS[request.status];
   const entry = names.get(request.participantPersonId);
@@ -216,8 +242,24 @@ function RequestCard({
           <span className="caption">Requested {formatInstant(request.createdAt)}</span>
         </div>
       </div>
-      <StatusBadge tone={badge.tone} label={`Placement ${badge.label}`} />
-      <PlacementInformation request={request} />
+      <span className="actions-row">
+        <StatusBadge tone={badge.tone} label={`Placement ${badge.label}`} />
+        {request.requestedTeammatePersonIds.length > 0 ? (
+          <StatusBadge
+            tone="info"
+            label={`Friend request (${request.requestedTeammatePersonIds.length})`}
+          />
+        ) : null}
+      </span>
+      <PlacementInformation request={request} names={names} />
+      {profiles ? (
+        <ProfileEditor
+          seasonId={request.seasonId}
+          personId={request.participantPersonId}
+          personName={entry?.displayName ?? 'the entrant'}
+          profiles={profiles}
+        />
+      ) : null}
       {request.proposedTeamEntryId ? (
         <span>
           Proposed: <EntryName entryId={request.proposedTeamEntryId} teamIdOf={entries} />
@@ -264,7 +306,15 @@ interface Column {
   candidate: PlacementCandidate | undefined;
 }
 
-function TeamColumnHead({ column, band }: { column: Column; band: string }) {
+function TeamColumnHead({
+  column,
+  band,
+  profiles,
+}: {
+  column: Column;
+  band: string;
+  profiles: SeasonPlayerProfiles | undefined;
+}) {
   const check = column.entry ? rosterCheck(column.entry) : null;
   return (
     <div className="place-col-head" style={{ ['--team-color' as string]: band }}>
@@ -281,6 +331,9 @@ function TeamColumnHead({ column, band }: { column: Column; band: string }) {
         {column.entry?.rosterComplete ? (
           <StatusBadge tone="success" label="Roster complete" />
         ) : null}
+        <BalanceBadges
+          balance={profiles?.teams.find((b) => b.teamEntryId === column.teamEntryId)}
+        />
       </span>
     </div>
   );
@@ -295,10 +348,12 @@ function TeamColumns({
   selected,
   entries,
   entrantName,
+  profiles,
 }: {
   selected: PlacementRequest | null;
   entries: readonly TeamEntry[];
   entrantName: string;
+  profiles: SeasonPlayerProfiles | undefined;
 }) {
   const candidates = useApiQuery({
     path: '/placement-requests/{id}/candidates',
@@ -374,7 +429,11 @@ function TeamColumns({
             data-candidate={selected ? String(!!c) : undefined}
             aria-labelledby={`team-${column.teamEntryId}`}
           >
-            <TeamColumnHead column={column} band={bandOf.get(column.teamEntryId) ?? '#8a948f'} />
+            <TeamColumnHead
+              column={column}
+              band={bandOf.get(column.teamEntryId) ?? '#8a948f'}
+              profiles={profiles}
+            />
             <div className="place-col-body">
               {selected && c ? (
                 <div className="place-move" data-eligible={String(c.eligible)}>
@@ -389,7 +448,9 @@ function TeamColumns({
                     {c.capacity
                       ? `${c.capacity.available} of ${c.capacity.capacity} roster places free`
                       : 'No roster capacity limit recorded'}
-                    {` · ${c.requestedTeammatesOnRoster} requested teammate(s) on this roster`}
+                    {selected.requestedTeammatePersonIds.length > 0
+                      ? ` · friend request: ${c.requestedTeammatesOnRoster} of ${selected.requestedTeammatePersonIds.length} requested teammates on this roster`
+                      : ''}
                   </span>
                   <ReasonList reasons={c.reasons} label={`Reasons for ${c.teamName}`} />
                   <div className="actions-row">
@@ -510,7 +571,13 @@ export function PlacementBoardScreen() {
       },
     },
   });
-  const names = usePersonNames((requests.data?.items ?? []).map((r) => r.participantPersonId));
+  const names = usePersonNames(
+    (requests.data?.items ?? []).flatMap((r) => [
+      r.participantPersonId,
+      ...r.requestedTeammatePersonIds,
+    ]),
+  );
+  const profiles = usePlayerProfiles(seasonId);
   // The freshest copy of the selected entrant (its revision), or the one chosen if it left the
   // list after a placement.
   const current = selected
@@ -550,11 +617,26 @@ export function PlacementBoardScreen() {
               {approved.length} approved {approved.length === 1 ? 'team' : 'teams'}
             </span>
             <span className="chip chip-outline">Capacity checked when you assign</span>
+            {profiles.data ? (
+              <>
+                <span className="chip chip-outline">At least 1 keeper per team</span>
+                <span className="chip chip-outline">
+                  Skill {profiles.data.skillScale.min} to {profiles.data.skillScale.max}, staff
+                  rated
+                </span>
+              </>
+            ) : null}
           </>
         }
       />
       <SeasonLinks seasonId={seasonId} />
       <PendingNote decision={PENDING.placementModel} />
+      {profiles.error && !profiles.data ? (
+        <p className="caption" role="note">
+          Keeper and skill checks are not available to you: staff player profiles could not be read
+          ({profiles.error.code}).
+        </p>
+      ) : null}
       <div className="place-board">
         <section className="place-col place-col-unplaced" aria-labelledby="unplaced-title">
           <div className="place-col-head">
@@ -600,6 +682,7 @@ export function PlacementBoardScreen() {
                         names={names}
                         selected={current?.id === request.id}
                         onSelect={setSelected}
+                        profiles={profiles.data}
                       />
                     ))}
                   </ul>
@@ -620,6 +703,7 @@ export function PlacementBoardScreen() {
           selected={current}
           entries={entries}
           entrantName={selectedName?.split(' ')[0] ?? 'the entrant'}
+          profiles={profiles.data}
         />
       </div>
     </section>

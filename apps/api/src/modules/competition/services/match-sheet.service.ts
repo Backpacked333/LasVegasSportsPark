@@ -5,6 +5,7 @@ import { AuthorizationService, CLOCK, DATABASE, executorFor, type Clock } from '
 import { PeopleService } from '../../identity';
 import { MatchActions } from '../competition-matches.actions';
 import { ASSIGNMENT_CHECK_PORT, type AssignmentCheckPort } from '../competition-matches.ports';
+import { latestAttendanceMarks } from '../competition-field.queries';
 import { teamNamesOf } from '../competition.queries';
 import { organizationOf } from '../competition.shared';
 import { FixturesService } from './fixtures.service';
@@ -46,6 +47,12 @@ export class MatchSheetService {
       (id): id is string => id !== null,
     );
     const names = await teamNamesOf(db, organizationId, sides);
+    // Fixture attendance (migration 0465): each player's current check-in mark.
+    const marks = await latestAttendanceMarks(db, organizationId, [fixture.id]);
+    const markOf = (entryId: string, personId: string): 'present' | 'absent' | null => {
+      const mark = marks.find((m) => m.team_entry_id === entryId && m.person_id === personId);
+      return mark && mark.state !== 'cleared' ? mark.state : null;
+    };
     const out: MatchSheet['sides'] = [];
     for (const entryId of sides) {
       const members = await this.roster.effectiveRoster(organizationId, entryId, at);
@@ -63,6 +70,7 @@ export class MatchSheetService {
                 jerseyNumber: member.jerseyNumber,
                 playingStatus: member.status,
                 roles: member.roles,
+                attendance: markOf(entryId, member.personId),
               }
             : {
                 // SPK-CAP-002: a captain sees names and numbers only.
@@ -71,6 +79,7 @@ export class MatchSheetService {
                 jerseyNumber: member.jerseyNumber,
                 playingStatus: null,
                 roles: [],
+                attendance: null,
               },
         );
       }
@@ -80,7 +89,13 @@ export class MatchSheetService {
             (b.jerseyNumber ?? Number.MAX_SAFE_INTEGER) ||
           a.displayName.localeCompare(b.displayName),
       );
-      out.push({ entryId, teamName: names.get(entryId) ?? 'Unknown team', players });
+      out.push({
+        entryId,
+        teamName: names.get(entryId) ?? 'Unknown team',
+        players,
+        presentCount: marks.filter((m) => m.team_entry_id === entryId && m.state === 'present')
+          .length,
+      });
     }
     return {
       fixtureId: fixture.id,
@@ -91,6 +106,9 @@ export class MatchSheetService {
       venue: await this.fixtures.venueOf(db, fixture),
       view,
       sides: out,
+      // The full view is league staff or an accepted official: both record check-in while the
+      // fixture is scheduled (POST /v1/fixtures/{id}/attendance re-checks the authority).
+      canRecordAttendance: view === 'full' && fixture.status === 'scheduled',
     };
   }
 

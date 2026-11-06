@@ -257,3 +257,15 @@
     width: 100%;
   }
 }
+
+/* Official grade and safeguarding certification on a candidate (SPK-STAFF-001). */
+.cand-credentials {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+}
+.cand-action {
+  flex: none;
+  align-self: center;
+}

@@ -367,8 +367,10 @@ export function matchSheet(overrides: Record<string, unknown> = {}) {
             jerseyNumber: 7,
             playingStatus: 'active',
             roles: ['captain'],
+            attendance: null,
           },
         ],
+        presentCount: 0,
       },
       {
         entryId: ID.entryBlue,
@@ -380,10 +382,13 @@ export function matchSheet(overrides: Record<string, unknown> = {}) {
             jerseyNumber: 1,
             playingStatus: 'guest',
             roles: [],
+            attendance: null,
           },
         ],
+        presentCount: 0,
       },
     ],
+    canRecordAttendance: true,
     ...overrides,
   };
 }
@@ -617,6 +622,7 @@ export function standings(overrides: Record<string, unknown> = {}) {
         resolved: true,
       },
     ],
+    playoffLine: null,
     ...overrides,
   };
 }

@@ -19,4 +19,5 @@ export { AssignmentsService } from './services/assignments.service';
 export { ReplacementsService } from './services/replacements.service';
 export { FeesService } from './services/fees.service';
 export { WorkspaceService } from './services/workspace.service';
+export { AssignedStaffService, type AssignedPerson } from './services/assigned-staff.service';
 export * from './testing/workforce-fixtures';

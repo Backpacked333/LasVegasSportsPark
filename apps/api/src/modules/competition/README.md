@@ -735,3 +735,38 @@ built, waiting on a decision or another module.
   evening roster change on 31 December does not age every player a year. Without any known
   facility the UTC date is used and the age reason says so ("UTC date: no facility time zone is
   known") (`competition.rules.spec.ts`, `__tests__/readiness.spec.ts` "R3-TIME-MONEY-03").
+
+## Placement and field-side work (migrations 0464 to 0466) — verified 2026-11-06
+
+Verified in `__tests__/placement-field.spec.ts` and `__tests__/team-workspace.spec.ts`:
+
+- `GET`/`POST /v1/seasons/{id}/player-profiles` (`competition.read_player_profiles`,
+  `competition.record_player_profile`, staff only, SPK-PLACE-002/005): a staff position
+  (`goalkeeper`, `defender`, `midfielder`, `forward`, `outfield`) and skill rating per season and
+  person (`season_player_profiles`, revisioned, audited, never deleted); the read gives each live
+  entry its playing roster now, goalkeepers, rated players and skill average. The 1 to 5 scale is
+  an engineering placeholder (`SKILL_RATING_SCALE`); the placement model is pending DEC-031 and
+  DEC-051. What a registrant declares (level, position preferences, requested teammates) stays on
+  enrollment's placement request.
+- Standings carry `playoffLine` from the division's most recently changed fixture specification
+  that names a playoff structure (null otherwise), derived on every read.
+- `GET /v1/seasons/{id}/readiness` items add `warningCount` and the per-check `checks` (names,
+  status, counts only).
+- `GET`/`POST /v1/fixtures/{id}/attendance` (`competition.read_fixture_attendance`,
+  `competition.record_fixture_attendance`): league staff, an accepted official (ASSIGNMENT_CHECK_PORT)
+  or a captain for their own side marks a player on the roster at kickoff present or absent, or
+  clears the mark, while the fixture is scheduled. Marks are append-only and chained
+  (`supersedes_mark_id`; one first mark per player and side, each mark superseded at most once, all
+  enforced by the database). The match sheet carries each player's `attendance`, the side's
+  `presentCount` and `canRecordAttendance`.
+- `GET /v1/seasons/{id}/results-awaiting` (`competition.read_results_awaiting`): scheduled fixtures
+  past their end with no result revision in progress or official, with players present per side,
+  the rule set's minimum to start, a `suggestedForfeit` when exactly one side was marked below it,
+  and reminder counts. The suggestion decides nothing; the forfeit goes through the ordinary
+  submission and publication.
+- `POST /v1/fixtures/{id}/result-reminders` (`competition.remind_result`): an append-only reminder
+  to both sides' captains and co-captains, with `competition.result_reminder_requested`.
+
+**Pending:** communications does not subscribe to `competition.result_reminder_requested` yet, so a
+reminder is recorded and nothing is delivered (communications imports competition, so competition
+cannot call `NotificationsService` without a module cycle). Player profiles follow no person merge.

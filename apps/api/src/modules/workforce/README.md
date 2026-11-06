@@ -490,3 +490,22 @@ timezone }` from the kernel `FacilityDirectory`, one directory read per response
 - Hours are submitted as rate-basis minutes; there is no clock-in/clock-out record (entry module)
   and no automatic computation from attendance.
 - Requirements are declared per target; there is no template per season or offering yet.
+
+## Open-slot candidates, grade and safeguarding, assigned staff — verified 2026-11-06
+
+Verified in `__tests__/open-slot-candidates.spec.ts`:
+
+- `GET /v1/assignment-requirements/{id}/candidates` (`workforce.trigger_replacement`): ranked
+  candidates for an open slot with no assignment to replace, evaluated like replacement candidates
+  for the requirement's activity as it is now; someone already proposed, offered or accepted for
+  the role is blocked (`already_on_role`). Offering is the ordinary `POST /v1/assignments` with
+  `offer: true`.
+- Every candidate (replacement and open slot) carries `grade` and `safeguarding`, and reasons
+  `official_grade` / `official_grade_unknown` (officials) and `safeguarding_current` (positive) or
+  `safeguarding_missing|unverified|expired` (warning; a requirement that names the kind still
+  blocks), from the qualification kinds named by the settings
+  `WORKFORCE_OFFICIAL_GRADE_QUALIFICATION_KIND` and `WORKFORCE_SAFEGUARDING_QUALIFICATION_KIND`.
+  Unset (the default, DEC-011 pending), candidates name neither.
+- `GET /v1/assigned-staff?targetType=&targetIds=` (`workforce.view_assignments`) and the exported
+  `AssignedStaffService.assignedTo`: accepted or completed assignments per activity with display
+  names (the arrival screen's session coach); facilities the viewer may not see are left out.

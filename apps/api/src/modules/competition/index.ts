@@ -7,11 +7,14 @@ export * from './competition-matches.actions';
 export * from './competition-matches.events';
 export * from './competition-matches.ports';
 export * from './competition-matches.state-machines';
+export * from './competition-field.actions';
+export * from './competition-field.events';
 export {
   proposedRuleSetContent,
   TEAM_INVITATION_DEFAULT_HOURS,
   TEAM_INVITATION_EXPIRY_JOB,
   WORKSPACE_UPCOMING_FIXTURES,
+  SKILL_RATING_SCALE,
 } from './competition.policy';
 export {
   FAIR_PLAY_POINTS,
@@ -60,6 +63,9 @@ export { MyCompetitionService } from './services/my-competition.service';
 export { MatchSheetService } from './services/match-sheet.service';
 export { AvailabilityRequestsService } from './services/availability-requests.service';
 export { PoolsService } from './services/pools.service';
+export { PlayerProfilesService } from './services/player-profiles.service';
+export { FixtureAttendanceService } from './services/fixture-attendance.service';
+export { ResultsAwaitingService } from './services/results-awaiting.service';
 export {
   computeStandings,
   type OfficialResultInput,

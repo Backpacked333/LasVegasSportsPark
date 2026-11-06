@@ -5,6 +5,11 @@
  * - Uncovered required slots for the facility's next seven days come from the uncovered
  *   assignments report (`GET /v1/reports/uncovered-assignments`): proposed and offered never count
  *   as covering (SPK-STAFF-002), and the labels say so.
+ * - "Find candidates" on an uncovered slot ranks who could cover it although nobody holds an
+ *   assignment to replace (`GET /v1/assignment-requirements/{id}/candidates`, SPK-STAFF-003);
+ *   "Offer" sends the ordinary proposal with `offer: true` (`POST /v1/assignments`). Every
+ *   candidate list names the official's grade and safeguarding certification with its expiry
+ *   when the API reports them (qualification kinds configured in workforce, DEC-011 pending).
  * - Assignments (`GET /v1/assignments`) show all six states including "Proposed".
  * - Proposing (`POST /v1/assignments`) lets the API check qualification, availability, overlaps
  *   and turnaround (SPK-STAFF-003); its refusal is shown with its code and message. The person is
@@ -21,7 +26,7 @@
  *   resends exactly the proposal that was sent (same body, so the same idempotency key, §4.9).
  */
 import { formatMinorUnits, presentationForError, type Schema } from '@sportspark/api-client';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -103,6 +108,7 @@ export function AssignmentsScreen() {
   const facility = useOperatingFacility();
   const [proposal, setProposal] = useState<ProposalSeed | null>(null);
   const [replacing, setReplacing] = useState<Assignment | null>(null);
+  const [openSlot, setOpenSlot] = useState<OpenSlotSeed | null>(null);
   return (
     <section aria-labelledby="assignments-title" className="compete staff-area">
       <CompeteHeader
@@ -120,6 +126,10 @@ export function AssignmentsScreen() {
               today={facility.localDate}
               timezone={facility.timezone}
               onPropose={setProposal}
+              onFindCandidates={(seed) => {
+                setReplacing(null);
+                setOpenSlot((current) => (current?.key === seed.key ? null : seed));
+              }}
             />
           ) : (
             <div className="state">
@@ -131,7 +141,10 @@ export function AssignmentsScreen() {
           )}
           <AssignmentList
             replacingId={replacing?.id ?? null}
-            onReplace={(a) => setReplacing((current) => (current?.id === a.id ? null : a))}
+            onReplace={(a) => {
+              setOpenSlot(null);
+              setReplacing((current) => (current?.id === a.id ? null : a));
+            }}
           />
         </div>
         <aside className="season-side" aria-label="Cover a slot">
@@ -144,7 +157,13 @@ export function AssignmentsScreen() {
             </Button>
           </div>
           {proposal ? <ProposeForm key={JSON.stringify(proposal)} seed={proposal} /> : null}
-          {replacing ? (
+          {openSlot ? (
+            <OpenSlotCandidatesCard
+              key={openSlot.key}
+              seed={openSlot}
+              onClose={() => setOpenSlot(null)}
+            />
+          ) : replacing ? (
             <ReplacementCandidatesCard
               key={replacing.id}
               assignment={replacing}
@@ -154,9 +173,10 @@ export function AssignmentsScreen() {
             <section className="card" aria-labelledby="replace-hint-title">
               <h3 id="replace-hint-title">Find a replacement</h3>
               <p className="caption">
-                Choose &ldquo;Find a replacement&rdquo; on an offered, accepted or declined
-                assignment to see who could cover it, ranked by the service&apos;s checks of
-                qualification, availability and conflicts.
+                Choose &ldquo;Find candidates&rdquo; on an uncovered slot, or &ldquo;Find a
+                replacement&rdquo; on an offered, accepted or declined assignment, to see who could
+                cover it, ranked by the service&apos;s checks of qualification, availability and
+                conflicts.
               </p>
             </section>
           )}
@@ -177,16 +197,26 @@ interface ProposalSeed {
   role?: string;
 }
 
+interface OpenSlotSeed {
+  key: string;
+  requirementId: string;
+  title: string;
+  when: string | undefined;
+  timezone: string | null;
+}
+
 function UncoveredSlots({
   facilityId,
   today,
   timezone,
   onPropose,
+  onFindCandidates,
 }: {
   facilityId: string;
   today: string | null;
   timezone: string | null;
   onPropose: (seed: ProposalSeed) => void;
+  onFindCandidates: (seed: OpenSlotSeed) => void;
 }) {
   const now = useNow(60_000);
   const from = today ?? localDate(now, timezone);
@@ -253,7 +283,25 @@ function UncoveredSlots({
                           offered {count(row, 'offered')} and proposed {count(row, 'proposed')} do
                           not cover.
                         </span>
-                        <span className="cover-detail">
+                        <span className="cover-detail actions-row">
+                          {text(row, 'requirementId') ? (
+                            <Button
+                              variant="secondary"
+                              className="button-sm"
+                              aria-label={`Find candidates for ${text(row, 'title')}, ${humanize(text(row, 'role'))}`}
+                              onClick={() =>
+                                onFindCandidates({
+                                  key: `${text(row, 'requirementId')}-${text(row, 'role')}`,
+                                  requirementId: text(row, 'requirementId'),
+                                  title: `${humanize(text(row, 'role'))} · ${text(row, 'title')}`,
+                                  when: start ? formatInstant(start, zone) : undefined,
+                                  timezone: zone,
+                                })
+                              }
+                            >
+                              Find candidates
+                            </Button>
+                          ) : null}
                           <Button
                             variant="primary"
                             className="button-sm"
@@ -441,6 +489,180 @@ export function rankCandidates(candidates: readonly Candidate[]): Candidate[] {
     .map((x) => x.c);
 }
 
+/** Grade and safeguarding in words (glyph plus text, never colour alone, SPK-UX-009). */
+export function credentialsOf(c: Candidate): string[] {
+  const out: string[] = [];
+  if (c.grade) out.push(`Grade ${c.grade}`);
+  const sg = c.safeguarding;
+  if (sg) {
+    const until = sg.validTo ? ` until ${sg.validTo.slice(0, 10)}` : '';
+    out.push(
+      sg.status === 'held'
+        ? `✓ Safeguarding${until}`
+        : sg.status === 'expired'
+          ? '▲ Safeguarding expired'
+          : sg.status === 'unverified'
+            ? '▲ Safeguarding awaits verification'
+            : '▲ No safeguarding certification',
+    );
+  }
+  return out;
+}
+
+const PROFILE_CODES = new Set([
+  'official_grade',
+  'official_grade_unknown',
+  'safeguarding_current',
+  'safeguarding_missing',
+  'safeguarding_unverified',
+  'safeguarding_expired',
+]);
+
+function CandidateList({
+  candidates,
+  label,
+  action,
+}: {
+  candidates: readonly Candidate[];
+  label: string;
+  action?: (c: Candidate) => ReactNode;
+}) {
+  return (
+    <ol className="cand-list" aria-label={label}>
+      {rankCandidates(candidates).map((c, i) => {
+        const credentials = credentialsOf(c);
+        // The credentials line says grade and safeguarding; their reasons are not repeated.
+        const reasons = c.reasons.filter(
+          (r) => !PROFILE_CODES.has(r.code) || credentials.length === 0,
+        );
+        return (
+          <li key={c.personId} data-eligible={c.eligible}>
+            <span className="rank" aria-hidden="true">
+              {i + 1}
+            </span>
+            <span className="cand-avatar" aria-hidden="true">
+              {initials(c.displayName)}
+            </span>
+            <span className="cand-text">
+              <span className="row-title">{c.displayName}</span>
+              {credentials.length > 0 ? (
+                <span className="cand-credentials">{credentials.join(' · ')}</span>
+              ) : null}
+              <span className="cand-meta">
+                {c.eligible ? 'Eligible' : 'Not eligible'}
+                {reasons.length > 0 ? ` · ${reasons.map((r) => r.message).join(' · ')}` : ''}
+              </span>
+            </span>
+            {action ? <span className="cand-action">{action(c)}</span> : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * Ranked candidates for an open slot nobody holds (`GET /v1/assignment-requirements/{id}/candidates`,
+ * SPK-STAFF-003). "Offer" proposes and offers in one command (`POST /v1/assignments`, offer:
+ * true); the API checks qualification, availability, overlaps and turnaround again and its refusal
+ * is shown with its code.
+ */
+function OpenSlotCandidatesCard({ seed, onClose }: { seed: OpenSlotSeed; onClose: () => void }) {
+  const candidates = useApiQuery({
+    path: '/assignment-requirements/{id}/candidates',
+    request: { path: { id: seed.requirementId } },
+  });
+  const offer = useApiCommand('post', '/assignments', {
+    invalidate: [
+      ['api', '/assignments'],
+      ['api', '/reports/uncovered-assignments'],
+      ['api', '/assignment-requirements/{id}/candidates'],
+    ],
+  });
+  const [offeredTo, setOfferedTo] = useState<string | null>(null);
+  const send = (personId: string) => {
+    const data = candidates.data;
+    if (!data) return;
+    setOfferedTo(personId);
+    void offer
+      .submit({
+        body: {
+          personId,
+          kind: data.kind,
+          targetType: data.targetType,
+          targetId: data.targetId,
+          ...(data.offeringId ? { offeringId: data.offeringId } : {}),
+          role: data.role,
+          offer: true,
+        },
+      })
+      .catch(() => undefined);
+  };
+  return (
+    <section className="card card-flush" aria-labelledby="open-slot-title">
+      <div className="cand-head">
+        <span className="cand-kicker">Open slot · uncovered</span>
+        <h3 id="open-slot-title" className="cand-title">
+          {seed.title}
+        </h3>
+        {seed.when ? <span className="caption">{seed.when}</span> : null}
+      </div>
+      <QueryBoundary
+        query={candidates}
+        label="candidates for the open slot"
+        isEmpty={(data) => data.candidates.length === 0}
+        empty={{
+          title: 'No candidates',
+          description:
+            'Nobody holds the required qualifications and is free at this time. The slot stays uncovered until someone is assigned.',
+        }}
+        unavailableOffline={['offering the open slot']}
+      >
+        {(data) => (
+          <>
+            <p className="label-caps card-pad">
+              {data.covered} of {data.requiredCount} covered
+              {data.requiredQualifications.length > 0
+                ? ` · requires ${data.requiredQualifications.map(humanize).join(', ')}`
+                : ''}
+            </p>
+            <CandidateList
+              candidates={data.candidates}
+              label="Ranked candidates for the open slot"
+              action={(c) =>
+                offer.status === 'success' && offeredTo === c.personId ? (
+                  <StatusBadge tone="info" label="Offered" />
+                ) : c.eligible ? (
+                  <CommandButton
+                    className="button-sm"
+                    busy={offer.isProcessing && offeredTo === c.personId}
+                    aria-label={`Offer the slot to ${c.displayName}`}
+                    onClick={() => send(c.personId)}
+                  >
+                    Offer
+                  </CommandButton>
+                ) : null
+              }
+            />
+            <p className="card-note">Evaluated {formatInstant(data.evaluatedAt, seed.timezone)}</p>
+          </>
+        )}
+      </QueryBoundary>
+      <div className="card-body">
+        {offer.error ? (
+          <CommandError
+            error={offer.error}
+            onRetry={() => (offeredTo ? send(offeredTo) : undefined)}
+          />
+        ) : null}
+        <Button variant="secondary" className="button-sm" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 /**
  * Ranked replacement candidates for one assignment (`GET /v1/assignments/{id}/replacements`,
  * SPK-AT-012): availability, qualification and conflicts in one line per person, as the service
@@ -490,27 +712,7 @@ function ReplacementCandidatesCard({
                 ? ` · requires ${data.requiredQualifications.map(humanize).join(', ')}`
                 : ''}
             </p>
-            <ol className="cand-list" aria-label="Ranked replacement candidates">
-              {rankCandidates(data.candidates).map((c, i) => (
-                <li key={c.personId} data-eligible={c.eligible}>
-                  <span className="rank" aria-hidden="true">
-                    {i + 1}
-                  </span>
-                  <span className="cand-avatar" aria-hidden="true">
-                    {initials(c.displayName)}
-                  </span>
-                  <span className="cand-text">
-                    <span className="row-title">{c.displayName}</span>
-                    <span className="cand-meta">
-                      {c.eligible ? 'Eligible' : 'Not eligible'}
-                      {c.reasons.length > 0
-                        ? ` · ${c.reasons.map((r) => r.message).join(' · ')}`
-                        : ''}
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ol>
+            <CandidateList candidates={data.candidates} label="Ranked replacement candidates" />
             <p className="card-note">Evaluated {formatInstant(data.evaluatedAt, zone)}</p>
           </>
         )}

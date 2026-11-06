@@ -31,6 +31,7 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, STAFF_TABS } from '../../features/operations/AreaTabs';
 import { CompeteHeader } from '../../features/competition/page';
+import { credentialsOf } from './AssignmentsScreen';
 import './staff.css';
 import { nameOf, useFacilityZone, usePersonNames } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
@@ -387,6 +388,9 @@ function Replacement({ assignment: a }: { assignment: Assignment }) {
                       label={c.eligible ? 'Eligible' : 'Not eligible'}
                     />
                   </label>
+                  {credentialsOf(c).length > 0 ? (
+                    <p className="cand-credentials">{credentialsOf(c).join(' · ')}</p>
+                  ) : null}
                   <ul className="ops-history" aria-label={`Reasons for ${c.displayName}`}>
                     {c.reasons.map((r) => (
                       <li key={`${r.code}-${r.sourceIds.join(',')}`}>

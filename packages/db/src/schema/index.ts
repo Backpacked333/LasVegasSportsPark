@@ -2,6 +2,7 @@ import type { CoreTables } from './core';
 import type { AutomationTables } from './automation';
 import type { CatalogTables } from './catalog';
 import type { CommunicationsTables } from './communications';
+import type { CompetitionFieldTables } from './competition-field';
 import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
 import type { EnrollmentPackageGTables } from './enrollment-package-g';
@@ -22,6 +23,7 @@ export * from './core';
 export * from './automation';
 export * from './catalog';
 export * from './communications';
+export * from './competition-field';
 export * from './competition-matches';
 export * from './competition';
 export * from './enrollment-package-g';
@@ -48,6 +50,7 @@ export interface Database
     AutomationTables,
     CatalogTables,
     CommunicationsTables,
+    CompetitionFieldTables,
     CompetitionMatchesTables,
     CompetitionTables,
     EnrollmentPackageGTables,
