@@ -248,6 +248,22 @@ describe('SCR-S-39 MessageComposerScreen', () => {
     );
   });
 
+  it('SPK-COMMS-003: the live rail summarises the audience definition and shows the message as written, without resolving recipients', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({ routes: routes() });
+    render(app.at('/communications/compose'));
+    const form = await screen.findByRole('form', { name: 'Compose a message' });
+    const rail = screen.getByRole('complementary', { name: 'Live preview' });
+    expect(within(rail).getByTestId('audience-summary')).toHaveTextContent('Nobody yet');
+    await user.click(within(form).getByRole('checkbox', { name: 'Front desk' }));
+    await user.click(within(form).getByRole('checkbox', { name: 'Coach' }));
+    expect(within(rail).getByTestId('audience-summary')).toHaveTextContent('2 staff roles');
+    await user.type(within(form).getByLabelText('Title'), 'Car park closed');
+    expect(rail).toHaveTextContent('Car park closed');
+    // Recipients are resolved only by the preview step (step 2), never while composing.
+    expect(app.fake.requests.some((r) => r.route === '/notifications/{id}/recipients')).toBe(false);
+  });
+
   it('explains an audience that resolves to nobody', async () => {
     const app = createTestApp({
       routes: routes({
