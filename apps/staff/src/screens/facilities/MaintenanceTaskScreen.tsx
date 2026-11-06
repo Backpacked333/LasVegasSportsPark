@@ -542,7 +542,7 @@ export function MaintenanceTaskScreen() {
   const task = useApiQuery({ path: '/maintenance-tasks/{id}', request: { path: { id: taskId } } });
   const facility = useFacilityById(task.data?.facilityId);
   return (
-    <section aria-labelledby="task-title">
+    <section aria-labelledby="task-title" className="detail-screen">
       <h3 id="task-title">Maintenance task</h3>
       <Link to="/facilities/maintenance">All tasks</Link>
       <QueryBoundary

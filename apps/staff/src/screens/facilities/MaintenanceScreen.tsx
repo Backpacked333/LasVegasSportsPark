@@ -18,13 +18,14 @@
  * (no queued evidence upload is offered).
  */
 import type { Schema } from '@sportspark/api-client';
-import { useState, type FormEvent } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, useLocation } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Icon, type IconName } from '../../ui/Icon';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
@@ -68,6 +69,7 @@ import {
   whereLabel,
   type EvidenceDraft,
 } from './maintenance-shared';
+import { ActiveRestrictions } from './ReleaseReadiness';
 
 type Task = Schema<'MaintenanceTask'>;
 type Severity = Task['severity'];
@@ -78,6 +80,84 @@ type AssetKind = Asset['kind'];
 const SEVERITIES: Severity[] = ['low', 'medium', 'high', 'critical'];
 const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 const PAGE = 50;
+
+const ASSET_ICON: Record<AssetKind, IconName> = {
+  turf: 'grass',
+  goal: 'sports_soccer',
+  net: 'sports_soccer',
+  boards: 'fence',
+  divider: 'splitscreen',
+  lighting: 'lightbulb',
+  scoreboard: 'scoreboard',
+  equipment: 'hardware',
+  other: 'build',
+};
+
+/** A decorative icon for a work order, from its asset's kind (the text names the asset). */
+function taskIcon(task: Task, kinds: ReadonlyMap<string, AssetKind>): IconName {
+  const kind = task.assetId ? kinds.get(task.assetId) : undefined;
+  if (kind) return ASSET_ICON[kind];
+  return task.resourceId ? 'stadium' : 'construction';
+}
+
+/**
+ * Asset health at a glance (SPK-FAC-001): per kind, how many are in service and how many are
+ * restricted or out of service, counted from the facility's assets. Retired assets are left out.
+ */
+function AssetHealth({ facility }: { facility: FacilityContext }) {
+  const { assets } = useFacilityNames(facility.id);
+  const live = (assets.data ?? []).filter((a) => a.status !== 'retired');
+  const kinds = (Object.keys(ASSET_KIND_LABEL) as AssetKind[])
+    .map((kind) => {
+      const of = live.filter((a) => a.kind === kind);
+      return {
+        kind,
+        total: of.length,
+        inService: of.filter((a) => a.status === 'in_service').length,
+        restricted: of.filter((a) => a.status === 'restricted').length,
+        out: of.filter((a) => a.status === 'out_of_service').length,
+      };
+    })
+    .filter((k) => k.total > 0);
+  return (
+    <section className="card" aria-labelledby="asset-health-title">
+      <h4 id="asset-health-title">Asset health</h4>
+      {assets.error ? (
+        <p className="caption">Assets could not be read ({assets.error.code}).</p>
+      ) : !assets.data ? (
+        <StateView variant="loading" label="asset health" />
+      ) : kinds.length === 0 ? (
+        <p className="caption">No assets registered yet; register them under Assets below.</p>
+      ) : (
+        <ul className="asset-health" aria-label="Assets by kind">
+          {kinds.map((k) => (
+            <li key={k.kind}>
+              <span className="asset-health-kind">{ASSET_KIND_LABEL[k.kind]}</span>
+              <span className="caption">
+                {k.inService} of {k.total} in service
+              </span>
+              {k.restricted > 0 ? (
+                <StatusBadge tone="warning" label={`${k.restricted} restricted`} />
+              ) : null}
+              {k.out > 0 ? <StatusBadge tone="danger" label={`${k.out} out of service`} /> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Scrolls the report form into view when the page header's "Report a problem" opened it. */
+function ReportAnchor() {
+  const location = useLocation();
+  useEffect(() => {
+    if (location.hash === '#report') {
+      document.getElementById('report')?.scrollIntoView?.({ block: 'start' });
+    }
+  }, [location.hash]);
+  return null;
+}
 
 export function isOverdue(task: Task, now: Date): boolean {
   return (
@@ -91,7 +171,8 @@ export function isOverdue(task: Task, now: Date): boolean {
 function TaskList({ facility }: { facility: FacilityContext }) {
   const now = useNow();
   const me = useMyPersonId();
-  const { assetNames, resourceNames } = useFacilityNames(facility.id);
+  const { assets, assetNames, resourceNames } = useFacilityNames(facility.id);
+  const assetKinds = new Map((assets.data ?? []).map((a) => [a.id, a.kind]));
   const [status, setStatus] = useState<'' | TaskStatus>('');
   const [severity, setSeverity] = useState<'' | Severity>('');
   const [overdueOnly, setOverdueOnly] = useState(false);
@@ -161,7 +242,7 @@ function TaskList({ facility }: { facility: FacilityContext }) {
       >
         {(items) => (
           <>
-            <ul className="list" aria-label="Maintenance tasks">
+            <ul className="list work-orders" aria-label="Maintenance tasks">
               {[...items]
                 .sort(
                   (a, b) =>
@@ -174,6 +255,9 @@ function TaskList({ facility }: { facility: FacilityContext }) {
                   const st = TASK_BADGE[t.status];
                   return (
                     <li key={t.id} data-testid={`task-${t.id}`}>
+                      <span className="work-order-icon" aria-hidden="true">
+                        <Icon name={taskIcon(t, assetKinds)} size={19} />
+                      </span>
                       <div className="row-text">
                         <Link className="row-title" to={`/facilities/maintenance/tasks/${t.id}`}>
                           {t.issue}
@@ -193,7 +277,7 @@ function TaskList({ facility }: { facility: FacilityContext }) {
                             : ''}
                         </span>
                       </div>
-                      <span>
+                      <span className="work-order-status">
                         <StatusBadge tone={sev.tone} label={sev.label} />{' '}
                         <StatusBadge tone={st.tone} label={`Status: ${st.label}`} />
                         {isOverdue(t, now) ? (
@@ -1149,22 +1233,39 @@ function Preventive({ facility }: { facility: FacilityContext }) {
 
 export function MaintenanceScreen() {
   return (
-    <section aria-labelledby="maintenance-title">
+    <section aria-labelledby="maintenance-title" className="facilities-screen">
       <h3 id="maintenance-title">Assets and maintenance tasks</h3>
       <FacilityGate purpose="see its assets and maintenance">
         {(facility) => (
           <>
             <ZoneCaption facility={facility} />
-            <TaskList facility={facility} />
-            <ActionGate
-              action="facilities.report_issue"
-              facilityId={facility.id}
-              what="Reporting maintenance issues"
-            >
-              <ReportIssueForm facility={facility} />
-            </ActionGate>
-            <Assets facility={facility} />
-            <Preventive facility={facility} />
+            <ActiveRestrictions facility={facility} />
+            <div className="split">
+              <div className="split-main">
+                <div className="card">
+                  <TaskList facility={facility} />
+                </div>
+              </div>
+              <div className="split-side">
+                <AssetHealth facility={facility} />
+                <div className="card" id="report">
+                  <ReportAnchor />
+                  <ActionGate
+                    action="facilities.report_issue"
+                    facilityId={facility.id}
+                    what="Reporting maintenance issues"
+                  >
+                    <ReportIssueForm facility={facility} />
+                  </ActionGate>
+                </div>
+              </div>
+            </div>
+            <div className="card">
+              <Assets facility={facility} />
+            </div>
+            <div className="card">
+              <Preventive facility={facility} />
+            </div>
           </>
         )}
       </FacilityGate>
