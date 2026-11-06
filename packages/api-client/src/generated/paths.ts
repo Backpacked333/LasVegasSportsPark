@@ -50877,7 +50877,7 @@ export type components = {
             timezone: string;
         };
         AdminOrganizationSettings: {
-            defaultCurrency: string | null;
+            defaultCurrency?: string | null;
             /** Format: uuid */
             id: string;
             name: string;

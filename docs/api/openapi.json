@@ -21737,8 +21737,7 @@
           "name",
           "status",
           "revision",
-          "settings",
-          "defaultCurrency"
+          "settings"
         ]
       },
       "AdminFacilitySettings": {

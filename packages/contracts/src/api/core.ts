@@ -79,8 +79,11 @@ export const AdminOrganizationSettingsSchema = z
     status: z.enum(['active', 'suspended', 'archived']),
     revision: z.number().int(),
     settings: z.record(z.string(), z.unknown()),
-    /** ISO 4217 default currency; null until a system administrator sets it (SPK-PAY-001). */
-    defaultCurrency: CurrencyCode.nullable(),
+    /**
+     * ISO 4217 default currency; null until a system administrator sets it (SPK-PAY-001). Always
+     * sent; optional only so clients built on the earlier contract keep compiling.
+     */
+    defaultCurrency: CurrencyCode.nullable().optional(),
   })
   .openapi('AdminOrganizationSettings');
 
