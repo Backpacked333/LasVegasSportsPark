@@ -32,6 +32,8 @@ export interface ListRowProps {
   title: string;
   detail?: string;
   status?: StatusBadgeProps;
+  /** Further labelled pills after the status (e.g. a promotion), read after it. */
+  badges?: readonly StatusBadgeProps[];
   onPress?: () => void;
   accessibilityHint?: string;
   trailing?: ReactNode;
@@ -50,6 +52,7 @@ export function ListRow({
   title,
   detail,
   status,
+  badges = [],
   onPress,
   accessibilityHint,
   trailing,
@@ -60,7 +63,9 @@ export function ListRow({
   testID,
 }: ListRowProps) {
   const layout = useContext(RowLayoutContext);
-  const label = [title, detail, status?.label].filter(Boolean).join(', ');
+  const label = [title, detail, status?.label, ...badges.map((b) => b.label)]
+    .filter(Boolean)
+    .join(', ');
   const content = (
     <>
       {accent ? <View style={[styles.accent, { backgroundColor: accent }]} /> : null}
@@ -74,6 +79,9 @@ export function ListRow({
         <Text style={styles.title}>{title}</Text>
         {detail ? <Text style={styles.detail}>{detail}</Text> : null}
         {status ? <StatusBadge {...status} /> : null}
+        {badges.map((badge) => (
+          <StatusBadge key={badge.label} {...badge} />
+        ))}
       </View>
       {trailing}
       {onPress && !trailing ? <Icon name="chevron_right" size={22} color={colors.primary} /> : null}
