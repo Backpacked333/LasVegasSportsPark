@@ -149,16 +149,20 @@ export function ScheduleDraftsScreen() {
       </p>
       <FacilityGate purpose="work on its schedule drafts">
         {(facility) => (
-          <>
-            <ActionGate
-              action="scheduling.manage_drafts"
-              facilityId={facility.id}
-              what="Opening schedule drafts"
-            >
-              <NewDraftForm facility={facility} />
-            </ActionGate>
-            <DraftList facility={facility} />
-          </>
+          <div className="split">
+            <div className="split-main card">
+              <DraftList facility={facility} />
+            </div>
+            <div className="split-side card">
+              <ActionGate
+                action="scheduling.manage_drafts"
+                facilityId={facility.id}
+                what="Opening schedule drafts"
+              >
+                <NewDraftForm facility={facility} />
+              </ActionGate>
+            </div>
+          </div>
         )}
       </FacilityGate>
     </section>

@@ -51,6 +51,16 @@ import {
   overlaps,
 } from '../../features/schedule-facilities/time';
 import { usePinnedData } from '../../features/schedule-facilities/usePinnedData';
+import { Icon } from '../../ui/Icon';
+import {
+  KIND_ORDER,
+  KIND_TOKEN,
+  ResourceTimeline,
+  closureCovers,
+  type Selection,
+} from './ResourceTimeline';
+import { TimelineDetail } from './TimelineDetail';
+import './schedule.css';
 import { FacilitySessions } from './FacilitySessions';
 
 type Resource = Schema<'Resource'>;
@@ -83,23 +93,10 @@ interface EventPagesRefetch {
   };
 }
 
-/** Whether a closure covers a resource: the whole facility, the resource, or shared space. */
-export function closureCovers(
-  closure: Closure,
-  resource: Resource,
-  all: readonly Resource[],
-): boolean {
-  if (closure.resourceId === null) return true;
-  if (closure.resourceId === resource.id) return true;
-  const closed = all.find((r) => r.id === closure.resourceId);
-  return closed ? sharesSpace(closed, resource) : false;
-}
-
-type TrackKind = 'event' | 'buffer' | 'closure' | 'closure-pending' | 'shared';
-
-/** Names each bar kind in text, so the decorative track is never read by pattern alone. */
-const TRACK_LEGEND: readonly { kind: TrackKind; label: string }[] = [
-  { kind: 'event', label: 'Booked' },
+/** Names each mark of the timeline in text, so no block is read by colour or pattern alone. */
+const TRACK_LEGEND: readonly { kind: string; label: string }[] = [
+  { kind: 'event', label: 'Booked (colour by activity kind)' },
+  { kind: 'draft', label: 'Not published (dashed)' },
   { kind: 'buffer', label: 'Setup or cleanup' },
   { kind: 'shared', label: 'Shared space in use' },
   { kind: 'closure', label: 'Closed' },
@@ -111,45 +108,11 @@ export function TrackLegend() {
     <ul className="track-legend" aria-label="Timeline key">
       {TRACK_LEGEND.map((l) => (
         <li key={l.kind}>
-          <span className="track-swatch" aria-hidden="true">
-            <span className={`track-bar track-${l.kind}`} style={{ left: 0, width: '100%' }} />
-          </span>
+          <span className={`legend-swatch legend-${l.kind}`} aria-hidden="true" />
           {l.label}
         </li>
       ))}
     </ul>
-  );
-}
-
-function Track({
-  range,
-  items,
-}: {
-  range: { start: string; end: string };
-  items: {
-    key: string;
-    start: string;
-    end: string;
-    kind: TrackKind;
-  }[];
-}) {
-  const from = new Date(range.start).getTime();
-  const span = new Date(range.end).getTime() - from;
-  const pct = (iso: string) =>
-    Math.min(100, Math.max(0, ((new Date(iso).getTime() - from) / span) * 100));
-  return (
-    <div className="track" aria-hidden="true">
-      {items.map((item) => (
-        <span
-          key={item.key}
-          className={`track-bar track-${item.kind}`}
-          style={{
-            left: `${pct(item.start)}%`,
-            width: `${Math.max(0.5, pct(item.end) - pct(item.start))}%`,
-          }}
-        />
-      ))}
-    </div>
   );
 }
 
@@ -196,9 +159,7 @@ function ResourceRow({
   resources,
   events,
   closures,
-  range,
   timezone,
-  showTrack,
   truncated,
 }: {
   resource: Resource;
@@ -206,9 +167,7 @@ function ResourceRow({
   resources: readonly Resource[];
   events: readonly Event[];
   closures: readonly Closure[];
-  range: { start: string; end: string };
   timezone: string;
-  showTrack: boolean;
   /** More events exist in the range than were loaded: never claim the space is free. */
   truncated: boolean;
 }) {
@@ -224,28 +183,6 @@ function ResourceRow({
   const covering = closures.filter((c) => closureCovers(c, resource, resources));
   const parent = resource.parentResourceId ? names.get(resource.parentResourceId) : null;
   const headingId = `resource-${resource.id}`;
-  const trackItems = [
-    ...covering.map((c) => ({
-      key: `c-${c.id}`,
-      ...c.interval,
-      kind: c.status === 'pending' ? ('closure-pending' as const) : ('closure' as const),
-    })),
-    ...blocked.map((e) => ({
-      key: `s-${e.id}`,
-      ...occupiedRange(e.scheduledStart, e.scheduledEnd, e.setupMinutes, e.cleanupMinutes),
-      kind: 'shared' as const,
-    })),
-    ...own
-      .filter((e) => e.status !== 'canceled')
-      .flatMap((e) => [
-        {
-          key: `b-${e.id}`,
-          ...occupiedRange(e.scheduledStart, e.scheduledEnd, e.setupMinutes, e.cleanupMinutes),
-          kind: 'buffer' as const,
-        },
-        { key: `e-${e.id}`, start: e.scheduledStart, end: e.scheduledEnd, kind: 'event' as const },
-      ]),
-  ];
   return (
     <section
       className="resource-row"
@@ -269,7 +206,6 @@ function ResourceRow({
       {sharing.length > 0 ? (
         <p className="caption">Shares space with {sharing.map((r) => r.name).join(', ')}.</p>
       ) : null}
-      {showTrack ? <Track range={range} items={trackItems} /> : null}
       <ul className="list" aria-label={`Bookings and closures on ${resource.name}`}>
         {covering.map((c) => (
           <li key={c.id}>
@@ -342,6 +278,15 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
   const [span, setSpan] = useState<1 | 7>(1);
   const [focusId, setFocusId] = useState('');
   const [showCanceled, setShowCanceled] = useState(false);
+  const [hiddenKinds, setHiddenKinds] = useState<ReadonlySet<Event['kind']>>(new Set());
+  const [selected, setSelected] = useState<Selection>(null);
+  const toggleKind = (kind: Event['kind']) =>
+    setHiddenKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
   const range = useMemo(() => localDaysWindow(date, span, tz), [date, span, tz]);
 
   const resources = useApiQuery({
@@ -358,6 +303,14 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
     path: '/closures',
     request: { query: { facilityId: facility.id } },
   });
+  // Open drafts for the header shortcut; a viewer who may not read drafts just sees no count.
+  const drafts = useApiQuery({
+    path: '/schedule-drafts',
+    request: { query: { facilityId: facility.id } },
+  });
+  const openDrafts = (drafts.data ?? []).filter(
+    (d) => d.status === 'editing' || d.status === 'validated' || d.status === 'failed',
+  ).length;
   const latest = useMemo<ShownEvents | undefined>(
     () => (eventPages.data ? { items: eventPages.data, more: eventPages.hasNextPage } : undefined),
     [eventPages.data, eventPages.hasNextPage],
@@ -395,20 +348,46 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
       ? formatLocalDate(date)
       : `${formatLocalDate(date)} to ${formatLocalDate(addDaysToLocalDate(date, 6))}`;
 
+  const step = (days: number) => {
+    setSelected(null);
+    setDate(addDaysToLocalDate(date, days));
+  };
+
   return (
-    <div>
+    <div className="schedule-calendar">
       <ZoneCaption facility={facility} />
-      <div className="toolbar" role="group" aria-label="Calendar range">
-        <Button variant="secondary" onClick={() => setDate(addDaysToLocalDate(date, -span))}>
-          {span === 1 ? 'Previous day' : 'Previous week'}
-        </Button>
-        <Button variant="secondary" onClick={() => setDate(today)}>
+      <div className="cal-toolbar" role="group" aria-label="Calendar range">
+        <div className="cal-stepper">
+          <button
+            type="button"
+            className="cal-step"
+            aria-label={span === 1 ? 'Previous day' : 'Previous week'}
+            onClick={() => step(-span)}
+          >
+            <Icon name="chevron_left" />
+          </button>
+          <p className="range-label" aria-live="polite">
+            <strong>{rangeLabel}</strong>
+          </p>
+          <button
+            type="button"
+            className="cal-step"
+            aria-label={span === 1 ? 'Next day' : 'Next week'}
+            onClick={() => step(span)}
+          >
+            <Icon name="chevron_right" />
+          </button>
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setSelected(null);
+            setDate(today);
+          }}
+        >
           Today
         </Button>
-        <Button variant="secondary" onClick={() => setDate(addDaysToLocalDate(date, span))}>
-          {span === 1 ? 'Next day' : 'Next week'}
-        </Button>
-        <label>
+        <label className="cal-field">
           Date{' '}
           <input
             type="date"
@@ -416,14 +395,14 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
             onChange={(e) => e.target.value && setDate(e.target.value)}
           />
         </label>
-        <label>
+        <label className="cal-field">
           View{' '}
           <select value={span} onChange={(e) => setSpan(e.target.value === '7' ? 7 : 1)}>
             <option value="1">Day</option>
             <option value="7">Week</option>
           </select>
         </label>
-        <label>
+        <label className="cal-field">
           Space{' '}
           <select value={focusId} onChange={(e) => setFocusId(e.target.value)}>
             <option value="">All spaces</option>
@@ -436,7 +415,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
               ))}
           </select>
         </label>
-        <label>
+        <label className="cal-check">
           <input
             type="checkbox"
             checked={showCanceled}
@@ -444,13 +423,20 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
           />{' '}
           Show canceled events
         </label>
-        <Button variant="secondary" disabled={!online} onClick={refresh}>
-          Refresh
-        </Button>
+        <span className="cal-toolbar-end">
+          <Button variant="secondary" disabled={!online} onClick={refresh}>
+            <Icon name="refresh" size={18} />
+            Refresh
+          </Button>
+          <Link className="button button-secondary" to="/schedule/drafts">
+            <span className="tone-pending">
+              <Icon name="edit_calendar" size={18} />
+            </span>
+            Drafts
+            {openDrafts > 0 ? <span className="cal-count">{openDrafts} open</span> : null}
+          </Link>
+        </span>
       </div>
-      <p className="range-label" aria-live="polite">
-        <strong>{rangeLabel}</strong>
-      </p>
       {pinned.changed ? (
         <div className="banner" role="status" data-testid="schedule-changed">
           <StatusBadge tone="warning" label="Schedule changed" />
@@ -491,6 +477,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
               );
               const known = new Set(inventory.map((r) => r.id));
               const unplaced = visible.filter((e) => !e.resourceIds.some((id) => known.has(id)));
+              const kinds = KIND_ORDER.filter((k) => visible.some((e) => e.kind === k));
               return (
                 <>
                   {visible.length === 0 && !truncated ? (
@@ -511,42 +498,100 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
                         : 'Load more events below.'}
                     </p>
                   ) : null}
-                  {span === 1 ? <TrackLegend /> : null}
                   {closures.error ? (
                     <p className="caption">
                       Closures could not be loaded ({closures.error.code}); closed spaces may not be
                       marked.
                     </p>
                   ) : null}
-                  {rows.map(({ resource, depth }) => (
-                    <ResourceRow
-                      key={resource.id}
-                      resource={resource}
-                      depth={depth}
-                      resources={inventory}
+                  <div className="cal-layout">
+                    <section
+                      className="card card-flush cal-timeline"
+                      aria-labelledby="timeline-title"
+                    >
+                      <div className="card-head">
+                        <h4 id="timeline-title">Timeline</h4>
+                        {kinds.length > 0 ? (
+                          <div className="kind-filters" role="group" aria-label="Highlight kinds">
+                            {kinds.map((k) => (
+                              <button
+                                type="button"
+                                key={k}
+                                className="kind-chip"
+                                data-kind={KIND_TOKEN[k]}
+                                aria-pressed={!hiddenKinds.has(k)}
+                                onClick={() => toggleKind(k)}
+                              >
+                                <span className="kind-swatch" aria-hidden="true" />
+                                {EVENT_KIND_LABEL[k]}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                      <ResourceTimeline
+                        rows={rows}
+                        resources={inventory}
+                        events={visible}
+                        closures={activeClosures}
+                        range={range}
+                        span={span}
+                        date={date}
+                        timezone={tz}
+                        now={now}
+                        hiddenKinds={hiddenKinds}
+                        selected={selected}
+                        onSelect={setSelected}
+                      />
+                      <div className="card-foot">
+                        <TrackLegend />
+                      </div>
+                    </section>
+                    <TimelineDetail
+                      selected={selected}
                       events={visible}
                       closures={activeClosures}
-                      range={range}
+                      resources={inventory}
                       timezone={tz}
-                      showTrack={span === 1}
+                      rangeLabel={rangeLabel}
                       truncated={truncated}
+                      onClear={() => setSelected(null)}
                     />
-                  ))}
-                  <LoadMore
-                    pages={{
-                      ...eventPages,
-                      loadMore: () => {
-                        // The next page continues the latest read, so a held-back change is
-                        // shown first: held and new pages are never mixed.
-                        if (pinned.changed) pinned.showLatest();
-                        pinned.extend();
-                        eventPages.loadMore();
-                      },
-                    }}
-                    label="events"
-                  />
+                  </div>
+                  <section
+                    className="card by-space"
+                    aria-labelledby="by-space-title"
+                    data-testid="bookings-by-space"
+                  >
+                    <h4 id="by-space-title">Bookings by space</h4>
+                    {rows.map(({ resource, depth }) => (
+                      <ResourceRow
+                        key={resource.id}
+                        resource={resource}
+                        depth={depth}
+                        resources={inventory}
+                        events={visible}
+                        closures={activeClosures}
+                        timezone={tz}
+                        truncated={truncated}
+                      />
+                    ))}
+                    <LoadMore
+                      pages={{
+                        ...eventPages,
+                        loadMore: () => {
+                          // The next page continues the latest read, so a held-back change is
+                          // shown first: held and new pages are never mixed.
+                          if (pinned.changed) pinned.showLatest();
+                          pinned.extend();
+                          eventPages.loadMore();
+                        },
+                      }}
+                      label="events"
+                    />
+                  </section>
                   {unplaced.length > 0 && !focus ? (
-                    <section aria-labelledby="unplaced-events">
+                    <section className="card" aria-labelledby="unplaced-events">
                       <h4 id="unplaced-events">Events on spaces not in this inventory</h4>
                       <ul className="list">
                         {unplaced.map((e) => (
