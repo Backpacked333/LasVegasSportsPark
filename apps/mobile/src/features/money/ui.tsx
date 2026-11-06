@@ -75,12 +75,15 @@ export function ChoiceGroup({
   role = 'radiogroup',
   error,
   children,
+  layout = 'list',
   testID,
 }: {
   label: string;
   role?: 'radiogroup' | 'list';
   error?: string | null;
   children: ReactNode;
+  /** `grid`: the choices are tiles side by side (start times), wrapping as text grows. */
+  layout?: 'list' | 'grid';
   testID?: string;
 }) {
   return (
@@ -88,6 +91,7 @@ export function ChoiceGroup({
       accessibilityRole={role}
       accessibilityLabel={label}
       accessibilityHint={error ? `Error: ${error}` : undefined}
+      style={layout === 'grid' ? styles.grid : null}
       testID={testID}
     >
       <ChoiceErrorContext.Provider value={error ?? null}>{children}</ChoiceErrorContext.Provider>
@@ -98,6 +102,9 @@ export function ChoiceGroup({
 /**
  * One radio or checkbox row; the label is the whole row and the state is announced. While its
  * `ChoiceGroup` shows an error, the error is the row's hint.
+ *
+ * `tile` draws it as a time tile (Book a space): `shortLabel` is shown, the full `label` is read;
+ * a chosen tile is floodlight with "✓" before its text, so the choice never rests on colour.
  */
 export function ChoiceRow({
   label,
@@ -106,6 +113,8 @@ export function ChoiceRow({
   onPress,
   mode,
   disabled = false,
+  tile = false,
+  shortLabel,
   testID,
 }: {
   label: string;
@@ -114,9 +123,33 @@ export function ChoiceRow({
   onPress: () => void;
   mode: 'radio' | 'checkbox';
   disabled?: boolean;
+  tile?: boolean;
+  shortLabel?: string;
   testID?: string;
 }) {
   const groupError = useContext(ChoiceErrorContext);
+  if (tile) {
+    return (
+      <Pressable
+        accessibilityRole={mode}
+        accessibilityLabel={detail ? `${label}, ${detail}` : label}
+        accessibilityHint={groupError ? `Error: ${groupError}` : undefined}
+        accessibilityState={{ checked, disabled }}
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.tile,
+          checked && styles.tileOn,
+          pressed && styles.pressed,
+          disabled && styles.dim,
+        ]}
+        testID={testID}
+      >
+        <Text style={styles.tileLabel}>{`${checked ? '✓ ' : ''}${shortLabel ?? label}`}</Text>
+        {detail ? <Text style={styles.tileDetail}>{detail}</Text> : null}
+      </Pressable>
+    );
+  }
   return (
     <Pressable
       accessibilityRole={mode}
@@ -243,6 +276,23 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   choiceText: { flex: 1, gap: 2 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.xs },
+  tile: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    minHeight: 56,
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.sm + 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    gap: 2,
+  },
+  tileOn: { backgroundColor: colors.floodlight, borderColor: colors.night },
+  tileLabel: { ...type.body, ...fonts.extrabold, color: colors.text },
+  tileDetail: { ...type.caption, fontSize: 12, lineHeight: 16, color: colors.textMuted },
   pressed: { opacity: 0.8 },
   dim: { opacity: 0.55 },
   mark: {
