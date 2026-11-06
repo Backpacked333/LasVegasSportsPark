@@ -44,4 +44,25 @@ export * from './workforce';
  * The complete database type. Each module contributes its own table interfaces from
  * `./<module>.ts`; run `node scripts/regenerate-registrations.mjs` after adding one.
  */
-export interface Database extends CoreTables, AutomationTables, CatalogTables, CommunicationsTables, CompetitionFieldTables, CompetitionMatchesTables, CompetitionTables, EnrollmentPackageGTables, EnrollmentTables, EntryTables, FacilitiesTables, FinanceAccountingTables, FinancePosTables, FinanceTables, IdentityTables, MigrationTables, ReportingTables, SchedulingTables, SupportTables, WorkforceTables {}
+export interface Database
+  extends
+    CoreTables,
+    AutomationTables,
+    CatalogTables,
+    CommunicationsTables,
+    CompetitionFieldTables,
+    CompetitionMatchesTables,
+    CompetitionTables,
+    EnrollmentPackageGTables,
+    EnrollmentTables,
+    EntryTables,
+    FacilitiesTables,
+    FinanceAccountingTables,
+    FinancePosTables,
+    FinanceTables,
+    IdentityTables,
+    MigrationTables,
+    ReportingTables,
+    SchedulingTables,
+    SupportTables,
+    WorkforceTables {}
