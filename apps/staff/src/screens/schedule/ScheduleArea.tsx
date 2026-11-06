@@ -8,6 +8,7 @@
 import { Navigate, Route, Routes } from 'react-router';
 import { SubNav } from '../../features/schedule-facilities/SubNav';
 import '../../features/schedule-facilities/schedule-facilities.css';
+import { PageHeader } from '../../ui/Page';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { PartiesScreen } from '../package-g/parties/PartiesScreen';
 import { RentalsScreen } from '../package-g/rentals/RentalsScreen';
@@ -32,8 +33,12 @@ const SECTIONS = [
 
 export function ScheduleArea() {
   return (
-    <section aria-labelledby="area-schedule">
-      <h2 id="area-schedule">Schedule</h2>
+    <section aria-labelledby="area-schedule" className="area-stack">
+      <PageHeader
+        eyebrow="Operate · Spaces, bookings and closures"
+        title="Schedule"
+        titleId="area-schedule"
+      />
       <SubNav label="Schedule sections" items={SECTIONS} />
       <Routes>
         <Route index element={<Navigate to="calendar" replace />} />

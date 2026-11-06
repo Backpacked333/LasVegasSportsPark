@@ -345,14 +345,20 @@ export function ClosuresScreen() {
         {(facility) => (
           <>
             <ZoneCaption facility={facility} />
-            <ActionGate
-              action="scheduling.manage_closures"
-              facilityId={facility.id}
-              what="Previewing and creating closures"
-            >
-              <NewClosureForm facility={facility} />
-            </ActionGate>
-            <ClosureList facility={facility} />
+            <div className="split">
+              <div className="split-main card">
+                <ClosureList facility={facility} />
+              </div>
+              <div className="split-side card">
+                <ActionGate
+                  action="scheduling.manage_closures"
+                  facilityId={facility.id}
+                  what="Previewing and creating closures"
+                >
+                  <NewClosureForm facility={facility} />
+                </ActionGate>
+              </div>
+            </div>
           </>
         )}
       </FacilityGate>

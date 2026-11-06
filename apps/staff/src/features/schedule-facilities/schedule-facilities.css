@@ -6,26 +6,11 @@
  */
 .sub-nav ul {
   list-style: none;
-  margin: 0 0 var(--space-4);
+  margin: 0;
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
-}
-.sub-nav a {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--touch);
-  padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  color: var(--color-text);
-  text-decoration: none;
-}
-.sub-nav a[aria-current='page'] {
-  font-weight: 600;
-  border: 2px solid var(--color-primary);
-  border-bottom-width: 4px;
+  gap: 4px;
 }
 .toolbar {
   display: flex;
@@ -179,4 +164,16 @@ a.button {
   .facts {
     grid-template-columns: 1fr;
   }
+}
+
+/* Area page: header, section tabs and the screen, spaced like the redesign's pages. */
+.area-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.area-stack > section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
