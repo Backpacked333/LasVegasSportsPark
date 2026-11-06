@@ -6,7 +6,7 @@
  */
 import { StyleSheet, Text, View } from 'react-native';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, spacing, type } from '../../ui/theme';
+import { colors, fonts, radius, spacing, toneBackgrounds, type } from '../../ui/theme';
 import type { EventDetailsView, ScheduleChange } from './notices';
 import { formatRange } from './time';
 
@@ -32,7 +32,12 @@ export function ChangeDetails({ change, testID }: { change: ScheduleChange; test
         : { tone: 'warning' as const, label: 'Changed' };
   const label = [badge.label, was ? `Was: ${was}` : null, `Now: ${now}`].filter(Boolean).join('. ');
   return (
-    <View style={styles.box} accessible accessibilityLabel={label} testID={testID}>
+    <View
+      style={[styles.box, { backgroundColor: toneBackgrounds[badge.tone] }]}
+      accessible
+      accessibilityLabel={label}
+      testID={testID}
+    >
       <StatusBadge tone={badge.tone} label={badge.label} />
       {was ? (
         <Text style={styles.line}>
@@ -51,11 +56,9 @@ export function ChangeDetails({ change, testID }: { change: ScheduleChange; test
 const styles = StyleSheet.create({
   box: {
     gap: spacing.xs,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 6,
-    backgroundColor: colors.surface,
+    paddingVertical: spacing.md,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
   },
   line: { ...type.caption, color: colors.text },
   key: { ...fonts.bold },

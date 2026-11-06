@@ -94,7 +94,7 @@ export function Caption({ children, testID }: { children: ReactNode; testID?: st
 }
 
 const styles = StyleSheet.create({
-  section: { gap: spacing.sm, paddingVertical: spacing.md },
-  title: { ...type.heading, color: colors.text, paddingHorizontal: spacing.lg },
+  section: { gap: spacing.sm, paddingTop: spacing.lg, paddingBottom: spacing.xs },
+  title: { ...type.eyebrow, color: colors.textMuted, paddingHorizontal: spacing.lg + 2 },
   caption: { ...type.caption, color: colors.textMuted, paddingHorizontal: spacing.lg },
 });

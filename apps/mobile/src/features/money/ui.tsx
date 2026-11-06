@@ -6,10 +6,12 @@
  */
 import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SectionCard } from '../../ui/Card';
 import { LiveText } from '../../ui/announce';
-import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import type { AccountPerson } from './people';
 
+/** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
 export function Section({
   title,
   children,
@@ -20,12 +22,9 @@ export function Section({
   testID?: string;
 }) {
   return (
-    <View style={styles.section} testID={testID}>
-      <Text style={styles.heading} accessibilityRole="header">
-        {title}
-      </Text>
+    <SectionCard title={title} testID={testID}>
       {children}
-    </View>
+    </SectionCard>
   );
 }
 
@@ -153,7 +152,7 @@ export function PersonPicker({
 }) {
   if (people.length < 2) return null;
   return (
-    <View style={styles.section}>
+    <View style={styles.picker}>
       <Text style={styles.caption}>{label}</Text>
       <View accessibilityRole="radiogroup" accessibilityLabel={label}>
         {people.map((person) => (
@@ -228,8 +227,7 @@ export function FieldError({ error, testID }: { error?: string | null; testID?: 
 }
 
 const styles = StyleSheet.create({
-  section: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.sm },
-  heading: { ...type.heading, color: colors.text },
+  picker: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.xs },
   field: { gap: 2 },
   fieldBox: { gap: spacing.xs },
   fieldLabel: { ...type.caption, color: colors.textMuted },
@@ -252,7 +250,7 @@ const styles = StyleSheet.create({
     height: 24,
     borderWidth: 2,
     borderColor: colors.primary,
-    borderRadius: 4,
+    borderRadius: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -262,12 +260,13 @@ const styles = StyleSheet.create({
   input: {
     ...type.body,
     color: colors.text,
-    minHeight: MIN_TOUCH_SIZE,
+    minHeight: 48,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 6,
-    paddingHorizontal: spacing.md,
+    borderColor: colors.control,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
     paddingVertical: spacing.sm,
+    backgroundColor: colors.background,
   },
   multiline: { minHeight: 88, textAlignVertical: 'top' },
   inputError: { borderColor: colors.danger, borderWidth: 2 },
