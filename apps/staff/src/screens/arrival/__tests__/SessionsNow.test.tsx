@@ -72,4 +72,51 @@ describe('SessionsNow', () => {
     expect(sessionPlace(legacy)).toBeNull();
     expect(sessionCapacity(legacy)).toBeNull();
   });
+  it('SPK-STAFF-001: names the accepted coach of each session from workforce, never a request when none is shown', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': oneFacilityMe(),
+        'GET /sessions': {
+          status: 200,
+          body: {
+            items: [
+              {
+                ...BASE,
+                location: { source: 'none', label: null, resources: [] },
+                capacity: { source: 'offering', units: [] },
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+        'GET /assigned-staff': {
+          status: 200,
+          body: {
+            targetType: 'session',
+            items: [
+              {
+                targetId: SESSION_1,
+                staff: [
+                  {
+                    assignmentId: '0192f1a0-0000-7000-8000-000000000a01',
+                    personId: '0192f1a0-0000-7000-8000-000000000a02',
+                    displayName: 'Coach Ramirez',
+                    kind: 'coach',
+                    role: 'head_coach',
+                    slot: 1,
+                    status: 'accepted',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    });
+    render(app.at('/arrival'));
+    const list = await screen.findByRole('list', { name: 'Sessions now and next' });
+    expect(await within(list).findByText('With Coach Ramirez')).toBeInTheDocument();
+    const request = app.fake.requests.find((r) => r.route === '/assigned-staff');
+    expect(request?.query).toMatchObject({ targetType: 'session' });
+  });
 });

@@ -6,6 +6,7 @@ import { createTestApp, type TestApp } from '../../../testing';
 import {
   CompetitionEvents,
   CompetitionModule,
+  FieldEvents,
   MatchEvents,
   addRosterMemberFixture,
   assignTeamRoleFixture,
@@ -367,5 +368,43 @@ describe('competition notices and team role holders (COM-03, COM-06)', () => {
       .where('subject_id', '=', payload.fixtureId)
       .execute();
     expect(all).toHaveLength(1);
+  });
+  it('SPK-RESULT-001: a result reminder queues one protected notice to the named captains, with the staff note, once', async () => {
+    const home = await team('Comets');
+    const away = await team('Meteors');
+    const reminderId = newId();
+    const fixtureId = newId();
+    const payload = {
+      reminderId,
+      fixtureId,
+      teamEntryIds: [home.teamEntryId, away.teamEntryId],
+      recipientPersonIds: [home.captain, away.captain, home.captain],
+      message: 'Score sheet please',
+      facilityId: t.facilityId,
+    };
+    const eventId = await announce(FieldEvents.resultReminderRequested, reminderId, payload);
+    const notices = await noticesFrom(eventId);
+    expect(notices).toHaveLength(1);
+    const notice = notices[0];
+    expect(notice).toMatchObject({
+      kind: 'result_reminder',
+      category: 'operational',
+      protected: true,
+      subject_type: 'fixture',
+      subject_id: fixtureId,
+      status: 'dispatched',
+    });
+    expect(notice?.title).toContain('Comets vs Meteors');
+    expect(notice?.body).toContain('Score sheet please');
+    const recipients = await recipientsOf(t.db, org, notice?.id as string);
+    expect(recipients.map((r) => r.person_id).sort()).toEqual([home.captain, away.captain].sort());
+    // a redelivered event composes nothing new
+    await t.db
+      .updateTable('outbox_events')
+      .set({ status: 'pending', dispatched_at: null })
+      .where('id', '=', eventId)
+      .execute();
+    await dispatchOutbox(t.app);
+    expect(await noticesFrom(eventId)).toHaveLength(1);
   });
 });

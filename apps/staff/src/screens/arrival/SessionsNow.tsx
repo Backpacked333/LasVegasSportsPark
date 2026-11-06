@@ -66,6 +66,17 @@ export function SessionsNow({
     .slice(0, 4);
   const unavailable =
     sessions.error && (sessions.error.isPermissionRestriction || sessions.error.isNotFound);
+  // The coach or staff with an accepted assignment on each shown session (workforce
+  // `GET /v1/assigned-staff`); a role that may not read assignments simply sees no names.
+  const shownIds = remaining.slice(0, SHOWN).map((s) => s.sessionId);
+  const assigned = useApiQuery({
+    path: '/assigned-staff',
+    request: { query: { targetType: 'session', targetIds: shownIds } },
+    enabled: shownIds.length > 0,
+  });
+  const staffBySession = new Map(
+    (assigned.data?.items ?? []).map((i) => [i.targetId, i.staff.map((p) => p.displayName)]),
+  );
 
   const body = (content: (items: FacilitySession[]) => ReactNode, empty: string) =>
     sessions.data === undefined ? (
@@ -100,7 +111,13 @@ export function SessionsNow({
             (items) => (
               <ul className="ops-link-list" aria-label="Sessions now and next">
                 {items.slice(0, SHOWN).map((s) => (
-                  <SessionFillRow key={s.sessionId} session={s} timezone={timezone} now={now} />
+                  <SessionFillRow
+                    key={s.sessionId}
+                    session={s}
+                    timezone={timezone}
+                    now={now}
+                    staff={staffBySession.get(s.sessionId) ?? []}
+                  />
                 ))}
               </ul>
             ),
@@ -160,10 +177,12 @@ function SessionFillRow({
   session,
   timezone,
   now,
+  staff,
 }: {
   session: FacilitySession;
   timezone: string | null;
   now: Date;
+  staff: readonly string[];
 }) {
   const activity = sessionActivity(session);
   const zone = session.timezone ?? timezone;
@@ -221,6 +240,12 @@ function SessionFillRow({
               ) : null}
               {place && capacity ? ' · ' : null}
               {capacity}
+            </span>
+          ) : null}
+          {staff.length > 0 ? (
+            <span className="caption session-staff">
+              <Icon name="sports" size={14} />
+              With {staff.join(', ')}
             </span>
           ) : null}
         </span>
