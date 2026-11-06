@@ -33,6 +33,7 @@ import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
+import { UNREAD_COUNT_KEY } from '../../api/inbox-unread';
 import { useApiQuery } from '../../api/useApiQuery';
 import { ChangeDetails } from '../../features/today/ChangeDetails';
 import { categoryLabel, scheduleChangeOf } from '../../features/today/notices';
@@ -92,9 +93,12 @@ function NoticeDetail({
   const queryClient = useQueryClient();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
-  const read = useApiCommand('post', '/me/inbox/{id}/read', { invalidate: [INBOX_KEY] });
+  // The header badge (UNREAD_COUNT_KEY) is read again with the list (SPK-UX-003).
+  const read = useApiCommand('post', '/me/inbox/{id}/read', {
+    invalidate: [INBOX_KEY, UNREAD_COUNT_KEY],
+  });
   const acknowledge = useApiCommand('post', '/me/inbox/{id}/acknowledge', {
-    invalidate: [INBOX_KEY],
+    invalidate: [INBOX_KEY, UNREAD_COUNT_KEY],
   });
   const sentRead = useRef(false);
   const withdrawn =

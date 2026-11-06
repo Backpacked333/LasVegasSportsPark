@@ -25,6 +25,12 @@
  * `GET /v1/fixtures/{id}` (the read SCR-C-24 makes for the same games, so it is shared) gives
  * `venue.timezone`; while it loads or if it fails the device's zone is used, always named.
  *
+ * Park UI additions (WorkspaceExtras.tsx): the form guide from official results under the team
+ * name, mini standings with the playoff line, the next game's availability progress for the
+ * management view, and the captain's check-in of their own side for the next scheduled game
+ * (`GET`/`POST /v1/fixtures/{id}/attendance`). "Maybe" stays pending DEC-064; the number of players
+ * a game needs is not in the API, so no minimum-players warning is shown.
+ *
  * States: loading; empty (no fixtures yet); ready; permission restriction (captain-only sections
  * hidden for players; NOT_FOUND is "not available"); stale (refetch on focus, "Updated <time>");
  * offline (cached with age, sending a request disabled); processing and success: the request to
@@ -52,6 +58,13 @@ import { Button } from '../../ui/Button';
 import { Hero } from '../../ui/Hero';
 import { ListRow } from '../../ui/ListRow';
 import { StatusBadge } from '../../ui/StatusBadge';
+import {
+  FormGuide,
+  MatchCheckIn,
+  MiniStandings,
+  RsvpProgress,
+  useStandings,
+} from './WorkspaceExtras';
 
 type Upcoming = Workspace['upcomingFixtures'][number];
 
@@ -100,13 +113,7 @@ function UpcomingGameRow({
 }
 
 function StandingSummary({ workspace }: { workspace: Workspace }) {
-  const standings = useApiQuery({
-    path: '/seasons/{id}/standings',
-    request: {
-      path: { id: workspace.season.id },
-      query: workspace.division ? { divisionId: workspace.division.id } : {},
-    },
-  });
+  const standings = useStandings(workspace);
   const data = standings.data;
   const row = data?.rows.find((r) => r.teamEntryId === workspace.entry.id);
   let text: string;
@@ -184,6 +191,7 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
         title={workspace.team.name}
       >
         <StatusBadge {...teamEntryStatus(workspace.entry)} testID="entry-status" />
+        <FormGuide workspace={workspace} />
       </Hero>
       <Section title="Season">
         <Detail
@@ -208,21 +216,32 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
         {games.length === 0 ? (
           <Body>No games yet. They appear here once the league publishes the schedule.</Body>
         ) : (
-          <View accessibilityRole="list">
-            {games.map((game) => (
-              <UpcomingGameRow
-                key={game.fixture.id}
-                game={game}
-                viewer={viewer}
-                onPress={() => router.push(teamRoutes.availability(entryId))}
-              />
-            ))}
-          </View>
+          <>
+            {viewer.captainView && games[0] ? <RsvpProgress game={games[0]} /> : null}
+            <View accessibilityRole="list">
+              {games.map((game) => (
+                <UpcomingGameRow
+                  key={game.fixture.id}
+                  game={game}
+                  viewer={viewer}
+                  onPress={() => router.push(teamRoutes.availability(entryId))}
+                />
+              ))}
+            </View>
+          </>
         )}
       </Section>
 
+      {viewer.actingAsCaptain && games[0]?.fixture.status === 'scheduled' ? (
+        <Section title="Match sheet check-in" testID="check-in-section">
+          <Body muted>{`Next game: ${upcomingTitle(games[0])}`}</Body>
+          <MatchCheckIn workspace={workspace} viewer={viewer} game={games[0]} />
+        </Section>
+      ) : null}
+
       <Section title="Standings">
         <StandingSummary workspace={workspace} />
+        <MiniStandings workspace={workspace} />
         <Button
           label="Standings and results"
           onPress={() => router.push(teamRoutes.standings(entryId))}

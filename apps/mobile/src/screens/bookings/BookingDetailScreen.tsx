@@ -11,6 +11,10 @@
  * basket, where it is paid (quote and checkout, SCR-C-11 to SCR-C-15) and shows the hold's expiry;
  * once that basket's checkout completed (or the hold ended) the booking still reads `held` until
  * the API records the outcome, so it says the booking is being updated and never asks to pay again.
+ * Where the booking has a basket, "Price" shows `GET /v1/basket-prices/{id}` (finance): the order's
+ * figures once checked out, otherwise an estimate from the price rules in effect now, before
+ * discounts and credits (the quote at checkout is binding, SPK-PAY-002), or that no price is set;
+ * protected NOT_FOUND reads "not available".
  * Cancellation (`CancelBooking`) is never gated by the capability switch (DEC-016).
  *
  * States: signed out (sign in, nothing read); loading; ready; error with the code and "Try
@@ -18,6 +22,7 @@
  * age, canceling needs a connection); success and failures of the cancellation (see
  * CancelBooking).
  */
+import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -34,12 +39,14 @@ import {
   type Booking,
 } from '../../features/package-g/booking-model';
 import { routeId } from '../../features/package-g/routes';
+import { formatMoney } from '../../features/money/format';
 import { formatInstantIn } from '../../features/package-g/time';
 import { registrationRoutes } from '../../features/registration/routes';
 import { displayZone, formatRange, zoneNotice } from '../../features/today/time';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
-import { QueryBoundary } from '../../ui/QueryBoundary';
+import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
+import { StateView } from '../../ui/StateView';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { colors, spacing, type } from '../../ui/theme';
@@ -142,6 +149,64 @@ function HoldSection({ booking, reload }: { booking: Booking; reload: () => void
   );
 }
 
+type BasketPrice = Schema<'BasketPrice'>;
+
+/** The price lines of a basket price that has figures, in order; zero tax and fees are left out. */
+export function basketPriceLines(price: BasketPrice): { label: string; value: string }[] {
+  if (price.currency === null || price.totalMinor === null) return [];
+  const money = (minor: number) => formatMoney(minor, price.currency as string);
+  const lines: { label: string; value: string }[] = [];
+  if (price.subtotalMinor !== null)
+    lines.push({ label: 'Subtotal', value: money(price.subtotalMinor) });
+  if (price.taxMinor) lines.push({ label: 'Tax', value: money(price.taxMinor) });
+  if (price.feeMinor) lines.push({ label: 'Fees', value: money(price.feeMinor) });
+  lines.push({
+    label: price.basis === 'order' ? 'Total' : 'Estimated total',
+    value: money(price.totalMinor),
+  });
+  return lines;
+}
+
+function BookingPrice({ basketId }: { basketId: string }) {
+  const price = useApiQuery({
+    path: '/basket-prices/{id}',
+    request: { path: { id: basketId } },
+    staleTime: 30_000,
+  });
+  const data = price.data;
+  return (
+    <Section title="Price" testID="booking-price">
+      {data === undefined ? (
+        price.error ? (
+          <QueryErrorView
+            error={price.error}
+            onRetry={() => void price.refetch()}
+            unavailable={{
+              title: 'Price not available',
+              description: 'Your basket shows the price where your account may see it.',
+            }}
+          />
+        ) : (
+          <StateView variant="loading" label="the price" />
+        )
+      ) : data.basis === 'unpriced' ? (
+        <Body>No price is set for part of this booking yet. Your quote shows the price.</Body>
+      ) : (
+        <>
+          {basketPriceLines(data).map((l) => (
+            <Field key={l.label} label={l.label} value={l.value} />
+          ))}
+          <Caption>
+            {data.basis === 'order'
+              ? 'From your order.'
+              : 'An estimate from the prices in effect now, before discounts and credits. Your quote at checkout gives the binding price.'}
+          </Caption>
+        </>
+      )}
+    </Section>
+  );
+}
+
 function BookingView({ booking, reload }: { booking: Booking; reload: () => void }) {
   const zone = displayZone(booking.timezone);
   const status = bookingStatus(booking);
@@ -168,6 +233,7 @@ function BookingView({ booking, reload }: { booking: Booking; reload: () => void
       ) : null}
 
       {booking.status === 'held' ? <HoldSection booking={booking} reload={reload} /> : null}
+      {booking.basketId !== null ? <BookingPrice basketId={booking.basketId} /> : null}
 
       <Section title={booking.occurrences.length > 1 ? 'Times' : 'Time'} testID="booking-times">
         <View
