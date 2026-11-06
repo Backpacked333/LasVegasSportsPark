@@ -29,7 +29,7 @@ describe('organization default currency (SPK-PAY-001)', () => {
       .send(body);
 
   it('SPK-PAY-001: the default currency is null until set; a system administrator sets it with the expected revision and a reason', async () => {
-    const customer = await t.authHeader(customerPrincipal(t.organizationId, newId()));
+    const customer = await t.authHeader(customerPrincipal(t.organizationId, { personId: newId() }));
     const before = await t.http.get('/v1/organization').set(customer);
     expect(before.status).toBe(200);
     expect(before.body).toMatchObject({ id: t.organizationId, defaultCurrency: null });
