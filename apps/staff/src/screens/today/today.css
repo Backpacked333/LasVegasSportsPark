@@ -264,3 +264,10 @@
 .attention .card-foot .list > li {
   padding: 6px 0;
 }
+/* On a phone, what needs action comes before the board. */
+@media (max-width: 900px) {
+  .today .split-side {
+    order: -1;
+    max-width: none;
+  }
+}

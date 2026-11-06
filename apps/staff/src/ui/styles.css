@@ -1224,3 +1224,45 @@ p.facility-switcher {
   gap: 10px;
   min-width: 0;
 }
+
+/* Phones: a compact header and two KPI tiles per row. */
+@media (max-width: 600px) {
+  .shell-header h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .shell-header {
+    gap: 8px;
+  }
+  .shell-header .facility-switcher {
+    flex: 1;
+    min-width: 0;
+  }
+  .shell-header .facility-switcher select {
+    min-width: 0;
+    flex: 1;
+  }
+  .shell-header .facility-switcher label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .shell-header .spacer {
+    display: none;
+  }
+  .kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .kpi {
+    padding: 12px;
+  }
+  .kpi-value {
+    font-size: 28px;
+  }
+}
