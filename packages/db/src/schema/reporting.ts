@@ -632,6 +632,33 @@ export interface ReportingSettlementsView {
  * when they settled, card captures reported after their tender failed by when their journal was
  * posted, and returns by when they were recorded. No receipt records this money.
  */
+/** Migration 1309: lines in effect of paid point-of-sale sales (MET-109). */
+export interface ReportingPosSaleLinesView {
+  sale_line_id: V<string>;
+  organization_id: V<string>;
+  facility_id: V<string>;
+  product_kind: V<string>;
+  currency: V<string>;
+  quantity: V<number>;
+  base_minor: V<number>;
+  charges_minor: V<number>;
+  line_total_minor: V<number>;
+  paid_at: V<Date>;
+}
+
+/** Migration 1309: returned point-of-sale lines by product kind (MET-110). */
+export interface ReportingPosReturnLinesView {
+  return_id: V<string>;
+  organization_id: V<string>;
+  facility_id: V<string>;
+  product_kind: V<string>;
+  currency: V<string>;
+  amount_minor: V<number>;
+  returned_at: V<Date>;
+  tender_kind: V<string>;
+  refund_attempt_id: V<string | null>;
+}
+
 export interface ReportingPosMoneyView {
   movement_id: V<string>;
   organization_id: V<string>;
@@ -791,6 +818,8 @@ export interface ReportingTables {
   reporting_receipts_v: ReportingReceiptsView;
   reporting_settlements_v: ReportingSettlementsView;
   reporting_pos_money_v: ReportingPosMoneyView;
+  reporting_pos_sale_lines_v: ReportingPosSaleLinesView;
+  reporting_pos_return_lines_v: ReportingPosReturnLinesView;
   reporting_order_lines_v: ReportingOrderLinesView;
   reporting_restrictions_v: ReportingRestrictionsView;
   reporting_maintenance_tasks_v: ReportingMaintenanceTasksView;

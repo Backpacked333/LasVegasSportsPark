@@ -132,4 +132,14 @@ export class ReportsController {
   demand(@CurrentPrincipal() p: Principal, @Query() q: RawQuery) {
     return this.view(p, 'demand', q);
   }
+
+  @Get('utilization-heatmap')
+  utilizationHeatmap(@CurrentPrincipal() p: Principal, @Query() q: RawQuery) {
+    return this.view(p, 'utilization_heatmap', q);
+  }
+
+  @Get('sales-by-product-line')
+  salesByProductLine(@CurrentPrincipal() p: Principal, @Query() q: RawQuery) {
+    return this.view(p, 'sales_by_product_line', q);
+  }
 }

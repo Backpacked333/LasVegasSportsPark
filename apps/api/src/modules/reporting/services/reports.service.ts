@@ -32,6 +32,7 @@ import { FinanceReports } from '../reports/finance.reports';
 import { OperationsReports } from '../reports/operations.reports';
 import { RegistrationReports } from '../reports/registration.reports';
 import { RetentionReport } from '../reports/retention.report';
+import { SalesReport } from '../reports/sales.report';
 import { ScheduleReports } from '../reports/schedule.reports';
 import { UtilizationReport } from '../reports/utilization.report';
 import { MetricDefinitionsService } from './metric-definitions.service';
@@ -80,6 +81,7 @@ export class ReportsService {
     utilization: UtilizationReport,
     economics: EconomicsReport,
     retention: RetentionReport,
+    sales: SalesReport,
   ) {
     const all: ReportDefinition[] = [
       schedule.dailySchedule,
@@ -98,6 +100,8 @@ export class ReportsService {
       economics.definition,
       retention.definition,
       registration.demand,
+      utilization.heatmapDefinition,
+      sales.definition,
     ] as ReportDefinition[];
     this.definitions = new Map(all.map((d) => [d.key, d]));
   }

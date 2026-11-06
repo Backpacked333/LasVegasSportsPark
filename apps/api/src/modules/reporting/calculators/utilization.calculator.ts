@@ -61,6 +61,18 @@ export interface UtilizationInput {
   includeBuffers: boolean;
   weighting:
     { method: 'conflict_units' } | { method: 'custom'; weights: ReadonlyMap<string, number> };
+  /**
+   * Optional heatmap cells (MET-106 to MET-108): the parts of a day that fall in each local clock
+   * hour, keyed by weekday and hour. When given, available and reserved time is also summed per
+   * cell over every unit (unit-hours, U1), with the same rules as the totals.
+   */
+  cellsFor?(day: UtilizationDay): ReadonlyArray<{ key: string; start: number; end: number }>;
+}
+
+export interface CellTotals {
+  availableMs: number;
+  reservedMs: number;
+  closureMs: number;
 }
 
 export interface UnitTotals {
@@ -90,6 +102,8 @@ export interface ResourceTotals extends UnitTotals {
 
 export interface UtilizationResult {
   units: Map<string, UnitTotals>;
+  /** Per heatmap cell over every unit; empty unless `cellsFor` was given. */
+  cells: Map<string, CellTotals>;
   resources: ResourceTotals[];
   facility: UnitTotals;
   observedCaptured: boolean;
@@ -170,6 +184,17 @@ export function computeUtilization(input: UtilizationInput): UtilizationResult {
   }
 
   const units = new Map<string, UnitTotals>();
+  const cells = new Map<string, CellTotals>();
+  const cellsByDay = new Map<string, ReadonlyArray<{ key: string; start: number; end: number }>>();
+  const cellsOf = (day: UtilizationDay) => {
+    if (!input.cellsFor) return [];
+    let list = cellsByDay.get(day.date);
+    if (!list) {
+      list = input.cellsFor(day);
+      cellsByDay.set(day.date, list);
+    }
+    return list;
+  };
   let observedCaptured = false;
   for (const unit of input.units) {
     const totals = emptyTotals();
@@ -207,6 +232,18 @@ export function computeUtilization(input: UtilizationInput): UtilizationResult {
       totals.reservedOutsideHoursMs += length(subtract(counted, windows));
       totals.reservedDuringClosureMs += length(intersect(counted, closures));
       totals.observedMs += length(intersect(intersect(observed, dayWindow), open));
+      for (const cell of cellsOf(day)) {
+        const window: Interval[] = [[cell.start, cell.end]];
+        const available = length(intersect(open, window));
+        const reserved = length(intersect(intersect(counted, open), window));
+        const closed = length(intersect(intersect(closures, windows), window));
+        if (available === 0 && reserved === 0 && closed === 0) continue;
+        const totalsOfCell = cells.get(cell.key) ?? { availableMs: 0, reservedMs: 0, closureMs: 0 };
+        totalsOfCell.availableMs += available;
+        totalsOfCell.reservedMs += reserved;
+        totalsOfCell.closureMs += closed;
+        cells.set(cell.key, totalsOfCell);
+      }
       const kinds = new Set(used.map((r) => r.eventKind));
       for (const kind of kinds) {
         const ofKind = normalize(
@@ -272,6 +309,7 @@ export function computeUtilization(input: UtilizationInput): UtilizationResult {
 
   return {
     units,
+    cells,
     resources,
     facility,
     observedCaptured,

@@ -4,6 +4,7 @@ import { CurrencyCode } from '../money';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
 import { Instant } from '../time';
+import { NavigationAreaSchema } from './core';
 import { ActorSnapshotSchema } from './facilities';
 import { LocalDate } from './scheduling';
 
@@ -41,6 +42,8 @@ export const REPORT_KEYS = [
   'economics',
   'retention',
   'demand',
+  'utilization_heatmap',
+  'sales_by_product_line',
 ] as const;
 export const ReportKeySchema = z.enum(REPORT_KEYS).openapi('ReportKey');
 export type ReportKey = z.infer<typeof ReportKeySchema>;
@@ -347,6 +350,22 @@ export const DemandReportQuery = z.object({
   forecastPeriods: z.coerce.number().int().min(1).max(12).optional(),
 });
 
+/** Park UI redesign heatmap: the utilization unit-hours by local weekday and hour. */
+export const UtilizationHeatmapReportQuery = z.object({
+  facilityId: FacilityParam,
+  ...DateRange,
+  asOf: AsOf,
+  /** U5: reserved time includes setup and cleanup buffers unless set to false. */
+  includeBuffers: QueryBoolean.optional(),
+});
+
+/** Park UI redesign: sales by product line (offering kind, point-of-sale product kind). */
+export const SalesByProductLineReportQuery = z.object({
+  facilityId: FacilityParam,
+  ...DateRange,
+  asOf: AsOf,
+});
+
 /** Parameter schema of each report (the same object as its GET query string). */
 export const REPORT_QUERY_SCHEMAS = {
   daily_schedule: DailyScheduleReportQuery,
@@ -365,6 +384,8 @@ export const REPORT_QUERY_SCHEMAS = {
   economics: EconomicsReportQuery,
   retention: RetentionReportQuery,
   demand: DemandReportQuery,
+  utilization_heatmap: UtilizationHeatmapReportQuery,
+  sales_by_product_line: SalesByProductLineReportQuery,
 } as const satisfies Record<ReportKey, z.ZodType>;
 export type ReportParameters<K extends ReportKey> = z.infer<(typeof REPORT_QUERY_SCHEMAS)[K]>;
 
@@ -386,6 +407,8 @@ export const REPORT_PATHS: Readonly<Record<ReportKey, string>> = {
   economics: 'economics',
   retention: 'retention',
   demand: 'demand',
+  utilization_heatmap: 'utilization-heatmap',
+  sales_by_product_line: 'sales-by-product-line',
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -564,6 +587,34 @@ export const CostInputListSchema = z
 // OpenAPI registration
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Sidebar attention counts (park UI redesign; SPK-UX-005, SPK-UX-006)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Per navigation area, how many items wait for the viewer's action, read through each owning
+ * module's own list with the viewer's own authority: an area whose list the viewer may not read is
+ * left out (never shown as zero). Counted up to `cap`; `capped` says there are more.
+ */
+export const AttentionAreaCountSchema = z
+  .object({
+    area: NavigationAreaSchema,
+    count: z.number().int().min(0),
+    capped: z.boolean(),
+    /** What is counted, in words (for the accessible label). */
+    counts: z.string(),
+  })
+  .openapi('AttentionAreaCount');
+
+export const AttentionCountsSchema = z
+  .object({
+    computedAt: Instant,
+    cap: z.number().int().min(1),
+    areas: z.array(AttentionAreaCountSchema),
+  })
+  .openapi('AttentionCounts');
+export type AttentionCounts = z.infer<typeof AttentionCountsSchema>;
+
 const TAG = 'Reporting';
 const IdParams = z.object({ id: z.uuid() });
 const err = (description: string) => ({
@@ -656,6 +707,10 @@ const REPORT_SUMMARIES: Readonly<Record<ReportKey, string>> = {
     'Renewal by cohort: adult teams, individual players, youth participants, households, rental customers (SPK-REPORT-005)',
   demand:
     'Observed demand by day, time, age band, format and program, with any forecast in its own series (SPK-REPORT-006)',
+  utilization_heatmap:
+    'Utilization by facility-local weekday and hour: available and reserved unit-hours per cell, no double counting (SPK-REPORT-003, SPK-REPORT-006)',
+  sales_by_product_line:
+    'Sales by product line (registration offering kinds and point-of-sale product kinds), per currency; refunds and returns shown apart, never netted (SPK-REPORT-004, SPK-PAY-011)',
 };
 
 for (const key of REPORT_KEYS) {
@@ -684,6 +739,13 @@ openApiRegistry.registerPath({
     404: err('Not found'),
   },
 });
+
+query(
+  '/me/attention',
+  "Sidebar attention counts: per navigation area, the items waiting for the viewer's action that the viewer may read",
+  null,
+  AttentionCountsSchema,
+);
 
 command(
   '/reports/runs',

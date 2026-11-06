@@ -10,10 +10,17 @@ import {
   type UtilizationResource,
 } from '../calculators/utilization.calculator';
 import { column, type ReportContext, type ReportDefinition } from '../engine/report-definition';
-import { addDays } from '../../scheduling';
+import { addDays, toLocal } from '../../scheduling';
 import { ReportingActions } from '../reporting.actions';
 import { REPORTING_SETTING_NAMES } from '../reporting.settings';
-import { hours, localDays, localInstant, metricValue, ratio } from '../reporting.shared';
+import {
+  hours,
+  localDays,
+  localInstant,
+  metricValue,
+  ratio,
+  weekdayName,
+} from '../reporting.shared';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -66,6 +73,27 @@ export function closedPeriods(
 }
 
 /**
+ * The parts of a reported day that fall in each facility-local clock hour, keyed `weekday:hour`
+ * (0 = Sunday). Boundaries are where the local minute is 0, so a day that starts at a configured
+ * operating day start (DEC-001) or crosses a daylight-saving change still splits on the clock.
+ */
+export function hourCells(
+  timezone: string,
+  day: { start: number; end: number },
+): Array<{ key: string; start: number; end: number }> {
+  const cells: Array<{ key: string; start: number; end: number }> = [];
+  let t = day.start;
+  while (t < day.end) {
+    const local = toLocal(timezone, new Date(t));
+    const toNextHour = ((60 - local.minute) * 60 - local.second) * 1000 - (t % 1000);
+    const end = Math.min(t + Math.max(toNextHour, 1000), day.end);
+    cells.push({ key: `${local.weekday}:${local.hour}`, start: t, end });
+    t = end;
+  }
+  return cells;
+}
+
+/**
  * Field utilization (SPK-REPORT-003): the scheduling, entry and catalog views of migration 1300
  * feed the pure calculator (calculators/utilization.calculator.ts), which measures everything on
  * conflict units so the same physical hour is never counted twice (U1).
@@ -86,6 +114,24 @@ export class UtilizationReport {
     compute: async (ctx, params) => this.compute(ctx, params),
   };
 
+  /**
+   * Utilization by local weekday and hour (park UI redesign heatmap; SPK-REPORT-003,
+   * SPK-REPORT-006 "demand by day, time"): the same unit-hours as the utilization report, split
+   * at facility-local clock hours and summed per weekday and hour over the range.
+   */
+  readonly heatmapDefinition: ReportDefinition<'utilization_heatmap'> = {
+    key: 'utilization_heatmap',
+    title: 'Utilization by weekday and hour',
+    requirementIds: ['SPK-REPORT-003', 'SPK-REPORT-006'],
+    viewAction: ReportingActions.viewUtilization,
+    exportAction: ReportingActions.exportOperational,
+    scope: 'facility',
+    pointInTime: 'partial',
+    pointInTimeNote: this.definition.pointInTimeNote,
+    settings: [REPORTING_SETTING_NAMES.operatingDayStart],
+    compute: async (ctx, params) => this.compute(ctx, params, 'heatmap'),
+  };
+
   private async compute(
     ctx: ReportContext,
     params: {
@@ -95,6 +141,7 @@ export class UtilizationReport {
       weighting?: 'conflict_units' | 'custom';
       weights?: string;
     },
+    mode: 'resources' | 'heatmap' = 'resources',
   ) {
     const facility = ctx.facility!;
     const tz = facility.timezone;
@@ -327,7 +374,11 @@ export class UtilizationReport {
         method === 'custom'
           ? { method: 'custom', weights: customWeights }
           : { method: 'conflict_units' },
+      ...(mode === 'heatmap' ? { cellsFor: (day: UtilizationDay) => hourCells(tz, day) } : {}),
     });
+    if (mode === 'heatmap') {
+      return this.heatmap(ctx, params, days, result.cells, includeBuffers);
+    }
 
     const f = result.facility;
     const values: MetricValue[] = [
@@ -497,6 +548,89 @@ export class UtilizationReport {
       ],
       rows,
       disclosures,
+    };
+  }
+
+  /** MET-106 to MET-108: one row per local weekday and hour that holds any time. */
+  private heatmap(
+    ctx: ReportContext,
+    params: { from: string; to: string },
+    days: readonly UtilizationDay[],
+    cells: ReadonlyMap<string, { availableMs: number; reservedMs: number; closureMs: number }>,
+    includeBuffers: boolean,
+  ) {
+    const tz = ctx.facility!.timezone;
+    const daysOfWeekday = new Map<number, number>();
+    for (const day of days) {
+      const weekday = new Date(`${day.date}T00:00:00Z`).getUTCDay();
+      daysOfWeekday.set(weekday, (daysOfWeekday.get(weekday) ?? 0) + 1);
+    }
+    const rows: ReportRow[] = [...cells.entries()]
+      .map(([key, c]) => {
+        const [weekday, hour] = key.split(':').map(Number) as [number, number];
+        return { weekday, hour, c };
+      })
+      .sort((a, b) => a.weekday - b.weekday || a.hour - b.hour)
+      .map(({ weekday, hour, c }) => ({
+        weekday,
+        weekdayName: weekdayName(weekday),
+        hour,
+        days: daysOfWeekday.get(weekday) ?? 0,
+        availableUnitHours: hours(c.availableMs),
+        reservedUnitHours: hours(c.reservedMs),
+        closureUnitHours: hours(c.closureMs),
+        utilizationRate: ratio(c.reservedMs, c.availableMs),
+      }));
+    let available = 0;
+    let reserved = 0;
+    let peak: { weekday: number; hour: number; rate: number } | null = null;
+    for (const [key, c] of cells) {
+      available += c.availableMs;
+      reserved += c.reservedMs;
+      const rate = ratio(c.reservedMs, c.availableMs);
+      if (rate === null) continue;
+      const [weekday, hour] = key.split(':').map(Number) as [number, number];
+      if (
+        !peak ||
+        rate > peak.rate ||
+        (rate === peak.rate &&
+          (weekday < peak.weekday || (weekday === peak.weekday && hour < peak.hour)))
+      ) {
+        peak = { weekday, hour, rate };
+      }
+    }
+    const values: MetricValue[] = [
+      metricValue('MET-108', 'Available unit-hours (all cells)', 'hours', hours(available)),
+      metricValue('MET-106', 'Reserved unit-hours (all cells)', 'hours', hours(reserved), {
+        dimensions: { buffers: includeBuffers ? 'included' : 'excluded' },
+      }),
+      metricValue('MET-107', 'Busiest weekday and hour', 'ratio', peak ? peak.rate : null, {
+        dimensions: peak
+          ? { weekday: weekdayName(peak.weekday), hour: String(peak.hour).padStart(2, '0') }
+          : {},
+        unavailableReason: 'no available hours in the range (G13)',
+      }),
+    ];
+    return {
+      scope: { from: params.from, to: params.to },
+      values,
+      columns: [
+        column('weekday', 'Weekday (0 = Sunday)', 'count'),
+        column('weekdayName', 'Weekday'),
+        column('hour', 'Local hour (start)', 'count'),
+        column('days', 'Days of this weekday in the range', 'count'),
+        column('availableUnitHours', 'Available unit-hours', 'hours'),
+        column('reservedUnitHours', 'Reserved unit-hours', 'hours'),
+        column('closureUnitHours', 'Closure unit-hours', 'hours'),
+        column('utilizationRate', 'Utilization rate', 'ratio'),
+      ],
+      rows,
+      disclosures: [
+        `Cells are facility-local clock hours in ${tz}, by the local weekday of the hour itself (not of the operating day it belongs to); each cell sums every day of that weekday in the range.`,
+        'Basis: unit-hours, as the utilization report: each physical unit-hour is counted once (U1, U2); available time is operating hours less closures (U6); maintenance and block events are unavailability (U4).',
+        `Reserved time ${includeBuffers ? 'includes' : 'excludes'} setup and cleanup buffers (U5). Reserved time outside operating hours or during closures is not in any cell (see the utilization report).`,
+        'Cells with no available, reserved or closure time are omitted. A rate is unavailable, never zero, when a cell has no available hours (G13).',
+      ],
     };
   }
 
