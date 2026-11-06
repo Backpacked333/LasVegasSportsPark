@@ -322,6 +322,14 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
                   {problems.score}
                 </span>
               ) : null}
+              {sheet.data ? (
+                <p className="caption" data-testid="report-checked-in">
+                  Checked in:{' '}
+                  {sheet.data.sides
+                    .map((side) => `${side.teamName} ${side.presentCount}`)
+                    .join(' · ')}
+                </p>
+              ) : null}
             </fieldset>
           ) : null}
           {classification === 'forfeit' ? (

@@ -20,6 +20,7 @@ import {
   ok,
   page,
   personNames,
+  resultRevision,
   ruleSet,
   season,
   standings,
@@ -98,6 +99,12 @@ describe('Season home (SCR-S-08, SCR-S-10, SCR-S-13)', () => {
       sides: [],
     }),
     'GET /seasons/{id}/result-revisions': ok(page([])),
+    'GET /seasons/{id}/results-awaiting': ok({
+      seasonId: ID.season,
+      evaluatedAt: '2026-10-24T11:59:00.000Z',
+      items: [],
+      truncated: false,
+    }),
     'GET /exceptions': ok(page([])),
   };
 
@@ -115,6 +122,179 @@ describe('Season home (SCR-S-08, SCR-S-10, SCR-S-13)', () => {
     expect(within(games).queryByText('Ready')).toBeNull();
     expect(within(games).getByText('Officials · 1')).toBeInTheDocument();
     expect(screen.getByText('Nothing waiting')).toBeInTheDocument();
+  });
+
+  it('SPK-READY-001: reads every game’s per-check readiness from one season read, never one per game', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /seasons/{id}/readiness': ok({
+          seasonId: ID.season,
+          evaluatedAt: '2026-10-24T11:59:00.000Z',
+          items: [
+            {
+              fixtureId: ID.fixture,
+              status: 'blocked',
+              blockingCount: 1,
+              unknownCount: 0,
+              warningCount: 0,
+              checks: [
+                { name: 'roster', status: 'blocked', issueCount: 1 },
+                { name: 'officials', status: 'ready', issueCount: 0 },
+              ],
+            },
+          ],
+        }),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}`));
+    const games = await screen.findByRole('list', { name: 'Games in the next 24 hours' });
+    expect(await within(games).findByText('Roster · 1')).toBeInTheDocument();
+    expect(within(games).getByText('Officials')).toBeInTheDocument();
+    expect(app.fake.requests.filter((r) => r.route === '/fixtures/{id}/readiness')).toHaveLength(0);
+    const summary = app.fake.requests.find((r) => r.route === '/seasons/{id}/readiness');
+    expect(summary?.query).toHaveProperty('from');
+    expect(summary?.query).toHaveProperty('to');
+  });
+});
+
+describe('Needs your call: inline result decisions (SPK-RESULT-001, SPK-RESULT-002, SPK-UX-006)', () => {
+  const T0 = '2026-10-24T11:59:00.000Z';
+  const base = {
+    'GET /seasons/{id}': ok(season({ status: 'active' })),
+    'GET /divisions': ok([division()]),
+    'GET /rule-sets/{id}': ok(ruleSet()),
+    'GET /seasons/{id}/standings': ok(standings()),
+    'GET /seasons/{id}/fixtures': ok(page([])),
+    'GET /seasons/{id}/readiness': ok({ seasonId: ID.season, evaluatedAt: T0, items: [] }),
+    'GET /seasons/{id}/result-revisions': ok(page([])),
+    'GET /exceptions': ok(page([])),
+  };
+  const awaiting = (suggested: boolean) => ({
+    seasonId: ID.season,
+    evaluatedAt: T0,
+    truncated: false,
+    items: [
+      {
+        fixtureId: ID.fixture,
+        scheduledStart: '2026-10-22T18:00:00.000Z',
+        scheduledEnd: '2026-10-22T19:00:00.000Z',
+        divisionId: null,
+        sides: [
+          { teamEntryId: ID.entryRed, teamName: 'Red', present: 6 },
+          { teamEntryId: ID.entryBlue, teamName: 'Blue', present: suggested ? 4 : null },
+        ],
+        minimumPlayersToStart: 5,
+        suggestedForfeit: suggested
+          ? {
+              forfeitingEntryId: ID.entryBlue,
+              homeScore: 3,
+              awayScore: 0,
+              reason: 'Blue had 4 players marked present (minimum 5).',
+            }
+          : null,
+        reminderCount: 0,
+        lastReminderAt: null,
+      },
+    ],
+  });
+
+  it('records the suggested forfeit by submitting it and then publishing it', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...base,
+        'GET /seasons/{id}/results-awaiting': ok(awaiting(true)),
+        'POST /fixtures/{id}/results': {
+          status: 201,
+          body: resultRevision({ classification: 'forfeit', homeScore: 3, awayScore: 0 }),
+        },
+        'POST /results/{id}/publish': ok({
+          revision: resultRevision({ status: 'official' }),
+          published: true,
+          supersededRevisionId: null,
+          reviewExceptionId: null,
+          standings: null,
+          proposedSuspensionIds: [],
+          bracketNodeIds: [],
+        }),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}`));
+    const calls = await screen.findByRole('list', { name: 'Decisions waiting' });
+    expect(
+      await within(calls).findByText('Blue had 4 players marked present (minimum 5).'),
+    ).toBeInTheDocument();
+    await user.click(
+      within(calls).getByRole('button', { name: /Record the 3–0 forfeit: Blue forfeits/ }),
+    );
+    expect(await within(calls).findByText('Forfeit published')).toBeInTheDocument();
+    const posts = app.fake.requests.filter((r) => r.method === 'POST');
+    expect(posts.map((r) => r.route)).toEqual(['/fixtures/{id}/results', '/results/{id}/publish']);
+    expect(posts[0]?.body).toEqual({
+      classification: 'forfeit',
+      homeScore: 3,
+      awayScore: 0,
+      forfeitingEntryId: ID.entryBlue,
+    });
+    expect(posts[1]?.body).toEqual({ expectedRevision: 2 });
+  });
+
+  it('nudges the captains of a game without a result', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...base,
+        'GET /seasons/{id}/results-awaiting': ok(awaiting(false)),
+        'POST /fixtures/{id}/result-reminders': {
+          status: 201,
+          body: {
+            id: ID.result2,
+            fixtureId: ID.fixture,
+            requestedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Lee' },
+            message: null,
+            requestedAt: T0,
+            recipientCount: 2,
+          },
+        },
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}`));
+    const calls = await screen.findByRole('list', { name: 'Decisions waiting' });
+    expect(await within(calls).findByText('Missing result')).toBeInTheDocument();
+    expect(within(calls).getByText(/Blue not checked in/)).toBeInTheDocument();
+    await user.click(within(calls).getByRole('button', { name: 'Nudge captains: Red v Blue' }));
+    expect(await within(calls).findByText('Reminder recorded for 2 captains')).toBeInTheDocument();
+    expect(within(calls).getByRole('link', { name: 'Enter result' })).toBeInTheDocument();
+  });
+
+  it('accepts a submitted referee report inline with its revision', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...base,
+        'GET /seasons/{id}/results-awaiting': ok({ ...awaiting(false), items: [] }),
+        'GET /seasons/{id}/result-revisions': ok(page([resultRevision()])),
+        'POST /results/{id}/publish': ok({
+          revision: resultRevision({ status: 'official' }),
+          published: false,
+          supersededRevisionId: null,
+          reviewExceptionId: ID.result2,
+          standings: null,
+          proposedSuspensionIds: [],
+          bracketNodeIds: [],
+        }),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}`));
+    const calls = await screen.findByRole('list', { name: 'Decisions waiting' });
+    await user.click(await within(calls).findByRole('button', { name: /Accept the report/ }));
+    expect(
+      await within(calls).findByText('Needs management review: nothing was published'),
+    ).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+      expectedRevision: 2,
+    });
   });
 });
 

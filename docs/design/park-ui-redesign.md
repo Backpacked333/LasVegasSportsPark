@@ -55,6 +55,34 @@ Home, facility pass, discover, offering detail and registration start, family sc
 and book-a-space all use the new heroes, cards, pills and time tiles. Fonts are verified by tests only, not
 yet on a device.
 
+### Compete API gaps closed (verified 2026-11-06)
+
+API in `apps/api/src/modules/competition` (migrations 0464 to 0466) and `apps/api/src/modules/workforce`,
+tested in `competition/__tests__/placement-field.spec.ts`, `workforce/__tests__/open-slot-candidates.spec.ts`
+and the staff screen tests named below.
+
+- **Placement board** keeper and skill balance from staff player profiles
+  (`GET`/`POST /v1/seasons/{id}/player-profiles`; position and a 1 to 5 skill rating, staff-only); the
+  entrant's friend request from the placement request's requested teammates
+  (`PlacementBoardScreen.test.tsx`). The rating scale is an engineering placeholder; the placement model
+  stays **pending DEC-031 / DEC-051**.
+- **Playoff line** on standings from the division's fixture specification (`StandingsScreen.test.tsx`).
+- **Per-check readiness** in the season readiness summary; the season home reads it once for the next
+  24 hours (`compete-redesign.test.tsx`).
+- **Inline result decisions** in "Needs your call": accept a submitted report (publish), record the
+  suggested forfeit (submit then publish), nudge captains (`POST /v1/fixtures/{id}/result-reminders`)
+  (`compete-redesign.test.tsx`). Reminder delivery is **proposed**: communications does not yet subscribe
+  to `competition.result_reminder_requested`, so a reminder is recorded and not sent.
+- **Match sheet player check-in** (`GET`/`POST /v1/fixtures/{id}/attendance`; attendance on the match
+  sheet) (`AssignmentWorkspaceScreen.test.tsx`).
+- **Replacement candidates for an unassigned slot** (`GET /v1/assignment-requirements/{id}/candidates`)
+  with the official's grade and safeguarding certification in the reasons (`ReplacementRail.test.tsx`).
+  Which qualification kinds are the grade and the safeguarding certification is configuration
+  (`WORKFORCE_OFFICIAL_GRADE_QUALIFICATION_KIND`, `WORKFORCE_SAFEGUARDING_QUALIFICATION_KIND`), unset by
+  default (**pending DEC-011**).
+- **Session coach for the arrival screen**: `GET /v1/assigned-staff` (API only; the arrival screen is not
+  wired yet, **proposed**).
+
 ## Proposed: design elements that need API work
 
 Each item names what the API would have to provide. None of these is shown with invented data today.
@@ -73,17 +101,10 @@ Each item names what the API would have to provide. None of these is shown with 
   and coach; session capacity; waiver commands ("send link", "sign on this tablet", "override with
   reason"); camera scanning.
 - **Field-side "report a problem"** screen and a phone bottom tab bar for the workspace.
-- **Match sheet player check-in** (fixture attendance).
 
 ### Compete
 
-- **Player position and skill rating**, so the placement board can check keepers and skill balance;
-  friend-request flags.
-- **Playoff line in standings** (playoff team count on the standings read).
-- **Per-check readiness in the season summary**, to avoid one readiness read per game.
-- **Inline result decisions** (accept referee report, record forfeit, nudge captains).
-- **Replacement candidates for an unassigned slot**, plus referee grade and SafeSport status in the
-  candidate reasons.
+- Delivery of result reminders through communications (see "Compete API gaps closed").
 
 ### Grow
 

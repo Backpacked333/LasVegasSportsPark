@@ -11,7 +11,7 @@
  * shown as the API holds them. Team names come with each node and table row (CMP-01).
  */
 import type { Schema } from '@sportspark/api-client';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -87,7 +87,7 @@ export function StandingsTable({
     | 'ruleSetVersion'
     | 'computedAt'
     | 'sourceResultIds'
-  > & { id?: string | null };
+  > & { id?: string | null; playoffLine?: Standings['playoffLine'] };
   caption?: string;
   form?: SeasonForm;
   compact?: boolean;
@@ -95,6 +95,10 @@ export function StandingsTable({
   const names = new Map(standings.rows.map((r) => [r.teamEntryId, r.teamName]));
   const nameOf = (id: string) => names.get(id);
   const showForm = !!form?.ready;
+  // The playoff line from the division's fixture specification (SPK-FIX-001): a ruled row after
+  // the last qualifying position, said in words, never colour alone.
+  const line = standings.playoffLine ?? null;
+  const columns = 10 + (compact ? 0 : 2) + (showForm ? 1 : 0);
   return (
     <>
       <p className="caption" data-testid="standings-provenance">
@@ -161,37 +165,50 @@ export function StandingsTable({
           </thead>
           <tbody>
             {standings.rows.map((row) => (
-              <tr key={row.teamEntryId}>
-                <td className="col-pos">{row.position}</td>
-                <th scope="row" className="col-team">
-                  {row.teamName}
-                </th>
-                <td className="col-num">{row.played}</td>
-                <td className="col-num">{row.won}</td>
-                <td className="col-num">{row.drawn}</td>
-                <td className="col-num">{row.lost}</td>
-                <td className="col-num">{row.goalsFor}</td>
-                <td className="col-num">{row.goalsAgainst}</td>
-                <td className="col-num">
-                  {row.goalDifference > 0 ? `+${row.goalDifference}` : row.goalDifference}
-                </td>
-                <td className="col-pts">{row.points}</td>
-                {compact ? null : (
-                  <>
-                    <td className="col-num">{row.fairPlayPoints}</td>
-                    <td className="col-num">{row.forfeits}</td>
-                  </>
-                )}
-                {showForm ? (
-                  <td className="col-form">
-                    <FormRun outcomes={form?.of(row.teamEntryId) ?? []} />
+              <Fragment key={row.teamEntryId}>
+                <tr data-qualifies={line ? String(row.position <= line.cutPosition) : undefined}>
+                  <td className="col-pos">{row.position}</td>
+                  <th scope="row" className="col-team">
+                    {row.teamName}
+                  </th>
+                  <td className="col-num">{row.played}</td>
+                  <td className="col-num">{row.won}</td>
+                  <td className="col-num">{row.drawn}</td>
+                  <td className="col-num">{row.lost}</td>
+                  <td className="col-num">{row.goalsFor}</td>
+                  <td className="col-num">{row.goalsAgainst}</td>
+                  <td className="col-num">
+                    {row.goalDifference > 0 ? `+${row.goalDifference}` : row.goalDifference}
                   </td>
+                  <td className="col-pts">{row.points}</td>
+                  {compact ? null : (
+                    <>
+                      <td className="col-num">{row.fairPlayPoints}</td>
+                      <td className="col-num">{row.forfeits}</td>
+                    </>
+                  )}
+                  {showForm ? (
+                    <td className="col-form">
+                      <FormRun outcomes={form?.of(row.teamEntryId) ?? []} />
+                    </td>
+                  ) : null}
+                </tr>
+                {line && row.position === line.cutPosition && row !== standings.rows.at(-1) ? (
+                  <tr className="playoff-line">
+                    <td colSpan={columns}>Playoff line: top {line.qualifyingTeams} qualify</td>
+                  </tr>
                 ) : null}
-              </tr>
+              </Fragment>
             ))}
           </tbody>
         </table>
       </div>
+      {line ? (
+        <p className="caption" data-testid="playoff-note">
+          Top {line.qualifyingTeams} qualify for the playoff (single elimination), from the
+          division&apos;s fixture specification.
+        </p>
+      ) : null}
       {showForm && form?.partial ? (
         <p className="caption">
           Form reads the latest 200 official results and fixtures; earlier games are not included.

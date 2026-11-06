@@ -279,7 +279,86 @@ describe('SCR-S-18 names in one read (ID-02, §4.14)', () => {
     render(app.at(`/teams/seasons/${ID.season}/placement`));
     const list = await screen.findByRole('list', { name: 'Placement requests' });
     expect(await within(list).findByText('Riley Free')).toBeInTheDocument();
-    expect(within(list).getByText('Person not available to you')).toBeInTheDocument();
+    // The omitted person is both the second entrant and the first entrant's requested teammate.
+    expect(within(list).getAllByText('Person not available to you').length).toBeGreaterThan(0);
     expect(app.fake.requests.filter((r) => r.route === '/person-names')).toHaveLength(1);
+  });
+});
+
+describe('SCR-S-18 keeper and skill balance from staff player profiles (SPK-PLACE-002, SPK-PLACE-005)', () => {
+  const profiles = {
+    seasonId: ID.season,
+    evaluatedAt: '2026-10-20T12:00:00.000Z',
+    skillScale: { min: 1, max: 5 },
+    profiles: [
+      {
+        id: '0192f1a0-0000-7000-8000-00000000e001',
+        seasonId: ID.season,
+        personId: ID.person,
+        position: 'goalkeeper',
+        skillRating: 4,
+        note: null,
+        recordedBy: { kind: 'staff', accountId: null, personId: null, actorLabel: 'Lee' },
+        recordedAt: '2026-10-20T12:00:00.000Z',
+        revision: 3,
+      },
+    ],
+    teams: [{ teamEntryId: ID.entryRed, players: 9, goalkeepers: 0, rated: 6, averageSkill: 3.2 }],
+  };
+
+  it('shows each team’s keepers and skill average, the entrant’s profile and friend request', async () => {
+    const app = createTestApp({
+      routes: { ...routes, 'GET /seasons/{id}/player-profiles': ok(profiles) },
+    });
+    render(app.at(`/teams/seasons/${ID.season}/placement`));
+    expect(await screen.findByText('No keeper')).toBeInTheDocument();
+    expect(screen.getByText('Skill 3.2 (6 of 9 rated)')).toBeInTheDocument();
+    const list = await screen.findByRole('list', { name: 'Placement requests' });
+    expect(within(list).getByText('Goalkeeper')).toBeInTheDocument();
+    expect(within(list).getByRole('img', { name: 'Skill 4 of 5' })).toBeInTheDocument();
+    expect(within(list).getByText('Friend request (1)')).toBeInTheDocument();
+    expect(screen.getByText('At least 1 keeper per team')).toBeInTheDocument();
+  });
+
+  it('records a changed profile with the profile revision', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /seasons/{id}/player-profiles': ok(profiles),
+        'POST /seasons/{id}/player-profiles': { status: 201, body: profiles.profiles[0] },
+      },
+    });
+    render(app.at(`/teams/seasons/${ID.season}/placement`));
+    await user.click(await screen.findByRole('button', { name: 'Change profile' }));
+    const form = screen.getByRole('form', { name: 'Rate Riley Free' });
+    await user.selectOptions(within(form).getByLabelText(/Skill \(1 to 5\)/), '5');
+    await user.click(within(form).getByRole('button', { name: 'Save profile' }));
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.method === 'POST')?.body).toEqual({
+        personId: ID.person,
+        position: 'goalkeeper',
+        skillRating: 5,
+        expectedRevision: 3,
+      }),
+    );
+  });
+
+  it('says in words when the profiles cannot be read, and shows no balance', async () => {
+    const app = createTestApp({
+      routes: {
+        ...routes,
+        'GET /seasons/{id}/player-profiles': fail(
+          403,
+          'ACCESS_DENIED',
+          'contact_support_or_request_access',
+        ),
+      },
+    });
+    render(app.at(`/teams/seasons/${ID.season}/placement`));
+    expect(
+      await screen.findByText(/Keeper and skill checks are not available to you/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No keeper')).toBeNull();
   });
 });

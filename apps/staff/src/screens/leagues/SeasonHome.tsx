@@ -9,8 +9,10 @@
  *   brackets are on the standings screen.
  * - Game readiness for the next 24 hours: the season's fixtures in that window
  *   (`GET /v1/seasons/{id}/fixtures?from&to`) with each match's derived readiness and its checks
- *   (`GET /v1/fixtures/{id}/readiness`, at most READINESS_ROWS matches; the full list is on the
- *   fixtures screen). Readiness is never shown as ready on unknown or stale evidence, offline or
+ *   from one season readiness read for the same window (`GET /v1/seasons/{id}/readiness?from&to`,
+ *   per-check outcomes, CMP-01). Only when that read cannot answer (too many fixtures, or it
+ *   failed) is each match read on its own (`GET /v1/fixtures/{id}/readiness`, at most
+ *   READINESS_ROWS matches; the full list is on the fixtures screen). Readiness is never shown as ready on unknown or stale evidence, offline or
  *   after a failed refresh, and there is no "mark ready" control (SPK-READY-004).
  *
  * A read the viewer may not make reads "not available to you" in words; a failed read names its
@@ -23,7 +25,7 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { useDivisionZones } from '../../features/competition/facilities';
 import { useSeasonForm } from '../../features/competition/form';
 import { READINESS_STATUS, humanizeCode } from '../../features/competition/labels';
-import { effectiveReadiness } from '../../features/competition/readiness';
+import { effectiveCounts, effectiveReadiness } from '../../features/competition/readiness';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CardHead } from '../../ui/Page';
@@ -32,6 +34,27 @@ import { StandingsTable } from './StandingsScreen';
 
 type Division = Schema<'Division'>;
 type SeasonFixture = Schema<'SeasonFixture'>;
+type SummaryItem = Schema<'SeasonReadiness'>['items'][number];
+type Check = SummaryItem['checks'][number];
+type ReadinessStatus = Schema<'ReadinessStatus'>;
+
+function CheckBadges({ checks, overall }: { checks: readonly Check[]; overall: ReadinessStatus }) {
+  return (
+    <>
+      {checks.map((check) => {
+        // A ready check reads as unknown when the whole evaluation is not confirmed.
+        const shown = check.status === 'ready' && overall === 'unknown' ? 'unknown' : check.status;
+        return (
+          <StatusBadge
+            key={check.name}
+            tone={READINESS_STATUS[shown].tone}
+            label={`${humanizeCode(check.name)}${check.issueCount > 0 ? ` · ${check.issueCount}` : ''}`}
+          />
+        );
+      })}
+    </>
+  );
+}
 
 /** Matches whose own readiness is read on the season home; the rest are on the fixtures screen. */
 const READINESS_ROWS = 10;
@@ -185,19 +208,31 @@ function GameRow({
   zone,
   divisionName,
   readOwn,
+  summary,
 }: {
   fixture: SeasonFixture;
   zone: string | null;
   divisionName: string | null;
   readOwn: boolean;
+  /** The fixture's item of the season readiness read, with that read's evaluation time. */
+  summary: { item: SummaryItem; evaluatedAt: string; refreshFailed: boolean } | null;
 }) {
   const now = useNow();
   const { online, services } = useApp();
   const readiness = useApiQuery({
     path: '/fixtures/{id}/readiness',
     request: { path: { id: fixture.id } },
-    enabled: readOwn,
+    enabled: readOwn && !summary,
   });
+  const fromSummary = summary
+    ? effectiveCounts(summary.item, {
+        now,
+        evaluatedAt: summary.evaluatedAt,
+        staleThresholdMs: services.config.staleDataThresholdMs,
+        offline: !online,
+        refreshFailed: summary.refreshFailed,
+      })
+    : null;
   const when = fixture.scheduledStart ? timeParts(fixture.scheduledStart, zone) : null;
   const data = readiness.data;
   const effective = data
@@ -223,7 +258,15 @@ function GameRow({
         </span>
       </span>
       <span className="ready-checks">
-        {!readOwn ? (
+        {summary && fromSummary ? (
+          <>
+            <StatusBadge
+              tone={READINESS_STATUS[fromSummary.status].tone}
+              label={READINESS_STATUS[fromSummary.status].label}
+            />
+            <CheckBadges checks={summary.item.checks} overall={fromSummary.status} />
+          </>
+        ) : !readOwn ? (
           <span className="caption">Open the fixture for its readiness</span>
         ) : effective && data ? (
           <>
@@ -231,22 +274,7 @@ function GameRow({
               tone={READINESS_STATUS[effective.status].tone}
               label={READINESS_STATUS[effective.status].label}
             />
-            {data.checks.map((check) => {
-              // A ready check reads as unknown when the whole evaluation is not confirmed.
-              const shown =
-                check.status === 'ready' && effective.status === 'unknown'
-                  ? 'unknown'
-                  : check.status;
-              return (
-                <StatusBadge
-                  key={check.name}
-                  tone={READINESS_STATUS[shown].tone}
-                  label={`${humanizeCode(check.name)}${
-                    check.issueCount > 0 ? ` · ${check.issueCount}` : ''
-                  }`}
-                />
-              );
-            })}
+            <CheckBadges checks={data.checks} overall={effective.status} />
           </>
         ) : readiness.error ? (
           presentationForError(readiness.error) === 'unavailable' ? (
@@ -286,6 +314,13 @@ export function GameReadinessCard({
     path: '/seasons/{id}/fixtures',
     request: { path: { id: seasonId }, query: { ...window, limit: 50 } },
   });
+  // One read for the readiness of every game in the window (per-check outcomes, CMP-01).
+  const summaryRead = useApiQuery({
+    path: '/seasons/{id}/readiness',
+    request: { path: { id: seasonId }, query: window },
+  });
+  const summaryOf = new Map((summaryRead.data?.items ?? []).map((i) => [i.fixtureId, i]));
+  const summaryPending = !summaryRead.data && !summaryRead.error;
   const zoneOf = useDivisionZones(divisions);
   const divisionName = new Map((divisions ?? []).map((d) => [d.id, d.name]));
   const games = (fixtures.data?.items ?? [])
@@ -320,7 +355,16 @@ export function GameReadinessCard({
               fixture={f}
               zone={zoneOf(f.divisionId)}
               divisionName={f.divisionId ? (divisionName.get(f.divisionId) ?? null) : null}
-              readOwn={i < READINESS_ROWS}
+              readOwn={!summaryPending && i < READINESS_ROWS}
+              summary={
+                summaryRead.data && summaryOf.has(f.id)
+                  ? {
+                      item: summaryOf.get(f.id) as SummaryItem,
+                      evaluatedAt: summaryRead.data.evaluatedAt,
+                      refreshFailed: summaryRead.error !== null,
+                    }
+                  : null
+              }
             />
           ))}
         </ul>
