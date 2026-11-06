@@ -271,3 +271,34 @@
     max-width: none;
   }
 }
+
+/* Exception detail: summary card with a severity edge, lifecycle commands in the side rail. */
+.exception-summary {
+  box-shadow: inset 4px 0 0 var(--edge, transparent);
+}
+.exception-summary[data-edge='danger'] {
+  --edge: var(--tone-danger);
+}
+.exception-summary[data-edge='warning'] {
+  --edge: #d99a1e;
+}
+.exception-summary[data-edge='info'] {
+  --edge: var(--tone-info);
+}
+.exception .split-side > .panel {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-pop);
+}
+
+/* SCR-S-50 assistant: lavender "suggestions only" surface, clearly apart from operational data. */
+.assistant {
+  background: #f4f0fc;
+  border-color: var(--tone-pending-line);
+}
+.assistant .panel {
+  background: var(--card);
+  border-color: #e7e0f7;
+}
+.assistant h3 {
+  color: var(--tone-pending);
+}

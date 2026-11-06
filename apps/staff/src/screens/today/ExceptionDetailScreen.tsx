@@ -31,6 +31,8 @@ import { Facts, TextAreaField } from '../../ui/FormFields';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { RecordRef, isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
+import { Icon } from '../../ui/Icon';
+import './today.css';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { formatDateTime, formatMinutes } from '../../ui/time';
 import {
@@ -219,61 +221,81 @@ function ExceptionView({ exception }: { exception: OperationalException }) {
   const recovery = RECOVERY_CATEGORIES.has(exception.category);
   const statusTone: StatusTone = EXCEPTION_STATUS_TONE[exception.status];
   return (
-    <>
-      <h3>{exception.title}</h3>
-      <span className="actions-row">
-        {recovery ? <StatusBadge tone="danger" label="Recovery required" /> : null}
-        <StatusBadge tone={severity.tone} label={severity.label} />
-        <StatusBadge tone={statusTone} label={`Status: ${exception.status}`} />
-        {exception.overdue ? <StatusBadge tone="danger" label="Overdue" /> : null}
-      </span>
-      <Facts
-        label="Exception details"
-        items={[
-          ['Category', exception.category],
-          ['Owner queue', exception.ownerQueue],
-          ['Facility', facilities.name(exception.facilityId) ?? 'Whole organization'],
-          ['Opened', formatDateTime(exception.openedAt, zone)],
-          ['Age', formatMinutes(exception.ageMinutes)],
-          [
-            'Acknowledge by',
-            exception.acknowledgeBy ? formatDateTime(exception.acknowledgeBy, zone) : 'None set',
-          ],
-          ['Deadline', exception.deadlineAt ? formatDateTime(exception.deadlineAt, zone) : 'None'],
-          ['Revision', String(exception.revision)],
-        ]}
-      />
-      <AffectedRecord exception={exception} />
-      <section className="panel" aria-labelledby="next-title">
-        <h3 id="next-title">Next permitted actions</h3>
-        {next.length === 0 ? (
-          <p>No action on the underlying record is available to you.</p>
-        ) : (
-          <ul className="list">
-            {next.map((a) => (
-              <li key={`${a.action}-${a.href ?? ''}`}>
-                <NextActionLink action={a} />
-                <span className="caption">{a.action}</span>
+    <div className="split exception">
+      <div className="split-main">
+        <section
+          className="card exception-summary"
+          data-edge={
+            recovery
+              ? 'danger'
+              : exception.severity === 'critical' || exception.severity === 'high'
+                ? 'danger'
+                : exception.severity
+          }
+        >
+          <h3>{exception.title}</h3>
+          <span className="actions-row">
+            {recovery ? <StatusBadge tone="danger" label="Recovery required" /> : null}
+            <StatusBadge tone={severity.tone} label={severity.label} />
+            <StatusBadge tone={statusTone} label={`Status: ${exception.status}`} />
+            {exception.overdue ? <StatusBadge tone="danger" label="Overdue" /> : null}
+          </span>
+          <Facts
+            label="Exception details"
+            items={[
+              ['Category', exception.category],
+              ['Owner queue', exception.ownerQueue],
+              ['Facility', facilities.name(exception.facilityId) ?? 'Whole organization'],
+              ['Opened', formatDateTime(exception.openedAt, zone)],
+              ['Age', formatMinutes(exception.ageMinutes)],
+              [
+                'Acknowledge by',
+                exception.acknowledgeBy
+                  ? formatDateTime(exception.acknowledgeBy, zone)
+                  : 'None set',
+              ],
+              [
+                'Deadline',
+                exception.deadlineAt ? formatDateTime(exception.deadlineAt, zone) : 'None',
+              ],
+              ['Revision', String(exception.revision)],
+            ]}
+          />
+        </section>
+        <AffectedRecord exception={exception} />
+        <section className="panel" aria-labelledby="next-title">
+          <h3 id="next-title">Next permitted actions</h3>
+          {next.length === 0 ? (
+            <p>No action on the underlying record is available to you.</p>
+          ) : (
+            <ul className="list">
+              {next.map((a) => (
+                <li key={`${a.action}-${a.href ?? ''}`}>
+                  <NextActionLink action={a} />
+                  <span className="caption">{a.action}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+        <DeadLetterReplay exception={exception} />
+        <section className="panel" aria-labelledby="history-title">
+          <h3 id="history-title">Resolution history</h3>
+          <ol aria-label="Resolution history">
+            {exception.history.map((h, i) => (
+              <li key={`${h.at}-${i}`}>
+                {formatDateTime(h.at, zone)}: {h.action} by {h.actorLabel}
+                {h.reason ? `. Note: ${h.reason}` : ''}
               </li>
             ))}
-          </ul>
-        )}
-      </section>
-      <DeadLetterReplay exception={exception} />
-      <LifecycleCommands exception={exception} />
-      <section className="panel" aria-labelledby="history-title">
-        <h3 id="history-title">Resolution history</h3>
-        <ol aria-label="Resolution history">
-          {exception.history.map((h, i) => (
-            <li key={`${h.at}-${i}`}>
-              {formatDateTime(h.at, zone)}: {h.action} by {h.actorLabel}
-              {h.reason ? `. Note: ${h.reason}` : ''}
-            </li>
-          ))}
-        </ol>
-      </section>
-      <AuditHistory targetType="operational_exception" targetId={exception.id} zone={zone} />
-    </>
+          </ol>
+        </section>
+        <AuditHistory targetType="operational_exception" targetId={exception.id} zone={zone} />
+      </div>
+      <div className="split-side">
+        <LifecycleCommands exception={exception} />
+      </div>
+    </div>
   );
 }
 
@@ -294,10 +316,11 @@ function ExceptionQuery({ id }: { id: string }) {
 export function ExceptionDetailScreen() {
   const { exceptionId = '' } = useParams();
   return (
-    <section aria-labelledby="exception-title">
-      <p>
-        <Link to="/today">Back to Today</Link>
-      </p>
+    <section aria-labelledby="exception-title" className="today">
+      <Link to="/today" className="back-link">
+        <Icon name="arrow_back" size={18} />
+        Back to Today
+      </Link>
       <h2 id="exception-title">Exception</h2>
       {isUuid(exceptionId) ? (
         <ExceptionQuery id={exceptionId} />
