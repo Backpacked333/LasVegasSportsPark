@@ -105,6 +105,26 @@ and the staff screen tests named below.
 - **Session coach for the arrival screen**: `GET /v1/assigned-staff` (API only; the arrival screen is not
   wired yet, **proposed**).
 
+### API added for the redesign: catalog and enrollment
+
+Verified by API tests (`catalog/__tests__/park-ui-gaps.spec.ts`,
+`enrollment/__tests__/park-ui-overview.spec.ts`) and, where wired, staff UI tests. These close the
+matching items in "Proposed" below.
+
+| Gap                                                 | API                                                                                                                      | Staff UI                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| Enrollment by age, form completion, waitlist counts | `GET /v1/offering-enrollment-summaries` (ages in whole years on the reference date; bands pending DEC-003)               | Programs cards and readiness rail      |
+| Organization-wide waitlist                          | `GET /v1/waitlist-queue`                                                                                                 | Registrations home "Waitlists" card    |
+| Session location and capacity                       | `GET /v1/sessions` rows carry `location` and `capacity`; a session may record its own location (migration 0210)          | Arrival "Sessions now"                 |
+| Recent attendance on the person record              | `GET /v1/participants/{personId}/activities` (last 8 sessions, through entry's attendance port)                          | Person record "Activities" card        |
+| Discover text search, promotions                    | `GET /v1/offerings?q=`; `PublicOffering.promotions` (automatic discounts only, never promo codes)                        | Customer app: proposed (not wired yet) |
+| "Picked for <child>"                                | `GET /v1/me/offering-suggestions` (age band on the reference date only)                                                  | Customer app: proposed (not wired yet) |
+| Camp week picker with live total                    | `GET /v1/offerings?programId=&kind=camp`, `GET /v1/offering-availability`, `POST /v1/discounts/evaluate` (informational) | Customer app: proposed (not wired yet) |
+
+Still proposed from these areas: the session's coach on the arrival panel (workforce), editing a
+session's location after it is created, and a binding multi-week quote without a basket (the binding
+quote stays finance's `POST /v1/registration-quotes`).
+
 ## Proposed: design elements that need API work
 
 Each item names what the API would have to provide. None of these is shown with invented data today.
@@ -125,8 +145,6 @@ Each item names what the API would have to provide. None of these is shown with 
 
 ### Grow
 
-- **Program enrollment by age group, form completion and waitlist counts** across offerings.
-- **Organization-wide waitlist list** for the registrations home.
 - **Protected care notes, account balance, make-up credits and "paid this year"** on the person record,
   plus waiver/form status and recent attendance.
 - **Booking prices** and prime/off-peak labels on the week grid (availability by resource type is

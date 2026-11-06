@@ -174,3 +174,25 @@
   flex: 0 1 220px;
   min-width: 160px;
 }
+
+/* Enrollment by age (whole years on the reference date) and waitlist counts per offering. */
+.age-split {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.age-bar {
+  display: flex;
+  gap: 2px;
+  height: 9px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--line-soft);
+}
+.age-bar > span {
+  display: block;
+  min-width: 3px;
+}
+.readiness-waitlist a {
+  font-weight: 600;
+}

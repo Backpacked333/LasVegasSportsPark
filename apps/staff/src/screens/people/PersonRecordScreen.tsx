@@ -40,12 +40,11 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { formatDateTime } from '../../ui/time';
 import { Icon } from '../../ui/Icon';
 import { Avatar } from '../../features/grow/Grow';
-import { formatDate } from '../../features/registration-finance/format';
-import { ENROLLMENT_STATUS, OFFERING_KIND } from '../../features/registration-finance/labels';
 import type { GrantPermission } from '../../features/people/people';
 import './people.css';
 import { AuditHistory } from '../today/AuditHistory';
 import { CareNotesCard } from './CareNotesCard';
+import { ActivitiesCard } from './ActivitiesCard';
 import { useFacilityDirectory } from '../today/useFacilityDirectory';
 
 type PersonDetail = Schema<'PersonDetail'>;
@@ -583,71 +582,6 @@ function HouseholdCard({ personId }: { personId: string }) {
       <div className="card-head">
         <h4 id="household-title">Household and pickup</h4>
         <Link to={`/people/${personId}/relationships`}>Manage</Link>
-      </div>
-      {body}
-    </section>
-  );
-}
-
-const KIND_SPORT: Partial<Record<string, string>> = {
-  camp: 'var(--kind-program)',
-  season: 'var(--kind-league)',
-  term: 'var(--kind-program)',
-  party: 'var(--kind-party)',
-  rental: 'var(--kind-rental)',
-};
-
-/** Activities: the person's enrollments as a participant (`GET /v1/enrollments`), newest first. */
-function ActivitiesCard({ personId }: { personId: string }) {
-  const enrollments = useApiQuery({
-    path: '/enrollments',
-    request: { query: { participantPersonId: personId, limit: 10 } },
-  });
-  let body;
-  if (!enrollments.data) {
-    body = (
-      <p className="caption">
-        {enrollments.error
-          ? presentationForError(enrollments.error) === 'unavailable'
-            ? 'Activities are not available to you.'
-            : `Activities could not load (${enrollments.error.code}).`
-          : 'Loading activities…'}
-      </p>
-    );
-  } else if (enrollments.data.items.length === 0) {
-    body = <p className="caption">Not enrolled in any program or league.</p>;
-  } else {
-    body = (
-      <ul className="list" aria-label="Activities">
-        {enrollments.data.items.map((e) => (
-          <li key={e.id}>
-            <span
-              className="activity-strip"
-              aria-hidden="true"
-              style={{
-                ['--sport' as string]: KIND_SPORT[e.offering?.kind ?? ''] ?? 'var(--kind-dropin)',
-              }}
-            />
-            <div className="row-text">
-              <span className="row-title">{e.offering?.name ?? 'An offering'}</span>
-              {e.offering ? (
-                <span className="caption">
-                  {OFFERING_KIND[e.offering.kind]} · {formatDate(e.offering.startsOn)} to{' '}
-                  {formatDate(e.offering.endsOn)}
-                </span>
-              ) : null}
-            </div>
-            <StatusBadge {...ENROLLMENT_STATUS[e.status]} />
-          </li>
-        ))}
-      </ul>
-    );
-  }
-  return (
-    <section className="card card-flush person-card" aria-labelledby="activities-title">
-      <div className="card-head">
-        <h4 id="activities-title">Activities</h4>
-        {enrollments.data?.nextCursor ? <span className="caption">Latest 10</span> : null}
       </div>
       {body}
     </section>

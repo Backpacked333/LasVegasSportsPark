@@ -685,6 +685,40 @@ export const CreatePriceRuleBody = withCommandMeta({
   .openapi('CreatePriceRuleRequest');
 export type CreatePriceRuleInput = z.infer<typeof CreatePriceRuleBody>;
 
+/**
+ * Why an automatic discount applies (park UI "promotions"): `early_registration` has a
+ * registration-before deadline, `multi_line` needs several eligible lines in one basket (siblings,
+ * several camp weeks), `automatic` applies to every eligible line.
+ */
+export const PromotionBasisSchema = z
+  .enum(['early_registration', 'multi_line', 'automatic'])
+  .openapi('PromotionBasis');
+export type PromotionBasis = z.infer<typeof PromotionBasisSchema>;
+
+/**
+ * An active automatic discount that applies to this offering at the view instant (SPK-PAY-003),
+ * shown as a badge in discovery. Promo codes are never listed (a code is given to the customer, not
+ * discovered). It is informational: the evaluated basket (`POST /discounts/evaluate`) and the quote
+ * decide what is actually applied, after stacking, caps, limits and per-person rules.
+ */
+export const PublicPromotionSchema = z
+  .object({
+    discountDefinitionId: z.uuid(),
+    name: z.string(),
+    description: z.string().nullable(),
+    basis: PromotionBasisSchema,
+    amountKind: DiscountAmountKindSchema,
+    /** Basis points for a percentage (10000 = 100%), minor units for a fixed amount. */
+    amountValue: z.number().int(),
+    currency: CurrencyCode.nullable(),
+    /** `multi_line`: the number of eligible lines the basket needs. */
+    minLines: z.number().int().nullable(),
+    /** The earliest of the registration-before deadline and the discount's effective end. */
+    availableUntil: Instant.nullable(),
+  })
+  .openapi('PublicPromotion');
+export type PublicPromotion = z.infer<typeof PublicPromotionSchema>;
+
 /** Public price summary shown in discovery: the effective base price and its charge lines. */
 export const PublicPriceSchema = z
   .object({
@@ -741,6 +775,8 @@ export const PublicOfferingSchema = z
      * (readable by any principal of the organization); null for other kinds or when none is.
      */
     bookingTermsPolicyVersionId: z.uuid().nullable(),
+    /** Automatic discounts that apply to this offering now (badges; never promo codes). */
+    promotions: z.array(PublicPromotionSchema),
   })
   .openapi('PublicOffering');
 export type PublicOffering = z.infer<typeof PublicOfferingSchema>;
@@ -910,6 +946,11 @@ export const ListPublicOfferingsQuery = PageRequestSchema.extend({
    * narrowed to their facilities; anyone else gets the public view. Default `public`.
    */
   view: z.enum(['public', 'staff']).default('public'),
+  /**
+   * Free-text search (customer discover): every word must appear, case-insensitively, in the
+   * offering's name, description, activity type, format or location label, or its program's name.
+   */
+  q: z.string().trim().min(2).max(100).optional(),
 }).refine((v) => v.from === undefined || v.to === undefined || v.from <= v.to, {
   message: 'from must not be after to',
   path: ['to'],
@@ -934,6 +975,8 @@ export const OfferingSessionSchema = z
     scheduledEnd: Instant,
     schedulingEventId: z.uuid().nullable(),
     capacityOverride: z.array(CapacityUnitSchema).nullable(),
+    /** The session's own place; null when it takes place where the offering is (0210). */
+    location: OfferingLocationSchema.nullable(),
     status: OfferingSessionStatusSchema,
     canceledAt: Instant.nullable(),
     cancelReason: z.string().nullable(),
@@ -950,6 +993,14 @@ export const CreateOfferingSessionBody = withCommandMeta({
   scheduledEnd: Instant,
   schedulingEventId: z.uuid().optional(),
   capacityOverride: CapacityUnitsSchema.optional(),
+  /**
+   * Where this session takes place when it is more specific than the offering (one pitch of the
+   * complex): a label and/or resources of the offering's facility.
+   */
+  location: OfferingLocationSchema.refine(
+    (v) => (v.label !== undefined && v.label.length > 0) || (v.resourceIds?.length ?? 0) > 0,
+    { message: 'a session location needs a label or at least one resource' },
+  ).optional(),
 })
   .refine((v) => new Date(v.scheduledStart) < new Date(v.scheduledEnd), {
     message: 'scheduledStart must be before scheduledEnd',
@@ -989,6 +1040,20 @@ export const ListFacilitySessionsQuery = PageRequestSchema.extend({
   );
 export type ListFacilitySessionsQuery = z.infer<typeof ListFacilitySessionsQuery>;
 
+/**
+ * Where a session takes place: the resources the scheduling event linked to it reserves (scheduling
+ * is the authority for reserved space), else the session's own location, else the offering's.
+ * Resource names come from the scheduling module; an id it does not know keeps a null name.
+ */
+export const FacilitySessionLocationSchema = z
+  .object({
+    source: z.enum(['scheduling_event', 'session', 'offering', 'none']),
+    label: z.string().nullable(),
+    resources: z.array(z.object({ id: z.uuid(), name: z.string().nullable() })),
+  })
+  .openapi('FacilitySessionLocation');
+export type FacilitySessionLocation = z.infer<typeof FacilitySessionLocationSchema>;
+
 /** One session in a facility's day, with what an attendance desk needs (SPK-SCHED-008 zone). */
 export const FacilitySessionSchema = z
   .object({
@@ -1003,6 +1068,16 @@ export const FacilitySessionSchema = z
     facilityId: z.uuid(),
     /** IANA time zone of the facility (SPK-SCHED-008). */
     timezone: z.string(),
+    /** Where the session takes place (arrival "Sessions now"). */
+    location: FacilitySessionLocationSchema,
+    /**
+     * The configured capacity of the session: its override, else the offering's units. The live
+     * fill (committed and held places) is the enrollment module's capacity pools.
+     */
+    capacity: z.object({
+      source: z.enum(['session', 'offering']),
+      units: z.array(CapacityUnitSchema),
+    }),
   })
   .openapi('FacilitySession');
 export type FacilitySession = z.infer<typeof FacilitySessionSchema>;

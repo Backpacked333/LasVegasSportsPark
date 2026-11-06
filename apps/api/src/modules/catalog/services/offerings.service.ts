@@ -88,6 +88,7 @@ import {
   OfferingPublicationMachine,
   type OfferingPublicationEvent,
 } from '../catalog.state-machines';
+import { loadPromotionCandidates, promotionsFor } from '../pricing/promotions';
 import { PoliciesService } from './policies.service';
 import { PriceRulesService } from './price-rules.service';
 
@@ -829,6 +830,8 @@ export class OfferingsService implements OfferingLookupPort {
               scheduling_event_id: null,
               capacity_override:
                 session.capacity_override === null ? null : json(session.capacity_override),
+              // 0210: the session's own place is configuration, so the draft copy keeps it.
+              location: session.location === null ? null : json(session.location),
               canceled_at: null,
               cancel_reason: null,
             })
@@ -950,6 +953,26 @@ export class OfferingsService implements OfferingLookupPort {
     if (query.format) q = q.where('offerings.format', '=', query.format);
     if (query.from) q = q.where(sql<boolean>`offerings.ends_on >= ${query.from}::date`);
     if (query.to) q = q.where(sql<boolean>`offerings.starts_on <= ${query.to}::date`);
+    // Customer discover search: every word, case-insensitively, in one of the offering's public
+    // text fields or its program's name (LIKE wildcards in the words are matched literally).
+    for (const word of searchWords(query.q)) {
+      const pattern = `%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      q = q.where(
+        sql<boolean>`(
+          offerings.name ilike ${pattern}
+          or coalesce(offerings.description, '') ilike ${pattern}
+          or offerings.activity_type ilike ${pattern}
+          or coalesce(offerings.format, '') ilike ${pattern}
+          or coalesce(offerings.location->>'label', '') ilike ${pattern}
+          or exists (
+            select 1 from programs p
+            where p.organization_id = offerings.organization_id
+              and p.id = offerings.program_id
+              and p.name ilike ${pattern}
+          )
+        )`,
+      );
+    }
     if (cursor) {
       q = q.where(
         sql<boolean>`(offerings.starts_on, offerings.id) > (${cursor.startsOn}::date, ${cursor.id}::uuid)`,
@@ -1704,18 +1727,27 @@ export class OfferingsService implements OfferingLookupPort {
       termKeys,
       at,
     );
+    // Discover badges: automatic discounts in force at the view instant (one read per page).
+    const promotionCandidates = await loadPromotionCandidates(db, organizationId, at);
     for (const row of rows) {
       const facility = facilities.get(row.facility_id);
       if (!facility) throw errors.internal(`facility ${row.facility_id} is not in the directory`);
+      const price = prices.get(row.id) ?? null;
       out.set(row.id, {
         ageBand: ageBands.get(row.program_id) ?? {},
-        price: prices.get(row.id) ?? null,
+        price,
         requiredFormPolicyVersionIds: forms.get(row.id) ?? [],
         facility: { id: facility.id, name: facility.name, timezone: facility.timezone },
         bookingTermsPolicyVersionId:
           BOOKING_OFFERING_KINDS.includes(row.kind) && row.booking_terms_key
             ? (terms.get(row.booking_terms_key) ?? null)
             : null,
+        promotions: promotionsFor(
+          { id: row.id, kind: row.kind, programId: row.program_id },
+          price,
+          promotionCandidates,
+          at,
+        ),
       });
     }
     return out;
@@ -1757,4 +1789,17 @@ export class OfferingsService implements OfferingLookupPort {
       .where('offerings.id', '=', id)
       .executeTakeFirst()) as unknown as OfferingRow | undefined;
   }
+}
+
+/** The distinct words of a discover search (at most 8), in order. */
+export function searchWords(q: string | undefined): string[] {
+  if (!q) return [];
+  return [
+    ...new Set(
+      q
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length > 0),
+    ),
+  ].slice(0, 8);
 }

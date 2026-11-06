@@ -420,3 +420,27 @@ Review findings fixed when the stage-3 branches were integrated (each with its t
   `GET /offerings/{id}/publication-check` answer another facility's draft exactly as an unknown id.
 - Cross-module journeys over this module: `apps/api/src/__tests__/journeys/spk-cond-00*.spec.ts`,
   `pos-to-accounting-export.spec.ts` (approved `tax_fee` versions).
+
+## Park UI gaps (docs/design/park-ui-redesign.md) — verified
+
+Tests in `__tests__/park-ui-gaps.spec.ts`.
+
+- **Session location** (SPK-CAT-001, migration `0210_catalog_session_location.sql`): `POST
+/v1/offerings/{id}/sessions` takes an optional `location` (`{ label?, resourceIds? }`, resources
+  of the offering's facility, checked against scheduling's inventory; VALIDATION_FAILED
+  `location.resourceIds` otherwise). The database refuses a location that is not an object, has a
+  blank or non-string label, a non-array or over-long `resourceIds`, or states neither. The
+  child-safe session view shows the label only. A copy keeps it. There is no command to change it
+  later (proposed).
+- **`GET /v1/sessions`** rows carry `location` (`scheduling_event`: the resources the linked event
+  reserves, scheduling being the authority; else `session`, else `offering`, else `none`; resource
+  names from scheduling) and `capacity` (`session` override or `offering` units). The live fill is
+  enrollment's capacity pools.
+- **Discover search**: `GET /v1/offerings?q=` (2..100 characters): every word, case-insensitively,
+  in the name, description, activity type, format, location label or program name; LIKE wildcards
+  are literal. No index: a sequential filter within the organization (fine at catalog sizes).
+- **Promotions** (SPK-PAY-003): `PublicOffering.promotions` lists active automatic discounts in
+  their window whose offering kind/id/program, early-registration deadline, minimum line amount and
+  currency the offering meets, with `basis` `early_registration` / `multi_line` / `automatic`.
+  Promo codes, exhausted limits and drafts are never listed. Badges are informational; the
+  evaluation (`POST /v1/discounts/evaluate`) and finance's quote decide what applies.

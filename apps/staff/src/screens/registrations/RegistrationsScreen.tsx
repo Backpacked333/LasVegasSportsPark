@@ -10,9 +10,11 @@ import { formatAge, presentationForError } from '@sportspark/api-client';
 import { Link } from 'react-router';
 import { useApiPages } from '../../api/useApiPages';
 import '../../features/grow/grow.css';
+import { useApiQuery } from '../../api/useApiQuery';
 import {
   APPLICATION_STATUS,
   REGISTRATION_INTENT,
+  WAITLIST_ENTRY_STATUS,
 } from '../../features/registration-finance/labels';
 import { OfferingName, PersonName } from '../../features/registration-finance/names';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
@@ -21,6 +23,7 @@ import { Icon, type IconName } from '../../ui/Icon';
 import { PageHeader } from '../../ui/Page';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { timeLeft } from './WaitlistScreen';
 import './registrations.css';
 
 const SCREENS: readonly {
@@ -157,6 +160,96 @@ function WaitingPreview() {
   );
 }
 
+/**
+ * Waitlists across offerings (`GET /v1/waitlist-queue`, SPK-REG-008): the live counts and the
+ * newest entries, each with its offering and, for an open offer, the time left until the API's
+ * expiry. Offers are made on the offering's waitlist screen (SCR-S-26).
+ */
+function WaitlistPreview() {
+  const now = useNow(30_000);
+  const queue = useApiQuery({ path: '/waitlist-queue', request: { query: { limit: PREVIEW } } });
+  let body;
+  if (!queue.data) {
+    body = (
+      <p className="caption">
+        {queue.error
+          ? presentationForError(queue.error) === 'unavailable'
+            ? 'Waitlists are not available to you.'
+            : `Waitlists could not load (${queue.error.code}). Open waitlist management to try again.`
+          : 'Loading waitlists…'}
+      </p>
+    );
+  } else if (queue.data.items.length === 0) {
+    body = (
+      <StateView
+        variant="empty"
+        title="Nobody waiting"
+        description="No waitlist has a waiting entry or an open offer."
+      />
+    );
+  } else {
+    body = (
+      <ul className="list approvals" aria-label="Waitlist entries">
+        {queue.data.items.map((entry) => {
+          const offered = entry.openOffer !== null;
+          return (
+            <li key={entry.id} className="approval" data-tone={offered ? 'pending' : 'info'}>
+              <span
+                className="icon-tile"
+                data-tone={offered ? 'pending' : 'info'}
+                aria-hidden="true"
+              >
+                <Icon name={offered ? 'timer' : 'hourglass_empty'} size={20} />
+              </span>
+              <div className="row-text">
+                <span className="row-title">
+                  <PersonName id={entry.participantPersonId} fallback="Participant" />
+                  <span className="approval-arrow"> → </span>
+                  {entry.offering ? (
+                    <Link to={`/registrations/waitlists/${entry.offering.id}`}>
+                      {entry.offering.name}
+                    </Link>
+                  ) : (
+                    <OfferingName id={entry.offeringId} />
+                  )}
+                </span>
+                <span className="caption">
+                  {entry.openOffer
+                    ? `Offer open · ${timeLeft(entry.openOffer.expiresAt, now)}`
+                    : entry.position !== null
+                      ? `Position ${entry.position} · joined ${formatAge(new Date(entry.joinedAt), now)}`
+                      : `Joined ${formatAge(new Date(entry.joinedAt), now)}`}
+                </span>
+              </div>
+              <span className="rf-actions">
+                <StatusBadge {...WAITLIST_ENTRY_STATUS[entry.status]} />
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+  const counts = queue.data?.counts;
+  return (
+    <section className="card card-flush queue-card" aria-labelledby="waitlists-title">
+      <div className="card-head">
+        <h3 id="waitlists-title">Waitlists</h3>
+        {counts ? (
+          <span className="queue-count">
+            {counts.waiting} waiting · {counts.offered} {counts.offered === 1 ? 'offer' : 'offers'}{' '}
+            open
+          </span>
+        ) : null}
+      </div>
+      <div className="queue-note">{body}</div>
+      <div className="card-foot">
+        <Link to="/registrations/waitlists">Open waitlist management →</Link>
+      </div>
+    </section>
+  );
+}
+
 export function RegistrationsScreen() {
   return (
     <section aria-labelledby="registrations-title" className="grow">
@@ -175,6 +268,7 @@ export function RegistrationsScreen() {
       <div className="split">
         <div className="split-main">
           <WaitingPreview />
+          <WaitlistPreview />
         </div>
         <div className="split-side">
           <section className="card card-flush" aria-labelledby="reg-screens-title">

@@ -223,6 +223,7 @@ export function offering(
     requiredFormPolicyVersionIds: [],
     entitlementDefinitionId: RENTAL_DEFINITION_ID,
     bookingTermsPolicyVersionId: TERMS_ID,
+    promotions: [],
     ...overrides,
   };
 }
@@ -507,6 +508,7 @@ export function session(
     scheduledEnd: '2026-10-31T02:30:00.000Z',
     schedulingEventId: null,
     capacityOverride: null,
+    location: null,
     status: 'scheduled',
     canceledAt: null,
     cancelReason: null,

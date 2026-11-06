@@ -233,6 +233,70 @@ describe('SCR-S-20 PersonRecordScreen', () => {
     ).toBe(PERSON_ID);
   });
 
+  it('SPK-ENTRY-005: each activity shows the attendance of its last sessions, glyph and words', async () => {
+    const session = (n: number, extra: Record<string, unknown>) => ({
+      sessionId: `0192f1a0-0000-7000-8000-00000000090${n}`,
+      sequence: n,
+      title: null,
+      scheduledStart: `2026-10-0${n}T17:00:00.000Z`,
+      scheduledEnd: `2026-10-0${n}T18:00:00.000Z`,
+      sessionStatus: 'scheduled',
+      attendance: null,
+      conflict: false,
+      ...extra,
+    });
+    const app = createTestApp({
+      routes: {
+        'GET /people/{id}': { status: 200, body: person() },
+        'GET /customers/{personId}/timeline': { status: 200, body: timeline() },
+        'GET /participants/{personId}/activities': {
+          status: 200,
+          body: {
+            personId: PERSON_ID,
+            items: [
+              {
+                enrollment: {
+                  id: GRANT_ID,
+                  offeringId: OTHER_ID,
+                  participantPersonId: PERSON_ID,
+                  status: 'confirmed',
+                  offering: {
+                    id: OTHER_ID,
+                    name: 'U10 fall program',
+                    kind: 'term',
+                    startsOn: '2026-09-01',
+                    endsOn: '2026-11-30',
+                    facilityId: OTHER_ID,
+                    timezone: 'America/Los_Angeles',
+                  },
+                },
+                // most recent first, as the API lists them
+                recentSessions: [
+                  session(4, { attendance: 'present' }),
+                  session(3, { sessionStatus: 'canceled' }),
+                  session(2, { conflict: true }),
+                  session(1, { attendance: 'absent' }),
+                ],
+                attendance: { held: 3, attended: 1, recorded: 3 },
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+      },
+    });
+    render(app.at(`/people/${PERSON_ID}`));
+    const activities = await screen.findByRole('list', { name: 'Activities' });
+    expect(within(activities).getByText('U10 fall program')).toBeInTheDocument();
+    expect(
+      within(activities).getByRole('img', {
+        name: /Last 4 sessions, oldest first: .* absent, .* under review, .* canceled, .* present/,
+      }),
+    ).toBeInTheDocument();
+    expect(within(activities).getByText('Attended 1 of 3 held · 3 recorded')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/enrollments')).toBe(false);
+  });
+
   it('SPK-SUPPORT-001: shows the person, contact points and the scoped timeline', async () => {
     const app = createTestApp({
       routes: {

@@ -18,6 +18,7 @@ import {
   type Principal,
   type Program,
   type PublicOffering,
+  type PublicPromotion,
 } from '@sportspark/contracts';
 import type {
   AcknowledgmentsTable,
@@ -137,6 +138,8 @@ export interface OfferingViewContext {
   facility: OfferingFacility;
   /** CAT-02: the approved booking terms version effective at the view instant (rental, party). */
   bookingTermsPolicyVersionId: string | null;
+  /** Automatic discounts that apply to the offering at the view instant (discover badges). */
+  promotions: PublicPromotion[];
 }
 
 export function capacityUnitsOf(row: { capacity_units: unknown[] }): CapacityUnit[] {
@@ -181,6 +184,7 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
     requiredFormPolicyVersionIds: ctx.requiredFormPolicyVersionIds,
     entitlementDefinitionId: row.entitlement_definition_id,
     bookingTermsPolicyVersionId: ctx.bookingTermsPolicyVersionId,
+    promotions: ctx.promotions,
   };
 }
 
@@ -309,6 +313,7 @@ export function toOfferingSession(row: Selectable<OfferingSessionsTable>): Offer
     scheduledEnd: iso(row.scheduled_end),
     schedulingEventId: row.scheduling_event_id,
     capacityOverride: (row.capacity_override as CapacityUnit[] | null) ?? null,
+    location: (row.location as OfferingLocation | null) ?? null,
     status: row.status,
     canceledAt: isoOrNull(row.canceled_at),
     cancelReason: row.cancel_reason,
@@ -329,6 +334,8 @@ export function toPublicOfferingSession(row: Selectable<OfferingSessionsTable>):
     ...full,
     schedulingEventId: null,
     capacityOverride: full.capacityOverride?.map((u) => ({ unit: u.unit, limit: u.limit })) ?? null,
+    // As in `PublicOffering` (`locationLabel` only): the place's name, not the scheduling resources.
+    location: full.location?.label ? { label: full.location.label } : null,
     cancelReason: null,
   };
 }

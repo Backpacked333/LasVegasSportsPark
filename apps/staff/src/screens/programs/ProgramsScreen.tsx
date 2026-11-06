@@ -39,6 +39,14 @@ import {
   type Pool,
   type ProgramSummary,
 } from './program-capacity';
+import {
+  AgeSplit,
+  ageLabel,
+  totalsOf,
+  useEnrollmentSummaries,
+  waitlistText,
+  type EnrollmentSummary,
+} from './program-enrollment';
 import './programs.css';
 
 type ProgramStatus = Schema<'ProgramStatus'>;
@@ -231,12 +239,14 @@ function useProgramCapacity() {
 function ProgramCard({
   program,
   summary,
+  enrollment,
   capacityKnown,
   selected,
   onSelect,
 }: {
   program: Program;
   summary: ProgramSummary | null;
+  enrollment: Map<string, EnrollmentSummary> | null;
   capacityKnown: boolean;
   selected: boolean;
   onSelect: () => void;
@@ -246,6 +256,7 @@ function ProgramCard({
   const first = offerings[0];
   const last = offerings[offerings.length - 1];
   const where = first ? (first.locationLabel ?? first.facility.name) : null;
+  const totals = enrollment ? totalsOf(offerings.flatMap((o) => enrollment.get(o.id) ?? [])) : null;
   return (
     <li className="program-card" data-sport={sport} data-selected={selected}>
       <div className="program-card-body">
@@ -299,6 +310,9 @@ function ProgramCard({
             <span>{offerings.length === 1 ? '1 offering' : `${offerings.length} offerings`}</span>
           )}
           {summary && summary.openCount > 0 ? ` · ${summary.openCount} open` : ''}
+          {totals && totals.waiting + totals.offered > 0
+            ? ` · ${waitlistText(totals.waiting, totals.offered)}`
+            : ''}
         </span>
         <button
           type="button"
@@ -318,10 +332,14 @@ function ReadinessRail({
   program,
   summary,
   pools,
+  enrollment,
+  enrollmentUnavailable,
 }: {
   program: Program;
   summary: ProgramSummary;
   pools: readonly Pool[];
+  enrollment: Map<string, EnrollmentSummary> | null;
+  enrollmentUnavailable: boolean;
 }) {
   const { offerings } = summary;
   const first = offerings[0];
@@ -334,6 +352,7 @@ function ReadinessRail({
   const programPools = offerings.flatMap((o) => poolsOf(o.id, pools));
   const staff = staffing(programPools);
   const forms = new Set(live.flatMap((o) => o.requiredFormPolicyVersionIds)).size;
+  const totals = enrollment ? totalsOf(live.flatMap((o) => enrollment.get(o.id) ?? [])) : null;
   const closes = live
     .map((o) => o.registrationClosesAt)
     .filter((t): t is string => t !== null && t !== undefined)
@@ -376,9 +395,16 @@ function ReadinessRail({
                   ) : (
                     <span className="caption">No capacity pool.</span>
                   )}
-                  <Link className="caption" to={`/registrations/waitlists/${o.id}`}>
-                    Waitlist of {o.name}
-                  </Link>
+                  {enrollment?.get(o.id) ? <AgeSplit summary={enrollment.get(o.id)!} /> : null}
+                  <span className="caption readiness-waitlist">
+                    <Link to={`/registrations/waitlists/${o.id}`}>Waitlist of {o.name}</Link>
+                    {enrollment?.get(o.id)
+                      ? ` · ${waitlistText(
+                          enrollment.get(o.id)!.waitlist.waiting,
+                          enrollment.get(o.id)!.waitlist.offered,
+                        )}`
+                      : null}
+                  </span>
                 </li>
               );
             })}
@@ -414,15 +440,49 @@ function ReadinessRail({
             label="Required forms"
             value={forms === 0 ? 'None' : String(forms)}
           />
+          {totals && forms > 0 ? (
+            <CheckRow
+              tone={
+                totals.formParticipants === 0
+                  ? 'neutral'
+                  : totals.participantsComplete >= totals.formParticipants
+                    ? 'success'
+                    : 'warning'
+              }
+              label="Forms complete"
+              value={
+                totals.formParticipants === 0
+                  ? 'Nobody enrolled'
+                  : `${totals.participantsComplete} of ${totals.formParticipants} participants`
+              }
+            />
+          ) : null}
+          {totals ? (
+            <CheckRow
+              tone={totals.waiting + totals.offered > 0 ? 'pending' : 'neutral'}
+              label="Waitlist"
+              value={waitlistText(totals.waiting, totals.offered)}
+            />
+          ) : null}
           <CheckRow
             tone="info"
             label="Registration closes"
             value={closes ? formatInstant(closes, zone) : 'Not set'}
           />
         </ul>
-        <p className="caption">
-          Form completion and age-group splits are not listed by the API, so they are not shown.
-        </p>
+        {totals && totals.ages.length > 0 ? (
+          <p className="caption">
+            Enrolled by age:{' '}
+            {totals.ages.map((a) => `${ageLabel(a.ageYears)}: ${a.count}`).join(' · ')}. Ages are
+            counted in whole years on each offering&rsquo;s reference date; age bands are pending{' '}
+            {PENDING.youthStaffing.ids.join(', ')}.
+          </p>
+        ) : null}
+        {enrollmentUnavailable && !enrollment ? (
+          <p className="caption">
+            Enrollment by age, form completion and waitlist counts are not available to you.
+          </p>
+        ) : null}
       </div>
       <div className="rail-actions">
         <Link className="button button-primary button-sm" to={`/programs/${program.id}`}>
@@ -460,6 +520,11 @@ export function ProgramsScreen() {
     }
     return map;
   }, [programs.data, capacity.offerings, capacity.pools]);
+  const offeringIds = useMemo(
+    () => (capacity.offerings ?? []).map((o) => o.id),
+    [capacity.offerings],
+  );
+  const enrollment = useEnrollmentSummaries(offeringIds);
   const items = programs.data ?? [];
   const selected = items.find((p) => p.id === selectedId) ?? items[0] ?? null;
   const selectedSummary = selected ? summaries.get(selected.id) : undefined;
@@ -517,6 +582,7 @@ export function ProgramsScreen() {
                     key={program.id}
                     program={program}
                     summary={summaries.get(program.id) ?? null}
+                    enrollment={enrollment.byOffering}
                     capacityKnown={capacity.capacityKnown}
                     selected={selected?.id === program.id}
                     onSelect={() => setSelectedId(program.id)}
@@ -539,6 +605,8 @@ export function ProgramsScreen() {
               program={selected}
               summary={selectedSummary}
               pools={capacity.pools ?? []}
+              enrollment={enrollment.byOffering}
+              enrollmentUnavailable={enrollment.unavailable}
             />
           ) : null}
           <CreateProgram />

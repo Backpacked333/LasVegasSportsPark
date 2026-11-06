@@ -855,3 +855,32 @@ bookingTermsPolicyVersionId`). **Pending** finance (FIN) and DEC-073.
 - Journeys over this module: `spk-cond-001` to `spk-cond-003`, `capability-switches`,
   `spk-reg-008-waitlist-offer`, `spk-youth-005-progression`, `spk-at-023-interrupted-payment` in
   `apps/api/src/__tests__/journeys/`.
+
+## Park UI overview reads (docs/design/park-ui-redesign.md) — verified
+
+Read-only (no idempotency key), in `services/enrollment-overview.service.ts`; tests in
+`__tests__/park-ui-overview.spec.ts`. Contracts in `packages/contracts/src/api/enrollment-overview.ts`.
+
+- `GET /v1/offering-enrollment-summaries?offeringIds=` (at most 100):
+  `enrollment.read_enrollment_summary` (READERS), decided per offering facility; the others are
+  listed in `unavailableOfferingIds` with unknown ids. Per offering: confirmed and pending
+  enrollments by whole-year age on the eligibility reference date (null = no date of birth; no
+  bands, DEC-003 pending), required-form completion (catalog `acknowledgedSubjects`), waiting and
+  offered waitlist entries. Counts only (§4.14).
+- `GET /v1/waitlist-queue?status&offeringId&facilityId&participantPersonId`:
+  `enrollment.manage_waitlist`, narrowed to the managing roles' facilities; newest first, each with
+  its offering and open offer, plus `counts` over the filter.
+- `GET /v1/participants/{personId}/activities`: `enrollment.read_participant_activity` (staff roles
+  holding both read_enrollment and entry's read_attendance, the participant, a guardian with
+  `view`; protected NOT_FOUND otherwise). Each enrollment with its last 8 started sessions and the
+  effective attendance from entry's `ATTENDANCE_PORT`, resolved lazily through `ModuleRef` (entry
+  imports this module, so the port file is imported directly, never entry's index). Without entry
+  in the application, `attendance` is null. People merged into the participant are included.
+- `GET /v1/me/offering-suggestions?participantPersonId=`: for someone the caller may register
+  (`enrollment.apply` customer subjects; protected NOT_FOUND otherwise). Published (not paused)
+  offerings ending today or later whose program age band contains the participant's age on the
+  offering's reference date, excluding offerings with a live enrollment or waitlist entry. Age is
+  the only input; `basis: date_of_birth_unknown` when none is recorded. Not an eligibility decision.
+- `GET /v1/offering-availability?offeringIds=` (at most 20): places left (capacity minus committed
+  and held) of the tightest active offering-level pool; published offerings for anyone of the
+  organization, unpublished ones for staff with `enrollment.read_capacity` there.
