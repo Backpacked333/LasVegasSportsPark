@@ -8,6 +8,11 @@
   flex-direction: column;
   gap: 20px;
 }
+@media (max-width: 640px) {
+  .fin .kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .fin-card .card-head h3 {
   font-size: 20px;
 }
