@@ -20,7 +20,7 @@
  *   again" are disabled with "Needs a connection" and nothing is queued or sent later. "Try again"
  *   resends exactly the proposal that was sent (same body, so the same idempotency key, §4.9).
  */
-import type { Schema } from '@sportspark/api-client';
+import { formatMinorUnits, presentationForError, type Schema } from '@sportspark/api-client';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -55,6 +55,9 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { StaffPicker, type StaffRole } from '../../features/operations/StaffPicker';
 import { AssignmentTargetPicker, type ChosenTarget, type TargetType } from './AssignmentTarget';
+import { CompeteHeader, initials } from '../../features/competition/page';
+import { CardHead } from '../../ui/Page';
+import './staff.css';
 
 type Assignment = Schema<'Assignment'>;
 type AssignmentStatus = Schema<'AssignmentStatus'>;
@@ -69,32 +72,97 @@ const STATUSES: readonly AssignmentStatus[] = [
   'completed',
 ];
 
+/** Assignment states whose slot can be offered to someone else (as on the assignment page). */
+const REPLACEABLE: ReadonlySet<AssignmentStatus> = new Set(['offered', 'accepted', 'declined']);
+
+/** "18:00" and "Sat 24 Oct" in the facility zone, for the condensed time column. */
+function clockParts(iso: string, timeZone: string | null): { time: string; day: string } {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return { time: iso, day: '' };
+  const zone = timeZone ? { timeZone } : {};
+  try {
+    return {
+      time: new Intl.DateTimeFormat('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        ...zone,
+      }).format(date),
+      day: new Intl.DateTimeFormat('en-GB', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        ...zone,
+      }).format(date),
+    };
+  } catch {
+    return { time: date.toISOString().slice(11, 16), day: '' };
+  }
+}
+
 export function AssignmentsScreen() {
   const facility = useOperatingFacility();
   const [proposal, setProposal] = useState<ProposalSeed | null>(null);
+  const [replacing, setReplacing] = useState<Assignment | null>(null);
   return (
-    <section aria-labelledby="assignments-title">
-      <h2 id="assignments-title">Assignments and replacement</h2>
-      <AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />
-      {facility.facilityId ? (
-        <UncoveredSlots
-          facilityId={facility.facilityId}
-          today={facility.localDate}
-          timezone={facility.timezone}
-          onPropose={setProposal}
-        />
-      ) : (
-        <p className="caption">
-          Choose a facility in the header to see its uncovered required slots.
-        </p>
-      )}
-      <div className="ops-actions">
-        <Button variant="secondary" onClick={() => setProposal(proposal ? null : {})}>
-          {proposal ? 'Close the proposal form' : 'Propose an assignment'}
-        </Button>
+    <section aria-labelledby="assignments-title" className="compete staff-area">
+      <CompeteHeader
+        eyebrow="Compete · Staff and officials"
+        title="Assignments and replacement"
+        titleId="assignments-title"
+        intro="Cover every required official and coach slot. Proposed and offered never count as covering; only an accepted assignment does."
+        actions={<AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />}
+      />
+      <div className="season-grid">
+        <div className="season-main">
+          {facility.facilityId ? (
+            <UncoveredSlots
+              facilityId={facility.facilityId}
+              today={facility.localDate}
+              timezone={facility.timezone}
+              onPropose={setProposal}
+            />
+          ) : (
+            <div className="state">
+              <StatusBadge tone="neutral" label="No facility chosen" />
+              <p className="caption">
+                Choose a facility in the header to see its uncovered required slots.
+              </p>
+            </div>
+          )}
+          <AssignmentList
+            replacingId={replacing?.id ?? null}
+            onReplace={(a) => setReplacing((current) => (current?.id === a.id ? null : a))}
+          />
+        </div>
+        <aside className="season-side" aria-label="Cover a slot">
+          <div className="ops-actions">
+            <Button
+              variant={proposal ? 'secondary' : 'primary'}
+              onClick={() => setProposal(proposal ? null : {})}
+            >
+              {proposal ? 'Close the proposal form' : 'Propose an assignment'}
+            </Button>
+          </div>
+          {proposal ? <ProposeForm key={JSON.stringify(proposal)} seed={proposal} /> : null}
+          {replacing ? (
+            <ReplacementCandidatesCard
+              key={replacing.id}
+              assignment={replacing}
+              onClose={() => setReplacing(null)}
+            />
+          ) : (
+            <section className="card" aria-labelledby="replace-hint-title">
+              <h3 id="replace-hint-title">Find a replacement</h3>
+              <p className="caption">
+                Choose &ldquo;Find a replacement&rdquo; on an offered, accepted or declined
+                assignment to see who could cover it, ranked by the service&apos;s checks of
+                qualification, availability and conflicts.
+              </p>
+            </section>
+          )}
+          <FeeSummary />
+        </aside>
       </div>
-      {proposal ? <ProposeForm key={JSON.stringify(proposal)} seed={proposal} /> : null}
-      <AssignmentList />
     </section>
   );
 }
@@ -133,70 +201,103 @@ function UncoveredSlots({
   const count = (row: ReportRow, key: string) =>
     typeof row[key] === 'number' ? (row[key] as number) : 0;
   return (
-    <section className="ops-section" aria-labelledby="uncovered-title">
-      <h3 id="uncovered-title">Uncovered required slots (next seven days)</h3>
-      <QueryBoundary
-        query={report}
-        label="uncovered slots"
-        isEmpty={(data) => data.rows.every((r) => count(r, 'uncovered') === 0)}
-        empty={{
-          title: 'Nothing uncovered',
-          description:
-            'Every required official and coach slot in the next seven days has an accepted assignment.',
-        }}
-      >
-        {(data) => (
-          <ul className="list" aria-label="Uncovered slots">
-            {data.rows
-              .filter((r) => count(r, 'uncovered') > 0)
-              .map((row) => (
-                <li key={`${text(row, 'requirementId')}-${text(row, 'role')}`}>
-                  <div className="row-text">
-                    <span className="row-title">{text(row, 'title')}</span>
-                    <span className="caption">
-                      {text(row, 'start')
-                        ? formatInstant(text(row, 'start'), data.scope.timezone ?? timezone)
-                        : ''}{' '}
-                      · {humanize(text(row, 'role'))}
-                    </span>
-                    <StatusBadge tone="danger" label={`${count(row, 'uncovered')} uncovered`} />
-                    <span className="caption">
-                      {count(row, 'required')} required, {count(row, 'accepted')} accepted; offered{' '}
-                      {count(row, 'offered')} and proposed {count(row, 'proposed')} do not cover.
-                    </span>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    aria-label={`Propose someone for ${text(row, 'title')}, ${humanize(text(row, 'role'))}`}
-                    onClick={() =>
-                      onPropose({
-                        targetType: text(row, 'targetType'),
-                        targetId: text(row, 'targetId'),
-                        title: text(row, 'title'),
-                        when: text(row, 'start')
-                          ? formatInstant(text(row, 'start'), data.scope.timezone ?? timezone)
-                          : undefined,
-                        kind: text(row, 'kind'),
-                        role: text(row, 'role'),
-                      })
-                    }
-                  >
-                    Propose someone
-                  </Button>
-                </li>
-              ))}
-          </ul>
-        )}
-      </QueryBoundary>
+    <section className="card card-flush" aria-labelledby="uncovered-title">
+      <CardHead aside={<span className="caption">Propose someone for an open slot</span>}>
+        <h3 id="uncovered-title">Uncovered required slots (next seven days)</h3>
+      </CardHead>
+      <div className="card-body">
+        <QueryBoundary
+          query={report}
+          label="uncovered slots"
+          isEmpty={(data) => data.rows.every((r) => count(r, 'uncovered') === 0)}
+          empty={{
+            title: 'Nothing uncovered',
+            description:
+              'Every required official and coach slot in the next seven days has an accepted assignment.',
+          }}
+        >
+          {(data) => {
+            const zone = data.scope.timezone ?? timezone;
+            return (
+              <ul className="cover-list" aria-label="Uncovered slots">
+                {data.rows
+                  .filter((r) => count(r, 'uncovered') > 0)
+                  .map((row) => {
+                    const start = text(row, 'start');
+                    const when = start ? clockParts(start, zone) : null;
+                    return (
+                      <li
+                        key={`${text(row, 'requirementId')}-${text(row, 'role')}`}
+                        data-tone="danger"
+                      >
+                        <span className="cover-time">
+                          {when?.time ?? 'No time'}
+                          {when ? <small>{when.day}</small> : null}
+                        </span>
+                        <span className="cover-what">
+                          <span className="row-title">{text(row, 'title')}</span>
+                          <span className="caption">
+                            {start ? formatInstant(start, zone) : ''} ·{' '}
+                            {humanize(text(row, 'role'))}
+                          </span>
+                        </span>
+                        <span className="cover-role">{humanize(text(row, 'role'))}</span>
+                        <span className="cover-who">
+                          <StatusBadge
+                            tone="danger"
+                            label={`${count(row, 'uncovered')} uncovered`}
+                          />
+                        </span>
+                        <span className="cover-detail caption">
+                          {count(row, 'required')} required, {count(row, 'accepted')} accepted;
+                          offered {count(row, 'offered')} and proposed {count(row, 'proposed')} do
+                          not cover.
+                        </span>
+                        <span className="cover-detail">
+                          <Button
+                            variant="primary"
+                            className="button-sm"
+                            aria-label={`Propose someone for ${text(row, 'title')}, ${humanize(text(row, 'role'))}`}
+                            onClick={() =>
+                              onPropose({
+                                targetType: text(row, 'targetType'),
+                                targetId: text(row, 'targetId'),
+                                title: text(row, 'title'),
+                                when: start ? formatInstant(start, zone) : undefined,
+                                kind: text(row, 'kind'),
+                                role: text(row, 'role'),
+                              })
+                            }
+                          >
+                            Propose someone
+                          </Button>
+                        </span>
+                      </li>
+                    );
+                  })}
+              </ul>
+            );
+          }}
+        </QueryBoundary>
+      </div>
     </section>
   );
 }
 
-function AssignmentList() {
+function AssignmentList({
+  replacingId,
+  onReplace,
+}: {
+  replacingId: string | null;
+  onReplace: (a: Assignment) => void;
+}) {
   const [status, setStatus] = useState<AssignmentStatus | ''>('');
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const now = useNow(60_000);
-  const from = useMemo(() => new Date(now.getTime() - 86_400_000).toISOString(), [now]);
+  // `now` is a new Date on every render with a real clock: the window moves by whole minutes so
+  // the query key stays put between renders (otherwise every render starts a new read).
+  const minute = Math.floor(now.getTime() / 60_000) * 60_000;
+  const from = useMemo(() => new Date(minute - 86_400_000).toISOString(), [minute]);
   const list = useApiQuery({
     path: '/assignments',
     request: { query: { status: status || undefined, from, limit: 50, cursor } },
@@ -205,72 +306,267 @@ function AssignmentList() {
     useMemo(() => (list.data?.items ?? []).map((a) => a.personId), [list.data]),
   );
   return (
-    <section className="ops-section" aria-labelledby="assignment-list-title">
-      <h3 id="assignment-list-title">Assignments from yesterday on</h3>
-      <SelectField
-        label="Show"
-        value={status}
-        onChange={(v) => {
-          setStatus(v as AssignmentStatus | '');
-          setCursor(undefined);
-        }}
-        placeholder="Every state"
-        options={STATUSES.map((s) => ({ value: s, label: ASSIGNMENT_STATUS[s].label }))}
-      />
-      <QueryBoundary
-        query={list}
-        label="assignments"
-        isEmpty={(data) => data.items.length === 0}
-        empty={{
-          title: 'No assignments',
-          description: 'Assignments you propose or offer appear here.',
-        }}
-        unavailableOffline={['proposing, offering and withdrawing assignments']}
+    <section className="card card-flush" aria-labelledby="assignment-list-title">
+      <CardHead
+        aside={
+          <div className="toolbar">
+            <SelectField
+              label="Show"
+              value={status}
+              onChange={(v) => {
+                setStatus(v as AssignmentStatus | '');
+                setCursor(undefined);
+              }}
+              placeholder="Every state"
+              options={STATUSES.map((s) => ({ value: s, label: ASSIGNMENT_STATUS[s].label }))}
+            />
+          </div>
+        }
       >
-        {(data) => (
-          <>
-            <ul className="list" aria-label="Assignments">
-              {data.items.map((a) => (
-                <AssignmentRow key={a.id} assignment={a} name={nameOf(names, a.personId)} />
-              ))}
-            </ul>
-            <div className="ops-actions">
-              {cursor ? (
-                <Button variant="secondary" onClick={() => setCursor(undefined)}>
-                  Back to the first page
-                </Button>
-              ) : null}
-              {data.nextCursor ? (
-                <Button variant="secondary" onClick={() => setCursor(data.nextCursor ?? undefined)}>
-                  Next page
-                </Button>
-              ) : null}
-            </div>
-          </>
-        )}
-      </QueryBoundary>
+        <h3 id="assignment-list-title">Assignments from yesterday on</h3>
+      </CardHead>
+      <div className="card-body">
+        <QueryBoundary
+          query={list}
+          label="assignments"
+          isEmpty={(data) => data.items.length === 0}
+          empty={{
+            title: 'No assignments',
+            description: 'Assignments you propose or offer appear here.',
+          }}
+          unavailableOffline={['proposing, offering and withdrawing assignments']}
+        >
+          {(data) => (
+            <>
+              <ul className="cover-list" aria-label="Assignments">
+                {[...data.items]
+                  .sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart))
+                  .map((a) => (
+                    <AssignmentRow
+                      key={a.id}
+                      assignment={a}
+                      name={nameOf(names, a.personId)}
+                      selected={replacingId === a.id}
+                      onReplace={onReplace}
+                    />
+                  ))}
+              </ul>
+              <div className="ops-actions">
+                {cursor ? (
+                  <Button variant="secondary" onClick={() => setCursor(undefined)}>
+                    Back to the first page
+                  </Button>
+                ) : null}
+                {data.nextCursor ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => setCursor(data.nextCursor ?? undefined)}
+                  >
+                    Next page
+                  </Button>
+                ) : null}
+              </div>
+            </>
+          )}
+        </QueryBoundary>
+      </div>
     </section>
   );
 }
 
-function AssignmentRow({ assignment: a, name }: { assignment: Assignment; name: string }) {
+function AssignmentRow({
+  assignment: a,
+  name,
+  selected,
+  onReplace,
+}: {
+  assignment: Assignment;
+  name: string;
+  selected: boolean;
+  onReplace: (a: Assignment) => void;
+}) {
   const zone = useFacilityZone(a.facilityId);
   const badge = ASSIGNMENT_STATUS[a.status];
+  const when = clockParts(a.scheduledStart, zone ?? null);
+  const title = `${a.targetTitle}: ${humanize(a.role)} ${a.slot > 1 ? `(slot ${a.slot})` : ''}`;
   return (
-    <li>
-      <div className="row-text">
+    <li data-selected={selected} data-tone={a.status === 'declined' ? 'danger' : undefined}>
+      <span className="cover-time">
+        {when.time}
+        <small>{when.day}</small>
+      </span>
+      <span className="cover-what">
         <Link to={`/staff/assignments/${a.id}`} className="row-title">
-          {a.targetTitle}: {humanize(a.role)} {a.slot > 1 ? `(slot ${a.slot})` : ''}
+          {title}
         </Link>
         <span className="caption">
           {formatRange(a.scheduledStart, a.scheduledEnd, zone)} · {name} · {humanize(a.engagement)}
         </span>
+      </span>
+      <span className="cover-role">{humanize(a.role)}</span>
+      <span className="cover-who">
         <StatusBadge tone={badge.tone} label={badge.label} />
-      </div>
+        {REPLACEABLE.has(a.status) ? (
+          <Button
+            variant={selected ? 'primary' : 'secondary'}
+            className="button-sm"
+            aria-pressed={selected}
+            aria-label={`Find a replacement for ${a.targetTitle}, ${humanize(a.role)}`}
+            onClick={() => onReplace(a)}
+          >
+            Find a replacement
+          </Button>
+        ) : null}
+      </span>
     </li>
   );
 }
 
+const REASON_RANK: Record<Schema<'ReplacementCandidateReason'>['severity'], number> = {
+  positive: 2,
+  info: 0,
+  warning: -1,
+  blocking: -10,
+};
+
+type Candidate = Schema<'ReplacementCandidate'>;
+
+/** Eligible first; then more positive and fewer warning reasons; then the API's order. */
+export function rankCandidates(candidates: readonly Candidate[]): Candidate[] {
+  const score = (c: Candidate) =>
+    (c.eligible ? 100 : 0) + c.reasons.reduce((sum, r) => sum + REASON_RANK[r.severity], 0);
+  return candidates
+    .map((c, i) => ({ c, i }))
+    .sort((x, y) => score(y.c) - score(x.c) || x.i - y.i)
+    .map((x) => x.c);
+}
+
+/**
+ * Ranked replacement candidates for one assignment (`GET /v1/assignments/{id}/replacements`,
+ * SPK-AT-012): availability, qualification and conflicts in one line per person, as the service
+ * evaluated them. Offering needs a reason and the expected revision, so it happens on the
+ * assignment's own page; this card links there.
+ */
+function ReplacementCandidatesCard({
+  assignment: a,
+  onClose,
+}: {
+  assignment: Assignment;
+  onClose: () => void;
+}) {
+  const zone = useFacilityZone(a.facilityId);
+  const candidates = useApiQuery({
+    path: '/assignments/{id}/replacements',
+    request: { path: { id: a.id } },
+  });
+  const badge = ASSIGNMENT_STATUS[a.status];
+  return (
+    <section className="card card-flush" aria-labelledby="replace-title">
+      <div className="cand-head" data-tone={a.status === 'declined' ? undefined : 'neutral'}>
+        <span className="cand-kicker">
+          {a.status === 'declined' ? 'Needs cover' : 'Replacement'} · {badge.label}
+        </span>
+        <h3 id="replace-title" className="cand-title">
+          {humanize(a.role)} · {a.targetTitle}
+        </h3>
+        <span className="caption">{formatRange(a.scheduledStart, a.scheduledEnd, zone)}</span>
+      </div>
+      <QueryBoundary
+        query={candidates}
+        label="replacement candidates"
+        isEmpty={(data) => data.candidates.length === 0}
+        empty={{
+          title: 'No candidates',
+          description:
+            'Nobody holds the required qualifications and is free at this time. The slot stays uncovered until someone is assigned.',
+        }}
+        unavailableOffline={['offering the slot to a replacement']}
+      >
+        {(data) => (
+          <>
+            <p className="label-caps card-pad">
+              Best matches
+              {data.requiredQualifications.length > 0
+                ? ` · requires ${data.requiredQualifications.map(humanize).join(', ')}`
+                : ''}
+            </p>
+            <ol className="cand-list" aria-label="Ranked replacement candidates">
+              {rankCandidates(data.candidates).map((c, i) => (
+                <li key={c.personId} data-eligible={c.eligible}>
+                  <span className="rank" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  <span className="cand-avatar" aria-hidden="true">
+                    {initials(c.displayName)}
+                  </span>
+                  <span className="cand-text">
+                    <span className="row-title">{c.displayName}</span>
+                    <span className="cand-meta">
+                      {c.eligible ? 'Eligible' : 'Not eligible'}
+                      {c.reasons.length > 0
+                        ? ` · ${c.reasons.map((r) => r.message).join(' · ')}`
+                        : ''}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <p className="card-note">Evaluated {formatInstant(data.evaluatedAt, zone)}</p>
+          </>
+        )}
+      </QueryBoundary>
+      <div className="card-body">
+        <div className="actions-row">
+          <Link className="button button-primary button-sm" to={`/staff/assignments/${a.id}`}>
+            Offer the slot on the assignment page
+          </Link>
+          <Button variant="secondary" className="button-sm" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Fee claims waiting for approval (`GET /v1/fee-submissions?status=submitted`), per currency. */
+function FeeSummary() {
+  const fees = useApiQuery({
+    path: '/fee-submissions',
+    request: { query: { status: 'submitted', limit: 50 } },
+  });
+  const items = fees.data?.items ?? [];
+  const totals = new Map<string, number>();
+  for (const f of items)
+    totals.set(f.currency, (totals.get(f.currency) ?? 0) + f.submittedAmountMinor);
+  return (
+    <section className="card" aria-labelledby="fee-summary-title">
+      <div className="fee-summary-head">
+        <h3 id="fee-summary-title">Fee approvals</h3>
+        {totals.size > 0 ? (
+          <strong>
+            {[...totals].map(([currency, minor]) => formatMinorUnits(minor, currency)).join(' + ')}
+            {fees.data?.nextCursor ? '+' : ''}
+          </strong>
+        ) : null}
+      </div>
+      <p className="caption">
+        {fees.error && !fees.data
+          ? presentationForError(fees.error) === 'unavailable'
+            ? 'Fee claims are not available to you.'
+            : `Fee claims could not load (${fees.error.code}).`
+          : !fees.data
+            ? 'Checking fee claims…'
+            : items.length === 0
+              ? 'No fee claims are waiting for approval.'
+              : `${items.length}${fees.data.nextCursor ? '+' : ''} ${items.length === 1 ? 'claim' : 'claims'} waiting for approval.`}
+      </p>
+      <Link className="button button-secondary button-sm" to="/staff/fees">
+        Review fee claims
+      </Link>
+    </section>
+  );
+}
 const KIND_OPTIONS = ['official', 'coach', 'supervisor', 'organizer'].map((v) => ({
   value: v,
   label: humanize(v),

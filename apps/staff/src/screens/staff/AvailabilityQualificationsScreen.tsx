@@ -19,6 +19,8 @@ import { useMemo, useState } from 'react';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { AreaTabs, STAFF_TABS } from '../../features/operations/AreaTabs';
+import { CompeteHeader } from '../../features/competition/page';
+import './staff.css';
 import { useKeyedCommands } from '../../features/operations/commands';
 import { nameOf, useOperatingFacility, usePersonNames } from '../../features/operations/context';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
@@ -82,9 +84,14 @@ export function AvailabilityQualificationsScreen() {
   const names = usePersonNames(people);
   const [availabilityFor, setAvailabilityFor] = useState<{ id: string; name: string } | null>(null);
   return (
-    <section aria-labelledby="availability-title">
-      <h2 id="availability-title">Availability and qualifications</h2>
-      <AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />
+    <section aria-labelledby="availability-title" className="compete staff-area">
+      <CompeteHeader
+        eyebrow="Compete · Staff and officials"
+        title="Availability and qualifications"
+        titleId="availability-title"
+        intro="Who is free and qualified to officiate or coach: qualification evidence with its expiry, and each person’s availability windows."
+        actions={<AreaTabs label="Staff and officials screens" tabs={STAFF_TABS} />}
+      />
       <section className="ops-section" aria-labelledby="qualifications-title">
         <h3 id="qualifications-title">Qualification evidence</h3>
         <StateView
