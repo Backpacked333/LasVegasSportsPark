@@ -9,7 +9,8 @@ invitations, claims, staff memberships, disputed-access reviews, duplicate candi
 **Migration range:** `packages/db/migrations/0100_identity_core.sql` … `0199` (present: `0100`,
 `0101_identity_invitation_subjects`, `0102_identity_suspension_window`,
 `0103_identity_grant_suspensions`, `0104_identity_invitation_decline`,
-`0105_identity_expiry_indexes`, `0180_identity_org_scoped_kernel_fks`)
+`0105_identity_expiry_indexes`, `0180_identity_org_scoped_kernel_fks`,
+`0181_identity_care_notes_and_staff_access`)
 
 **Status: implemented** (verified by `apps/api/src/modules/identity/__tests__` and the unit specs
 next to the code). Statements below are verified unless marked proposed or pending.
@@ -368,7 +369,43 @@ database's precision (`exactInstantOf` in `kernel/database/keyset.ts`) and compa
 instead of the rest of a millisecond being skipped. A cursor whose instant PostgreSQL cannot
 represent reads as the first page, never a server fault (`__tests__/keyset-paging.spec.ts`).
 
+## Care notes, staff access reviews and staff invitations (migration 0181)
+
+**Verified** by `__tests__/care-notes.spec.ts`, `__tests__/staff-access.spec.ts` and entry's
+`__tests__/scan-care-notes.spec.ts`:
+
+- **Care notes** (§1.7 "not a medical assessment system", SPK-DISC-005, §4.14): `person_care_notes`
+  holds operational notes only, kind `allergy` or `care_instruction` (the database refuses any
+  other kind). `GET /v1/people/{id}/care-notes`, `POST /v1/people/{id}/care-notes`,
+  `POST /v1/care-notes/{id}/retire` (reason and expected revision). Reads:
+  `identity.read_care_notes` (front desk, program manager, general manager; the person; a holder
+  of `view`), anyone else NOT_FOUND. Writes: `identity.manage_care_notes` (the same staff, the adult
+  themselves, a holder of `complete_forms`). Every read that returns a note writes an audit record
+  naming the reader and the person, never the text; events carry no text. A note is never
+  rewritten or deleted (trigger); a correction retires it and records a new one. A merged person's
+  notes show on the survivor. `CareNotesService.mayReadAtFacility` / `readForArrivalIn` serve the
+  arrival scan.
+- **Staff access reviews** (§2.1, §4.14): `POST /v1/staff-access-reviews` (system administrator of
+  every facility the roles cover, never their own access: the database refuses a self review),
+  `GET /v1/staff-access-reviews`, `GET /v1/staff-access-summary`. Append-only. The next review date
+  is set by the reviewer: no review interval is an approved policy (none is proposed here).
+- **Last seen**: `StaffMembershipView.lastSeenAt` is `accounts.last_login_at`, which the principal
+  resolver touches at most hourly, so it is accurate to the hour.
+- **Staff invitations** (§2.1, SPK-IAM-004): `POST /v1/staff-invitations` (token returned once,
+  withheld from the idempotency record), `GET /v1/staff-invitations`,
+  `POST /v1/staff-invitations/{id}/accept` (token plus the address as a verified email contact
+  point of the accepting active adult; creates exactly one staff membership through
+  `StaffMembershipsService.createFromInvitationIn`), `POST /v1/staff-invitations/{id}/revoke`.
+  One pending invitation per address (partial unique index); acceptance is refused when the
+  inviter no longer administers the scope. Expiry is applied on read and recorded on an acceptance
+  attempt or a re-invitation (no sweep job yet). **Pending**: delivery. No messaging channel is
+  approved (DEC-012, DEC-062) and communications addresses people, not bare email addresses, so
+  issuing records `identity.staff_invitation_created` without the address or token.
+
 ## Known gaps
+
+- Care notes are not shown to assigned coaches on activity days (the design's wish): that needs an
+  assignment-scoped read through workforce and entry, not built.
 
 - Self claims are bound only by handing the token over in person: an account with no person yet
   holds no verified contact point, and the kernel principal carries no provider-verified contact
