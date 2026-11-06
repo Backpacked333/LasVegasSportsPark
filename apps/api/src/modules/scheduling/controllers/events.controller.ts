@@ -16,7 +16,14 @@ import {
   type Principal,
   type Reservation,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { EventsService } from '../services/events.service';
 import { ScheduleDraftsService } from '../services/schedule-drafts.service';
 import { ScheduleInsightsService } from '../services/schedule-insights.service';
@@ -69,6 +76,7 @@ export class EventsController {
 
   /** Direct move from the timeline: a single-change draft published at once (SPK-SCHED-005/006). */
   @Post('events/:id/move')
+  @RecordAuthority('future_schedule')
   @HttpCode(200)
   @Idempotent()
   move(
@@ -87,6 +95,7 @@ export class EventsController {
 
   /** Direct cancel from the timeline: a single-change draft published at once (SPK-SCHED-005/006). */
   @Post('events/:id/cancel')
+  @RecordAuthority('future_schedule')
   @HttpCode(200)
   @Idempotent()
   cancel(

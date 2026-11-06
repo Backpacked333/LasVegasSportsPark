@@ -11,7 +11,14 @@ import {
   type ReleaseChecklist,
   type ReleaseChecklistItem,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  NoRecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { FacilityDaySummaryService } from '../services/facility-day-summary.service';
 import { ReleaseChecklistService } from '../services/release-checklist.service';
 import { CorrelationId } from './correlation.decorator';
@@ -45,6 +52,7 @@ export class ReleaseChecklistController {
   }
 
   @Post('maintenance-restrictions/:id/checklist-items')
+  @NoRecordAuthority('Release checklist evidence on a restriction, not a §5.3 record category')
   @Idempotent()
   add(
     @CurrentPrincipal() principal: Principal,
@@ -56,6 +64,7 @@ export class ReleaseChecklistController {
   }
 
   @Post('maintenance-restrictions/:id/checklist-items/:itemId/complete')
+  @NoRecordAuthority('Release checklist evidence on a restriction, not a §5.3 record category')
   @HttpCode(200)
   @Idempotent()
   complete(
@@ -68,6 +77,7 @@ export class ReleaseChecklistController {
   }
 
   @Post('maintenance-restrictions/:id/checklist-items/:itemId/reopen')
+  @NoRecordAuthority('Release checklist evidence on a restriction, not a §5.3 record category')
   @HttpCode(200)
   @Idempotent()
   reopen(
@@ -80,6 +90,7 @@ export class ReleaseChecklistController {
   }
 
   @Post('maintenance-restrictions/:id/checklist-items/:itemId/remove')
+  @NoRecordAuthority('Release checklist evidence on a restriction, not a §5.3 record category')
   @HttpCode(200)
   @Idempotent()
   remove(

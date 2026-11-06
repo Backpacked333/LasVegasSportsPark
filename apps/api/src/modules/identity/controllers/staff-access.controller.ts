@@ -19,7 +19,14 @@ import {
   type StaffInvitationAccepted,
   type StaffInvitationIssued,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  NoRecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CorrelationId } from '../identity.shared';
 import { CareNotesService } from '../services/care-notes.service';
 import { StaffAccessService } from '../services/staff-access.service';
@@ -42,6 +49,7 @@ export class CareNotesController {
   }
 
   @Post('people/:id/care-notes')
+  @NoRecordAuthority('Operational care note, not a §5.3 record category')
   @Idempotent()
   record(
     @CurrentPrincipal() principal: Principal,
@@ -53,6 +61,7 @@ export class CareNotesController {
   }
 
   @Post('care-notes/:id/retire')
+  @NoRecordAuthority('Operational care note, not a §5.3 record category')
   @HttpCode(200)
   @Idempotent()
   retire(
@@ -71,6 +80,7 @@ export class StaffAccessController {
   constructor(private readonly access: StaffAccessService) {}
 
   @Post('staff-access-reviews')
+  @NoRecordAuthority('Staff access administration, not a §5.3 record category')
   @Idempotent()
   recordReview(
     @CurrentPrincipal() principal: Principal,
@@ -95,6 +105,7 @@ export class StaffAccessController {
 
   /** The token is returned once and never stored with the idempotency key (§4.14). */
   @Post('staff-invitations')
+  @NoRecordAuthority('Staff access administration, not a §5.3 record category')
   @Idempotent({ withhold: ['token'] })
   createInvitation(
     @CurrentPrincipal() principal: Principal,
@@ -113,6 +124,7 @@ export class StaffAccessController {
   }
 
   @Post('staff-invitations/:id/accept')
+  @NoRecordAuthority('Staff access administration, not a §5.3 record category')
   @HttpCode(200)
   @Idempotent()
   accept(
@@ -125,6 +137,7 @@ export class StaffAccessController {
   }
 
   @Post('staff-invitations/:id/revoke')
+  @NoRecordAuthority('Staff access administration, not a §5.3 record category')
   @HttpCode(200)
   @Idempotent()
   revoke(
