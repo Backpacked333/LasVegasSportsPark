@@ -63,6 +63,13 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { inputZoneHint } from '../../ui/time';
 
 import { PageHeader } from '../../ui/Page';
+import {
+  AccessFacts,
+  AccessSummaryLine,
+  InviteStaff,
+  RecordAccessReview,
+  StaffInvitationsList,
+} from './StaffAccessPanels';
 type StaffMembership = Schema<'StaffMembership'>;
 type StaffMembershipView = Schema<'StaffMembershipView'>;
 
@@ -614,6 +621,7 @@ function MembershipRow({
         personName={membership.personDisplayName}
         idPrefix="membership"
       />
+      <AccessFacts membership={membership} />
       {fresh.error ? <CommandError error={fresh.error} onRetry={reload} /> : null}
       {reloadNote && fresh.data ? (
         <p className="caption" role="status">
@@ -641,6 +649,12 @@ function MembershipRow({
             End membership
           </Button>
         </div>
+      ) : null}
+      {membership.status === 'active' &&
+      canManage &&
+      scopeCovers(scope, membership.facilityIds) &&
+      mode === 'view' ? (
+        <RecordAccessReview membership={membership} onOutcome={onOutcome} />
       ) : null}
       {mode === 'change' && membership.status === 'active' ? (
         <ChangeMembership membership={membership} onSaved={changed} onReload={reload} />
@@ -820,6 +834,11 @@ function ManageAccess({ children }: { children: (canManage: boolean) => ReactNod
   );
 }
 
+/** Invitations reach only the facilities this administrator administers (R3-SECURITY-01). */
+function InviteStaffWithScope() {
+  return <InviteStaff adminScope={useAdminScope()} />;
+}
+
 export function AccountsRolesScreen() {
   return (
     <section aria-labelledby="accounts-title" className="ia-screen">
@@ -837,11 +856,14 @@ export function AccountsRolesScreen() {
         Multifactor status for privileged staff is not shown: it is enforced by the managed identity
         provider, which is not selected, and which roles count as privileged is not decided.
       </PendingNote>
+      <AccessSummaryLine />
       <ManageAccess>
         {(canManage) => (
           <>
             {canManage ? <AssignRoles /> : null}
+            {canManage ? <InviteStaffWithScope /> : null}
             <StaffMemberships canManage={canManage} />
+            <StaffInvitationsList canManage={canManage} />
           </>
         )}
       </ManageAccess>

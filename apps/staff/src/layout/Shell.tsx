@@ -13,6 +13,7 @@ import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
 import { OfflineQueueProvider } from '../features/operations/offline/OfflineQueueProvider';
 import { WORKSPACE_PATH } from '../navigation/areas';
 import { useApp, useNow } from '../providers/AppProviders';
+import { WorkspaceTabBar } from '../screens/workspace/WorkspaceTabBar';
 import { Button } from '../ui/Button';
 import { Icon } from '../ui/Icon';
 import { UpdateRequiredNotice } from '../ui/UpdateRequiredNotice';
@@ -157,6 +158,7 @@ export function Shell() {
             <ConnectivityBanner />
             <Outlet />
           </main>
+          <WorkspaceTabBar />
         </div>
       </div>
     </OfflineQueueProvider>

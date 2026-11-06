@@ -45,6 +45,7 @@ import { ENROLLMENT_STATUS, OFFERING_KIND } from '../../features/registration-fi
 import type { GrantPermission } from '../../features/people/people';
 import './people.css';
 import { AuditHistory } from '../today/AuditHistory';
+import { CareNotesCard } from './CareNotesCard';
 import { useFacilityDirectory } from '../today/useFacilityDirectory';
 
 type PersonDetail = Schema<'PersonDetail'>;
@@ -762,12 +763,9 @@ function PersonRecord({ personId }: { personId: string }) {
             <section className="card" aria-label="Details and contacts">
               <PersonFacts person={data} />
             </section>
+            <CareNotesCard personId={personId} merged={data.status === 'merged'} />
             <AccountSection personId={personId} />
           </div>
-          <p className="caption">
-            Care notes are not shown: the API exposes no protected care or medical record to this
-            screen.
-          </p>
           <CustomerTimelineSection personId={personId} />
           <AuditHistory targetType="person" targetId={personId} />
         </>

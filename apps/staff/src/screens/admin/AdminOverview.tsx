@@ -14,6 +14,7 @@
  */
 import { CAPABILITY_PRESENTATION, type CapabilityId } from '@sportspark/api-client';
 import { Link } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useFacilityChoices } from '../../features/insight-admin/facilities';
@@ -21,7 +22,9 @@ import { gateTitle, roleLabel } from '../../features/insight-admin/labels';
 import { Icon, type IconName } from '../../ui/Icon';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { useNow } from '../../providers/AppProviders';
 import './admin.css';
+import { AccessSummaryLine, INVITE_ACTION, lastSeenText } from './StaffAccessPanels';
 
 const GATE_ICON: Record<string, IconName> = {
   identity: 'fingerprint',
@@ -61,10 +64,12 @@ function AccountsCard() {
   });
   const { choices } = useFacilityChoices();
   const facility = (id: string) => choices.find((c) => c.id === id)?.label ?? 'a facility';
+  const now = useNow();
   return (
     <section className="card card-flush adm-card" aria-labelledby="adm-accounts-title">
       <div className="card-head">
         <h3 id="adm-accounts-title">Accounts and roles</h3>
+        <AccessSummaryLine />
         <Link to="/admin/accounts" className="adm-head-link">
           Manage <Icon name="chevron_right" size={18} />
         </Link>
@@ -101,6 +106,7 @@ function AccountsCard() {
                       </span>
                     ))}
                   </span>
+                  <span className="adm-seen caption">{lastSeenText(m.lastSeenAt, now)}</span>
                 </li>
               ))}
             </ul>
@@ -201,10 +207,22 @@ function IntegrationsCard() {
   );
 }
 
+/** The design's "Invite staff" action, for roles holding identity.manage_staff_invitation. */
+function InviteStaffLink() {
+  const permissions = usePermissions();
+  if (permissions.isPermitted(INVITE_ACTION) !== true) return null;
+  return (
+    <Link to="/admin/accounts#invite-staff" className="button button-primary adm-invite">
+      <Icon name="person_add" size={18} /> Invite staff
+    </Link>
+  );
+}
+
 export function AdminOverview() {
   return (
     <div className="split adm-overview">
       <div className="split-main">
+        <InviteStaffLink />
         <AccountsCard />
         <IntegrationsCard />
       </div>

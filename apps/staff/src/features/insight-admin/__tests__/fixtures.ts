@@ -423,7 +423,13 @@ export function facilityList(overrides: Partial<Schema<'FacilitySummary'>>[] = [
 export function staffMembershipView(
   overrides: Partial<Schema<'StaffMembershipView'>> = {},
 ): Schema<'StaffMembershipView'> {
-  return { ...staffMembership(), personDisplayName: 'Alex Rivera', ...overrides };
+  return {
+    ...staffMembership(),
+    personDisplayName: 'Alex Rivera',
+    lastSeenAt: null,
+    lastAccessReview: null,
+    ...overrides,
+  };
 }
 
 export function capability(

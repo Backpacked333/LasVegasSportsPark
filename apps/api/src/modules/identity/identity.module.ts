@@ -9,6 +9,7 @@ import { InvitationsController } from './controllers/invitations.controller';
 import { MeController } from './controllers/me.controller';
 import { PeopleController } from './controllers/people.controller';
 import { RelationshipsController } from './controllers/relationships.controller';
+import { CareNotesController, StaffAccessController } from './controllers/staff-access.controller';
 import {
   StaffDirectoryController,
   StaffMembershipsController,
@@ -31,6 +32,8 @@ import { PrincipalResolver } from './services/principal-resolver.service';
 import { RelationshipAuthority } from './services/relationship-authority.service';
 import { RelationshipsService } from './services/relationships.service';
 import { StaffMembershipsService } from './services/staff-memberships.service';
+import { CareNotesService } from './services/care-notes.service';
+import { StaffAccessService } from './services/staff-access.service';
 
 /**
  * IdentityModule (specification §3.1 SPK-IAM-001..007, §4.4 Identity, §4.5, §4.14).
@@ -51,6 +54,8 @@ import { StaffMembershipsService } from './services/staff-memberships.service';
     AccessReviewsController,
     DuplicatesController,
     MeController,
+    CareNotesController,
+    StaffAccessController,
   ],
   providers: [
     PeopleService,
@@ -61,6 +66,8 @@ import { StaffMembershipsService } from './services/staff-memberships.service';
     ClaimsService,
     StaffMembershipsService,
     AccessReviewsService,
+    CareNotesService,
+    StaffAccessService,
     DuplicatesService,
     AuthorityReadsService,
     IdentityJobs,
@@ -81,6 +88,8 @@ import { StaffMembershipsService } from './services/staff-memberships.service';
     ClaimsService,
     StaffMembershipsService,
     AccessReviewsService,
+    CareNotesService,
+    StaffAccessService,
     DuplicatesService,
     AuthorityReadsService,
     PrincipalResolver,

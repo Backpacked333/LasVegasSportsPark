@@ -50,4 +50,5 @@ export const WORKSPACE_TABS: readonly AreaTab[] = [
   { path: '/workspace', title: 'My assignments', end: true },
   { path: '/workspace/fees', title: 'Hours and fees' },
   { path: '/workspace/assessments', title: 'Assessments' },
+  { path: '/workspace/report-problem', title: 'Report a problem' },
 ];

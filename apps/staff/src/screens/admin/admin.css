@@ -46,7 +46,37 @@
 /* People */
 .adm-people > li {
   display: grid !important;
-  grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+.adm-seen {
+  white-space: nowrap;
+  text-align: right;
+}
+.adm-invite {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.adm-card .card-head [data-testid='access-summary'] {
+  margin-left: auto;
+  margin-right: 12px;
+}
+/* Accounts screen: last seen and the latest access review on each membership. */
+.ia-access-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ia-issued {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ia-token {
+  word-break: break-all;
 }
 .adm-people .row-text {
   flex: none;
@@ -96,9 +126,11 @@
   .adm-people > li {
     grid-template-columns: 36px minmax(0, 1fr);
   }
-  .adm-roles {
+  .adm-roles,
+  .adm-seen {
     grid-column: 2;
     justify-content: flex-start;
+    text-align: left;
   }
 }
 

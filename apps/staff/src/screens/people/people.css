@@ -129,3 +129,38 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
 }
+
+/* Care notes card (migration 0181): protected, operational notes only. */
+.care-card .card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.care-protected {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+.care-card .card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.care-notes > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-left: 3px solid var(--tone-danger);
+  padding-left: 10px;
+}
+.care-notes > li[data-kind='care_instruction'] {
+  border-left-color: var(--tone-warning);
+}
+.care-retire,
+.care-add {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
