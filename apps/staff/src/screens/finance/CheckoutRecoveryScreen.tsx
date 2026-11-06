@@ -30,6 +30,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type Checkout = Schema<'Checkout'>;
 const CHECKOUT_KEY = ['api', '/registration-checkouts/{id}'] as const;
 
@@ -175,7 +176,11 @@ export function CheckoutRecoveryScreen() {
   });
   return (
     <section aria-labelledby="checkout-title">
-      <h2 id="checkout-title">Checkout {shortRef(checkoutId)}</h2>
+      <PageHeader
+        eyebrow="Business · Finance"
+        title={`Checkout ${shortRef(checkoutId)}`}
+        titleId="checkout-title"
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <QueryBoundary
         query={checkout}

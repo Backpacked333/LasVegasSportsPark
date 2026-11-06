@@ -62,6 +62,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { inputZoneHint } from '../../ui/time';
 
+import { PageHeader } from '../../ui/Page';
 type StaffMembership = Schema<'StaffMembership'>;
 type StaffMembershipView = Schema<'StaffMembershipView'>;
 
@@ -822,7 +823,11 @@ function ManageAccess({ children }: { children: (canManage: boolean) => ReactNod
 export function AccountsRolesScreen() {
   return (
     <section aria-labelledby="accounts-title" className="ia-screen">
-      <h2 id="accounts-title">Accounts, roles and permissions</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Accounts, roles and permissions"
+        titleId="accounts-title"
+      />
       <AdminNav />
       <YourAccess />
       <PendingNote

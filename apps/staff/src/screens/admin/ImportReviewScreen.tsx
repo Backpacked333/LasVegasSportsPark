@@ -22,6 +22,7 @@ import { ExceptionCard } from '../../features/insight-admin/migration';
 import { MigrationNav } from '../../features/insight-admin/nav';
 import { Button } from '../../ui/Button';
 
+import { PageHeader } from '../../ui/Page';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function ExceptionsPage({
@@ -95,7 +96,11 @@ export function ImportReviewScreen() {
   const reset = () => setCursors([null]);
   return (
     <section aria-labelledby="review-title" className="ia-screen">
-      <h2 id="review-title">Import review queue</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Import review queue"
+        titleId="review-title"
+      />
       <MigrationNav />
       <div className="ia-filters">
         <SelectField

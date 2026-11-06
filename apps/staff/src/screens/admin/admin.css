@@ -1,0 +1,158 @@
+/*
+ * Administration overview (SCR-S-46, SCR-S-47): accounts and roles, capability switches and the
+ * integration register at a glance. Switch graphics are decorative; "On"/"Off" is always written.
+ */
+.adm-card .card-head h3 {
+  font-size: 20px;
+}
+.adm-head-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+}
+.adm-body {
+  padding: 0 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.adm-body > div > [data-testid='last-updated'] {
+  font-size: 11px;
+  color: var(--faint);
+}
+.adm-body > div > ul {
+  list-style: none;
+  margin: 0 -18px -14px;
+  padding: 0;
+}
+.adm-body > div > ul > li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.adm-body .state h2,
+.shell-main .adm-body .state h2 {
+  font-size: 15px;
+}
+.adm-more {
+  font-size: 13px;
+  padding-top: 18px;
+}
+
+/* People */
+.adm-people > li {
+  display: grid !important;
+  grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr);
+}
+.adm-people .row-text {
+  flex: none;
+}
+.adm-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--pitch);
+}
+.adm-avatar[data-tint='1'] {
+  background: var(--kind-program);
+}
+.adm-avatar[data-tint='2'] {
+  background: var(--kind-party);
+}
+.adm-avatar[data-tint='3'] {
+  background: var(--kind-basketball);
+}
+.adm-avatar[data-tint='4'] {
+  background: var(--night-3);
+}
+.adm-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.adm-role {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--sand);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .adm-people > li {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+  .adm-roles {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
+
+/* Switches */
+.adm-switches .row-text {
+  flex: 1 1 auto;
+}
+.adm-switches .caption {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.adm-switch {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  position: relative;
+  flex: none;
+}
+.adm-switch > span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.adm-switch[data-on='true'] {
+  background: var(--pitch);
+}
+.adm-switch[data-on='true'] > span {
+  left: 19px;
+}
+.adm-switches .badge {
+  min-width: 46px;
+  flex: none;
+  white-space: nowrap;
+}
+
+/* Integration gates */
+.adm-gate-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--sand);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.adm-gates .row-text {
+  flex: 1 1 auto;
+}

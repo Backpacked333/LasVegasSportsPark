@@ -41,6 +41,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type ObligationStatus = Schema<'ObligationStatus'>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -240,7 +241,11 @@ export function ObligationsScreen() {
   const [view, setView] = useState<'obligations' | 'orders'>('obligations');
   return (
     <section aria-labelledby="obligations-title">
-      <h2 id="obligations-title">Obligations and orders</h2>
+      <PageHeader
+        eyebrow="Business · Finance"
+        title="Obligations and orders"
+        titleId="obligations-title"
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <div className="rf-actions" role="group" aria-label="Show">
         <Button

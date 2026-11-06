@@ -24,6 +24,7 @@ import {
 import { MigrationNav } from '../../features/insight-admin/nav';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 function scopeLabel(
   scope: { kind: string; facilityId?: string; programId?: string; competitionId?: string } | null,
   facilityName: (id: string) => string,
@@ -114,7 +115,11 @@ export function AuthorityMatrixScreen() {
   });
   return (
     <section aria-labelledby="authority-title" className="ia-screen">
-      <h2 id="authority-title">Authority matrix</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Authority matrix"
+        titleId="authority-title"
+      />
       <MigrationNav />
       <PendingNote decisions={DECISIONS.migrationScope.ids} owner={DECISIONS.migrationScope.owner}>
         Which system writes each record category during transition.

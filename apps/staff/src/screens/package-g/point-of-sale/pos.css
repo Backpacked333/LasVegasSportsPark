@@ -1,0 +1,379 @@
+/*
+ * SCR-S-55 point of sale: a tap-to-add register beside a ticket with big tender choices. The
+ * product tiles send the same "add a line" command as the form under them (one unit per tap); the
+ * form stays for typing a quantity and for keyboard users who prefer it. Prices and totals are the
+ * API's (SPK-PAY-001).
+ */
+.pos-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.pos-sale {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pos-sale > h3 {
+  font-size: 24px;
+}
+.pos-register {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+}
+.pos-main {
+  flex: 1 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pos-status {
+  margin: 0;
+}
+
+/* Product tiles */
+.pos-add.rf-panel {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pos-add-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.shell-main .pos-add-head h4 {
+  font-size: 20px;
+}
+.pos-kinds {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: #e9e7e0;
+  border-radius: 9px;
+}
+.pos-kinds button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.pos-kinds button[aria-pressed='true'] {
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.1);
+}
+.pos-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.pos-tile {
+  position: relative;
+  width: 100%;
+  height: 104px;
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    transform 0.08s;
+}
+.pos-tile:hover:not([disabled]) {
+  border-color: var(--pitch);
+  box-shadow: 0 0 0 1px var(--pitch);
+}
+.pos-tile:active:not([disabled]) {
+  transform: scale(0.98);
+}
+.pos-tile[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pos-tile > .icon {
+  color: var(--pitch);
+}
+.pos-tile[data-kind='concession'] > .icon {
+  color: var(--kind-basketball);
+}
+.pos-tile[data-kind='service'] > .icon {
+  color: var(--kind-program);
+}
+.pos-tile-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+.pos-tile-name {
+  font-weight: 700;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pos-tile-price {
+  font-size: 13px;
+  color: var(--muted);
+}
+.pos-tile-count {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--pitch);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  padding: 0 6px;
+}
+/* The typed alternative sits in one row under the tiles. */
+.pos-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(90px, 0.6fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+.pos-add-row > .button {
+  margin-top: 22px;
+}
+@media (max-width: 640px) {
+  .pos-add-row {
+    grid-template-columns: 1fr;
+  }
+  .pos-add-row > .button {
+    margin-top: 0;
+  }
+}
+
+/* The ticket */
+.pos-ticket {
+  flex: 0 1 380px;
+  min-width: 300px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+@media (min-width: 1200px) {
+  .pos-ticket {
+    position: sticky;
+    top: 86px;
+  }
+}
+@media (max-width: 700px) {
+  .pos-ticket {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+}
+.pos-ticket-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+}
+.pos-ticket-customer {
+  flex: 1;
+  font-weight: 600;
+  color: var(--ink);
+}
+.pos-ticket-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-height: 120px;
+}
+.pos-ticket-lines li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.pos-ticket-lines .pos-ticket-empty {
+  justify-content: center;
+  padding: 40px 16px;
+  color: var(--muted);
+  border: 0;
+}
+.pos-qty {
+  min-width: 34px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 12.5px;
+}
+.pos-ticket-name {
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+}
+.pos-ticket-amount {
+  font-weight: 700;
+}
+.pos-ticket-totals {
+  padding: 12px 16px;
+  background: var(--sand-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+.pos-ticket-totals .facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+.pos-ticket-totals .fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pos-ticket-totals .fact dt,
+.pos-ticket-totals .fact dd {
+  margin: 0;
+  font-size: 13px;
+  color: inherit;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+/* Total (3rd) is the headline; remaining to pay (6th) is the call to action. */
+.pos-ticket-totals .fact:nth-child(3) {
+  color: var(--ink);
+  padding: 6px 0 8px;
+  margin: 4px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.pos-ticket-totals .fact:nth-child(3) dt {
+  font-weight: 700;
+}
+.pos-ticket-totals .fact:nth-child(3) dd {
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+}
+.pos-ticket-totals .fact:nth-child(6) {
+  color: var(--ink);
+}
+.pos-ticket-totals .fact:nth-child(6) dd {
+  font-weight: 800;
+  font-size: 15px;
+}
+.pos-ticket-actions {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pos-ticket-actions .rf-panel {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Big tender choices: the radios stay native inside each tile. */
+.pos-ticket-actions .fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.pos-ticket-actions .fieldset > legend {
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+.pos-ticket-actions .fieldset > .choice {
+  position: relative;
+  min-height: 56px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: 700;
+  font-size: 13.5px;
+  cursor: pointer;
+  padding: 6px 8px;
+}
+.pos-ticket-actions .fieldset > .choice input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.pos-ticket-actions .fieldset > .choice:has(input:checked) {
+  background: var(--pitch);
+  border-color: var(--pitch);
+  color: #fff;
+}
+.pos-ticket-actions .fieldset > .choice:has(input:checked)::before {
+  content: '✓';
+  margin-right: 6px;
+}
+.pos-ticket-actions .fieldset > .choice:has(input:focus-visible) {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.pos-ticket-actions .fieldset > :not(legend):not(.choice) {
+  grid-column: 1 / -1;
+}
+.pos-ticket-actions form .button-primary {
+  min-height: 48px;
+  font-size: 15px;
+}

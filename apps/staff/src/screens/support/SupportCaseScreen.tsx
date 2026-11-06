@@ -68,6 +68,7 @@ import {
   type CaseResolutionKind,
 } from './support';
 
+import { PageHeader } from '../../ui/Page';
 type CaseDetail = Schema<'CaseDetail'>;
 type CaseAction = Schema<'CaseAction'>;
 
@@ -947,8 +948,12 @@ function CaseQuery({ id }: { id: string }) {
 export function SupportCaseScreen() {
   const { caseId = '' } = useParams();
   return (
-    <section aria-labelledby="case-title">
-      <h2 id="case-title">Support case</h2>
+    <section aria-labelledby="case-title" className="ia-screen">
+      <PageHeader
+        eyebrow="Business · Administration · Support"
+        title="Support case"
+        titleId="case-title"
+      />
       <p>
         <Link to="/admin/cases">Back to support cases</Link>
       </p>

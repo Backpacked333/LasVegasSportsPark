@@ -19,7 +19,9 @@
 import { Route, Routes } from 'react-router';
 import { FINANCE_LINKS, SectionNav } from '../../../features/registration-finance/SectionNav';
 import { CapabilityGate } from '../../../ui/CapabilityGate';
+import { PageHeader } from '../../../ui/Page';
 import { StateView } from '../../../ui/StateView';
+import '../../../features/pos-access-accounting/screens.css';
 import { BatchesPage } from './BatchesPage';
 import { BatchPage } from './BatchPage';
 import { MappingsPage } from './MappingsPage';
@@ -34,8 +36,12 @@ const LINKS = [
 export function AccountingExportsScreen() {
   const headingId = `package-g-${ACCOUNTING_EXPORTS.slug}`;
   return (
-    <section aria-labelledby={headingId} data-testid={headingId}>
-      <h2 id={headingId}>{ACCOUNTING_EXPORTS.title}</h2>
+    <section aria-labelledby={headingId} data-testid={headingId} className="pg-screen">
+      <PageHeader
+        eyebrow="Business · Finance · Accounting connection (conditional)"
+        title={ACCOUNTING_EXPORTS.title}
+        titleId={headingId}
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <CapabilityGate
         capability={ACCOUNTING_EXPORTS.capability}

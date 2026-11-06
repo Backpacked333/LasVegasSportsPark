@@ -1,0 +1,67 @@
+/*
+ * Shared layout of the conditional point of sale, access hardware and accounting export screens
+ * (SCR-S-55 to SCR-S-57): the page rhythm, record panels as cards and lists as row cards. Scoped to
+ * `.pg-screen` so the registration and finance screens that share the `rf-` classes keep their own
+ * look.
+ */
+.pg-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.pg-screen .rf-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pg-screen .rf-panel > h3,
+.pg-screen .rf-panel > h4 {
+  margin: 0;
+}
+.pg-screen .rf-panel > h4 {
+  font-size: 17px;
+}
+.pg-screen .list:not(.list-card) {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.pg-screen .list:not(.list-card) > li {
+  padding: 12px 18px;
+}
+.pg-screen .list:not(.list-card) > li:hover {
+  background: var(--sand-2);
+}
+.pg-screen .rf-panel .list:not(.list-card) {
+  border: 0;
+  border-radius: 0;
+  margin: 0 -18px;
+}
+.pg-screen .rf-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+  background: var(--card);
+}
+.pg-screen .rf-table {
+  margin: 0;
+}
+.pg-screen .rf-table th {
+  border-top: 0;
+}
+.pg-screen .rf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+.pg-screen > .state,
+.pg-screen .rf-panel .state {
+  border-radius: var(--radius);
+}

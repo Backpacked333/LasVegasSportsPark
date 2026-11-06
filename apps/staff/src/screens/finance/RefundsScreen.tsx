@@ -34,6 +34,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 function RequestRefund({ paymentId, currency }: { paymentId: string; currency: string }) {
   const online = useOnline();
   const [amount, setAmount] = useState('');
@@ -143,7 +144,7 @@ export function RefundsScreen() {
   const payment = useApiQuery({ path: '/payments/{id}', request: { path: { id: paymentId } } });
   return (
     <section aria-labelledby="refunds-title">
-      <h2 id="refunds-title">Refund a payment</h2>
+      <PageHeader eyebrow="Business · Finance" title="Refund a payment" titleId="refunds-title" />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <QueryBoundary
         query={payment}

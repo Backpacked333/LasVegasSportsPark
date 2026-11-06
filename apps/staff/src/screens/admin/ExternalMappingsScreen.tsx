@@ -17,6 +17,7 @@ import { MigrationNav } from '../../features/insight-admin/nav';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 interface Lookup {
   sourceSystem: string;
   entityType: string;
@@ -137,7 +138,11 @@ export function ExternalMappingsScreen() {
   };
   return (
     <section aria-labelledby="mappings-title" className="ia-screen">
-      <h2 id="mappings-title">External mappings</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="External mappings"
+        titleId="mappings-title"
+      />
       <MigrationNav />
       <form className="ia-form" onSubmit={submit} aria-label="Look up external mappings" noValidate>
         <TextField

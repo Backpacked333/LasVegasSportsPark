@@ -1,0 +1,401 @@
+/*
+ * Communications (SCR-S-39 to SCR-S-41): compose as three steps (who, what, how) beside a live
+ * rail of who the definition reaches, what the recipient sees and the latest sends. Chosen pills
+ * show a check mark as well as colour (SPK-UX-009); the native inputs stay in place for keyboard
+ * and screen-reader use, only visually folded into the pill.
+ */
+.cm,
+.cm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.cm-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+}
+.cm .cm-form {
+  flex: 1 1 560px;
+  min-width: 0;
+  max-width: none;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  gap: 0;
+}
+.cm-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px 20px;
+  border-top: 1px solid var(--line-soft);
+}
+.cm-step:first-child {
+  border-top: 0;
+}
+.cm-step-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.cm-step-n {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--night);
+  color: var(--floodlight);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.cm .cm-form .ops-fieldset {
+  border: 0;
+  padding: 0;
+  gap: 10px;
+}
+.cm .cm-form legend {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 0;
+  margin-bottom: 4px;
+}
+.cm .cm-form .cm-audience > legend,
+.cm .cm-form .cm-category > legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.cm .cm-form textarea,
+.cm .cm-form input[type='text'],
+.cm .cm-form input:not([type]),
+.cm .cm-form input[type='datetime-local'],
+.cm .cm-form select {
+  width: 100%;
+}
+
+/* Staff roles as pills, category as a segmented choice. */
+.cm .cm-pills {
+  justify-content: flex-start;
+  gap: 6px;
+}
+.cm .cm-pills .ops-check,
+.cm .cm-segment .ops-check {
+  position: relative;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  gap: 6px;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.cm .cm-pills .ops-check label {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.cm .cm-pills .ops-check input,
+.cm .cm-segment .ops-check input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.cm .cm-pills .ops-check:hover,
+.cm .cm-segment .ops-check:hover {
+  border-color: var(--pitch);
+}
+.cm .cm-pills .ops-check:has(input:checked),
+.cm .cm-segment .ops-check:has(input:checked) {
+  background: var(--tone-success-bg);
+  border-color: var(--pitch);
+  color: var(--pitch);
+}
+.cm .cm-pills .ops-check:has(input:checked) label::before,
+.cm .cm-segment .ops-check:has(input:checked)::before {
+  content: '✓ ';
+  font-weight: 800;
+}
+.cm .cm-pills .ops-check:has(input:focus-visible),
+.cm .cm-segment .ops-check:has(input:focus-visible) {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.cm-segment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cm .cm-segment .ops-check {
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.cm-two {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.8fr) minmax(0, 1.2fr);
+  gap: 16px;
+  align-items: start;
+}
+.cm-ids {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.cm-ids textarea {
+  min-height: 64px !important;
+  font-family: var(--font-mono);
+  font-size: 12.5px !important;
+}
+.cm .cm-form .ops-section {
+  border: 1px dashed var(--line-strong);
+  background: var(--sand-2);
+  border-radius: var(--radius);
+  margin: 0;
+}
+.cm .cm-form .ops-section .ops-fieldset {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+}
+.cm .cm-form .ops-section .ops-fieldset > legend {
+  width: 100%;
+}
+.cm .cm-form .ops-section .ops-check {
+  min-height: 30px;
+  font-size: 13px;
+}
+.cm .cm-form .ops-section .ops-check input {
+  width: 18px;
+  height: 18px;
+}
+.cm .cm-form .state {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--tone-pending-bg);
+  border: 0;
+}
+.cm-actions {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+.cm-actions > .caption:first-child {
+  flex: 1 1 240px;
+}
+.cm-actions .button-primary {
+  min-height: 44px;
+  padding: 0 20px;
+}
+
+/* The live rail */
+.cm-side {
+  flex: 1 1 320px;
+  max-width: 400px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (min-width: 1200px) {
+  .cm-side {
+    position: sticky;
+    top: 86px;
+  }
+}
+@media (max-width: 960px) {
+  .cm-side {
+    max-width: none;
+  }
+  .cm-two {
+    grid-template-columns: 1fr;
+  }
+}
+.cm-reach {
+  padding: 18px;
+  gap: 10px;
+}
+.cm-reach-kicker {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--floodlight);
+}
+.cm-reach-value {
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  color: #fff;
+}
+.cm-reach-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--night-text);
+}
+.cm-reach-list li::before {
+  content: '●';
+  color: var(--floodlight);
+  margin-right: 8px;
+  font-size: 9px;
+  vertical-align: 2px;
+}
+.cm-preview {
+  gap: 10px;
+}
+.cm-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--sand);
+  border: 1px solid var(--line);
+}
+.cm-bubble-app {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cm-bubble-app .icon {
+  color: var(--pitch);
+}
+.cm-bubble-title {
+  font-weight: 700;
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+.cm-bubble-body {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cm-bubble-change {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.cm-bubble-change s {
+  color: var(--faint);
+}
+.cm-recent .card-head h4 {
+  font-size: 17px;
+}
+.cm-recent-body {
+  padding: 0 18px 14px;
+}
+.cm-recent-body > div > [data-testid='last-updated'] {
+  font-size: 11px;
+  color: var(--faint);
+}
+.cm-recent-list {
+  list-style: none;
+  margin: 6px -18px -14px;
+  padding: 0;
+}
+.cm-recent-list li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.cm-recent-body .state h2,
+.shell-main .cm-recent-body .state h2 {
+  font-size: 14px;
+}
+
+/* Delivery status list (SCR-S-40) */
+.cm-list-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.cm-list-filters .ops-field,
+.cm-list-filters > div {
+  min-width: 220px;
+}
+.cm-messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.cm-messages > li {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.cm-messages > li:first-child {
+  border-top: 0;
+}
+.cm-messages > li:hover {
+  background: var(--sand-2);
+}
+.cm-msg-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--tone-success-bg);
+  color: var(--pitch);
+}
+.cm-msg-icon[data-category='promotional'] {
+  background: var(--kind-party-bg);
+  color: var(--kind-party);
+}
+.cm-messages .row-text {
+  flex: none;
+}
+@media (max-width: 640px) {
+  .cm-messages > li {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+  .cm-messages > li > .badge {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

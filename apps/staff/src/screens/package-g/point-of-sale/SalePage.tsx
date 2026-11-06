@@ -39,10 +39,12 @@ import {
 import { PersonName } from '../../../features/registration-finance/names';
 import { useOnline } from '../../../features/registration-finance/offline';
 import { Facts } from '../../../ui/FormFields';
+import { Icon } from '../../../ui/Icon';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { POS_PATHS, SALE_QUERY_PREFIX } from './paths';
 import { AddLineForm, ReturnForm, TenderForm } from './SaleForms';
+import './pos.css';
 
 type Sale = Schema<'PosSale'>;
 
@@ -55,7 +57,7 @@ export function SalePage() {
 function SaleView({ saleId }: { saleId: string }) {
   const sale = useApiQuery({ path: '/pos-sales/{id}', request: { path: { id: saleId } } });
   return (
-    <section aria-labelledby="pos-sale-title">
+    <section aria-labelledby="pos-sale-title" className="pos-sale">
       <h3 id="pos-sale-title">Sale {sale.data?.saleNumber ?? shortRef(saleId)}</h3>
       <QueryBoundary
         query={sale}
@@ -98,91 +100,128 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
   const hasReceipt =
     sale.status === 'paid' || sale.status === 'partially_returned' || sale.status === 'returned';
   return (
-    <>
-      <p>
-        <StatusBadge {...POS_SALE_STATUS[sale.status]} />
-      </p>
-      {cards.unknown.length > 0 ? <UnknownCardRecovery tenders={cards.unknown} /> : null}
-      {cards.inProgress.length > 0 ? (
-        <section className="state" aria-live="polite" data-testid="state-processing">
-          <StatusBadge tone="pending" label="Card payment in progress: not paid yet" />
-          <p>
-            The sale is paid only once the provider confirms the card payment. Reload to see its
-            outcome; do not take the card again.
-          </p>
-        </section>
-      ) : null}
-      <Facts
-        label="Sale"
-        items={[
-          ['Sale number', sale.saleNumber],
-          ['Facility', directory.nameOf(sale.facilityId)],
-          [
-            'Customer',
-            sale.customerPersonId ? (
-              <PersonName key="c" id={sale.customerPersonId} fallback="Customer" />
-            ) : (
-              'Not named'
-            ),
-          ],
-          [
-            'Register session',
-            <Link key="s" to={POS_PATHS.session(sale.registerSessionId)}>
-              Session {shortRef(sale.registerSessionId)}
-            </Link>,
-          ],
-          ['Started at', formatInstant(sale.createdAt, zone)],
-          ['Paid at', sale.paidAt ? formatInstant(sale.paidAt, zone) : 'Not paid'],
-          ...(sale.voidReason
-            ? ([
-                ['Voided at', formatInstant(sale.voidedAt, zone)],
-                ['Void reason', sale.voidReason],
-              ] as [string, string][])
-            : []),
-        ]}
-      />
-      <Facts
-        label="Sale totals"
-        items={[
-          ['Subtotal', formatMoney(sale.subtotalMinor, c)],
-          ['Taxes and fees', formatMoney(sale.chargesMinor, c)],
-          ['Total', formatMoney(sale.totalMinor, c)],
-          ['Paid (settled tenders)', formatMoney(sale.settledMinor, c)],
-          ['Card payments not final', formatMoney(sale.pendingMinor, c)],
-          ['Remaining to pay', formatMoney(sale.remainingMinor, c)],
-          ['Returned', formatMoney(sale.returnedMinor, c)],
-        ]}
-      />
-      <Lines sale={sale} />
-      <Tenders sale={sale} zone={zone} />
-      <Returns sale={sale} zone={zone} />
-      {selling ? <AddLineForm sale={sale} onReload={onReload} /> : null}
-      {tendering && !switchOn ? (
-        <p className="caption">
-          Point of sale is turned off: no line is added to this sale, but what it already holds can
-          still be paid, or the sale voided.
+    <div className="pos-register">
+      <div className="pos-main">
+        <p className="pos-status">
+          <StatusBadge {...POS_SALE_STATUS[sale.status]} />
         </p>
-      ) : null}
-      {tendering && sale.lines.length > 0 && sale.remainingMinor > 0 ? (
-        <TenderForm sale={sale} onReload={onReload} />
-      ) : null}
-      {sale.status === 'open' && operate ? (
-        cards.blocksVoid ? (
+        {cards.unknown.length > 0 ? <UnknownCardRecovery tenders={cards.unknown} /> : null}
+        {cards.inProgress.length > 0 ? (
+          <section className="state" aria-live="polite" data-testid="state-processing">
+            <StatusBadge tone="pending" label="Card payment in progress: not paid yet" />
+            <p>
+              The sale is paid only once the provider confirms the card payment. Reload to see its
+              outcome; do not take the card again.
+            </p>
+          </section>
+        ) : null}
+        {selling ? <AddLineForm sale={sale} onReload={onReload} /> : null}
+        {tendering && !switchOn ? (
           <p className="caption">
-            A card was charged or is being charged for this sale, so it cannot be voided: complete
-            it, then return what was bought.
+            Point of sale is turned off: no line is added to this sale, but what it already holds
+            can still be paid, or the sale voided.
           </p>
-        ) : (
-          <VoidSale sale={sale} onReload={onReload} />
-        )
-      ) : null}
-      {returnable ? <ReturnForm sale={sale} onReload={onReload} /> : null}
-      {hasReceipt ? (
-        <p>
-          <Link to={POS_PATHS.receipt(sale.id)}>Open the receipt of sale {sale.saleNumber}</Link>
-        </p>
-      ) : null}
-    </>
+        ) : null}
+        <Lines sale={sale} />
+        <Tenders sale={sale} zone={zone} />
+        <Returns sale={sale} zone={zone} />
+        {returnable ? <ReturnForm sale={sale} onReload={onReload} /> : null}
+        <Facts
+          label="Sale"
+          items={[
+            ['Sale number', sale.saleNumber],
+            ['Facility', directory.nameOf(sale.facilityId)],
+            [
+              'Customer',
+              sale.customerPersonId ? (
+                <PersonName key="c" id={sale.customerPersonId} fallback="Customer" />
+              ) : (
+                'Not named'
+              ),
+            ],
+            [
+              'Register session',
+              <Link key="s" to={POS_PATHS.session(sale.registerSessionId)}>
+                Session {shortRef(sale.registerSessionId)}
+              </Link>,
+            ],
+            ['Started at', formatInstant(sale.createdAt, zone)],
+            ['Paid at', sale.paidAt ? formatInstant(sale.paidAt, zone) : 'Not paid'],
+            ...(sale.voidReason
+              ? ([
+                  ['Voided at', formatInstant(sale.voidedAt, zone)],
+                  ['Void reason', sale.voidReason],
+                ] as [string, string][])
+              : []),
+          ]}
+        />
+      </div>
+      <aside className="pos-ticket" aria-label={`Ticket of sale ${sale.saleNumber}`}>
+        <div className="pos-ticket-head">
+          <Icon name="person" size={20} />
+          <span className="pos-ticket-customer">
+            {sale.customerPersonId ? (
+              <>
+                <PersonName id={sale.customerPersonId} fallback="Customer" />{' '}
+                <span className="caption">· customer account</span>
+              </>
+            ) : (
+              <span className="caption">Walk-in sale, no customer named</span>
+            )}
+          </span>
+        </div>
+        <ul className="pos-ticket-lines" aria-label="Ticket lines">
+          {sale.lines.length === 0 ? (
+            <li className="pos-ticket-empty">Add products to start the ticket</li>
+          ) : (
+            sale.lines.map((line) => (
+              <li key={line.id}>
+                <span className="pos-qty">{line.quantity}×</span>
+                <span className="pos-ticket-name">{line.name}</span>
+                <span className="pos-ticket-amount">{formatMoney(line.lineTotalMinor, c)}</span>
+              </li>
+            ))
+          )}
+        </ul>
+        <div className="pos-ticket-totals">
+          <Facts
+            label="Sale totals"
+            items={[
+              ['Subtotal', formatMoney(sale.subtotalMinor, c)],
+              ['Taxes and fees', formatMoney(sale.chargesMinor, c)],
+              ['Total', formatMoney(sale.totalMinor, c)],
+              ['Paid (settled tenders)', formatMoney(sale.settledMinor, c)],
+              ['Card payments not final', formatMoney(sale.pendingMinor, c)],
+              ['Remaining to pay', formatMoney(sale.remainingMinor, c)],
+              ['Returned', formatMoney(sale.returnedMinor, c)],
+            ]}
+          />
+        </div>
+        <div className="pos-ticket-actions">
+          {tendering && sale.lines.length > 0 && sale.remainingMinor > 0 ? (
+            <TenderForm sale={sale} onReload={onReload} />
+          ) : null}
+          {sale.status === 'open' && operate ? (
+            cards.blocksVoid ? (
+              <p className="caption">
+                A card was charged or is being charged for this sale, so it cannot be voided:
+                complete it, then return what was bought.
+              </p>
+            ) : (
+              <VoidSale sale={sale} onReload={onReload} />
+            )
+          ) : null}
+          {hasReceipt ? (
+            <p>
+              <Link className="button button-secondary" to={POS_PATHS.receipt(sale.id)}>
+                <Icon name="receipt_long" size={18} />
+                Open the receipt of sale {sale.saleNumber}
+              </Link>
+            </p>
+          ) : null}
+        </div>
+      </aside>
+    </div>
   );
 }
 

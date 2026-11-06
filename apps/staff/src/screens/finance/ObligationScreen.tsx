@@ -27,6 +27,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { Debtor } from './ObligationsScreen';
 
+import { PageHeader } from '../../ui/Page';
 export function OrderSection({ orderId }: { orderId: string }) {
   const order = useApiQuery({ path: '/orders/{id}', request: { path: { id: orderId } } });
   return (
@@ -216,7 +217,7 @@ export function ObligationScreen() {
   return (
     <section aria-labelledby="obligation-title">
       {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
-      <h2 id="obligation-title">Obligation</h2>
+      <PageHeader eyebrow="Business · Finance" title="Obligation" titleId="obligation-title" />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <QueryBoundary
         query={obligation}

@@ -78,6 +78,35 @@ describe('SCR-S-55 SalePage', () => {
     expect(within(totals).getByText('$0.42')).toBeInTheDocument();
   });
 
+  it('SPK-PAY-001: a product tile adds one unit with the same command, no price, and counts it on the tile', async () => {
+    const user = userEvent.setup();
+    let current = sale();
+    const app = createTestApp({
+      routes: saleRoutes(() => current, {
+        'POST /pos-sales/{id}/lines': () => {
+          current = saleWithLine();
+          return fakeResponse(201, current);
+        },
+      }),
+    });
+    render(app.at(SALE_PATH));
+    const tiles = await screen.findByRole('list', { name: 'Tap to add one of a product' });
+    await user.click(
+      within(tiles).getByRole('button', { name: /^Add one Water bottle \(WATER\), \$2\.50/ }),
+    );
+    const call = await waitFor(() => {
+      const found = app.fake.requests.find((r) => r.route === '/pos-sales/{id}/lines');
+      expect(found).toBeDefined();
+      return found;
+    });
+    expect(call?.body).toEqual({ productId: PRODUCT_ID, quantity: 1, expectedRevision: 1 });
+    expect(await within(tiles).findByRole('button', { name: /in the sale$/ })).toBeInTheDocument();
+    const ticket = screen.getByRole('complementary', { name: /^Ticket of sale/ });
+    expect(within(ticket).getByRole('list', { name: 'Ticket lines' })).toHaveTextContent(
+      'Water bottle',
+    );
+  });
+
   it('DEC-057: a tax not approved refuses the line as a validation failure naming the tax', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

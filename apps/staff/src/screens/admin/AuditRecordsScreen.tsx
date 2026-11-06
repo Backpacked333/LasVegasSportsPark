@@ -26,6 +26,7 @@ import { PersonIdField } from '../../features/insight-admin/PersonSearch';
 import { Button } from '../../ui/Button';
 import { inputZoneHint } from '../../ui/time';
 
+import { PageHeader } from '../../ui/Page';
 interface Draft {
   targetType: string;
   targetId: string;
@@ -104,7 +105,7 @@ export function AuditRecordsScreen() {
   };
   return (
     <section aria-labelledby="audit-title" className="ia-screen">
-      <h2 id="audit-title">Audit records</h2>
+      <PageHeader eyebrow="Business · Administration" title="Audit records" titleId="audit-title" />
       <AdminNav />
       <p className="caption">
         Privileged actions as the API audited them, newest first. Reading the audit is itself an

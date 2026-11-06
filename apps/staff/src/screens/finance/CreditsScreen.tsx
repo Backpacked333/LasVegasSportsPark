@@ -52,6 +52,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type Credit = Schema<'Credit'>;
 type CreditUse = Schema<'CreditUse'>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -445,7 +446,11 @@ export function CreditsScreen() {
   const ownerId = UUID.test(owner.trim()) ? owner.trim() : '';
   return (
     <section aria-labelledby="credits-title">
-      <h2 id="credits-title">Refunds and credits</h2>
+      <PageHeader
+        eyebrow="Business · Finance"
+        title="Refunds and credits"
+        titleId="credits-title"
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       {creditId ? null : <RefundsByState />}
       <h3>Credits</h3>

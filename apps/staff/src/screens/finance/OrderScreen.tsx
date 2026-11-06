@@ -13,6 +13,7 @@ import { FINANCE_LINKS, SectionNav } from '../../features/registration-finance/S
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { OrderSection } from './ObligationScreen';
 
+import { PageHeader } from '../../ui/Page';
 function OrderObligations({ obligationIds }: { obligationIds: readonly string[] }) {
   return obligationIds.length === 0 ? (
     <p>No obligation was created for this order.</p>
@@ -34,7 +35,7 @@ export function OrderScreen() {
   return (
     <section aria-labelledby="order-screen-title">
       {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
-      <h2 id="order-screen-title">Order</h2>
+      <PageHeader eyebrow="Business · Finance" title="Order" titleId="order-screen-title" />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       {/* §4.10: the obligations and payment attempts are listed only for an order the viewer may
           read, so an unavailable order never shows "no payment attempt", which would imply that
