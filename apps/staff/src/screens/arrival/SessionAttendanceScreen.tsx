@@ -17,12 +17,18 @@ import {
 import { ARRIVAL_TABS, AreaTabs } from '../../features/operations/AreaTabs';
 import { useOperatingFacility } from '../../features/operations/context';
 import { ChooseFacility } from '../../features/operations/feedback';
-import { formatRange, humanize } from '../../features/operations/format';
-import { OfflineQueueStatus } from '../../features/operations/offline/OfflineQueueStatus';
+import { formatClock, formatRange, humanize } from '../../features/operations/format';
+import {
+  OfflineQueueChip,
+  OfflineQueueStatus,
+} from '../../features/operations/offline/OfflineQueueStatus';
 import { sessionTitle, useDayWindow, useTodaySessions } from '../../features/operations/sessions';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { Icon } from '../../ui/Icon';
+import { PageHeader } from '../../ui/Page';
 import { StateView } from '../../ui/StateView';
+import './arrival.css';
 import { AttendancePanel } from './AttendancePanel';
 
 export function SessionAttendanceScreen() {
@@ -30,14 +36,22 @@ export function SessionAttendanceScreen() {
   const activity = useMemo(() => activityFromSearch(params), [params]);
   const facility = useOperatingFacility();
   return (
-    <section aria-labelledby="attendance-title">
-      <h2 id="attendance-title">Session attendance</h2>
+    <section aria-labelledby="attendance-title" className="ops-screen">
+      <PageHeader
+        eyebrow="Operate · Arrival and attendance"
+        title="Session attendance"
+        titleId="attendance-title"
+        actions={<OfflineQueueChip />}
+      />
       <AreaTabs label="Arrival and attendance screens" tabs={ARRIVAL_TABS} />
       <OfflineQueueStatus />
       {activity ? (
         <>
           <p>
-            <Link to="/arrival/attendance">Choose another activity</Link>
+            <Link to="/arrival/attendance" className="back-link">
+              <Icon name="arrow_back" size={18} />
+              Choose another activity
+            </Link>
           </p>
           <ActivityAttendance
             activity={activity}
@@ -144,9 +158,12 @@ function ActivityPicker({
           }}
         >
           {(items) => (
-            <ul className="list" aria-label="Sessions today">
+            <ul className="ops-link-list" aria-label="Sessions today">
               {items.map((s) => (
-                <li key={s.sessionId}>
+                <li key={s.sessionId} className="ops-link-row">
+                  <span className="ops-time">
+                    {formatClock(s.scheduledStart, s.timezone ?? timezone)}
+                  </span>
                   <div className="row-text">
                     <Link
                       to={`/arrival/attendance${activitySearch({
@@ -182,11 +199,14 @@ function ActivityPicker({
           }}
         >
           {(data) => (
-            <ul className="list" aria-label="Activities today">
+            <ul className="ops-link-list" aria-label="Activities today">
               {data.items
                 .filter((e) => e.kind !== 'maintenance' && e.kind !== 'block')
                 .map((e) => (
-                  <li key={e.id}>
+                  <li key={e.id} className="ops-link-row">
+                    <span className="ops-time">
+                      {formatClock(e.scheduledStart, e.timezone ?? timezone)}
+                    </span>
                     <div className="row-text">
                       <Link
                         to={`/arrival/attendance${activitySearch({ type: 'event', eventId: e.id })}`}

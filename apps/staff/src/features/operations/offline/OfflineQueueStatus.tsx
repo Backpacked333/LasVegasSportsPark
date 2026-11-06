@@ -9,9 +9,10 @@ import { formatAge } from '@sportspark/api-client';
 import { Link } from 'react-router';
 import { useApp, useNow } from '../../../providers/AppProviders';
 import { Button } from '../../../ui/Button';
+import { Icon } from '../../../ui/Icon';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { CommandError } from '../feedback';
-import { formatInstant } from '../format';
+import { formatClock, formatInstant } from '../format';
 import { useOfflineQueue } from './OfflineQueueProvider';
 
 export function OfflineQueueStatus({ reviewPath = '/arrival/offline' }: { reviewPath?: string }) {
@@ -69,5 +70,33 @@ export function OfflineQueueStatus({ reviewPath = '/arrival/offline' }: { review
       ) : null}
       {syncError ? <CommandError error={syncError} onRetry={() => void queue.sync()} /> : null}
     </section>
+  );
+}
+
+/**
+ * The page-header chip of the arrival and workspace screens: connectivity and this device's queue
+ * at a glance ("Queue empty", "2 waiting to sync", "Offline · 2 waiting to sync"), linking to the
+ * queue review. A queued observation is never called recorded.
+ */
+export function OfflineQueueChip({ reviewPath = '/arrival/offline' }: { reviewPath?: string }) {
+  const queue = useOfflineQueue();
+  const { online } = useApp();
+  const waiting = queue.mine.length;
+  const last = queue.state.lastSync;
+  const text =
+    waiting > 0
+      ? `${waiting} waiting to sync`
+      : last
+        ? `Queue empty · synced ${formatClock(last.at)}`
+        : 'Queue empty';
+  return (
+    <Link
+      to={reviewPath}
+      className="ops-chip"
+      data-state={!online ? 'offline' : waiting > 0 ? 'waiting' : 'ok'}
+    >
+      <Icon name={!online ? 'cloud_off' : waiting > 0 ? 'sync' : 'cloud_done'} size={16} />
+      {online ? text : `Offline · ${text}`}
+    </Link>
   );
 }

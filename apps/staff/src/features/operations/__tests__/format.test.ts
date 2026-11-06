@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { readZonedInput as sharedReadZonedInput } from '../../schedule-facilities/time';
 import { inputZoneHint as sharedInputZoneHint } from '../../../ui/time';
-import { inputZoneHint, readZonedInput } from '../format';
+import { formatClock, initialsOf, inputZoneHint, readZonedInput } from '../format';
 
 describe('operations date-and-time fields (SPK-SCHED-008, SPK-UX-010)', () => {
   it('are read and named by the shared helpers, not a copy with its own rules or words', () => {
@@ -34,5 +34,20 @@ describe('operations date-and-time fields (SPK-SCHED-008, SPK-UX-010)', () => {
   it('names the clock in the hint', () => {
     expect(inputZoneHint('America/Los_Angeles')).toBe('Facility time (America/Los_Angeles).');
     expect(inputZoneHint(null)).toMatch(/^Your device's time zone/);
+  });
+});
+
+describe('field-side display helpers (SPK-SCHED-008, SPK-UX-007)', () => {
+  it('formatClock shows the time in the facility zone, not the device zone', () => {
+    // 16:00 UTC on 24 Oct 2026 is 09:00 in Los Angeles (PDT).
+    expect(formatClock('2026-10-24T16:00:00.000Z', 'America/Los_Angeles')).toBe('09:00');
+    expect(formatClock('2026-10-24T16:00:00.000Z', 'UTC')).toBe('16:00');
+  });
+
+  it('initialsOf takes the first and last name initials, decorative beside the written name', () => {
+    expect(initialsOf('Alex Rivera')).toBe('AR');
+    expect(initialsOf('Maya Ada Okafor')).toBe('MO');
+    expect(initialsOf('Cher')).toBe('C');
+    expect(initialsOf('  ')).toBe('?');
   });
 });

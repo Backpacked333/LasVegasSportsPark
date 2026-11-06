@@ -1,44 +1,106 @@
 /*
  * Operations screens (arrival, attendance, release, staff and officials, communications, the
- * coach and referee workspace). Dense but readable (SPK-UX-010); targets at least 44 px; one
- * column below 768 px so the workspace works on a phone beside a field (SPK-UX-007). Status is
- * never colour alone: badges carry a glyph and text (SPK-UX-009).
+ * coach and referee workspace) on the night-pitch design system (SPK-UX-010). Dense but readable;
+ * one column on a phone beside a field (SPK-UX-007), where coarse pointers get 44 px targets and the
+ * field actions 52 to 56 px. Status is never colour alone: badges carry a glyph and text
+ * (SPK-UX-009).
+ *
+ * The `ops-*` classes are shared by every operations screen; screen-specific styles live with the
+ * screen (`screens/arrival/arrival.css`, `screens/workspace/workspace.css`).
  */
+
+/* ---------- Screen frame ---------- */
+.ops-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.ops-screen > .ops-section,
+.ops-screen > .ops-queue,
+.ops-screen .split .ops-section {
+  margin: 0;
+}
+.ops-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* ---------- Area tabs: a segmented control (the current screen by weight and a raised tile) ---------- */
 .ops-tabs ul {
   list-style: none;
   margin: 0 0 var(--space-3);
-  padding: 0;
+  padding: 4px;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: 4px;
+  background: #ebe9e2;
+  border-radius: 10px;
+  width: fit-content;
+  max-width: 100%;
+}
+.ops-screen .ops-tabs ul {
+  margin: 0;
 }
 .ops-tabs a {
   display: inline-flex;
   align-items: center;
-  min-height: var(--touch);
-  padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  color: var(--color-text);
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ops-tabs a:hover {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
   text-decoration: none;
 }
 .ops-tabs a[aria-current='page'] {
-  font-weight: 600;
-  border-bottom: 4px solid var(--color-primary);
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 800;
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.12);
 }
+
+/* ---------- Sections are cards ---------- */
 .ops-section {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: var(--space-3) var(--space-4);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
   margin: var(--space-3) 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  min-width: 0;
 }
 .ops-section > h3,
 .ops-section > h4 {
   margin: 0;
 }
+/* A section inside a section is a quiet inset panel. */
+.ops-section .ops-section {
+  background: var(--sand-2);
+  border-color: var(--line-soft);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 0;
+}
+.ops-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+/* ---------- Forms ---------- */
 .ops-form {
   display: flex;
   flex-direction: column;
@@ -48,33 +110,59 @@
 .ops-field {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 5px;
+  min-width: 0;
+  max-width: 40rem;
 }
 .ops-field input,
 .ops-field select,
 .ops-field textarea {
-  min-height: var(--touch);
-  font: inherit;
-  padding: var(--space-2) var(--space-3);
-  border: 2px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-text);
+  width: 100%;
+  max-width: 100%;
 }
 .ops-field [aria-invalid='true'] {
   border-color: var(--tone-danger);
   border-style: dashed;
+  border-width: 2px;
 }
 .ops-check {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px 10px;
   min-height: var(--touch);
 }
 .ops-check input {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.shell-main .ops-check input[type='checkbox'],
+.shell-main .ops-check input[type='radio'] {
+  width: 20px;
+  height: 20px;
+}
+.ops-check > .caption {
+  flex-basis: 100%;
+  padding-left: 30px;
+}
+.ops-fieldset {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 14px 12px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ops-fieldset legend {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 6px;
 }
 .ops-actions {
   display: flex;
@@ -95,16 +183,25 @@
   gap: var(--space-2);
   align-items: center;
 }
+
+/* ---------- Offline queue banner (SCR-W-10) ---------- */
 .ops-queue {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--space-2) var(--space-3);
   align-items: center;
-  padding: var(--space-3) var(--space-4);
-  border: 2px dashed var(--tone-warning);
-  border-radius: 6px;
+  padding: 10px 14px;
+  background: var(--tone-warning-bg);
+  border: 1px dashed var(--tone-warning-line);
+  border-radius: var(--radius);
   margin: var(--space-3) 0;
+  color: #5c3a00;
 }
+.ops-queue .caption {
+  color: #6b4a12;
+}
+
+/* ---------- Tables, lists, cards ---------- */
 .ops-table {
   width: 100%;
   border-collapse: collapse;
@@ -112,19 +209,28 @@
 .ops-table th,
 .ops-table td {
   text-align: left;
-  padding: var(--space-2);
-  border-bottom: 1px solid var(--color-border);
   vertical-align: top;
+}
+.ops-table caption {
+  caption-side: bottom;
+  text-align: left;
+  padding: 8px 12px;
 }
 .ops-table-wrap {
   overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
 }
 .ops-history {
   margin: 0;
-  padding-left: var(--space-4);
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .ops-history li {
-  padding: var(--space-1) 0;
+  padding: 2px 0;
 }
 .ops-cards {
   list-style: none;
@@ -135,25 +241,18 @@
   gap: var(--space-3);
 }
 .ops-cards > li {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: var(--space-3);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  min-width: 0;
 }
-.ops-fieldset {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: var(--space-3);
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.ops-fieldset legend {
-  font-weight: 600;
-  padding: 0 var(--space-1);
+.ops-section .ops-cards > li {
+  background: var(--sand-2);
+  border-color: var(--line-soft);
 }
 .ops-counts {
   list-style: none;
@@ -163,16 +262,186 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+.ops-section dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 0;
+}
+.ops-section dt {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding-top: 2px;
+}
+.ops-section dd {
+  margin: 0;
+}
+
+/* ---------- Shared bits for the field-side screens ---------- */
+/* Initials in a rounded tile (decorative: the name is always written beside it). */
+.ops-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--tone-success-bg);
+  color: var(--pitch);
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 800;
+  flex: none;
+  letter-spacing: 0.02em;
+}
+/* Scoreboard tiles: condensed numbers (counts the screen also states in words). */
+.ops-tally {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ops-tally > li {
+  background: var(--sand-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ops-tally-value {
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+}
+.ops-tally-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.ops-tally > li[data-tone='success'] .ops-tally-value {
+  color: var(--tone-success);
+}
+.ops-tally > li[data-tone='warning'] .ops-tally-value {
+  color: var(--tone-warning);
+}
+.ops-tally > li[data-tone='danger'] .ops-tally-value {
+  color: var(--tone-danger);
+}
+/* A small status chip in a page header (connectivity, queue). */
+.ops-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-decoration: none;
+}
+a.ops-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  text-decoration: none;
+}
+.ops-chip .icon {
+  color: var(--pitch);
+}
+.ops-chip[data-state='offline'] {
+  background: var(--tone-warning-bg);
+  border-color: var(--tone-warning-line);
+  color: var(--tone-warning);
+}
+.ops-chip[data-state='offline'] .icon,
+.ops-chip[data-state='waiting'] .icon {
+  color: var(--tone-warning);
+}
+/* Rows that open a record: a time block, the text, a chevron. */
+.ops-link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ops-link-list > li {
+  border-top: 1px solid var(--line-soft);
+}
+.ops-link-list > li:first-child {
+  border-top: 0;
+}
+.ops-link-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  min-height: 52px;
+}
+.ops-time {
+  font-size: 19px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+  color: var(--ink);
+}
+.ops-link-row .row-text {
+  flex: none;
+}
+.ops-link-row .icon {
+  color: var(--faint);
+}
+
+/* Visually hidden, still read by assistive technology. */
+.ops-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 
 @media (max-width: 768px) {
   .ops-cards {
     grid-template-columns: 1fr;
   }
   .ops-section {
-    padding: var(--space-3);
+    padding: 14px;
   }
   .ops-actions .button {
     flex: 1 1 auto;
     justify-content: center;
   }
+  /* The area tabs scroll sideways instead of wrapping into a tall block. */
+  .ops-tabs ul {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    width: 100%;
+    scrollbar-width: none;
+  }
+  .ops-tabs li {
+    flex: none;
+  }
+  .ops-form {
+    max-width: none;
+  }
+}
+.ops-check > label {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--touch);
 }

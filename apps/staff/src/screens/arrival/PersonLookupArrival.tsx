@@ -221,6 +221,7 @@ function LookedUpPerson({
                 <CheckinOutcome
                   checkin={current}
                   title={sessionTitle(chosenSession)}
+                  timezone={chosenSession.timezone ?? timezone}
                   busy={recheck.status === 'pending'}
                   onRecheck={
                     online
