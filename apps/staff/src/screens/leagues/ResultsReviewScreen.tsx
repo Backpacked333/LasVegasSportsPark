@@ -758,7 +758,8 @@ export function ResultsReviewScreen() {
   const shootout = useShootout(fixture.data);
   const [entering, setEntering] = useState(false);
   return (
-    <section aria-labelledby="results-title">
+    <section aria-labelledby="results-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Fixture</span>
       <h2 id="results-title">Results{fixture.data ? `: ${fixtureTitle(fixture.data)}` : ''}</h2>
       <LeaguesNav />
       <p>

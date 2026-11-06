@@ -2,12 +2,21 @@
  * SCR-S-18 Placement board (SPK-PLACE-001 approved placement information, SPK-PLACE-002 eligible
  * candidate teams with explainable reasons, staff-reviewed by default, SPK-PLACE-003 capacity and
  * eligibility checked at commitment and a recommendation reserves nothing, SPK-PLACE-005 no public
- * profiles, SPK-UX-008). Individual entrants waiting for a team are listed with the information
- * they gave; candidates come from the API with their reasons and the capacity they would use.
- * Propose, assign, reject a proposal and release carry `expectedRevision`. CAPACITY_UNAVAILABLE or
- * a changed eligibility at assignment is shown with its code, and the candidates are reloaded.
- * The assignment's operation is shown: `recovery_required` means a follow-up (roster addition or
- * notice) was not recorded. The placement model and its fields are pending DEC-031 and DEC-051.
+ * profiles, SPK-UX-008, SPK-UX-009). Individual entrants waiting for a team are listed with the
+ * information they gave; the season's approved teams stand beside them as columns, each with its
+ * roster size against the rule set's minimum and maximum (`TeamEntry.rosterCount`, `rosterMin`,
+ * `rosterMax`).
+ *
+ * Placing is select-then-place, never drag only (SPK-UX-009): "Show candidate teams" selects an
+ * entrant; the team columns then become the API's candidates for that entrant
+ * (`GET /v1/placement-requests/{id}/candidates`) with their reasons and the capacity they would
+ * use, and each candidate column offers "Propose" and "Assign" as ordinary buttons. A team the API
+ * did not offer says so and offers nothing. Propose, assign, reject a proposal and release carry
+ * `expectedRevision`. CAPACITY_UNAVAILABLE or a changed eligibility at assignment is shown with its
+ * code, and the candidates are reloaded. The assignment's operation is shown: `recovery_required`
+ * means a follow-up (roster addition or notice) was not recorded. The placement model and its
+ * fields are pending DEC-031 and DEC-051; the API gives no position or skill rating for rostered
+ * players, so the board does not claim keeper or skill balance.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -27,7 +36,7 @@ import {
 import { SelectField, TextAreaField } from '../../features/competition/fields';
 import { formatInstant } from '../../features/competition/format';
 import { PLACEMENT_STATUS, weekdayName } from '../../features/competition/labels';
-import { SeasonLinks, TeamsNav } from '../../features/competition/nav';
+import { SeasonLinks } from '../../features/competition/nav';
 import {
   EntryName,
   PersonName,
@@ -37,13 +46,17 @@ import {
   type PersonNames,
 } from '../../features/competition/names';
 import { OperationStatus } from '../../features/competition/OperationStatus';
+import { CompeteHeader, initials } from '../../features/competition/page';
 import { PENDING } from '../../features/competition/pending';
+import { SeasonEyebrow } from '../../features/competition/season-context';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { StatusBadge } from '../../ui/StatusBadge';
+import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 
 type PlacementRequest = Schema<'PlacementRequest'>;
 type PlacementStatus = Schema<'PlacementStatus'>;
+type PlacementCandidate = Schema<'PlacementCandidate'>;
+type TeamEntry = Schema<'TeamEntry'>;
 
 const PLACEMENT_KEYS = keys(
   '/placement-requests',
@@ -51,6 +64,9 @@ const PLACEMENT_KEYS = keys(
   '/placement-requests/{id}/candidates',
   '/team-entries',
 );
+
+/** A team colour band for each column, by position only (no meaning: the name is the label). */
+const TEAM_BANDS = ['#c0392b', '#2d5bd8', '#b07a12', '#0e7c74', '#5b3fa8', '#b0306b', '#c4541c'];
 
 function PlacementInformation({ request }: { request: PlacementRequest }) {
   return (
@@ -91,121 +107,16 @@ function PlacementInformation({ request }: { request: PlacementRequest }) {
   );
 }
 
-function Candidates({ request }: { request: PlacementRequest }) {
-  const candidates = useApiQuery({
-    path: '/placement-requests/{id}/candidates',
-    request: { path: { id: request.id } },
-  });
-  const propose = useApiCommand('post', '/placement-requests/{id}/propose', {
-    invalidate: PLACEMENT_KEYS,
-  });
-  const assign = useApiCommand('post', '/placement-requests/{id}/assign', {
-    invalidate: PLACEMENT_KEYS,
-  });
-  const reload = useRefetch(['/placement-requests', '/placement-requests/{id}/candidates']);
-  const [last, setLast] = useState<{ kind: 'propose' | 'assign'; teamEntryId: string } | null>(
-    null,
-  );
-  const send = (kind: 'propose' | 'assign', teamEntryId: string) => {
-    setLast({ kind, teamEntryId });
-    const options = {
-      path: { id: request.id },
-      body: { teamEntryId, expectedRevision: request.revision },
-    };
-    const sent = kind === 'propose' ? propose.submit(options) : assign.submit(options);
-    void sent.catch(() => undefined);
-  };
-  const error = propose.error ?? assign.error;
-  return (
-    <section aria-labelledby={`candidates-${request.id}`}>
-      <h4 id={`candidates-${request.id}`}>Candidate teams</h4>
-      <p className="caption">
-        A recommendation reserves nothing: capacity and eligibility are checked again when you
-        assign.
-      </p>
-      <QueryBoundary
-        query={candidates}
-        label="candidate teams"
-        isEmpty={(data) => data.length === 0}
-        empty={{
-          title: 'No candidate teams',
-          description: 'No approved team of this season can take this entrant now.',
-        }}
-        unavailableOffline={['proposing and assigning placements']}
-      >
-        {(data) => (
-          <ul className="list" aria-label="Candidate teams">
-            {data.map((candidate) => (
-              <li
-                key={candidate.teamEntryId}
-                aria-labelledby={`cand-${request.id}-${candidate.teamEntryId}`}
-              >
-                <div className="row-text">
-                  <span className="row-title" id={`cand-${request.id}-${candidate.teamEntryId}`}>
-                    {candidate.teamName}
-                  </span>
-                  <span>
-                    <StatusBadge
-                      tone={candidate.eligible ? 'success' : 'danger'}
-                      label={candidate.eligible ? 'Eligible' : 'Not eligible'}
-                    />{' '}
-                    {candidate.recommended ? <StatusBadge tone="info" label="Recommended" /> : null}
-                  </span>
-                  <span className="caption">
-                    {candidate.capacity
-                      ? `${candidate.capacity.available} of ${candidate.capacity.capacity} roster places free`
-                      : 'No roster capacity limit recorded'}
-                    {` · ${candidate.requestedTeammatesOnRoster} requested teammate(s) on this roster`}
-                  </span>
-                  <ReasonList
-                    reasons={candidate.reasons}
-                    label={`Reasons for ${candidate.teamName}`}
-                  />
-                </div>
-                <div className="actions">
-                  {request.status === 'unassigned' ? (
-                    <CommandButton
-                      variant="secondary"
-                      busy={propose.isProcessing && last?.teamEntryId === candidate.teamEntryId}
-                      aria-label={`Propose ${candidate.teamName}`}
-                      onClick={() => send('propose', candidate.teamEntryId)}
-                    >
-                      Propose
-                    </CommandButton>
-                  ) : null}
-                  <CommandButton
-                    busy={assign.isProcessing && last?.teamEntryId === candidate.teamEntryId}
-                    aria-label={`Assign to ${candidate.teamName}`}
-                    onClick={() => send('assign', candidate.teamEntryId)}
-                  >
-                    Assign
-                  </CommandButton>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </QueryBoundary>
-      {propose.status === 'success' && propose.data ? (
-        <SuccessNote>{`Placement ${propose.data.status}`}</SuccessNote>
-      ) : null}
-      {assign.status === 'success' && assign.data ? (
-        <>
-          <SuccessNote>{`Placement ${assign.data.status}`}</SuccessNote>
-          <OperationStatus operationId={assign.data.lastOperationId} />
-        </>
-      ) : null}
-      <CommandError
-        error={error}
-        onRetry={() => (last ? send(last.kind, last.teamEntryId) : undefined)}
-        onReload={() => {
-          propose.reset();
-          assign.reset();
-          reload();
-        }}
-      />
-    </section>
-  );
+/** Roster size against the rule set's limits for one team entry, in words (SPK-UX-009). */
+export function rosterCheck(entry: Pick<TeamEntry, 'rosterCount' | 'rosterMin' | 'rosterMax'>): {
+  tone: StatusTone;
+  label: string;
+} {
+  const { rosterCount: n, rosterMin: min, rosterMax: max } = entry;
+  const players = `${n} ${n === 1 ? 'player' : 'players'}`;
+  if (n > max) return { tone: 'danger', label: `${players}, over the ${max} maximum` };
+  if (n < min) return { tone: 'warning', label: `${players} of ${min} minimum` };
+  return { tone: 'success', label: players };
 }
 
 function ReasonedAction({
@@ -242,7 +153,7 @@ function ReasonedAction({
   };
   if (!open) {
     return (
-      <Button variant="secondary" onClick={() => setOpen(true)}>
+      <Button variant="secondary" className="button-sm" onClick={() => setOpen(true)}>
         {label}
       </Button>
     );
@@ -280,50 +191,61 @@ function RequestCard({
   request,
   entries,
   names,
+  selected,
+  onSelect,
 }: {
   request: PlacementRequest;
   entries: EntryNames;
   names: PersonNames;
+  selected: boolean;
+  onSelect: (request: PlacementRequest | null) => void;
 }) {
-  const [showCandidates, setShowCandidates] = useState(false);
   const badge = PLACEMENT_STATUS[request.status];
+  const entry = names.get(request.participantPersonId);
+  const placeable = request.status === 'unassigned' || request.status === 'proposed';
   return (
-    <li aria-labelledby={`placement-${request.id}`}>
-      <div className="row-text">
-        <span className="row-title" id={`placement-${request.id}`}>
-          <PersonName personId={request.participantPersonId} names={names} />
+    <li aria-labelledby={`placement-${request.id}`} data-selected={selected}>
+      <div className="place-player">
+        <span className="place-avatar" aria-hidden="true">
+          {entry ? initials(entry.displayName) : '?'}
         </span>
-        <StatusBadge tone={badge.tone} label={`Placement ${badge.label}`} />
-        <span className="caption">Requested {formatInstant(request.createdAt)}</span>
-        <PlacementInformation request={request} />
-        {request.proposedTeamEntryId ? (
-          <span>
-            Proposed: <EntryName entryId={request.proposedTeamEntryId} teamIdOf={entries} />
-            {request.proposedAt ? ` (${formatInstant(request.proposedAt)})` : ''}
+        <div className="row-text">
+          <span className="row-title" id={`placement-${request.id}`}>
+            <PersonName personId={request.participantPersonId} names={names} />
           </span>
-        ) : null}
-        {request.proposalReasons.length > 0 ? (
-          <ReasonList reasons={request.proposalReasons} label="Proposal reasons" />
-        ) : null}
-        {request.assignedTeamEntryId ? (
-          <span>
-            Assigned: <EntryName entryId={request.assignedTeamEntryId} teamIdOf={entries} />
-            {request.assignedAt ? ` (${formatInstant(request.assignedAt)})` : ''}
-          </span>
-        ) : null}
-        {request.releaseReason ? <span>Released: {request.releaseReason}</span> : null}
-        {request.status === 'assigned' ? (
-          <OperationStatus operationId={request.lastOperationId} />
-        ) : null}
+          <span className="caption">Requested {formatInstant(request.createdAt)}</span>
+        </div>
       </div>
-      <div className="actions">
-        {request.status === 'unassigned' || request.status === 'proposed' ? (
+      <StatusBadge tone={badge.tone} label={`Placement ${badge.label}`} />
+      <PlacementInformation request={request} />
+      {request.proposedTeamEntryId ? (
+        <span>
+          Proposed: <EntryName entryId={request.proposedTeamEntryId} teamIdOf={entries} />
+          {request.proposedAt ? ` (${formatInstant(request.proposedAt)})` : ''}
+        </span>
+      ) : null}
+      {request.proposalReasons.length > 0 ? (
+        <ReasonList reasons={request.proposalReasons} label="Proposal reasons" />
+      ) : null}
+      {request.assignedTeamEntryId ? (
+        <span>
+          Assigned: <EntryName entryId={request.assignedTeamEntryId} teamIdOf={entries} />
+          {request.assignedAt ? ` (${formatInstant(request.assignedAt)})` : ''}
+        </span>
+      ) : null}
+      {request.releaseReason ? <span>Released: {request.releaseReason}</span> : null}
+      {request.status === 'assigned' ? (
+        <OperationStatus operationId={request.lastOperationId} />
+      ) : null}
+      <div className="actions-row">
+        {placeable ? (
           <Button
-            variant="secondary"
-            aria-expanded={showCandidates}
-            onClick={() => setShowCandidates((s) => !s)}
+            variant={selected ? 'primary' : 'secondary'}
+            className="button-sm"
+            aria-expanded={selected}
+            onClick={() => onSelect(selected ? null : request)}
           >
-            {showCandidates ? 'Hide candidate teams' : 'Show candidate teams'}
+            {selected ? 'Hide candidate teams' : 'Show candidate teams'}
           </Button>
         ) : null}
         {request.status === 'proposed' ? (
@@ -331,15 +253,250 @@ function RequestCard({
         ) : null}
         {request.status === 'assigned' ? <ReasonedAction request={request} kind="release" /> : null}
       </div>
-      {showCandidates ? <Candidates request={request} /> : null}
     </li>
   );
+}
+
+interface Column {
+  teamEntryId: string;
+  teamName: string;
+  entry: TeamEntry | undefined;
+  candidate: PlacementCandidate | undefined;
+}
+
+function TeamColumnHead({ column, band }: { column: Column; band: string }) {
+  const check = column.entry ? rosterCheck(column.entry) : null;
+  return (
+    <div className="place-col-head" style={{ ['--team-color' as string]: band }}>
+      <div className="place-col-title">
+        <h4 id={`team-${column.teamEntryId}`}>{column.teamName}</h4>
+        {column.entry ? (
+          <span className="place-count">
+            {column.entry.rosterCount} / {column.entry.rosterMax}
+          </span>
+        ) : null}
+      </div>
+      <span className="actions-row">
+        {check ? <StatusBadge tone={check.tone} label={check.label} /> : null}
+        {column.entry?.rosterComplete ? (
+          <StatusBadge tone="success" label="Roster complete" />
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The team columns. With an entrant selected they are that entrant's candidate teams (the
+ * "Candidate teams" list), each with its placement controls; teams the API did not offer follow,
+ * marked as not offered.
+ */
+function TeamColumns({
+  selected,
+  entries,
+  entrantName,
+}: {
+  selected: PlacementRequest | null;
+  entries: readonly TeamEntry[];
+  entrantName: string;
+}) {
+  const candidates = useApiQuery({
+    path: '/placement-requests/{id}/candidates',
+    request: { path: { id: selected?.id ?? '' } },
+    enabled: !!selected,
+  });
+  const propose = useApiCommand('post', '/placement-requests/{id}/propose', {
+    invalidate: PLACEMENT_KEYS,
+  });
+  const assign = useApiCommand('post', '/placement-requests/{id}/assign', {
+    invalidate: PLACEMENT_KEYS,
+  });
+  const reload = useRefetch(['/placement-requests', '/placement-requests/{id}/candidates']);
+  const [last, setLast] = useState<{ kind: 'propose' | 'assign'; teamEntryId: string } | null>(
+    null,
+  );
+  const send = (kind: 'propose' | 'assign', teamEntryId: string) => {
+    if (!selected) return;
+    setLast({ kind, teamEntryId });
+    const options = {
+      path: { id: selected.id },
+      body: { teamEntryId, expectedRevision: selected.revision },
+    };
+    const sent = kind === 'propose' ? propose.submit(options) : assign.submit(options);
+    void sent.catch(() => undefined);
+  };
+  const error = propose.error ?? assign.error;
+
+  const approved = entries.filter((e) => e.status === 'approved');
+  const byEntry = new Map(approved.map((e) => [e.id, e]));
+  const offered = candidates.data ?? [];
+  const offeredIds = new Set(offered.map((c) => c.teamEntryId));
+  const columns: Column[] = selected
+    ? [
+        // Recommended first, then eligible, then the rest the API offered, in its order.
+        ...[...offered]
+          .sort(
+            (a, b) =>
+              Number(b.recommended) - Number(a.recommended) ||
+              Number(b.eligible) - Number(a.eligible),
+          )
+          .map((c) => ({
+            teamEntryId: c.teamEntryId,
+            teamName: c.teamName,
+            entry: byEntry.get(c.teamEntryId),
+            candidate: c,
+          })),
+        ...approved
+          .filter((e) => !offeredIds.has(e.id))
+          .map((e) => ({
+            teamEntryId: e.id,
+            teamName: e.teamName,
+            entry: e,
+            candidate: undefined,
+          })),
+      ]
+    : approved.map((e) => ({
+        teamEntryId: e.id,
+        teamName: e.teamName,
+        entry: e,
+        candidate: undefined,
+      }));
+  const bandOf = new Map(approved.map((e, i) => [e.id, TEAM_BANDS[i % TEAM_BANDS.length] ?? '']));
+
+  const list = (
+    <ul className="place-teams" aria-label={selected ? 'Candidate teams' : 'Teams of the season'}>
+      {columns.map((column) => {
+        const c = column.candidate;
+        return (
+          <li
+            key={column.teamEntryId}
+            className="place-col place-team"
+            data-candidate={selected ? String(!!c) : undefined}
+            aria-labelledby={`team-${column.teamEntryId}`}
+          >
+            <TeamColumnHead column={column} band={bandOf.get(column.teamEntryId) ?? '#8a948f'} />
+            <div className="place-col-body">
+              {selected && c ? (
+                <div className="place-move" data-eligible={String(c.eligible)}>
+                  <span className="actions-row">
+                    <StatusBadge
+                      tone={c.eligible ? 'success' : 'danger'}
+                      label={c.eligible ? 'Eligible' : 'Not eligible'}
+                    />
+                    {c.recommended ? <StatusBadge tone="info" label="Recommended" /> : null}
+                  </span>
+                  <span className="caption">
+                    {c.capacity
+                      ? `${c.capacity.available} of ${c.capacity.capacity} roster places free`
+                      : 'No roster capacity limit recorded'}
+                    {` · ${c.requestedTeammatesOnRoster} requested teammate(s) on this roster`}
+                  </span>
+                  <ReasonList reasons={c.reasons} label={`Reasons for ${c.teamName}`} />
+                  <div className="actions-row">
+                    {selected.status === 'unassigned' ? (
+                      <CommandButton
+                        variant="secondary"
+                        className="button-sm"
+                        busy={propose.isProcessing && last?.teamEntryId === c.teamEntryId}
+                        aria-label={`Propose ${c.teamName}`}
+                        onClick={() => send('propose', c.teamEntryId)}
+                      >
+                        Propose
+                      </CommandButton>
+                    ) : null}
+                    <CommandButton
+                      className="button-sm"
+                      busy={assign.isProcessing && last?.teamEntryId === c.teamEntryId}
+                      onClick={() => send('assign', c.teamEntryId)}
+                    >
+                      Assign to {c.teamName}
+                    </CommandButton>
+                  </div>
+                </div>
+              ) : selected ? (
+                <p className="place-empty">Not offered as a candidate for {entrantName}.</p>
+              ) : (
+                <p className="place-empty">
+                  {column.entry
+                    ? `${column.entry.rosterCount} on the roster. Select an entrant to see whether this team can take them.`
+                    : 'Select an entrant to see whether this team can take them.'}
+                </p>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+
+  return (
+    <section className="place-board-teams" aria-labelledby="place-teams-title">
+      <h3 id="place-teams-title" className="sr-only-caption">
+        Teams
+      </h3>
+      {selected ? (
+        <p className="caption">
+          A recommendation reserves nothing: capacity and eligibility are checked again when you
+          assign.
+        </p>
+      ) : null}
+      {selected ? (
+        <QueryBoundary
+          query={candidates}
+          label="candidate teams"
+          isEmpty={(data) => data.length === 0 && approved.length === 0}
+          empty={{
+            title: 'No candidate teams',
+            description: 'No approved team of this season can take this entrant now.',
+          }}
+          unavailableOffline={['proposing and assigning placements']}
+        >
+          {() => list}
+        </QueryBoundary>
+      ) : columns.length === 0 ? (
+        <div className="state">
+          <StatusBadge tone="neutral" label="No approved teams yet" />
+          <p className="caption">
+            Approved team entries of this season appear here as columns. Entrants can still be
+            selected to see the API&apos;s candidate teams.
+          </p>
+        </div>
+      ) : (
+        list
+      )}
+      {propose.status === 'success' && propose.data ? (
+        <SuccessNote>{`Placement ${propose.data.status}`}</SuccessNote>
+      ) : null}
+      {assign.status === 'success' && assign.data ? (
+        <>
+          <SuccessNote>{`Placement ${assign.data.status}`}</SuccessNote>
+          <OperationStatus operationId={assign.data.lastOperationId} />
+        </>
+      ) : null}
+      <CommandError
+        error={error}
+        onRetry={() => (last ? send(last.kind, last.teamEntryId) : undefined)}
+        onReload={() => {
+          propose.reset();
+          assign.reset();
+          reload();
+        }}
+      />
+    </section>
+  );
+}
+
+/** One chip with the roster limits when every approved team has the same (from the rule set). */
+function rosterRule(entries: readonly TeamEntry[]): string | null {
+  const limits = new Set(entries.map((e) => `${e.rosterMin}–${e.rosterMax}`));
+  return limits.size === 1 ? `Roster ${[...limits][0]}` : null;
 }
 
 export function PlacementBoardScreen() {
   const { seasonId = '' } = useParams();
   const [status, setStatus] = useState<PlacementStatus | ''>('unassigned');
-  const { byId } = useSeasonEntries(seasonId);
+  const [selected, setSelected] = useState<PlacementRequest | null>(null);
+  const { byId, query: entriesQuery } = useSeasonEntries(seasonId);
   // Every entrant is reachable: pages follow the API cursor (SPK-PLACE-001, §4.5).
   const pages = useCursorStack();
   const requests = useApiQuery({
@@ -354,50 +511,117 @@ export function PlacementBoardScreen() {
     },
   });
   const names = usePersonNames((requests.data?.items ?? []).map((r) => r.participantPersonId));
+  // The freshest copy of the selected entrant (its revision), or the one chosen if it left the
+  // list after a placement.
+  const current = selected
+    ? (requests.data?.items.find((r) => r.id === selected.id) ?? selected)
+    : null;
+  const selectedName = current ? names.get(current.participantPersonId)?.displayName : undefined;
+  const entries = entriesQuery.data ?? [];
+  const approved = entries.filter((e) => e.status === 'approved');
+  const rule = rosterRule(approved);
+  const waiting = requests.data?.items.length;
   return (
-    <section aria-labelledby="placement-title">
-      <h2 id="placement-title">Placement board</h2>
-      <TeamsNav />
+    <section aria-labelledby="placement-title" className="compete">
+      <CompeteHeader
+        eyebrow={
+          <SeasonEyebrow
+            seasonId={seasonId}
+            extra={
+              waiting !== undefined && status === 'unassigned'
+                ? `${waiting}${requests.data?.nextCursor ? '+' : ''} waiting for a team`
+                : undefined
+            }
+          />
+        }
+        title="Placement board"
+        titleId="placement-title"
+        actions={
+          <span className="place-hint" aria-live="polite">
+            {current
+              ? `Choose a team for ${selectedName ?? 'the selected entrant'}`
+              : 'Select an entrant, then a team'}
+          </span>
+        }
+        chips={
+          <>
+            {rule ? <span className="chip chip-outline">{rule}</span> : null}
+            <span className="chip chip-outline">
+              {approved.length} approved {approved.length === 1 ? 'team' : 'teams'}
+            </span>
+            <span className="chip chip-outline">Capacity checked when you assign</span>
+          </>
+        }
+      />
       <SeasonLinks seasonId={seasonId} />
       <PendingNote decision={PENDING.placementModel} />
-      <SelectField
-        label="Placement state"
-        value={status}
-        onChange={(v) => {
-          setStatus(v as PlacementStatus | '');
-          pages.reset();
-        }}
-        options={Object.entries(PLACEMENT_STATUS).map(([value, b]) => ({ value, label: b.label }))}
-        placeholder="All states"
-      />
-      <QueryBoundary
-        query={requests}
-        label="placement requests"
-        isEmpty={(data) => data.items.length === 0 && pages.depth === 0}
-        empty={{
-          title: status === 'unassigned' ? 'No unplaced entrants' : 'No placement requests',
-          description:
-            'Individual entrants who asked to be placed on a team appear here with the information they gave.',
-        }}
-        unavailableOffline={['proposing, assigning and releasing placements']}
-      >
-        {(data) => (
-          <>
-            <ul className="list" aria-label="Placement requests">
-              {data.items.map((request) => (
-                <RequestCard key={request.id} request={request} entries={byId} names={names} />
-              ))}
-            </ul>
-            <PageButtons
-              what="placement requests"
-              depth={pages.depth}
-              nextCursor={data.nextCursor}
-              onNext={pages.next}
-              onPrevious={pages.previous}
+      <div className="place-board">
+        <section className="place-col place-col-unplaced" aria-labelledby="unplaced-title">
+          <div className="place-col-head">
+            <div className="place-col-title">
+              <h3 id="unplaced-title">Entrants</h3>
+              {waiting !== undefined ? <span className="place-count">{waiting}</span> : null}
+            </div>
+            <SelectField
+              label="Placement state"
+              value={status}
+              onChange={(v) => {
+                setStatus(v as PlacementStatus | '');
+                setSelected(null);
+                pages.reset();
+              }}
+              options={Object.entries(PLACEMENT_STATUS).map(([value, b]) => ({
+                value,
+                label: b.label,
+              }))}
+              placeholder="All states"
             />
-          </>
-        )}
-      </QueryBoundary>
+          </div>
+          <div className="place-col-body">
+            <QueryBoundary
+              query={requests}
+              label="placement requests"
+              isEmpty={(data) => data.items.length === 0 && pages.depth === 0}
+              empty={{
+                title: status === 'unassigned' ? 'No unplaced entrants' : 'No placement requests',
+                description:
+                  'Individual entrants who asked to be placed on a team appear here with the information they gave.',
+              }}
+              unavailableOffline={['proposing, assigning and releasing placements']}
+            >
+              {(data) => (
+                <>
+                  <ul className="place-requests" aria-label="Placement requests">
+                    {data.items.map((request) => (
+                      <RequestCard
+                        key={request.id}
+                        request={request}
+                        entries={byId}
+                        names={names}
+                        selected={current?.id === request.id}
+                        onSelect={setSelected}
+                      />
+                    ))}
+                  </ul>
+                  <PageButtons
+                    what="placement requests"
+                    depth={pages.depth}
+                    nextCursor={data.nextCursor}
+                    onNext={pages.next}
+                    onPrevious={pages.previous}
+                  />
+                </>
+              )}
+            </QueryBoundary>
+          </div>
+        </section>
+        <TeamColumns
+          key={current?.id ?? 'none'}
+          selected={current}
+          entries={entries}
+          entrantName={selectedName?.split(' ')[0] ?? 'the entrant'}
+        />
+      </div>
     </section>
   );
 }

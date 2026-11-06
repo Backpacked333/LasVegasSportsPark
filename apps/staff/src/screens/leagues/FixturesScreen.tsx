@@ -16,7 +16,9 @@ import { useDivisionZones } from '../../features/competition/facilities';
 import { SelectField } from '../../features/competition/fields';
 import { formatInstant } from '../../features/competition/format';
 import { FIXTURE_STATUS } from '../../features/competition/labels';
-import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
+import { SeasonLinks } from '../../features/competition/nav';
+import { CompeteHeader } from '../../features/competition/page';
+import { SeasonEyebrow } from '../../features/competition/season-context';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -55,11 +57,15 @@ export function FixturesScreen() {
   const divisionName = new Map((divisions.data ?? []).map((d) => [d.id, d.name]));
 
   return (
-    <section aria-labelledby="fixtures-title">
-      <h2 id="fixtures-title">Fixtures and readiness</h2>
-      <LeaguesNav />
+    <section aria-labelledby="fixtures-title" className="compete">
+      <CompeteHeader
+        eyebrow={<SeasonEyebrow seasonId={seasonId} />}
+        title="Fixtures and readiness"
+        titleId="fixtures-title"
+        intro="A fixture's state and its readiness are shown apart: a scheduled game can still be blocked. Readiness is derived from rosters, fees and officials on every evaluation."
+      />
       <SeasonLinks seasonId={seasonId} />
-      <div className="actions">
+      <div className="toolbar">
         <SelectField
           label="Division"
           value={divisionId}

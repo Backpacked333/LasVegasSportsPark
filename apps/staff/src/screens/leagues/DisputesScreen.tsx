@@ -88,7 +88,8 @@ export function DisputesScreen() {
     },
   });
   return (
-    <section aria-labelledby="all-disputes-title">
+    <section aria-labelledby="all-disputes-title" className="compete">
+      <span className="eyebrow">Compete · Leagues and tournaments</span>
       <h2 id="all-disputes-title">Disputes</h2>
       <LeaguesNav />
       <PendingNote decision={PENDING.discipline} />

@@ -122,7 +122,8 @@ export function FixtureScreen() {
   const { fixtureId = '' } = useParams();
   const fixture = useApiQuery({ path: '/fixtures/{id}', request: { path: { id: fixtureId } } });
   return (
-    <section aria-labelledby="fixture-title">
+    <section aria-labelledby="fixture-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Fixture</span>
       <h2 id="fixture-title">{fixture.data ? fixtureTitle(fixture.data) : 'Fixture'}</h2>
       <LeaguesNav />
       <QueryBoundary

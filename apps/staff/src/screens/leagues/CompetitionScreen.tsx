@@ -300,7 +300,8 @@ export function CompetitionScreen() {
     request: { path: { id: competitionId } },
   });
   return (
-    <section aria-labelledby="competition-title">
+    <section aria-labelledby="competition-title" className="compete">
+      <span className="eyebrow">Compete · Leagues and tournaments</span>
       <h2 id="competition-title">{competition.data?.name ?? 'Competition'}</h2>
       <LeaguesNav />
       <QueryBoundary
@@ -313,24 +314,26 @@ export function CompetitionScreen() {
           const badge = COMPETITION_STATUS[data.status];
           return (
             <>
-              <dl className="facets" aria-label="Competition details">
-                <div>
-                  <dt>Kind</dt>
-                  <dd>{COMPETITION_KIND[data.kind]}</dd>
-                </div>
-                <div>
-                  <dt>Format</dt>
-                  <dd>{SPORT_FORMAT[data.sportFormat]}</dd>
-                </div>
-                <div>
-                  <dt>Status</dt>
-                  <dd>
-                    <StatusBadge tone={badge.tone} label={`Competition ${badge.label}`} />
-                  </dd>
-                </div>
-              </dl>
-              {data.description ? <p>{data.description}</p> : null}
-              <CompetitionLifecycle competition={data} />
+              <div className="card">
+                <dl className="facets" aria-label="Competition details">
+                  <div>
+                    <dt>Kind</dt>
+                    <dd>{COMPETITION_KIND[data.kind]}</dd>
+                  </div>
+                  <div>
+                    <dt>Format</dt>
+                    <dd>{SPORT_FORMAT[data.sportFormat]}</dd>
+                  </div>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>
+                      <StatusBadge tone={badge.tone} label={`Competition ${badge.label}`} />
+                    </dd>
+                  </div>
+                </dl>
+                {data.description ? <p>{data.description}</p> : null}
+                <CompetitionLifecycle competition={data} />
+              </div>
               <Seasons competition={data} />
             </>
           );

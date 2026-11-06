@@ -126,7 +126,8 @@ export function IncidentScreen() {
   const { incidentId = '' } = useParams();
   const incident = useApiQuery({ path: '/incidents/{id}', request: { path: { id: incidentId } } });
   return (
-    <section aria-labelledby="incident-title">
+    <section aria-labelledby="incident-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Discipline</span>
       <h2 id="incident-title">{incident.data ? INCIDENT_KIND[incident.data.kind] : 'Incident'}</h2>
       <LeaguesNav />
       <p>

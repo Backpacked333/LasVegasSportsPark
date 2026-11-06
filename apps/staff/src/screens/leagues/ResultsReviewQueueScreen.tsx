@@ -17,6 +17,7 @@ import { SelectField } from '../../features/competition/fields';
 import { useNow } from '../../providers/AppProviders';
 import { formatInstant } from '../../features/competition/format';
 import { LeaguesNav } from '../../features/competition/nav';
+import { CompeteHeader } from '../../features/competition/page';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
@@ -143,8 +144,13 @@ export function ResultsReviewQueueScreen() {
     request: { query: { queue: 'league_manager', limit: 100 } },
   });
   return (
-    <section aria-labelledby="review-queue-title">
-      <h2 id="review-queue-title">Result review tasks</h2>
+    <section aria-labelledby="review-queue-title" className="compete">
+      <CompeteHeader
+        eyebrow="Compete · Leagues and tournaments"
+        title="Result review tasks"
+        titleId="review-queue-title"
+        intro="Results waiting to be published, corrections that touch a played game or a published bracket, and seasons left with unscheduled fixtures."
+      />
       <LeaguesNav />
       <SubmittedResults />
       <QueryBoundary

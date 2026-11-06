@@ -18,7 +18,8 @@ import { SelectField } from '../../features/competition/fields';
 import { formatInstant, shortRef } from '../../features/competition/format';
 import { RESULT_CLASSIFICATION, RESULT_STATUS } from '../../features/competition/labels';
 import { FixtureReadFailure } from '../../features/competition/names';
-import { LeaguesNav, SeasonLinks } from '../../features/competition/nav';
+import { SeasonLinks } from '../../features/competition/nav';
+
 import { PENDING } from '../../features/competition/pending';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -124,11 +125,11 @@ export function SeasonResultsScreen() {
     },
   });
   return (
-    <section aria-labelledby="season-results-title">
+    <section aria-labelledby="season-results-title" className="compete">
+      <span className="eyebrow">Compete · Leagues · Season</span>
       <h2 id="season-results-title">
         Result revisions{season.data ? `: ${season.data.name}` : ''}
       </h2>
-      <LeaguesNav />
       <SeasonLinks seasonId={seasonId} />
       <PendingNote decision={PENDING.publicationAuthority} />
       <SelectField
