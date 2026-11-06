@@ -54,7 +54,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { KIND_LOOK, offeringSummary } from './offering-look';
 import { PickedFor } from './PickedFor';
-import { colors, fonts, kindColors, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 export const DISCOVER_PAGE_SIZE = 50;
 
