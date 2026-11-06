@@ -8899,6 +8899,104 @@
           "recipients"
         ]
       },
+      "AudienceCountRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NotificationKind"
+          },
+          "category": {
+            "$ref": "#/components/schemas/NotificationCategory"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "protected": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "kind",
+          "audience"
+        ],
+        "additionalProperties": false
+      },
+      "AudienceChannelCount": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/DeliveryChannel"
+          },
+          "reachable": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "optedOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offByDefault": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "noProvider": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "channel",
+          "reachable",
+          "optedOut",
+          "offByDefault",
+          "noProvider"
+        ]
+      },
+      "AudienceCount": {
+        "type": "object",
+        "properties": {
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "category": {
+            "$ref": "#/components/schemas/NotificationCategory"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unreachable": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudienceChannelCount"
+            }
+          },
+          "pendingDecisions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "resolvedAt",
+          "category",
+          "count",
+          "unreachable",
+          "channels",
+          "pendingDecisions"
+        ]
+      },
       "NotificationRecipient": {
         "type": "object",
         "properties": {
@@ -9366,6 +9464,27 @@
         "required": [
           "items",
           "nextCursor"
+        ]
+      },
+      "InboxUnreadCount": {
+        "type": "object",
+        "properties": {
+          "unread": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "capped": {
+            "type": "boolean"
+          },
+          "cap": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "unread",
+          "capped",
+          "cap"
         ]
       },
       "MarkNotificationReadRequest": {
@@ -21601,6 +21720,15 @@
           "settings": {
             "type": "object",
             "additionalProperties": {}
+          },
+          "defaultCurrency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
           }
         },
         "required": [
@@ -21609,7 +21737,8 @@
           "name",
           "status",
           "revision",
-          "settings"
+          "settings",
+          "defaultCurrency"
         ]
       },
       "AdminFacilitySettings": {
@@ -21674,6 +21803,71 @@
           "organization",
           "facilities"
         ]
+      },
+      "OrganizationProfile": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "defaultCurrency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "defaultCurrency",
+          "revision"
+        ]
+      },
+      "SetDefaultCurrencyRequest": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "currency",
+          "expectedRevision",
+          "reason"
+        ],
+        "additionalProperties": false
       },
       "NavigationArea": {
         "type": "string",
@@ -34147,6 +34341,13 @@
               }
             ]
           },
+          "lastReminderAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -36366,6 +36567,256 @@
         ],
         "additionalProperties": false
       },
+      "PaymentReminder": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "obligationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipientPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "remainingMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedByPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "obligationId",
+          "recipientPersonId",
+          "remainingMinor",
+          "currency",
+          "dueAt",
+          "reason",
+          "requestedByPersonId",
+          "requestedAt"
+        ]
+      },
+      "CreatePaymentReminderRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "CurrencyAmount": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "amountMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "currency",
+          "amountMinor"
+        ]
+      },
+      "PersonMoneySummary": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accountBalance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyAmount"
+            }
+          },
+          "openObligations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pastDueObligations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "creditsAvailable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyAmount"
+            }
+          },
+          "creditsPendingApproval": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyAmount"
+            }
+          },
+          "paidThisYear": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyAmount"
+            }
+          },
+          "refundedThisYear": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurrencyAmount"
+            }
+          },
+          "paidSince": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "yearTimeZone": {
+            "type": "string"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "personId",
+          "accountBalance",
+          "openObligations",
+          "pastDueObligations",
+          "creditsAvailable",
+          "creditsPendingApproval",
+          "paidThisYear",
+          "refundedThisYear",
+          "paidSince",
+          "yearTimeZone",
+          "asOf"
+        ]
+      },
+      "BasketPrice": {
+        "type": "object",
+        "properties": {
+          "basketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "order",
+              "estimate",
+              "unpriced"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "subtotalMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "taxMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "feeMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "totalMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "orderId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "paymentStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "basketId",
+          "basis",
+          "currency",
+          "subtotalMinor",
+          "taxMinor",
+          "feeMinor",
+          "totalMinor",
+          "orderId",
+          "paymentStatus",
+          "asOf"
+        ]
+      },
       "PosProductKind": {
         "type": "string",
         "enum": [
@@ -37264,6 +37715,36 @@
           "returnedMinor": {
             "type": "integer"
           },
+          "charges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "tax",
+                    "fee"
+                  ]
+                },
+                "amountMinor": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "code",
+                "label",
+                "kind",
+                "amountMinor"
+              ]
+            }
+          },
           "lines": {
             "type": "array",
             "items": {
@@ -37405,6 +37886,39 @@
         "required": [
           "productId",
           "quantity"
+        ],
+        "additionalProperties": false
+      },
+      "ChangePosLineQuantityRequest": {
+        "type": "object",
+        "properties": {
+          "quantity": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "quantity",
+          "expectedRevision"
         ],
         "additionalProperties": false
       },
@@ -39731,7 +40245,9 @@
           "utilization",
           "economics",
           "retention",
-          "demand"
+          "demand",
+          "utilization_heatmap",
+          "sales_by_product_line"
         ]
       },
       "ReportingMetricUnit": {
@@ -40851,6 +41367,54 @@
         },
         "required": [
           "items"
+        ]
+      },
+      "AttentionAreaCount": {
+        "type": "object",
+        "properties": {
+          "area": {
+            "$ref": "#/components/schemas/NavigationArea"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "capped": {
+            "type": "boolean"
+          },
+          "counts": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "area",
+          "count",
+          "capped",
+          "counts"
+        ]
+      },
+      "AttentionCounts": {
+        "type": "object",
+        "properties": {
+          "computedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cap": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "areas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttentionAreaCount"
+            }
+          }
+        },
+        "required": [
+          "computedAt",
+          "cap",
+          "areas"
         ]
       },
       "RecordReference": {
@@ -55995,6 +56559,187 @@
             }
           }
         }
+      }
+    },
+    "/me/inbox/unread-count": {
+      "get": {
+        "summary": "How many in-app notices the authenticated person has not read (inbox badge)",
+        "description": "Implements SPK-UX-003, SPK-COMMS-004, SPK-COMMS-005.",
+        "tags": [
+          "Communications"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxUnreadCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (stale revision, invalid transition, idempotency)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/notification-audience-counts": {
+      "post": {
+        "summary": "Count the recipients an audience resolves to now, by channel with opt-outs (no names; staff composer)",
+        "description": "Implements SPK-COMMS-003, SPK-COMMS-006, SPK-COMMS-007 (channel policy pending DEC-012, DEC-062).",
+        "tags": [
+          "Communications"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceCountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (stale revision, invalid transition, idempotency)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
       }
     },
     "/me/inbox/{id}/read": {
@@ -71239,6 +71984,136 @@
             }
           }
         }
+      }
+    },
+    "/organization": {
+      "get": {
+        "summary": "The signed-in principal's organization: name and default currency (null until configured; SPK-PAY-001)",
+        "tags": [
+          "Core"
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/admin/settings/default-currency": {
+      "post": {
+        "summary": "Set the organization default currency (core.set_default_currency; expected revision; no record is converted)",
+        "tags": [
+          "Core"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultCurrencyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Organization profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale revision (STALE_REVISION) or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
       }
     },
     "/admin/settings": {
@@ -89617,6 +90492,248 @@
         }
       }
     },
+    "/obligations/{id}/reminders": {
+      "post": {
+        "summary": "Remind the debtor of a past-due obligation (essential payment notice; channel approval pending DEC-062)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentReminderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The recorded reminder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentReminder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "OBLIGATION_NOT_PAST_DUE, NOTHING_OUTSTANDING, REMINDED_RECENTLY, INVALID_TRANSITION or IDEMPOTENCY_*",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/people/{id}/money-summary": {
+      "get": {
+        "summary": "A person's account balance, credits and paid this year, per currency (protected; finance readers, the person or who pays for them)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Money summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonMoneySummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/basket-prices/{id}": {
+      "get": {
+        "summary": "A basket's price: the order's figures once checked out, else an estimate from the price rules in effect now (booking requests)",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Basket price",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BasketPrice"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pos-products": {
       "post": {
         "summary": "Create a point-of-sale product with its approved charge policies",
@@ -91172,6 +92289,140 @@
           },
           "503": {
             "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pos-sales/{id}/lines/{lineId}/quantity": {
+      "post": {
+        "summary": "Change the quantity of an open sale line, or remove it with 0 (priced again; the earlier line is kept as superseded)",
+        "description": "FIN-06, §3.16 POS row, SPK-PAY-001/002/010. Needs the point_of_sale capability (DEC-016) like adding a line.",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "lineId",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePosLineQuantityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosSale"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (LINE_NOT_ON_SALE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or the point_of_sale capability is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (LINE_ALREADY_CHANGED, BELOW_TENDERED, CHARGE_POLICY_NOT_APPROVED, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore",
             "content": {
               "application/json": {
                 "schema": {
@@ -95764,6 +97015,231 @@
         }
       }
     },
+    "/reports/utilization-heatmap": {
+      "get": {
+        "summary": "Utilization by facility-local weekday and hour: available and reserved unit-hours per cell, no double counting (SPK-REPORT-003, SPK-REPORT-006)",
+        "tags": [
+          "Reporting"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Evaluate as of this instant (default now; never in the future). Corrections recorded later do not change the figures (SPK-REPORT-007)."
+            },
+            "required": false,
+            "description": "Evaluate as of this instant (default now; never in the future). Corrections recorded later do not change the figures (SPK-REPORT-007).",
+            "name": "asOf",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
+              ]
+            },
+            "required": false,
+            "name": "includeBuffers",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reports/sales-by-product-line": {
+      "get": {
+        "summary": "Sales by product line (registration offering kinds and point-of-sale product kinds), per currency; refunds and returns shown apart, never netted (SPK-REPORT-004, SPK-PAY-011)",
+        "tags": [
+          "Reporting"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Evaluate as of this instant (default now; never in the future). Corrections recorded later do not change the figures (SPK-REPORT-007)."
+            },
+            "required": false,
+            "description": "Evaluate as of this instant (default now; never in the future). Corrections recorded later do not change the figures (SPK-REPORT-007).",
+            "name": "asOf",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/reports/metric-definitions": {
       "get": {
         "summary": "List the active metric definitions with every SPK-REPORT-001 field",
@@ -95889,6 +97365,71 @@
             }
           }
         }
+      }
+    },
+    "/me/attention": {
+      "get": {
+        "summary": "Sidebar attention counts: per navigation area, the items waiting for the viewer's action that the viewer may read",
+        "tags": [
+          "Reporting"
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionCounts"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
       }
     },
     "/reports/runs": {

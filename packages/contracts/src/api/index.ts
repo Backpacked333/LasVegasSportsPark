@@ -12,6 +12,7 @@ export * from './entry-hardware';
 export * from './entry';
 export * from './facilities';
 export * from './finance-accounting';
+export * from './finance-desk';
 export * from './finance-pos';
 export * from './finance';
 export * from './identity';
