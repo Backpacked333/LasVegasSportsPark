@@ -8,7 +8,9 @@
  *   chosen person, balances due first, then history, in cursor pages. Each row shows the amount,
  *   what is left to pay and the status; an overpayment is shown, never hidden (SPK-PAY-005); a
  *   balance with a payment on its way says so (`liveAttempt`, SPK-PAY-007). Opening a row shows
- *   the order, installments and "Pay" (ObligationScreen).
+ *   the order, installments and "Pay" (ObligationScreen). Above the list, the person's money
+ *   summary (`GET /v1/people/{id}/money-summary`, MoneySummary.tsx; protected household money,
+ *   "not available" when the account may not see it).
  * - Payments, Receipts, Orders: the account's own lists (`GET /v1/me/payments`, `/me/receipts`,
  *   `/me/orders`; MoneyLists.tsx), covering the people this account pays for.
  * - Team contributions: the contributions asked of this person or of the people they pay for
@@ -39,6 +41,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { MyContributionsList } from '../teams/MyContributionsScreen';
+import { MoneySummary } from './MoneySummary';
 import { MyOrdersList, MyPaymentsList, MyReceiptsList, NeedsAttention } from './MoneyLists';
 
 export { obligationAmounts };
@@ -151,7 +154,12 @@ export function PaymentsScreen({ initialView = 'balances' }: { initialView?: Pay
         <ViewPicker value={view} onChange={setView} />
         {view === 'balances' ? (
           <PeopleGate pickerLabel="Show payments of">
-            {(person) => <ObligationList key={person.personId} person={person} />}
+            {(person) => (
+              <View key={person.personId}>
+                <MoneySummary person={person} />
+                <ObligationList person={person} />
+              </View>
+            )}
           </PeopleGate>
         ) : null}
         {view === 'payments' ? <MyPaymentsList /> : null}
