@@ -660,6 +660,34 @@ outcome recording and reconciliation are never gated.
 - The accounting export sends journal entries as booked; revenue recognition, payroll and
   account-level summaries are not exported (DEC-022, DEC-052 **Pending decision**).
 
+## Park UI redesign gaps — verified 2026-11-06
+
+Verified by `__tests__/desk.spec.ts` and `__tests__/pos-line-quantity.spec.ts`:
+
+- **Payment reminders** (`POST /v1/obligations/{id}/reminders`, `finance.send_payment_reminder`,
+  finance roles): an open, past-due obligation with a balance; recorded in `payment_reminders`
+  (migration 0685, append-only, past due and positive balance checked in the database), audited,
+  announced as `finance.payment_reminder_requested`; handler `finance.notify_payment_reminder`
+  composes an essential `payment_attention` notice to the debtor (or a team fee's responsible
+  payer). One reminder per obligation per 24 hours: an engineering placeholder
+  (`PAYMENT_REMINDER_MIN_INTERVAL_HOURS`), pending DEC-012/DEC-062. Staff obligation views carry
+  `lastReminderAt`.
+- **Person money summary** (`GET /v1/people/{id}/money-summary`, `finance.read_person_money`:
+  desk, finance, general manager, system administration, support; the person and holders of `pay`
+  over them): open balance, credits available and pending approval, receipts and succeeded refunds
+  since 1 January (the facilities' zone when they share one, else UTC; said in the response), per
+  currency, over merged records. Anyone else gets a protected NOT_FOUND.
+- **Basket price** (`GET /v1/basket-prices/{id}`, `finance.read_quote`): the order's figures once
+  checked out; else an estimate from the price rules and approved charges in effect, before
+  discounts and credits; `unpriced` when a line has no rule. Never stored, never a quote.
+- **POS line quantity** (`POST /v1/pos-sales/{id}/lines/{lineId}/quantity`, 0 removes): a new
+  append-only line supersedes the old one (migration 0686: superseded once, same sale and product,
+  quantity 0 only on a superseding line, never below the tenders taken; returns name live lines
+  only). Totals, the paid journal, returns and receipts use the lines in effect.
+  `PosSale.charges` lists the configured tax and fee lines. A household "account" tender (charging a
+  sale to the customer's account) is **not** implemented: no specification rule or approved policy
+  says how a POS sale becomes an obligation.
+
 ## Known gaps
 
 - Disputes and chargebacks are not modelled: the fake provider reports none and the dispute flow
