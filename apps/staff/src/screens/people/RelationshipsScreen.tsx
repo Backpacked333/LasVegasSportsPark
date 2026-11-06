@@ -67,6 +67,7 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { formatDateTime, inputZoneHint, localInputToIso } from '../../ui/time';
 import { AUTHORITY_KEY } from './PersonRecordScreen';
+import '../../features/grow/grow.css';
 
 /** The OpenAPI component is nullable (it is reused as a nullable field elsewhere); a created one is not. */
 type Relationship = NonNullable<Schema<'Relationship'>>;
@@ -867,7 +868,8 @@ function RelationshipsForPerson({ personId }: { personId: string }) {
 export function RelationshipsScreen() {
   const { personId = '' } = useParams();
   return (
-    <section aria-labelledby="relationships-title">
+    <section aria-labelledby="relationships-title" className="grow">
+      <span className="eyebrow">Grow · People and families</span>
       <h2 id="relationships-title">Household, relationships and grants</h2>
       <PeopleNav />
       {isUuid(personId) ? (

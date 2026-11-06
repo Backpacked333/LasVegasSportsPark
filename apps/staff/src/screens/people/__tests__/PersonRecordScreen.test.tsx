@@ -11,7 +11,17 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
-import { CHILD_ID, PERSON_ID, authority, person, searchPage, timeline } from './fixtures';
+import {
+  CHILD_ID,
+  GRANT_ID,
+  OTHER_ID,
+  PERSON_ID,
+  authority,
+  grantView,
+  person,
+  searchPage,
+  timeline,
+} from './fixtures';
 
 const LOOKUP = mePermissions({ actions: ['identity.lookup_person'] });
 
@@ -156,6 +166,73 @@ describe('SCR-S-20 PeopleScreen', () => {
 });
 
 describe('SCR-S-20 PersonRecordScreen', () => {
+  it('SPK-IAM-005: shows who may pick the person up, with each permission written, and the households', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['identity.read_authority'] }),
+        'GET /people/{id}': { status: 200, body: person() },
+        'GET /customers/{personId}/timeline': { status: 200, body: timeline() },
+        'GET /people/{id}/authority': {
+          status: 200,
+          body: authority({
+            grants: [
+              grantView('collect'),
+              grantView('pay', `${GRANT_ID.slice(0, -1)}8`),
+              // Only effective grants give authority; a suspended one is not listed here.
+              grantView('view', `${GRANT_ID.slice(0, -1)}9`, { status: 'suspended' }),
+            ],
+          }),
+        },
+      },
+    });
+    render(app.at(`/people/${PERSON_ID}`));
+    const household = await screen.findByRole('list', { name: 'Household and pickup authority' });
+    const [row] = within(household).getAllByRole('listitem');
+    expect(within(row!).getByRole('link', { name: 'Sam Rivera' })).toBeInTheDocument();
+    expect(within(row!).getByText('guardian · pickup, pay')).toBeInTheDocument();
+    expect(within(row!).getByText('Can pick up')).toBeInTheDocument();
+    expect(screen.getByText(/Rivera household \(3 members\)/)).toBeInTheDocument();
+  });
+
+  it('SPK-SUPPORT-001: lists the person’s activities from their enrollments, and says when they are not available', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /people/{id}': { status: 200, body: person() },
+        'GET /customers/{personId}/timeline': { status: 200, body: timeline() },
+        'GET /enrollments': {
+          status: 200,
+          body: {
+            items: [
+              {
+                id: GRANT_ID,
+                offeringId: OTHER_ID,
+                participantPersonId: PERSON_ID,
+                status: 'confirmed',
+                offering: {
+                  id: OTHER_ID,
+                  name: 'U10 fall program',
+                  kind: 'term',
+                  startsOn: '2026-09-01',
+                  endsOn: '2026-11-30',
+                  facilityId: OTHER_ID,
+                  timezone: 'America/Los_Angeles',
+                },
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+      },
+    });
+    render(app.at(`/people/${PERSON_ID}`));
+    const activities = await screen.findByRole('list', { name: 'Activities' });
+    expect(within(activities).getByText('U10 fall program')).toBeInTheDocument();
+    expect(within(activities).getByText('confirmed')).toBeInTheDocument();
+    expect(
+      app.fake.requests.find((r) => r.route === '/enrollments')?.query.participantPersonId,
+    ).toBe(PERSON_ID);
+  });
+
   it('SPK-SUPPORT-001: shows the person, contact points and the scoped timeline', async () => {
     const app = createTestApp({
       routes: {

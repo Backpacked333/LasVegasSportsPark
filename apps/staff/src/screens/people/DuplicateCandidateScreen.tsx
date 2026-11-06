@@ -38,6 +38,7 @@ import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { formatDateTime } from '../../ui/time';
 import { AuditHistory } from '../today/AuditHistory';
 import { CANDIDATES_KEY, CANDIDATE_STATUS_TONE } from './DuplicateReviewScreen';
+import '../../features/grow/grow.css';
 
 type CandidateDetail = Schema<'DuplicateCandidateDetail'>;
 type PersonSide = CandidateDetail['personA'];
@@ -287,7 +288,8 @@ function CandidateQuery({ id }: { id: string }) {
 export function DuplicateCandidateScreen() {
   const { candidateId = '' } = useParams();
   return (
-    <section aria-labelledby="candidate-screen-title">
+    <section aria-labelledby="candidate-screen-title" className="grow">
+      <span className="eyebrow">Grow · People and families</span>
       <h2 id="candidate-screen-title">Duplicate review</h2>
       <PeopleNav />
       <p>

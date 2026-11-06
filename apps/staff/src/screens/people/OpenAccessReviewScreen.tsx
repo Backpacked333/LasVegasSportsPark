@@ -17,6 +17,7 @@ import { SelectField, TextAreaField, TextField } from '../../ui/FormFields';
 import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
 import { inputZoneHint, localInputToIso } from '../../ui/time';
+import '../../features/grow/grow.css';
 
 export const REVIEW_OWNER_ROLES = [
   { value: 'support_operator', label: 'support_operator' },
@@ -93,7 +94,8 @@ export function OpenAccessReviewScreen() {
   };
 
   return (
-    <section aria-labelledby="open-review-title">
+    <section aria-labelledby="open-review-title" className="grow">
+      <span className="eyebrow">Grow · People and families</span>
       <h2 id="open-review-title">Open an access review</h2>
       <PeopleNav />
       <p>

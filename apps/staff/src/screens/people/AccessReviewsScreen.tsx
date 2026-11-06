@@ -37,6 +37,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { formatDateTime } from '../../ui/time';
 import { REVIEW_OWNER_ROLES, type ReviewOwnerRole } from './OpenAccessReviewScreen';
 import { REVIEW_STATUS_TONE } from './review-vocabulary';
+import '../../features/grow/grow.css';
 
 type ReviewSummary = Schema<'AccessReviewSummary'>;
 type ReviewStatus = ReviewSummary['status'];
@@ -225,7 +226,8 @@ export function AccessReviewsScreen() {
     void navigate(`/people/access-reviews/${reference.trim().toLowerCase()}`);
   };
   return (
-    <section aria-labelledby="reviews-title">
+    <section aria-labelledby="reviews-title" className="grow">
+      <span className="eyebrow">Grow · People and families</span>
       <h2 id="reviews-title">Disputed access reviews</h2>
       <PeopleNav />
       <p className="caption">

@@ -1,0 +1,131 @@
+/*
+ * People and families (SCR-S-20 to SCR-S-23): search with avatars, and the person record with
+ * household and pickup authority, activities, money and history in one place.
+ */
+.form.people-search {
+  max-width: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: start;
+}
+.form.people-search > :first-child {
+  grid-column: 1 / -1;
+}
+.people-search > .button {
+  align-self: start;
+  margin-top: 24px;
+}
+@media (max-width: 900px) {
+  .form.people-search {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.people-lookup > h3 {
+  margin: 0;
+}
+.list.person-results > li {
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  padding: 10px 4px;
+}
+.list.person-results > li > .badge {
+  margin-left: auto;
+  flex: none;
+}
+.list.people-links > li {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 18px;
+}
+
+/* Person record */
+.card.person-hero {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+.person-hero-text {
+  flex: 1 1 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.shell-main .person-hero-text h3 {
+  font-size: 36px;
+  line-height: 0.95;
+  margin: 0;
+}
+.person-hero .actions-row {
+  flex-wrap: wrap;
+}
+.person-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.person-grid > .card,
+.person-grid > .panel {
+  min-width: 0;
+}
+.person-card .list > li {
+  padding: 10px 18px;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+.person-card .list > li > .badge,
+.person-card .list > li > .actions-row {
+  margin-left: auto;
+  flex: none;
+}
+.person-card > .caption,
+.person-card > p {
+  padding: 0 18px 14px;
+  margin: 0;
+}
+.person-grid .facts {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 9rem), 1fr));
+}
+.person-grid .fact {
+  overflow-wrap: anywhere;
+}
+.person-grid .fact:has(code) {
+  grid-column: 1 / -1;
+}
+.activity-strip {
+  flex: none;
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--sport, var(--kind-program));
+}
+.money-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.money-row .money-amount {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.money-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.money-list .caption {
+  display: block;
+}
+.person-timeline .list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
