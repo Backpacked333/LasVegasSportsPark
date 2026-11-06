@@ -80,6 +80,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import '../../features/grow/grow.css';
 
 type Basket = Schema<'Basket'>;
 type Quote = Schema<'Quote'>;
@@ -1012,7 +1013,8 @@ export function AssistedRegistrationScreen() {
   });
   if (basketId === undefined) {
     return (
-      <section aria-labelledby="assisted-title">
+      <section aria-labelledby="assisted-title" className="grow">
+        <span className="eyebrow">Grow · Registrations · At the desk</span>
         <h2 id="assisted-title">Assisted registration</h2>
         <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
         <StartBasket />
@@ -1020,8 +1022,9 @@ export function AssistedRegistrationScreen() {
     );
   }
   return (
-    <section aria-labelledby="assisted-title">
+    <section aria-labelledby="assisted-title" className="grow">
       {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
+      <span className="eyebrow">Grow · Registrations · At the desk</span>
       <h2 id="assisted-title">Assisted registration</h2>
       <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <QueryBoundary

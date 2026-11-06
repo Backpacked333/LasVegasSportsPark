@@ -57,6 +57,7 @@ import {
   type PackageStatus,
 } from './labels';
 import { SESSION_PACKAGES } from './meta';
+import '../../../features/grow/grow.css';
 
 type Redemption = PackageEntitlement['redemptions'][number];
 
@@ -474,7 +475,8 @@ export function SessionPackagesScreen() {
   const meta = SESSION_PACKAGES;
   const headingId = `package-g-${meta.slug}`;
   return (
-    <section aria-labelledby={headingId} data-testid={`package-g-${meta.slug}`}>
+    <section aria-labelledby={headingId} data-testid={`package-g-${meta.slug}`} className="grow">
+      <span className="eyebrow">Business · Finance · Session packages</span>
       <h2 id={headingId}>{meta.title}</h2>
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <p className="caption">

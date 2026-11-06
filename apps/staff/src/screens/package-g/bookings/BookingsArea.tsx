@@ -18,12 +18,14 @@ import { NavLink, Route, Routes } from 'react-router';
 import { CapabilityGate } from '../../../ui/CapabilityGate';
 import { StateView } from '../../../ui/StateView';
 import '../participation/participation.css';
+import './bookings.css';
 import type { PackageGScreen } from '../registry';
 import { BookingDetail } from './BookingDetail';
 import { BookingList } from './BookingList';
 import { BookingOfferings } from './BookingOfferings';
 import { KIND_CAPABILITY, KIND_PATH, KIND_WORDS, type BookingKind } from './labels';
 import { NewBooking } from './NewBooking';
+import '../../../features/grow/grow.css';
 
 function Sections({ kind }: { kind: BookingKind }) {
   const base = KIND_PATH[kind];
@@ -52,7 +54,7 @@ export function BookingsArea({ kind, meta }: { kind: BookingKind; meta: PackageG
   const headingId = `package-g-${meta.slug}`;
   const words = KIND_WORDS[kind];
   return (
-    <section aria-labelledby={headingId} data-testid={`package-g-${meta.slug}`}>
+    <section aria-labelledby={headingId} data-testid={`package-g-${meta.slug}`} className="grow">
       <h3 id={headingId}>{meta.title}</h3>
       <p className="caption">
         {meta.id}: {meta.purpose}

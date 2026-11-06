@@ -22,6 +22,7 @@ import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-fina
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
+import '../../features/grow/grow.css';
 
 type EnrollmentStatus = Schema<'EnrollmentStatus'>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -45,7 +46,8 @@ export function EnrollmentsScreen() {
     enabled: offeringId !== '' || participantId !== '',
   });
   return (
-    <section aria-labelledby="enrollments-title">
+    <section aria-labelledby="enrollments-title" className="grow">
+      <span className="eyebrow">Grow · Registrations · Changes</span>
       <h2 id="enrollments-title">Cancellations and transfers</h2>
       <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <p>Find the enrollment, then preview the cancellation or transfer before committing it.</p>

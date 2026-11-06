@@ -46,6 +46,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { OfferingForm } from './OfferingForm';
+import '../../features/grow/grow.css';
 
 type Offering = Schema<'Offering'>;
 type ChargeLine = Schema<'ChargeLine'>;
@@ -621,8 +622,9 @@ export function OfferingSetupScreen() {
   const { timeZoneOf } = useFacilities();
   const offering = useApiQuery({ path: '/offerings/{id}', request: { path: { id: offeringId } } });
   return (
-    <section aria-labelledby="offering-title">
+    <section aria-labelledby="offering-title" className="grow">
       {/* SPK-UX-009: the region keeps its name in every state. */}
+      <span className="eyebrow">Grow · Programs and camps</span>
       <h2 id="offering-title">Offering setup</h2>
       <QueryBoundary
         query={offering}

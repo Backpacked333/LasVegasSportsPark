@@ -20,6 +20,7 @@ import '../participation/participation.css';
 import { MembershipDetail } from './MembershipDetail';
 import { MembershipOfferings } from './MembershipOfferings';
 import { MEMBERSHIPS } from './meta';
+import '../../../features/grow/grow.css';
 
 function Overview() {
   const pending = MEMBERSHIPS.pending;
@@ -42,7 +43,8 @@ export function MembershipsScreen() {
   const meta = MEMBERSHIPS;
   const headingId = `package-g-${meta.slug}`;
   return (
-    <section aria-labelledby={headingId} data-testid={`package-g-${meta.slug}`}>
+    <section aria-labelledby={headingId} data-testid={`package-g-${meta.slug}`} className="grow">
+      <span className="eyebrow">Business · Finance · Memberships</span>
       <h2 id={headingId}>{meta.title}</h2>
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <p className="caption">

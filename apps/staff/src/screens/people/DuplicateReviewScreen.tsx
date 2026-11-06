@@ -31,6 +31,7 @@ import { isUuid } from '../../ui/RecordRef';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { formatDateTime } from '../../ui/time';
+import '../../features/grow/grow.css';
 
 type CandidateStatus = Schema<'DuplicateCandidate'>['status'];
 
@@ -194,7 +195,8 @@ function FlagForm() {
 
 export function DuplicateReviewScreen() {
   return (
-    <section aria-labelledby="duplicates-title">
+    <section aria-labelledby="duplicates-title" className="grow">
+      <span className="eyebrow">Grow · People and families</span>
       <h2 id="duplicates-title">Duplicate review</h2>
       <PeopleNav />
       <section className="panel" aria-labelledby="queue-title">

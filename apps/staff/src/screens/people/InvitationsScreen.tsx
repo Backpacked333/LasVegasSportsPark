@@ -18,6 +18,7 @@ import { SelectField } from '../../ui/FormFields';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
+import '../../features/grow/grow.css';
 
 export const INVITATIONS_PAGE_SIZE = 25;
 export const READ_INVITATIONS_ACTION = 'identity.read_invitations';
@@ -67,7 +68,8 @@ export function InvitationsScreen() {
   const [status, setStatus] = useState('pending');
   const permitted = permissions.isPermitted(READ_INVITATIONS_ACTION);
   return (
-    <section aria-labelledby="invitations-title">
+    <section aria-labelledby="invitations-title" className="grow">
+      <span className="eyebrow">Grow · People and families</span>
       <h2 id="invitations-title">Invitations</h2>
       <PeopleNav />
       <p className="caption">

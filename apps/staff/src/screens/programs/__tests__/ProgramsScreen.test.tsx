@@ -9,8 +9,11 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { createTestApp } from '../../../testing/test-app';
 import {
+  OFFERING_B_ID,
   PROGRAM_ID,
   apiError,
+  capacityPool,
+  offering,
   ok,
   program,
 } from '../../../features/registration-finance/__tests__/fixtures';
@@ -37,6 +40,59 @@ describe('SCR-S-14 ProgramsScreen', () => {
     expect(within(items[0]!).getByText('active')).toBeInTheDocument();
     expect(within(items[0]!).getByText(/Ages 8 to 10/)).toBeInTheDocument();
     expect(within(items[1]!).getByText('draft')).toBeInTheDocument();
+  });
+
+  it('SPK-REG-008: a program card shows committed and held places of its offerings, and the readiness rail per offering', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        'GET /programs': LIST,
+        'GET /offerings': ok({
+          items: [
+            offering({ publicationState: 'registration_open' }),
+            offering({ id: OFFERING_B_ID, name: 'Spring academy U12', startsOn: '2026-12-01' }),
+          ],
+          nextCursor: null,
+        }),
+        'GET /capacity-pools': ok([
+          capacityPool({ participantsPerStaff: 10, staffCount: 1 }),
+          capacityPool({
+            id: `${PROGRAM_ID.slice(0, -1)}9`,
+            offeringId: OFFERING_B_ID,
+            scopeId: OFFERING_B_ID,
+            committed: 5,
+            held: 0,
+          }),
+        ]),
+      },
+    });
+    render(app.at('/programs'));
+    const list = await screen.findByRole('list', { name: 'Programs' });
+    const card = within(list).getAllByRole('listitem')[0]!;
+    // Both offerings' pools, summed: 24 committed and 1 held of 40, written out (SPK-UX-009).
+    expect(await within(card).findByText('24 / 40 · 1 held')).toBeInTheDocument();
+    expect(within(card).getByText('15 places left')).toBeInTheDocument();
+    expect(within(card).getByText(/1 open/)).toBeInTheDocument();
+    const rail = screen.getByRole('region', { name: 'Readiness: Spring academy' });
+    const byOffering = within(rail).getByRole('list', { name: 'Enrollment by offering' });
+    expect(within(byOffering).getByText('19 / 20 · 1 held')).toBeInTheDocument();
+    expect(within(byOffering).getByText('Full')).toBeInTheDocument();
+    const checks = within(rail).getByRole('list', { name: 'Readiness checks' });
+    expect(within(checks).getByText('1 of 2')).toBeInTheDocument();
+    expect(within(checks).getByText('Staff planned (1:10 ratio)')).toBeInTheDocument();
+    expect(within(checks).getByText('1 / 2')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Readiness: Winter camp' }));
+    expect(screen.getByRole('region', { name: 'Readiness: Winter camp' })).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/offerings')?.query.view).toBe('staff');
+  });
+
+  it('keeps the programs when capacity is not available, and says capacity is not shown', async () => {
+    const app = createTestApp({ routes: { 'GET /programs': LIST } });
+    render(app.at('/programs'));
+    const list = await screen.findByRole('list', { name: 'Programs' });
+    expect(
+      await within(list).findAllByText(/Capacity not shown: offerings or pools are not available/),
+    ).toHaveLength(2);
   });
 
   it('says so when there are no programs', async () => {
