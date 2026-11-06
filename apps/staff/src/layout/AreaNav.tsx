@@ -11,9 +11,10 @@
  */
 import { NavLink } from 'react-router';
 import { usePermissions } from '../api/permissions';
-import { STAFF_AREAS } from '../navigation/areas';
+import { STAFF_AREAS, STAFF_AREA_GROUPS } from '../navigation/areas';
 import { useApp } from '../providers/AppProviders';
 import { Button } from '../ui/Button';
+import { Icon } from '../ui/Icon';
 
 /**
  * The navigation's own compact states: distinct words and test ids from the page's StateView, so
@@ -82,15 +83,36 @@ export function AreaNav({ onNavigate }: { onNavigate: () => void }) {
       />
     );
   }
+  // One "Areas" list holding a labelled sub-list per sidebar group (Operate, Compete, Grow,
+  // Business); an empty group is left out.
   return (
-    <ul aria-label="Areas">
-      {areas.map((area) => (
-        <li key={area.id}>
-          <NavLink to={area.path} onClick={onNavigate}>
-            {area.title}
-          </NavLink>
-        </li>
-      ))}
+    <ul aria-label="Areas" className="nav-groups">
+      {STAFF_AREA_GROUPS.map((group) => {
+        const inGroup = areas.filter((area) => area.group === group);
+        if (inGroup.length === 0) return null;
+        const labelId = `nav-group-${group}`;
+        return (
+          <li key={group} className="nav-group">
+            <span className="nav-group-label" id={labelId}>
+              {group}
+            </span>
+            <ul aria-labelledby={labelId}>
+              {inGroup.map((area) => (
+                <li key={area.id}>
+                  <NavLink to={area.path} onClick={onNavigate}>
+                    {({ isActive }) => (
+                      <>
+                        <Icon name={area.icon} filled={isActive} />
+                        <span>{area.title}</span>
+                      </>
+                    )}
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          </li>
+        );
+      })}
     </ul>
   );
 }

@@ -1,0 +1,266 @@
+/* SCR-S-01 Today: KPIs, the night-pitch field board, the day's timeline and the issues rail. */
+.today {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.today-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.facility-today {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.facility-today-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.facility-today-head h3 {
+  font-size: 22px;
+}
+
+/* Field board */
+.field-board .card-body {
+  padding: 0 18px 6px;
+}
+.field-board .board-head,
+.field-board .board {
+  margin: 0 -18px;
+}
+.field-board-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.field-board-summary {
+  padding: 0 0 4px;
+}
+.board-head,
+.board > li {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) minmax(0, 200px) 150px;
+  gap: 14px;
+  align-items: center;
+  padding: 9px 18px;
+}
+.board-head {
+  border-top: 1px solid var(--night-line);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--night-faint);
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.board-head span:last-child {
+  text-align: right;
+}
+.board {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.board > li {
+  border-top: 1px solid #163428;
+}
+.board > li[data-restricted='true'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(245, 196, 107, 0.07) 0 8px,
+    transparent 8px 16px
+  );
+}
+.board-space {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  min-width: 0;
+}
+.board-space .row-title {
+  font-size: 17px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+.board-space .caption {
+  font-size: 11px;
+}
+.board-now {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.board-now-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.board-idle {
+  color: var(--night-muted);
+  font-weight: 600;
+}
+.board-restriction {
+  color: #f5c46b !important;
+  font-weight: 600;
+}
+.board-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.board-bar {
+  flex: 1;
+  max-width: 220px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--night-3);
+  overflow: hidden;
+}
+.board-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--floodlight);
+}
+.board-progress .caption {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.board-next {
+  font-size: 12.5px;
+  color: #b9cbc1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.board-next strong {
+  color: #fff;
+}
+.board-status {
+  justify-self: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+}
+.board-status .badge.tone-success {
+  background: #1f3d30;
+  color: #b9e4c9;
+}
+.board-status .badge.tone-warning {
+  background: #4a3510;
+  color: #f5c46b;
+}
+@media (max-width: 760px) {
+  .board-head {
+    display: none;
+  }
+  .board > li {
+    grid-template-columns: 1fr auto;
+  }
+  .board-now,
+  .board-next {
+    grid-column: 1 / -1;
+  }
+  .board-status {
+    grid-row: 1;
+    grid-column: 2;
+  }
+}
+
+/* Timeline of the rest of the day */
+.timeline-list > li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 96px minmax(0, 250px);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+}
+.timeline-list > li[data-current='true'] .timeline-list > li > .kind-tag {
+  grid-column: 3;
+  grid-row: 1;
+}
+.timeline-list > li > .actions-row {
+  grid-column: 4;
+  grid-row: 1;
+  justify-content: flex-end;
+}
+.timeline-time {
+  color: var(--pitch);
+}
+.timeline-list > li > .kind-tag {
+  grid-column: 3;
+  grid-row: 1;
+}
+.timeline-list > li > .actions-row {
+  grid-column: 4;
+  grid-row: 1;
+  justify-content: flex-end;
+}
+.timeline-time {
+  font-size: 16px;
+  font-weight: 800;
+  font-stretch: 75%;
+}
+@media (max-width: 760px) {
+  .timeline-list > li {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+  .timeline-list > li > .kind-tag,
+  .timeline-list > li > .actions-row {
+    grid-column: 2;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+}
+
+/* Issues rail: edge colour by severity, severity always written in the badges. */
+.issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.issue {
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: inset 3px 0 0 var(--edge, transparent);
+}
+.issue[data-edge='danger'] {
+  --edge: var(--tone-danger);
+  background: #fffafa;
+}
+.issue[data-edge='warning'] {
+  --edge: #d99a1e;
+}
+.issue[data-edge='info'] {
+  --edge: var(--tone-info);
+}
+.issue-badges .badge {
+  font-size: 11px;
+  min-height: 20px;
+  padding: 0 7px;
+}
+.issue-title {
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.attention .card-foot .list > li {
+  padding: 6px 0;
+}

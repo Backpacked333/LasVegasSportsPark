@@ -30,7 +30,9 @@ import { CommandError } from '../../ui/CommandFeedback';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
-import { formatDateTime, formatMinutes, formatTimeRange } from '../../ui/time';
+import { Icon, type IconName } from '../../ui/Icon';
+import { formatDateTime, formatMinutes, formatTime, formatTimeRange } from '../../ui/time';
+import './today.css';
 import '../../ui/form-fields.css';
 import { AssistantPanel } from './AssistantPanel';
 import { ExpectedArrivals } from './ExpectedArrivals';
@@ -119,6 +121,14 @@ function AcknowledgeAction({ item, exceptionId }: { item: TodayItem; exceptionId
   );
 }
 
+/** Severity drives the row's edge colour; the severity is also always written (SPK-UX-009). */
+const SEVERITY_EDGE: Record<Severity, string> = {
+  critical: 'danger',
+  high: 'danger',
+  warning: 'warning',
+  info: 'info',
+};
+
 function IssueRow({
   item,
   names,
@@ -135,69 +145,70 @@ function IssueRow({
   const zone = item.facilityId ? zones.get(item.facilityId) : null;
   const titleId = `today-item-title-${item.id}`;
   return (
-    <li data-testid={`today-item-${item.id}`} aria-labelledby={titleId}>
-      <div className="row-text">
-        <span className="row-title" id={titleId}>
-          {item.title}
+    <li
+      data-testid={`today-item-${item.id}`}
+      aria-labelledby={titleId}
+      className="issue"
+      data-edge={isRecoveryRequired(item) ? 'danger' : SEVERITY_EDGE[item.severity]}
+    >
+      <span className="actions-row issue-badges">
+        {isRecoveryRequired(item) ? <StatusBadge tone="danger" label="Recovery required" /> : null}
+        <StatusBadge tone={severity.tone} label={severity.label} />
+        <StatusBadge tone={EXCEPTION_STATUS_TONE[item.status]} label={`Status: ${item.status}`} />
+        {item.overdue ? <StatusBadge tone="danger" label="Overdue" /> : null}
+      </span>
+      <span className="issue-title" id={titleId}>
+        {item.title}
+      </span>
+      <span className="caption">
+        {item.affected ? `Affects ${item.affected.type} ${item.affected.id}` : 'No linked record'} ·
+        Owner: {item.ownerQueue}
+        {item.facilityId ? ` · ${facilityLabel(item.facilityId, names)}` : ''}
+        {item.ageMinutes !== null ? ` · Open ${formatMinutes(item.ageMinutes)}` : ''}
+        {item.deadlineAt ? ` · Due ${formatDateTime(item.deadlineAt, zone)}` : ''}
+      </span>
+      {next.length > 0 ? (
+        <span className="caption issue-next">
+          Next:{' '}
+          {next.map((a, i) => (
+            <span key={`${a.action}-${a.href ?? i}`}>
+              {i > 0 ? ', ' : null}
+              <NextActionLink action={a} />
+            </span>
+          ))}
         </span>
-        <span className="caption">
-          {item.affected ? `Affects ${item.affected.type} ${item.affected.id}` : 'No linked record'}{' '}
-          · Owner: {item.ownerQueue}
-          {item.facilityId ? ` · ${facilityLabel(item.facilityId, names)}` : ''}
-          {item.ageMinutes !== null ? ` · Open ${formatMinutes(item.ageMinutes)}` : ''}
-          {item.deadlineAt ? ` · Due ${formatDateTime(item.deadlineAt, zone)}` : ''}
-        </span>
-        <span className="actions-row">
-          {isRecoveryRequired(item) ? (
-            <StatusBadge tone="danger" label="Recovery required" />
-          ) : null}
-          <StatusBadge tone={severity.tone} label={severity.label} />
-          <StatusBadge tone={EXCEPTION_STATUS_TONE[item.status]} label={`Status: ${item.status}`} />
-          {item.overdue ? <StatusBadge tone="danger" label="Overdue" /> : null}
-        </span>
-        {next.length > 0 ? (
-          <span className="caption">
-            Next:{' '}
-            {next.map((a, i) => (
-              <span key={`${a.action}-${a.href ?? i}`}>
-                {i > 0 ? ', ' : null}
-                <NextActionLink action={a} />
-              </span>
-            ))}
-          </span>
-        ) : null}
-        <details>
-          <summary>Resolution history ({item.history.length})</summary>
-          {item.history.length === 0 ? (
-            <p className="caption">
-              No resolution steps yet. A derived condition clears only when its owning record
-              changes.
-            </p>
-          ) : (
-            <ol className="caption">
-              {item.history.map((h, i) => (
-                <li key={`${h.at}-${i}`}>
-                  {formatDateTime(h.at, zone)}: {h.action} by {h.actorLabel}
-                  {h.reason ? ` (${h.reason})` : ''}
-                </li>
-              ))}
-            </ol>
-          )}
-        </details>
-      </div>
-      <div className="actions-row">
-        {exceptionId ? (
+      ) : null}
+      {exceptionId ? (
+        <div className="actions-row">
           <Link
+            className="button button-primary button-sm"
             to={`/today/exceptions/${exceptionId}`}
             aria-label={`Open exception: ${item.title}`}
           >
             Open exception
           </Link>
-        ) : null}
-        {exceptionId && verbs.has('acknowledge') ? (
-          <AcknowledgeAction item={item} exceptionId={exceptionId} />
-        ) : null}
-      </div>
+          {verbs.has('acknowledge') ? (
+            <AcknowledgeAction item={item} exceptionId={exceptionId} />
+          ) : null}
+        </div>
+      ) : null}
+      <details>
+        <summary>Resolution history ({item.history.length})</summary>
+        {item.history.length === 0 ? (
+          <p className="caption">
+            No resolution steps yet. A derived condition clears only when its owning record changes.
+          </p>
+        ) : (
+          <ol className="caption">
+            {item.history.map((h, i) => (
+              <li key={`${h.at}-${i}`}>
+                {formatDateTime(h.at, zone)}: {h.action} by {h.actorLabel}
+                {h.reason ? ` (${h.reason})` : ''}
+              </li>
+            ))}
+          </ol>
+        )}
+      </details>
     </li>
   );
 }
@@ -277,10 +288,24 @@ const EVENT_STATUS_TONE: Record<Schema<'Event'>['status'], StatusTone> = {
   canceled: 'neutral',
 };
 
-function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Date }) {
+type ScheduledEvent = Schema<'Event'>;
+
+/** Activity kinds keep one colour across Today and the schedule; the kind is always written too. */
+export const EVENT_KIND_CLASS: Record<ScheduledEvent['kind'], string> = {
+  game: 'league',
+  practice: 'league',
+  session: 'program',
+  rental: 'rental',
+  party: 'party',
+  pickup: 'dropin',
+  maintenance: 'rental',
+  block: 'dropin',
+};
+
+/** Current and upcoming activities of a facility day: one read shared by the board and the list. */
+function useRemainingEvents(facility: TodayFacility, now: Date) {
   const window = remainingWindow(facility, now);
-  const visible = facility.activities.visible;
-  const events = useApiQuery({
+  const query = useApiQuery({
     path: '/events',
     request: {
       query: {
@@ -290,8 +315,18 @@ function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Da
         limit: 50,
       },
     },
-    enabled: visible && window !== null,
+    enabled: facility.activities.visible && window !== null,
   });
+  return { window, query };
+}
+
+function stillRunning(events: readonly ScheduledEvent[], now: Date): ScheduledEvent[] {
+  return events.filter((e) => new Date(e.scheduledEnd).getTime() > now.getTime());
+}
+
+function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Date }) {
+  const { window, query: events } = useRemainingEvents(facility, now);
+  const visible = facility.activities.visible;
   const headingId = `activities-${facility.facilityId}`;
   let body;
   if (!visible) {
@@ -303,7 +338,7 @@ function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Da
       />
     );
   } else if (!window) {
-    body = <p>No more activities today at this facility.</p>;
+    body = <p className="card-pad">No more activities today at this facility.</p>;
   } else {
     body = (
       <QueryBoundary
@@ -314,17 +349,21 @@ function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Da
       >
         {(page) => {
           // The API returns activities overlapping the window; anything already over is excluded.
-          const items = page.items.filter(
-            (e) => new Date(e.scheduledEnd).getTime() > now.getTime(),
-          );
+          const items = stillRunning(page.items, now);
           if (items.length === 0) return <p>No more activities today at this facility.</p>;
           return (
             <>
-              <ul className="list" aria-label={`Current and upcoming activities, ${facility.name}`}>
+              <ul
+                className="list timeline-list"
+                aria-label={`Current and upcoming activities, ${facility.name}`}
+              >
                 {items.map((e) => {
                   const current = new Date(e.scheduledStart).getTime() <= now.getTime();
                   return (
-                    <li key={e.id}>
+                    <li key={e.id} data-current={current}>
+                      <span className="timeline-time" aria-hidden="true">
+                        {formatTime(e.scheduledStart, facility.timezone)}
+                      </span>
                       <div className="row-text">
                         <span className="row-title">{e.title}</span>
                         <span className="caption">
@@ -332,6 +371,10 @@ function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Da
                           {e.kind}
                         </span>
                       </div>
+                      <span className="kind-tag" data-kind={EVENT_KIND_CLASS[e.kind]}>
+                        <span className="kind-swatch" aria-hidden="true" />
+                        {e.kind}
+                      </span>
                       <span className="actions-row">
                         <StatusBadge
                           tone={current ? 'info' : 'neutral'}
@@ -358,55 +401,155 @@ function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Da
     );
   }
   return (
-    <section aria-labelledby={headingId}>
-      <h4 id={headingId}>Current and upcoming activities</h4>
-      {body}
+    <section className="card card-flush" aria-labelledby={headingId}>
+      <div className="card-head">
+        <h4 id={headingId}>Current and upcoming activities</h4>
+        <Link to="/schedule">Open schedule</Link>
+      </div>
+      <div className="card-body">{body}</div>
     </section>
   );
 }
 
-function FieldStatusSection({ facility }: { facility: TodayFacility }) {
+/** What a space is doing now and next, from the facility's remaining activities. */
+function spaceActivity(resourceId: string, events: readonly ScheduledEvent[], now: Date) {
+  const mine = events
+    .filter((e) => e.status !== 'canceled' && e.resourceIds.includes(resourceId))
+    .sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart));
+  const t = now.getTime();
+  const current = mine.find(
+    (e) => new Date(e.scheduledStart).getTime() <= t && new Date(e.scheduledEnd).getTime() > t,
+  );
+  const next = mine.find((e) => new Date(e.scheduledStart).getTime() > t);
+  let progress: number | null = null;
+  if (current) {
+    const s = new Date(current.scheduledStart).getTime();
+    const e = new Date(current.scheduledEnd).getTime();
+    progress = Math.min(100, Math.max(0, Math.round(((t - s) / (e - s)) * 100)));
+  }
+  return { current, next, progress };
+}
+
+/**
+ * The field board (SPK-UX-006 field status): every space of the facility on one dark board, with
+ * what is on it now (and how far through), what is next, and its machine status. Restrictions are
+ * written out with their reason; colour is never the only signal (SPK-UX-009).
+ */
+function FieldStatusSection({ facility, now }: { facility: TodayFacility; now: Date }) {
   const status = useApiQuery({
     path: '/facilities/{id}/operating-status',
     request: { path: { id: facility.facilityId } },
   });
+  const { query: events } = useRemainingEvents(facility, now);
+  const remaining = stillRunning(events.data?.items ?? [], now);
   const headingId = `field-status-${facility.facilityId}`;
   return (
-    <section aria-labelledby={headingId}>
-      <h4 id={headingId}>Field status</h4>
-      <QueryBoundary
-        query={status}
-        label="field status"
-        empty={{ title: '', description: '' }}
-        unavailableOffline={['releasing areas to service']}
-      >
-        {(data) =>
-          data.resources.length === 0 ? (
-            <p>No fields or spaces are recorded for this facility.</p>
-          ) : (
-            <ul className="list" aria-label={`Field status, ${facility.name}`}>
-              {data.resources.map((r) => (
-                <li key={r.resourceId}>
-                  <div className="row-text">
-                    <span className="row-title">{r.name}</span>
-                    <span className="caption">{r.kind}</span>
-                    {r.restrictions.map((x) => (
-                      <span className="caption" key={x.restrictionId}>
-                        {x.kind}: {x.reason} until{' '}
-                        {formatDateTime(x.interval.end, facility.timezone)}
-                      </span>
-                    ))}
-                  </div>
-                  <StatusBadge
-                    tone={r.status === 'in_service' ? 'success' : 'warning'}
-                    label={`Status: ${r.status}`}
-                  />
-                </li>
-              ))}
-            </ul>
-          )
-        }
-      </QueryBoundary>
+    <section className="card card-dark card-flush field-board" aria-labelledby={headingId}>
+      <div className="card-head">
+        <span className="field-board-title">
+          <h4 id={headingId}>Field status</h4>
+          <span className="live-chip" aria-hidden="true">
+            <span className="live-dot" />
+            Live
+          </span>
+        </span>
+        <Link to="/schedule">Open schedule →</Link>
+      </div>
+      <div className="card-body">
+        <QueryBoundary
+          query={status}
+          label="field status"
+          empty={{ title: '', description: '' }}
+          unavailableOffline={['releasing areas to service']}
+        >
+          {(data) => {
+            if (data.resources.length === 0) {
+              return <p>No fields or spaces are recorded for this facility.</p>;
+            }
+            const inUse = data.resources.filter(
+              (r) => spaceActivity(r.resourceId, remaining, now).current,
+            ).length;
+            return (
+              <>
+                <p className="caption field-board-summary">
+                  {inUse} of {data.resources.length} spaces in use now
+                </p>
+                <div className="board-head" aria-hidden="true">
+                  <span>Space</span>
+                  <span>Now</span>
+                  <span>Next</span>
+                  <span>Status</span>
+                </div>
+                <ul className="board" aria-label={`Field status, ${facility.name}`}>
+                  {data.resources.map((r) => {
+                    const { current, next, progress } = spaceActivity(r.resourceId, remaining, now);
+                    const restricted = r.status !== 'in_service';
+                    return (
+                      <li key={r.resourceId} data-restricted={restricted} data-live={!!current}>
+                        <span className="board-space">
+                          <span className="row-title">{r.name}</span>
+                          <span className="caption">{r.kind}</span>
+                        </span>
+                        <span className="board-now">
+                          {current ? (
+                            <>
+                              <span className="board-now-title">{current.title}</span>
+                              <span className="board-progress">
+                                <span
+                                  className="board-bar"
+                                  role="progressbar"
+                                  aria-label={`${current.title} progress`}
+                                  aria-valuenow={progress ?? 0}
+                                  aria-valuemin={0}
+                                  aria-valuemax={100}
+                                >
+                                  <span style={{ width: `${progress ?? 0}%` }} />
+                                </span>
+                                <span className="caption">
+                                  {formatTimeRange(
+                                    current.scheduledStart,
+                                    current.scheduledEnd,
+                                    facility.timezone,
+                                  )}
+                                </span>
+                              </span>
+                            </>
+                          ) : restricted ? null : (
+                            <span className="board-idle">Open now</span>
+                          )}
+                          {r.restrictions.map((x) => (
+                            <span className="caption board-restriction" key={x.restrictionId}>
+                              {x.kind}: {x.reason} until{' '}
+                              {formatDateTime(x.interval.end, facility.timezone)}
+                            </span>
+                          ))}
+                        </span>
+                        <span className="board-next">
+                          {next ? (
+                            <>
+                              <strong>{formatTime(next.scheduledStart, facility.timezone)}</strong>{' '}
+                              {next.title}
+                            </>
+                          ) : (
+                            <span className="caption">Nothing else today</span>
+                          )}
+                        </span>
+                        <span className="board-status">
+                          {current ? <span className="live-chip">● In use</span> : null}
+                          <StatusBadge
+                            tone={r.status === 'in_service' ? 'success' : 'warning'}
+                            label={`Status: ${r.status}`}
+                          />
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            );
+          }}
+        </QueryBoundary>
+      </div>
     </section>
   );
 }
@@ -414,27 +557,98 @@ function FieldStatusSection({ facility }: { facility: TodayFacility }) {
 function FacilityToday({ facility, now }: { facility: TodayFacility; now: Date }) {
   const headingId = `facility-${facility.facilityId}`;
   return (
-    <section className="panel" aria-labelledby={headingId}>
-      <h3 id={headingId}>
-        {facility.name} · {facility.localDate}
-      </h3>
-      <p className="caption">
-        {facility.activities.visible
-          ? `${facility.activities.total} activities today: ${facility.activities.published} published, ${facility.activities.canceled} canceled.`
-          : 'Activity counts are not available to you.'}
-      </p>
+    <section className="facility-today" aria-labelledby={headingId}>
+      <div className="facility-today-head">
+        <h3 id={headingId}>
+          {facility.name} · {facility.localDate}
+        </h3>
+        <p className="caption">
+          {facility.activities.visible
+            ? `${facility.activities.total} activities today: ${facility.activities.published} published, ${facility.activities.canceled} canceled.`
+            : 'Activity counts are not available to you.'}
+        </p>
+      </div>
+      <FieldStatusSection facility={facility} now={now} />
       <ActivitiesSection facility={facility} now={now} />
-      <FieldStatusSection facility={facility} />
-      <ExpectedArrivals
-        facilityId={facility.facilityId}
-        facilityName={facility.name}
-        timezone={facility.timezone}
-        localDate={facility.localDate}
-        now={now}
-      />
     </section>
   );
 }
+
+function Kpi({
+  icon,
+  tone,
+  label,
+  value,
+  sub,
+}: {
+  icon: IconName;
+  tone: string;
+  label: string;
+  value: string;
+  sub: string;
+}) {
+  return (
+    <div className="kpi">
+      <span className="kpi-label">
+        <span className={`tone-${tone}`}>
+          <Icon name={icon} size={17} />
+        </span>
+        {label}
+      </span>
+      <span className="kpi-value-row">
+        <span className="kpi-value">{value}</span>
+        <span className="kpi-sub">{sub}</span>
+      </span>
+    </div>
+  );
+}
+
+function TodayKpis({ feed }: { feed: Schema<'TodayFeed'> }) {
+  const visible = feed.facilities.filter((f) => f.activities.visible);
+  const total = visible.reduce((n, f) => n + f.activities.total, 0);
+  const published = visible.reduce((n, f) => n + f.activities.published, 0);
+  const urgent = feed.items.filter((i) => i.severity === 'critical' || i.severity === 'high');
+  const overdue = feed.items.filter((i) => i.overdue).length;
+  const recovery = feed.items.filter(isRecoveryRequired).length;
+  return (
+    <div className="kpis" aria-label="Today at a glance" role="group">
+      <Kpi
+        icon="warning"
+        tone="danger"
+        label="Open issues"
+        value={String(feed.items.length)}
+        sub={`${urgent.length} critical or high`}
+      />
+      <Kpi
+        icon="calendar_month"
+        tone="success"
+        label="Activities today"
+        value={visible.length > 0 ? String(total) : '—'}
+        sub={visible.length > 0 ? `${published} published` : 'Not available to you'}
+      />
+      <Kpi
+        icon="schedule"
+        tone="warning"
+        label="Overdue"
+        value={String(overdue)}
+        sub="past their deadline"
+      />
+      <Kpi
+        icon="payments"
+        tone="pending"
+        label="Recovery required"
+        value={String(recovery)}
+        sub="money moved, not fulfilled"
+      />
+    </div>
+  );
+}
+
+const DATE_LINE = new Intl.DateTimeFormat(undefined, {
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+});
 
 export function TodayScreen() {
   const { facilityId } = useApp();
@@ -446,15 +660,21 @@ export function TodayScreen() {
     request: facilityId ? { query: { facilityId } } : undefined,
   });
   return (
-    <section aria-labelledby="today-title">
-      <div className="actions-row">
-        <h2 id="today-title">Today</h2>
+    <section aria-labelledby="today-title" className="today">
+      <div className="page-head">
+        <div className="page-head-text">
+          <span className="eyebrow">{DATE_LINE.format(now)} · Operating home</span>
+          <h2 id="today-title">Today</h2>
+        </div>
         <Button
           variant="secondary"
           aria-expanded={showAssistant}
           aria-controls="assistant-panel"
           onClick={() => setShowAssistant((open) => !open)}
         >
+          <span className="tone-pending">
+            <Icon name="star_shine" size={18} />
+          </span>
           {showAssistant ? 'Hide assistant' : 'Assistant (optional)'}
         </Button>
       </div>
@@ -471,28 +691,53 @@ export function TodayScreen() {
           const zones = new Map(feed.facilities.map((f) => [f.facilityId, f.timezone]));
           const items = orderTodayItems(feed.items);
           return (
-            <>
-              <section aria-labelledby="issues-title">
-                <h3 id="issues-title">Open issues</h3>
-                {items.length === 0 ? (
-                  <StateView
-                    variant="empty"
-                    title="No open issues"
-                    description={`Nothing needs action in your scope right now. Last evaluated ${formatDateTime(feed.generatedAt)}.`}
-                  />
-                ) : (
-                  <ul className="list" aria-label="Open issues">
-                    {items.map((item) => (
-                      <IssueRow key={item.id} item={item} names={names} zones={zones} />
-                    ))}
-                  </ul>
-                )}
-              </section>
-              <SourcesNote sources={feed.sources} names={names} />
-              {feed.facilities.map((f) => (
-                <FacilityToday key={f.facilityId} facility={f} now={now} />
-              ))}
-            </>
+            <div className="today-body">
+              <TodayKpis feed={feed} />
+              <div className="split">
+                <div className="split-main">
+                  {feed.facilities.map((f) => (
+                    <FacilityToday key={f.facilityId} facility={f} now={now} />
+                  ))}
+                </div>
+                <div className="split-side">
+                  <section className="card card-flush attention" aria-labelledby="issues-title">
+                    <div className="card-head">
+                      <h3 id="issues-title">Open issues</h3>
+                      <span className="caption">{items.length} open</span>
+                    </div>
+                    {items.length === 0 ? (
+                      <div className="card-body">
+                        <StateView
+                          variant="empty"
+                          title="No open issues"
+                          description={`Nothing needs action in your scope right now. Last evaluated ${formatDateTime(feed.generatedAt)}.`}
+                        />
+                      </div>
+                    ) : (
+                      <ul className="issues" aria-label="Open issues">
+                        {items.map((item) => (
+                          <IssueRow key={item.id} item={item} names={names} zones={zones} />
+                        ))}
+                      </ul>
+                    )}
+                    <div className="card-foot">
+                      <SourcesNote sources={feed.sources} names={names} />
+                    </div>
+                  </section>
+                  {feed.facilities.map((f) => (
+                    <div className="card" key={f.facilityId}>
+                      <ExpectedArrivals
+                        facilityId={f.facilityId}
+                        facilityName={f.name}
+                        timezone={f.timezone}
+                        localDate={f.localDate}
+                        now={now}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           );
         }}
       </QueryBoundary>
