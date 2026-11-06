@@ -7,7 +7,11 @@ import {
   newId,
   systemPrincipal,
   z,
+  AudienceSchema,
   type Audience,
+  type AudienceCount,
+  type AudienceCountInput,
+  type DeliveryChannelValue,
   type DeliveryFailureCodeValue,
   type ListNotificationsQuery,
   type Notification,
@@ -53,7 +57,11 @@ import {
   NotificationMachine,
   RecipientMachine,
 } from '../communications.machines';
-import { COMMUNICATIONS_POLICY, type CommunicationsPolicy } from '../communications.policy';
+import {
+  ALL_CHANNELS,
+  COMMUNICATIONS_POLICY,
+  type CommunicationsPolicy,
+} from '../communications.policy';
 import {
   CreatedCursor,
   afterCursor,
@@ -872,6 +880,74 @@ export class NotificationsService {
       resolvedAt: iso(this.clock.now()),
       count: recipients.length,
       recipients,
+    };
+  }
+
+  /**
+   * SPK-COMMS-006 while composing (park UI redesign): the audience resolved from current
+   * permissions right now (SPK-COMMS-003), counted per channel from each recipient's effective
+   * preferences for the category the policy binds the kind to (SPK-COMMS-007). Authorized like a
+   * recipient preview of that audience; no name, id or contact detail leaves this method. The
+   * channel defaults are an engineering placeholder pending DEC-012 and DEC-062; a channel with no
+   * provider (DEC-020) reaches nobody.
+   */
+  async countAudience(principal: Principal, input: AudienceCountInput): Promise<AudienceCount> {
+    const organizationId = organizationOf(principal);
+    const audience = AudienceSchema.parse(input.audience);
+    if (input.protected && audience.personIds.length > 0) {
+      throw errors.validation(
+        'A protected notice must address people through subject persons, team entries or staff roles, whose authority is re-checked before dispatch; explicit person ids carry no authority.',
+        { code: 'PROTECTED_EXPLICIT_RECIPIENT', path: 'audience.personIds' },
+      );
+    }
+    await this.requireAudience(
+      principal,
+      CommunicationsActions.previewRecipients,
+      { organizationId, facilityId: input.facilityId ?? null },
+      audience,
+    );
+    const category = this.categoryOf(input.kind, input.category);
+    const reader = this.uow.reader();
+    const resolved = await this.resolver.resolve(organizationId, audience);
+    const people = [...new Set(resolved.map((r) => r.personId))];
+    const providers = new Set<DeliveryChannelValue>([
+      'in_app',
+      ...this.providers.map((p) => p.channel),
+    ]);
+    const counts = new Map(
+      ALL_CHANNELS.map((channel) => [
+        channel,
+        { channel, reachable: 0, optedOut: 0, offByDefault: 0, noProvider: 0 },
+      ]),
+    );
+    let unreachable = 0;
+    for (const personId of people) {
+      const effective = await this.preferences.effective(reader, organizationId, personId);
+      let reached = false;
+      for (const channel of ALL_CHANNELS) {
+        const preference = effective.preferences.find(
+          (p) => p.category === category && p.channel === channel,
+        );
+        const count = counts.get(channel)!;
+        if (!preference || !preference.enabled) {
+          if (preference?.stored) count.optedOut += 1;
+          else count.offByDefault += 1;
+        } else if (!providers.has(channel)) {
+          count.noProvider += 1;
+        } else {
+          count.reachable += 1;
+          reached = true;
+        }
+      }
+      if (!reached) unreachable += 1;
+    }
+    return {
+      resolvedAt: iso(this.clock.now()),
+      category,
+      count: people.length,
+      unreachable,
+      channels: [...counts.values()],
+      pendingDecisions: ['DEC-012', 'DEC-062'],
     };
   }
 

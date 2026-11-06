@@ -8,6 +8,7 @@ import {
   type AcknowledgeInput,
   type InboxItem,
   type InboxQuery,
+  type InboxUnreadCount,
   type MarkReadInput,
   type Page,
   type Principal,
@@ -41,6 +42,12 @@ import {
 } from '../communications.shared';
 import { AudienceResolver } from './audience-resolver';
 import { MergedPersons } from './merged-persons';
+
+/** The inbox badge counts at most this many unread notices (it shows "99+" beyond). */
+export const INBOX_UNREAD_CAP = 99;
+/** Rows read per pass while counting (protected ones withheld from the reader are skipped). */
+const UNREAD_SCAN_BATCH = 100;
+const UNREAD_SCAN_PASSES = 5;
 
 /** An inbox row plus what the protected-notice re-check needs (never part of the response). */
 interface EntitlementRow extends InboxRow {
@@ -101,6 +108,46 @@ export class InboxService {
       items,
       nextCursor: last ? encodeCursor({ createdAt: last.cursor_at, id: last.attempt_id }) : null,
     };
+  }
+
+  /**
+   * The inbox badge (SPK-UX-003): delivered in-app notices not yet read. A notice a newer one
+   * replaced for this reader or for everyone (SPK-COMMS-005) is not counted: it stays in the list
+   * as replaced but asks for no attention. A protected notice counts only while the reader may
+   * still be served it (the same re-check as the list, SPK-IAM-006). Counting stops at
+   * INBOX_UNREAD_CAP; `capped` then says there are more.
+   */
+  async unreadCount(principal: Principal): Promise<InboxUnreadCount> {
+    const organizationId = organizationOf(principal);
+    const personId = personOf(principal);
+    await this.authorize(principal, organizationId, personId, CommunicationsActions.readInbox);
+    const reader = this.uow.reader();
+    const personIds = await this.inboxPersons(reader, organizationId, personId);
+    let unread = 0;
+    let cursor: { createdAt: string; id: string } | null = null;
+    for (let pass = 0; pass < UNREAD_SCAN_PASSES; pass += 1) {
+      let q = this.inboxQuery(reader, organizationId, personIds)
+        .select(cursorInstant('a.created_at').as('cursor_at'))
+        .where('a.status', '=', 'delivered')
+        .where('r.superseded_by_notification_id', 'is', null)
+        .where('n.superseded_by_notification_id', 'is', null)
+        .orderBy('a.created_at', 'desc')
+        .orderBy('a.id', 'desc')
+        .limit(UNREAD_SCAN_BATCH);
+      if (cursor) q = q.where(afterCursor('a.created_at', 'a.id', cursor));
+      const rows = await q.execute();
+      for (const row of rows) {
+        if (!(await this.stillEntitled(organizationId, personId, row))) continue;
+        unread += 1;
+        if (unread > INBOX_UNREAD_CAP) {
+          return { unread: INBOX_UNREAD_CAP, capped: true, cap: INBOX_UNREAD_CAP };
+        }
+      }
+      const last = rows[rows.length - 1];
+      if (rows.length < UNREAD_SCAN_BATCH || !last) break;
+      cursor = { createdAt: last.cursor_at, id: last.attempt_id };
+    }
+    return { unread, capped: false, cap: INBOX_UNREAD_CAP };
   }
 
   async markRead(
