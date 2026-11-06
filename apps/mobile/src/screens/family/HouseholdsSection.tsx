@@ -31,7 +31,7 @@ import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, radius, spacing, type } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
 import { ChoiceGroup, Paragraph, SectionHeader, TextField } from '../account/components/forms';
 
@@ -340,7 +340,8 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
   },
   title: { ...type.heading, color: colors.text, paddingHorizontal: spacing.lg },
   inset: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },

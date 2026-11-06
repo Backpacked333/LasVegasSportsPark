@@ -42,7 +42,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, radius, spacing, type } from '../../ui/theme';
 
 export const RECEIPTS_STILL_AVAILABLE = 'Receipts of earlier purchases stay available here.';
 export const RECEIPTS_PAGE_SIZE = 20;
@@ -184,7 +184,8 @@ const styles = StyleSheet.create({
   card: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
     padding: spacing.md,
     gap: spacing.xs,
   },

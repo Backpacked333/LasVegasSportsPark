@@ -47,7 +47,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { colors, radius, spacing } from '../../ui/theme';
 import { BookWithPackage } from './BookWithPackage';
 
 export const PACKAGES_STILL_AVAILABLE = 'Packages you already hold stay listed here.';
@@ -191,7 +191,8 @@ const styles = StyleSheet.create({
   card: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
     padding: spacing.md,
     gap: spacing.xs,
   },

@@ -8,7 +8,7 @@
  */
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, fonts, spacing, type } from '../../../ui/theme';
+import { colors, fonts, radius, spacing, type } from '../../../ui/theme';
 import { permissionState, type GrantView } from '../../family/grants';
 import {
   GRANT_PERMISSIONS,
@@ -97,7 +97,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
   },
   title: { ...type.heading, color: colors.text },
   row: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start', minHeight: 32 },

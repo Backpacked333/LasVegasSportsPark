@@ -41,7 +41,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 type Basket = Schema<'Basket'>;
 type AvailabilityWindow = Schema<'AvailabilityWindow'>;
@@ -470,12 +470,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: spacing.sm,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: colors.primary,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.control,
+    backgroundColor: colors.background,
   },
-  dayOn: { backgroundColor: colors.primary },
-  dayText: { ...type.caption, color: colors.primary, ...fonts.semibold },
+  dayOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  dayText: { ...type.caption, color: colors.text, ...fonts.bold },
   dayTextOn: { color: colors.primaryText },
   window: { gap: spacing.xs },
   error: { ...type.caption, color: colors.danger },

@@ -64,7 +64,7 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, radius, spacing, type } from '../../ui/theme';
 
 type FixtureDetail = Schema<'FixtureDetail'>;
 type FixtureSide = Schema<'FixtureSide'>;
@@ -455,7 +455,8 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
   },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
