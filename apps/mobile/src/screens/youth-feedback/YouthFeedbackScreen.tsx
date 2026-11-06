@@ -43,7 +43,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 
 type YouthFeedback = Schema<'YouthFeedback'>;
 type Assessment = YouthFeedback['assessments'][number];
@@ -290,7 +290,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: colors.background,
   },
-  title: { ...type.body, fontWeight: '700', color: colors.text },
+  title: { ...type.body, ...fonts.bold, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
 });

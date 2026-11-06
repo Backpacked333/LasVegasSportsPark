@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { LiveText, sentences } from '../../../ui/announce';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../../ui/theme';
 
 export function SectionHeader({ title, detail }: { title: string; detail?: string }) {
   return (
@@ -273,7 +273,7 @@ const styles = StyleSheet.create({
   muted: { color: colors.textMuted },
   caption: { ...type.caption, color: colors.textMuted },
   field: { gap: spacing.xs, paddingHorizontal: spacing.lg },
-  label: { ...type.body, fontWeight: '600', color: colors.text },
+  label: { ...type.body, ...fonts.semibold, color: colors.text },
   input: {
     ...type.body,
     minHeight: MIN_TOUCH_SIZE,

@@ -6,7 +6,7 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LiveText } from '../../ui/announce';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 
 export function Section({
   title,
@@ -172,7 +172,7 @@ const styles = StyleSheet.create({
   detail: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 },
   detailLabel: { ...type.body, color: colors.textMuted, flexShrink: 1 },
   detailValue: { ...type.body, color: colors.text, flexShrink: 1, textAlign: 'right' },
-  emphasis: { fontWeight: '700', color: colors.text },
+  emphasis: { ...fonts.bold, color: colors.text },
   choice: {
     minHeight: MIN_TOUCH_SIZE,
     flexDirection: 'row',
@@ -184,9 +184,9 @@ const styles = StyleSheet.create({
   off: { opacity: 0.55 },
   mark: { ...type.heading, color: colors.primary },
   choiceText: { flex: 1, gap: 2 },
-  choiceLabel: { ...type.body, color: colors.text, fontWeight: '600' },
+  choiceLabel: { ...type.body, color: colors.text, ...fonts.semibold },
   field: { gap: spacing.xs },
-  fieldLabel: { ...type.body, color: colors.text, fontWeight: '600' },
+  fieldLabel: { ...type.body, color: colors.text, ...fonts.semibold },
   input: {
     minHeight: MIN_TOUCH_SIZE,
     borderWidth: 1,

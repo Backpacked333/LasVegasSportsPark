@@ -74,7 +74,7 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { ListRow } from '../../ui/ListRow';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
 type FixtureDetail = Schema<'FixtureDetail'>;
@@ -380,5 +380,5 @@ export function ScheduleScreen() {
 const styles = StyleSheet.create({
   pad: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
   change: { paddingHorizontal: spacing.lg, gap: spacing.xs },
-  changeTitle: { ...type.body, fontWeight: '600', color: colors.text },
+  changeTitle: { ...type.body, ...fonts.semibold, color: colors.text },
 });

@@ -7,7 +7,7 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LiveText } from '../../ui/announce';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 import type { AccountPerson } from './people';
 
 export function Section({
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
   },
   round: { borderRadius: 12 },
   markChecked: { backgroundColor: colors.primary },
-  markGlyph: { color: colors.primaryText, fontWeight: '700' },
+  markGlyph: { color: colors.primaryText, ...fonts.bold },
   input: {
     ...type.body,
     color: colors.text,

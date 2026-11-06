@@ -72,7 +72,7 @@ import { ListRow } from '../../ui/ListRow';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 
 type FamilyCalendar = Schema<'FamilyCalendar'>;
 type MyTeamEntry = Schema<'MyTeamEntry'>;
@@ -468,6 +468,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   chipSelected: { backgroundColor: colors.primary },
-  chipText: { ...type.body, color: colors.primary, fontWeight: '600' },
+  chipText: { ...type.body, color: colors.primary, ...fonts.semibold },
   chipTextSelected: { color: colors.primaryText },
 });

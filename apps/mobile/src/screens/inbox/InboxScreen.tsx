@@ -54,7 +54,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
 
 type InboxItem = Schema<'InboxItem'>;
@@ -374,7 +374,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   pressed: { backgroundColor: colors.surface },
-  title: { ...type.body, fontWeight: '600', color: colors.text },
+  title: { ...type.body, ...fonts.semibold, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
   detail: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, gap: spacing.sm },

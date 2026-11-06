@@ -41,7 +41,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 
 type Basket = Schema<'Basket'>;
 type AvailabilityWindow = Schema<'AvailabilityWindow'>;
@@ -462,7 +462,7 @@ export function PlacementInformationRoute() {
 
 const styles = StyleSheet.create({
   editor: { gap: spacing.sm },
-  label: { ...type.body, fontWeight: '600', color: colors.text },
+  label: { ...type.body, ...fonts.semibold, color: colors.text },
   days: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   day: {
     minHeight: MIN_TOUCH_SIZE,
@@ -475,7 +475,7 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   dayOn: { backgroundColor: colors.primary },
-  dayText: { ...type.caption, color: colors.primary, fontWeight: '600' },
+  dayText: { ...type.caption, color: colors.primary, ...fonts.semibold },
   dayTextOn: { color: colors.primaryText },
   window: { gap: spacing.xs },
   error: { ...type.caption, color: colors.danger },

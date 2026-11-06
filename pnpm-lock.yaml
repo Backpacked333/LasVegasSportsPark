@@ -90,6 +90,15 @@ importers:
 
   apps/mobile:
     dependencies:
+      '@expo-google-fonts/archivo':
+        specifier: 0.4.2
+        version: 0.4.2
+      '@expo-google-fonts/archivo-narrow':
+        specifier: 0.4.2
+        version: 0.4.2
+      '@expo-google-fonts/material-symbols':
+        specifier: 0.4.49
+        version: 0.4.49
       '@expo/log-box':
         specifier: 57.0.4
         version: 57.0.4(@expo/dom-webview@57.0.1)(expo@57.0.27)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.87.1(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
@@ -111,6 +120,9 @@ importers:
       expo-crypto:
         specifier: 57.0.3
         version: 57.0.3(expo@57.0.27)
+      expo-font:
+        specifier: 57.0.4
+        version: 57.0.4(expo@57.0.27)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.87.1(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       expo-linking:
         specifier: 57.0.12
         version: 57.0.12(expo@57.0.27)(react-native@0.86.3(@babel/core@7.29.7)(@react-native/jest-preset@0.86.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.87.1(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
@@ -981,6 +993,12 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@expo-google-fonts/archivo-narrow@0.4.2':
+    resolution: {integrity: sha512-uD54ZIwnpiAKH2Bjj1awgfIMkVwDTKHICGa4y8n6oXdIXNwDPjk8EYWz8CIY3l9x3wVoSSRkd85rmueckJmZbA==}
+
+  '@expo-google-fonts/archivo@0.4.2':
+    resolution: {integrity: sha512-FLhI4/ZVIFSHHxx15Z7Rr4QX/4ZrJozEebBEFSdHSRRwULGCuSIpbb3dz56Hslux6LZEnJ1mVpZ6CyVpUzLwIg==}
 
   '@expo-google-fonts/material-symbols@0.4.49':
     resolution: {integrity: sha512-HtoaXYCk7A9kOjwoxrjq6i0iDtAoQnOPm31zUn+TgmKlHVUU+yyqvQDxN830MvGmBQV8eINv/SK7JRtWhB2xcg==}
@@ -6328,6 +6346,10 @@ snapshots:
   '@eslint/core@1.2.1':
     dependencies:
       '@types/json-schema': 7.0.15
+  '@expo-google-fonts/archivo-narrow@0.4.2': {}
+
+  '@expo-google-fonts/archivo@0.4.2': {}
+
 
   '@eslint/js@10.0.1(eslint@10.13.0)':
     optionalDependencies:

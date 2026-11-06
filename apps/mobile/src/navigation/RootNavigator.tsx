@@ -7,14 +7,25 @@
  */
 import { Stack } from 'expo-router';
 import { ConnectivityAnnouncer } from '../connectivity/ConnectivityBanner';
+import { colors, fonts } from '../ui/theme';
 import { UpdateGate } from './UpdateGate';
+
+/** Stack headers of the park system: sand bar, ink back button, condensed uppercase title. */
+const STACK_HEADER = {
+  headerBackTitle: 'Back',
+  headerStyle: { backgroundColor: colors.page },
+  headerShadowVisible: false,
+  headerTintColor: colors.text,
+  headerTitleStyle: { ...fonts.display, fontSize: 22, color: colors.text },
+  contentStyle: { backgroundColor: colors.page },
+} as const;
 
 export function RootNavigator() {
   return (
     <>
       <ConnectivityAnnouncer />
       <UpdateGate>
-        <Stack screenOptions={{ headerBackTitle: 'Back' }}>
+        <Stack screenOptions={STACK_HEADER}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="pass" options={{ title: 'Facility pass' }} />
           <Stack.Screen name="inbox" options={{ title: 'Notifications' }} />

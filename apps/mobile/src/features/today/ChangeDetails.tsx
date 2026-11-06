@@ -6,7 +6,7 @@
  */
 import { StyleSheet, Text, View } from 'react-native';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 import type { EventDetailsView, ScheduleChange } from './notices';
 import { formatRange } from './time';
 
@@ -58,5 +58,5 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   line: { ...type.caption, color: colors.text },
-  key: { fontWeight: '700' },
+  key: { ...fonts.bold },
 });

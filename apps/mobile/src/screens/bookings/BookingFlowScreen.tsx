@@ -94,7 +94,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { BookingForms } from './BookingForms';
 
@@ -677,5 +677,5 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
   title: { ...type.title, color: colors.text },
   dayRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
-  day: { ...type.body, color: colors.text, fontWeight: '600' },
+  day: { ...type.body, color: colors.text, ...fonts.semibold },
 });

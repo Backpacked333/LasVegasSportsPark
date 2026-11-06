@@ -13,7 +13,7 @@ import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Button } from '../../ui/Button';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { colors, fonts, spacing, type } from '../../ui/theme';
 import { ChangeDetails } from './ChangeDetails';
 import type { ScheduleChange } from './notices';
 import { formatRange, type DisplayZone } from './time';
@@ -121,6 +121,6 @@ const styles = StyleSheet.create({
   title: { ...type.heading, color: colors.text },
   facts: { gap: spacing.xs },
   body: { ...type.body, color: colors.text },
-  key: { fontWeight: '700' },
+  key: { ...fonts.bold },
   action: { gap: spacing.xs },
 });

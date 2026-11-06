@@ -43,7 +43,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 
 type PublicOffering = Schema<'PublicOffering'>;
 
@@ -342,7 +342,7 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   chipOn: { backgroundColor: colors.primary },
-  chipText: { ...type.caption, color: colors.primary, fontWeight: '600' },
+  chipText: { ...type.caption, color: colors.primary, ...fonts.semibold },
   chipTextOn: { color: colors.primaryText },
   more: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   caption: { ...type.caption, color: colors.textMuted, padding: spacing.lg },

@@ -1,10 +1,10 @@
 /**
- * StatusBadge: text plus a glyph, never colour alone (SPK-UX-009, SPK-UX-004 "Payment
+ * StatusBadge: a tinted pill with text plus a glyph, never colour alone (SPK-UX-009, SPK-UX-004 "Payment
  * processing", "awaiting placement" and "confirmed" must not look interchangeable). The label is
  * the full status phrase from docs/package-a/journeys.md section 3 and is what screen readers read.
  */
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, spacing, type } from './theme';
+import { colors, fonts, radius, toneBackgrounds, type } from './theme';
 
 export type StatusTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral' | 'pending';
 
@@ -28,7 +28,7 @@ export interface StatusBadgeProps {
 export function StatusBadge({ tone, label, testID }: StatusBadgeProps) {
   return (
     <View
-      style={[styles.badge, { borderColor: colors[tone] }]}
+      style={[styles.badge, { backgroundColor: toneBackgrounds[tone] }]}
       accessible
       accessibilityRole="text"
       accessibilityLabel={label}
@@ -41,7 +41,7 @@ export function StatusBadge({ tone, label, testID }: StatusBadgeProps) {
       >
         {STATUS_GLYPHS[tone]}
       </Text>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, { color: colors[tone] }]}>{label}</Text>
     </View>
   );
 }
@@ -51,12 +51,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    borderWidth: 1.5,
-    borderRadius: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    gap: spacing.xs,
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    gap: 5,
   },
-  glyph: { ...type.caption, fontWeight: '700' },
-  label: { ...type.caption, color: colors.text, flexShrink: 1 },
+  glyph: { ...type.caption, ...fonts.extrabold, fontSize: 13, lineHeight: 18 },
+  label: { ...type.caption, ...fonts.bold, fontSize: 13, lineHeight: 18, flexShrink: 1 },
 });

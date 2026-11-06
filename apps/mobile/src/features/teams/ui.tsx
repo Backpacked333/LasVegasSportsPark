@@ -23,7 +23,7 @@ import { OutcomeLost } from '../../ui/OutcomeLost';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 import { roleWords } from './format';
 import { severityStatus } from './status';
 
@@ -473,11 +473,11 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
   },
   body: { ...type.body, color: colors.text },
-  subheading: { ...type.body, color: colors.text, fontWeight: '700' },
+  subheading: { ...type.body, color: colors.text, ...fonts.bold },
   caption: { ...type.caption, color: colors.textMuted },
   detail: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   detailLabel: { ...type.body, color: colors.textMuted, minWidth: 120 },
-  detailValue: { ...type.body, color: colors.text, flexShrink: 1, fontWeight: '600' },
+  detailValue: { ...type.body, color: colors.text, flexShrink: 1, ...fonts.semibold },
   buttonRow: { gap: spacing.sm, paddingTop: spacing.xs },
   group: { gap: spacing.xs },
   choice: {
@@ -493,7 +493,7 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
   inactive: { opacity: 0.55 },
   field: { gap: spacing.xs },
-  fieldLabel: { ...type.body, color: colors.text, fontWeight: '600' },
+  fieldLabel: { ...type.body, color: colors.text, ...fonts.semibold },
   input: {
     ...type.body,
     minHeight: MIN_TOUCH_SIZE,
