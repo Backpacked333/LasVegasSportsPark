@@ -554,6 +554,12 @@ export const ObligationSchema = z
      * again until it is reconciled.
      */
     liveAttempt: LiveAttemptSchema.nullable(),
+    /**
+     * When finance staff last asked for the debtor to be reminded (POST
+     * /obligations/{id}/reminders; staff readers only, null otherwise). Always sent; optional only
+     * so clients built on the earlier contract keep compiling.
+     */
+    lastReminderAt: Instant.nullable().optional(),
     revision: Revision,
     createdAt: Instant,
   })

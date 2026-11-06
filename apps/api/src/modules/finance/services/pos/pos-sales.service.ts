@@ -4,6 +4,7 @@ import {
   newId,
   type AddPosSaleLineInput,
   type AddPosTenderInput,
+  type ChangePosLineQuantityInput,
   type CreatePosReturnInput,
   type CreatePosSaleInput,
   type ListMyPosReceiptsQuery,
@@ -51,6 +52,7 @@ import { PosSaleFinalizer, type PosSaleRow } from './pos-sale-finalizer.service'
 import { PosSetupService } from './pos-setup.service';
 import {
   PAID_SALE_STATES,
+  liveLines,
   loadSaleParts,
   returnedUnits,
   toPosReceipt,
@@ -253,47 +255,13 @@ export class PosSalesService {
           saleCurrency: sale.currency,
         });
       }
-      const keys = await trx
-        .selectFrom('pos_product_charges')
-        .select('tax_fee_policy_key')
-        .where('organization_id', '=', organizationId)
-        .where('product_id', '=', product.id)
-        .orderBy('position')
-        .execute();
-      const base = Number(product.price_minor) * input.quantity;
-      const now = this.clock.now();
-      const charges: PosLineChargeRecord[] = [];
-      for (const { tax_fee_policy_key: key } of keys) {
-        const version = await this.policies.currentPolicyVersion(
-          organizationId,
-          TAX_FEE_KIND,
-          key,
-          now,
-          trx,
-        );
-        if (!version || version.approvalStatus !== 'approved') {
-          // DEC-057: only Finance-approved taxes and fees appear on a sale; none is assumed.
-          throw errors.resourceConflict(
-            `No approved tax or fee policy "${key}" is in effect; the product cannot be sold.`,
-            { code: 'CHARGE_POLICY_NOT_APPROVED', policyKey: key, productId: product.id },
-          );
-        }
-        const content = TaxFeeContent.safeParse(version.content);
-        if (!content.success) {
-          throw errors.resourceConflict(
-            `The approved tax or fee policy "${key}" has no usable rate or amount.`,
-            { code: 'CHARGE_POLICY_INVALID', policyKey: key, policyVersionId: version.id },
-          );
-        }
-        if (content.data.currency !== undefined && content.data.currency !== sale.currency) {
-          throw errors.resourceConflict(
-            `The approved fixed charge "${key}" is in another currency than the sale.`,
-            { code: 'CHARGE_POLICY_CURRENCY_MISMATCH', policyKey: key },
-          );
-        }
-        charges.push(chargeFor(content.data, version.id, base, input.quantity));
-      }
-      const chargesMinor = charges.reduce((sum, c) => sum + c.amountMinor, 0);
+      const { base, charges, chargesMinor } = await this.price(
+        trx,
+        organizationId,
+        sale,
+        product,
+        input.quantity,
+      );
       const last = await trx
         .selectFrom('pos_sale_lines')
         .select((eb) => eb.fn.max('line_number').as('n'))
@@ -343,6 +311,185 @@ export class PosSalesService {
       });
     });
     return this.afterCommand(organizationId, saleId);
+  }
+
+  /**
+   * Park UI redesign (§3.16 POS, SPK-PAY-001/002/010, migration 0686): change the quantity of an
+   * open sale's line, or remove it with 0. Lines are append-only, so the change is a new line that
+   * supersedes the old one, priced again from the product and the approved charges in effect now;
+   * the old line stays as history. Gated by `point_of_sale` like adding a line (it changes what is
+   * sold); refused when the tenders already taken or pending exceed the new total (the database
+   * refuses it too, pos_sale_lines_below_tendered).
+   */
+  async changeLineQuantity(
+    principal: Principal,
+    saleId: string,
+    lineId: string,
+    input: ChangePosLineQuantityInput,
+    correlationId: string | null,
+  ): Promise<PosSale> {
+    const organizationId = organizationOf(principal);
+    await this.uow.run(async ({ trx }) => {
+      const sale = await this.finalizer.lockSale(trx, organizationId, saleId);
+      await this.requireOperator(principal, sale);
+      await this.capabilities.require(organizationId, 'point_of_sale', trx);
+      if (sale.status !== 'open') {
+        throw errors.invalidTransition('PosSale', sale.status, 'change_line');
+      }
+      assertExpectedRevision(input.expectedRevision, sale.revision);
+      const rows = await trx
+        .selectFrom('pos_sale_lines')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('sale_id', '=', sale.id)
+        .execute();
+      const line = rows.find((r) => r.id === lineId);
+      if (!line) {
+        throw errors.validation('The line is not on this sale.', {
+          code: 'LINE_NOT_ON_SALE',
+          saleLineId: lineId,
+        });
+      }
+      if (!liveLines(rows).some((r) => r.id === lineId)) {
+        throw errors.resourceConflict('The line was already changed or removed; reload the sale.', {
+          code: 'LINE_ALREADY_CHANGED',
+          saleLineId: lineId,
+        });
+      }
+      if (line.quantity === input.quantity) return; // nothing changes
+      const product = await trx
+        .selectFrom('pos_products')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', line.product_id)
+        .executeTakeFirstOrThrow();
+      if (input.quantity > 0 && product.status !== 'active') {
+        throw errors.resourceConflict('The product is retired; remove the line instead.', {
+          code: 'PRODUCT_RETIRED',
+        });
+      }
+      const { base, charges, chargesMinor } =
+        input.quantity === 0
+          ? { base: 0, charges: [] as PosLineChargeRecord[], chargesMinor: 0 }
+          : await this.price(trx, organizationId, sale, product, input.quantity);
+      const tendered = Number(sale.total_minor) - (await this.remaining(trx, sale));
+      const newTotal =
+        Number(sale.total_minor) - Number(line.line_total_minor) + base + chargesMinor;
+      if (newTotal < tendered) {
+        throw errors.resourceConflict(
+          'Tenders already taken cover more than the changed sale would cost.',
+          { code: 'BELOW_TENDERED', tenderedMinor: tendered, newTotalMinor: newTotal },
+        );
+      }
+      const last = await trx
+        .selectFrom('pos_sale_lines')
+        .select((eb) => eb.fn.max('line_number').as('n'))
+        .where('organization_id', '=', organizationId)
+        .where('sale_id', '=', sale.id)
+        .executeTakeFirst();
+      const newLineId = newId();
+      await trx
+        .insertInto('pos_sale_lines')
+        .values({
+          id: newLineId,
+          organization_id: organizationId,
+          sale_id: sale.id,
+          currency: sale.currency,
+          line_number: Number(last?.n ?? 0) + 1,
+          product_id: line.product_id,
+          // The product as it is now: the changed line is sold now (a PATCH changes later sales).
+          sku: product.sku,
+          name: product.name,
+          kind: product.kind,
+          unit_price_minor: Number(product.price_minor),
+          quantity: input.quantity,
+          base_minor: base,
+          charges: json(charges),
+          charges_minor: chargesMinor,
+          line_total_minor: base + chargesMinor,
+          supersedes_line_id: line.id,
+        })
+        .execute();
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: `${FinanceActions.operateRegister.id}.change_line`,
+        targetType: 'pos_sale',
+        targetId: sale.id,
+        beforeRevision: sale.revision,
+        reason: input.reason ?? null,
+        correlationId,
+        details: {
+          supersededLineId: line.id,
+          lineId: newLineId,
+          productId: line.product_id,
+          fromQuantity: line.quantity,
+          toQuantity: input.quantity,
+          baseMinor: base,
+          charges: charges.map((c) => ({
+            policyVersionId: c.policyVersionId,
+            code: c.code,
+            amountMinor: c.amountMinor,
+          })),
+        },
+      });
+    });
+    return this.afterCommand(organizationId, saleId);
+  }
+
+  /**
+   * SPK-PAY-001/002, DEC-057: `quantity` units of the product at its price with the charges of the
+   * approved `tax_fee` versions in effect now; a key without one refuses the line.
+   */
+  private async price(
+    trx: Trx,
+    organizationId: string,
+    sale: PosSaleRow,
+    product: { id: string; price_minor: number | string },
+    quantity: number,
+  ): Promise<{ base: number; charges: PosLineChargeRecord[]; chargesMinor: number }> {
+    const keys = await trx
+      .selectFrom('pos_product_charges')
+      .select('tax_fee_policy_key')
+      .where('organization_id', '=', organizationId)
+      .where('product_id', '=', product.id)
+      .orderBy('position')
+      .execute();
+    const base = Number(product.price_minor) * quantity;
+    const now = this.clock.now();
+    const charges: PosLineChargeRecord[] = [];
+    for (const { tax_fee_policy_key: key } of keys) {
+      const version = await this.policies.currentPolicyVersion(
+        organizationId,
+        TAX_FEE_KIND,
+        key,
+        now,
+        trx,
+      );
+      if (!version || version.approvalStatus !== 'approved') {
+        // DEC-057: only Finance-approved taxes and fees appear on a sale; none is assumed.
+        throw errors.resourceConflict(
+          `No approved tax or fee policy "${key}" is in effect; the product cannot be sold.`,
+          { code: 'CHARGE_POLICY_NOT_APPROVED', policyKey: key, productId: product.id },
+        );
+      }
+      const content = TaxFeeContent.safeParse(version.content);
+      if (!content.success) {
+        throw errors.resourceConflict(
+          `The approved tax or fee policy "${key}" has no usable rate or amount.`,
+          { code: 'CHARGE_POLICY_INVALID', policyKey: key, policyVersionId: version.id },
+        );
+      }
+      if (content.data.currency !== undefined && content.data.currency !== sale.currency) {
+        throw errors.resourceConflict(
+          `The approved fixed charge "${key}" is in another currency than the sale.`,
+          { code: 'CHARGE_POLICY_CURRENCY_MISMATCH', policyKey: key },
+        );
+      }
+      charges.push(chargeFor(content.data, version.id, base, quantity));
+    }
+    const chargesMinor = charges.reduce((sum, c) => sum + c.amountMinor, 0);
+    return { base, charges, chargesMinor };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -559,12 +706,15 @@ export class PosSalesService {
         throw errors.invalidTransition('PosSale', sale.status, 'return_part');
       }
       assertExpectedRevision(input.expectedRevision, sale.revision);
-      const lines = await trx
-        .selectFrom('pos_sale_lines')
-        .selectAll()
-        .where('organization_id', '=', organizationId)
-        .where('sale_id', '=', sale.id)
-        .execute();
+      // 0686: only lines in effect can be returned (pos_returns_live_lines refuses the others).
+      const lines = liveLines(
+        await trx
+          .selectFrom('pos_sale_lines')
+          .selectAll()
+          .where('organization_id', '=', organizationId)
+          .where('sale_id', '=', sale.id)
+          .execute(),
+      );
       const byId = new Map<string, PosSaleLineRow>(lines.map((l) => [l.id, l]));
       const earlier = await trx
         .selectFrom('pos_returns')

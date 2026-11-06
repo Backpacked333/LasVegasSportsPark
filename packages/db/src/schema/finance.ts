@@ -542,6 +542,22 @@ export interface SettlementReconciliationsTable {
   created_at: GeneratedTimestamp;
 }
 
+/** 0685: a payment reminder requested for a past-due obligation (append-only). */
+export interface PaymentRemindersTable {
+  id: string;
+  organization_id: string;
+  obligation_id: string;
+  currency: string;
+  remaining_minor: MinorUnits;
+  due_at: Timestamp;
+  recipient_person_id: string;
+  reason: string | null;
+  requested_by: Json<Record<string, unknown>>;
+  requested_by_person_id: string | null;
+  requested_at: Timestamp;
+  created_at: GeneratedTimestamp;
+}
+
 export interface FinanceTables {
   quotes: QuotesTable;
   quote_lines: QuoteLinesTable;
@@ -560,6 +576,7 @@ export interface FinanceTables {
   payment_refundables: PaymentRefundablesTable;
   refund_attempts: RefundAttemptsTable;
   credits: CreditsTable;
+  payment_reminders: PaymentRemindersTable;
   credit_redemptions: CreditRedemptionsTable;
   payment_allocations: PaymentAllocationsTable;
   settlement_reconciliations: SettlementReconciliationsTable;

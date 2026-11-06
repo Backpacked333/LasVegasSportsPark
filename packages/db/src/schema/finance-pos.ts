@@ -135,6 +135,8 @@ export interface PosSaleLinesTable {
   charges: GeneratedJson<PosLineChargeRecord[]>;
   charges_minor: GeneratedMinor;
   line_total_minor: MinorUnits;
+  /** 0686: the line this one corrects (quantity change or removal, quantity 0); null otherwise. */
+  supersedes_line_id: Generated<string | null>;
   created_at: GeneratedTimestamp;
 }
 

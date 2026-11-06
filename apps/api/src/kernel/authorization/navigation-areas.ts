@@ -26,6 +26,8 @@ const EXPLICIT: Readonly<Record<string, NavigationAreaId | null>> = {
   'finance.pay_obligation': 'registrations',
   'finance.pay_contribution': 'registrations',
   'finance.request_contribution': 'teams',
+  // The money card of the person record (park UI redesign).
+  'finance.read_person_money': 'people',
   // Catalog reads and acknowledgments used by desk and registration screens.
   'catalog.evaluate_discounts': 'registrations',
   'catalog.record_acknowledgment': 'registrations',

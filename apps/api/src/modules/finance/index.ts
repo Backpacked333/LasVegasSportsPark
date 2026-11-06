@@ -41,6 +41,7 @@ export {
 } from './services/participation-standing.service';
 export { FinancialStandingService } from './services/financial-standing.service';
 export { MoneyReadsService } from './services/money-reads.service';
+export { FinanceDeskService, localYearStart } from './services/finance-desk.service';
 export { FinanceNotices } from './services/finance-notices.service';
 export { PosSetupService } from './services/pos/pos-setup.service';
 export { PosSalesService } from './services/pos/pos-sales.service';
