@@ -6,12 +6,7 @@
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
-import {
-  familyRoutes,
-  IDS,
-  offering,
-  page,
-} from '../../../features/registration/testing/fixtures';
+import { familyRoutes, IDS, offering, page } from '../../../features/registration/testing/fixtures';
 import { promotionText } from '../../../features/registration/promotions';
 import { DiscoverScreen, searchProblem } from '../DiscoverScreen';
 

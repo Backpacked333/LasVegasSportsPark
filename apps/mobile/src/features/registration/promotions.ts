@@ -40,13 +40,15 @@ export function promotionText(promotion: PublicPromotion, timeZone: string): str
   if (promotion.basis === 'multi_line' && promotion.minLines !== null) {
     parts.push(`with ${promotion.minLines} or more registrations`);
   }
-  if (promotion.availableUntil) parts.push(`until ${untilDate(promotion.availableUntil, timeZone)}`);
+  if (promotion.availableUntil)
+    parts.push(`until ${untilDate(promotion.availableUntil, timeZone)}`);
   return parts.join(' ');
 }
 
-export function promotionBadges(
-  offering: { promotions: readonly PublicPromotion[]; facility: { timezone: string } },
-): StatusBadgeProps[] {
+export function promotionBadges(offering: {
+  promotions: readonly PublicPromotion[];
+  facility: { timezone: string };
+}): StatusBadgeProps[] {
   return offering.promotions.map((promotion) => ({
     tone: 'info',
     label: promotionText(promotion, offering.facility.timezone),

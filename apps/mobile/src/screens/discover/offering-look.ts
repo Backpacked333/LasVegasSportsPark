@@ -44,4 +44,3 @@ export function offeringSummary(offering: PublicOffering): string {
     .filter((part): part is string => Boolean(part))
     .join(' · ');
 }
-
