@@ -28,7 +28,8 @@ export type NotificationKind =
   | 'youth_feedback'
   | 'staff_broadcast'
   | 'availability_request'
-  | 'activity_reminder';
+  | 'activity_reminder'
+  | 'result_reminder';
 export type NotificationCategory = 'operational' | 'promotional';
 export type NotificationStatus = 'composed' | 'queued' | 'dispatched' | 'suppressed';
 export type SuppressionReason = 'obsolete' | 'no_recipients' | 'authority_revoked';
