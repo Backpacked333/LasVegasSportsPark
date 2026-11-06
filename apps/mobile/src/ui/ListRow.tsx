@@ -41,6 +41,8 @@ export interface ListRowProps {
   iconTone?: readonly [string, string];
   /** A stripe on the left edge, e.g. the activity kind's colour. */
   accent?: string;
+  /** Content before the text, e.g. a schedule row's start time (part of the row's label). */
+  leading?: ReactNode;
   testID?: string;
 }
 
@@ -54,6 +56,7 @@ export function ListRow({
   icon,
   iconTone = [colors.surface, colors.text],
   accent,
+  leading,
   testID,
 }: ListRowProps) {
   const layout = useContext(RowLayoutContext);
@@ -61,6 +64,7 @@ export function ListRow({
   const content = (
     <>
       {accent ? <View style={[styles.accent, { backgroundColor: accent }]} /> : null}
+      {leading}
       {icon ? (
         <View style={[styles.tile, { backgroundColor: iconTone[0] }]}>
           <Icon name={icon} size={20} color={iconTone[1]} />

@@ -25,12 +25,22 @@
  * what it shows (§4.15) and the SCR-C-40 banner covers connectivity.
  * A fixture read that is not available (NOT_FOUND, ACCESS_DENIED) leaves fixtures out silently;
  * any other failure is shown in the next-activity section with its code and "Try again".
+ *
+ * Look (park system): the day and a greeting with the person's given name from `GET /v1/me`, the
+ * pass and the inbox as the first two actions, the next activity as the night card, notices as
+ * rows with a decorative icon per section, and, when the calendar includes family members, one
+ * tile per person with their next activity from the same reads (nothing else is derived).
  */
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { calendarWindowQuery } from '../../features/today/calendar';
-import { mergeEntries, nextEntry } from '../../features/today/entries';
+import {
+  entryPersonIds,
+  mergeEntries,
+  nextEntry,
+  type TodayEntry,
+} from '../../features/today/entries';
 import {
   fixtureCardModel,
   fixtureRequiredAction,
@@ -62,7 +72,7 @@ import { RsvpControl } from '../../features/today/RsvpControl';
 import { Caption, oldestUpdate, Section, SectionQueryState } from '../../features/today/Section';
 import { sessionHref, useSessionActivity } from '../../features/today/session-activity';
 import { enrollmentStatus, noticeStatus, RECOVERY_PHRASE } from '../../features/today/status';
-import { displayZone, zoneNotice } from '../../features/today/time';
+import { displayZone, formatDay, formatTime, zoneNotice } from '../../features/today/time';
 import { useApiPages } from '../../api/useApiPages';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
@@ -73,7 +83,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { spacing } from '../../ui/theme';
+import { colors, fonts, kindColors, radius, spacing, toneBackgrounds, type } from '../../ui/theme';
 import { usePendingRegistrations, type PendingRegistration } from './pending-registrations';
 
 type InboxItem = Schema<'InboxItem'>;
@@ -127,6 +137,15 @@ export function availabilityRequestAnswered(
 /** How many notices each Home section shows before "See all in notifications". */
 const NOTICES_PER_SECTION = 3;
 
+/** Decorative icon tile per notice section: [icon, tile, icon colour]. */
+const SECTION_ICONS: Record<NoticeSection, readonly [string, string, string]> = {
+  urgent: ['swap_horiz', toneBackgrounds.warning, colors.warning],
+  actions: ['assignment_late', toneBackgrounds.warning, colors.warning],
+  invitations: ['mail', toneBackgrounds.info, colors.info],
+  results: ['emoji_events', toneBackgrounds.success, colors.success],
+  renewals: ['autorenew', toneBackgrounds.neutral, colors.neutral],
+};
+
 const NOTICE_SECTIONS: readonly { key: NoticeSection; title: string }[] = [
   { key: 'urgent', title: 'Changes affecting you' },
   { key: 'actions', title: 'Actions required' },
@@ -161,8 +180,17 @@ export function noticeFor(item: InboxItem, names: Map<string, string>): string {
   return `For: ${ids.map((id) => nameOf(names, id)).join(', ')}. `;
 }
 
-function NoticeRows({ items, names }: { items: InboxItem[]; names: Map<string, string> }) {
+function NoticeRows({
+  items,
+  names,
+  section,
+}: {
+  items: InboxItem[];
+  names: Map<string, string>;
+  section: NoticeSection;
+}) {
   const router = useRouter();
+  const [icon, tile, tint] = SECTION_ICONS[section];
   return (
     <View accessibilityRole="list">
       {items.map((item) => (
@@ -171,6 +199,8 @@ function NoticeRows({ items, names }: { items: InboxItem[]; names: Map<string, s
           title={item.title}
           detail={`${noticeFor(item, names)}${item.body}`}
           status={noticeStatus(item)}
+          icon={icon}
+          iconTone={[tile, tint]}
           onPress={() => openNotice(router, item)}
           accessibilityHint="Opens the notice in your notifications"
           testID={`home-notice-${item.attemptId}`}
@@ -225,7 +255,11 @@ function NextActivitySection({
   const notice = zoneNotice(model.zone, model.start ?? item.start);
   return (
     <>
-      <NextActivityCard model={model} onOpen={href ? () => router.push(href as Href) : undefined} />
+      <NextActivityCard
+        model={model}
+        eyebrow="Next up"
+        onOpen={href ? () => router.push(href as Href) : undefined}
+      />
       {notice ? <Caption>{notice}</Caption> : null}
     </>
   );
@@ -284,9 +318,94 @@ function NextFixtureSection({
           router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
         }
         openLabel="View fixture"
+        eyebrow="Next up"
       />
       {notice ? <Caption>{notice}</Caption> : null}
     </>
+  );
+}
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
+const AVATAR_COLORS = [
+  kindColors.program,
+  kindColors.party,
+  kindColors.league,
+  kindColors.basketball,
+  kindColors.rental,
+] as const;
+
+/** "Sat, Oct 25, 10:00 AM · Junior Skills" on the activity's own clock (SPK-SCHED-008). */
+function entryLine(entry: TodayEntry, title: string): string {
+  const z = entry.zone.zone;
+  return `${formatDay(entry.start, z)}, ${formatTime(entry.start, z)} · ${title}`;
+}
+
+/**
+ * One tile per person the family calendar includes, with their next activity from the reads Home
+ * already made; opens the family calendar (SCR-C-19). Shown only when family members are included.
+ */
+function FamilyTiles({
+  personIds,
+  entries,
+  teams,
+  names,
+}: {
+  personIds: readonly string[];
+  entries: readonly TodayEntry[];
+  teams: readonly MyTeamEntry[] | undefined;
+  names: Map<string, string>;
+}) {
+  const router = useRouter();
+  if (personIds.length < 2) return null;
+  return (
+    <Section title="Family" testID="home-family">
+      <View style={styles.family}>
+        {personIds.map((personId, index) => {
+          const name = nameOf(names, personId);
+          const next = entries.find((e) => entryPersonIds(e, teams).includes(personId));
+          const title = next
+            ? next.type === 'session'
+              ? next.item.title
+              : `${next.fixture.home.teamName} vs ${next.fixture.away?.teamName ?? 'Bye'}`
+            : null;
+          const line = next && title ? entryLine(next, title) : 'Nothing scheduled soon';
+          return (
+            <Pressable
+              key={personId}
+              accessibilityRole="button"
+              accessibilityLabel={`${name}. Next: ${line}`}
+              accessibilityHint="Opens the family calendar"
+              onPress={() => router.push('/family-calendar')}
+              style={({ pressed }) => [styles.tile, pressed && styles.tilePressed]}
+              testID={`home-family-${personId}`}
+            >
+              <View
+                style={[
+                  styles.avatar,
+                  { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
+                ]}
+              >
+                <Text style={styles.avatarText}>{initials(name)}</Text>
+              </View>
+              <View style={styles.tileText}>
+                <Text style={styles.tileName}>{name}</Text>
+                <Text style={styles.tileLine} numberOfLines={2}>
+                  {line}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+    </Section>
   );
 }
 
@@ -330,9 +449,14 @@ function HomeContent() {
     ...registrations.pending,
     ...registrations.inProgress,
   ];
+  const familyIds =
+    (calendar.data?.participantPersonIds.length ?? 0) > 1
+      ? (calendar.data?.participantPersonIds ?? [])
+      : [];
   const names = usePersonNames(
     [
       ...(next?.type === 'session' ? [next.item.personId] : []),
+      ...familyIds,
       ...nextTeamMembers,
       ...allRegistrations.map((r) => r.enrollment.participantPersonId),
       ...(inbox.data?.items ?? []).flatMap((i) => i.subjectPersonIds ?? []),
@@ -454,7 +578,7 @@ function HomeContent() {
 
       {urgent.length > 0 ? (
         <Section title="Changes affecting you" testID="home-urgent">
-          <NoticeRows items={urgent.slice(0, NOTICES_PER_SECTION)} names={names} />
+          <NoticeRows items={urgent.slice(0, NOTICES_PER_SECTION)} names={names} section="urgent" />
         </Section>
       ) : null}
 
@@ -506,6 +630,7 @@ function HomeContent() {
           <NoticeRows
             items={(bySection.get('actions') ?? []).slice(0, NOTICES_PER_SECTION)}
             names={names}
+            section="actions"
           />
         </Section>
       ) : null}
@@ -528,10 +653,19 @@ function HomeContent() {
         if (items.length === 0) return null;
         return (
           <Section key={s.key} title={s.title} testID={`home-${s.key}`}>
-            <NoticeRows items={items.slice(0, NOTICES_PER_SECTION)} names={names} />
+            <NoticeRows items={items.slice(0, NOTICES_PER_SECTION)} names={names} section={s.key} />
           </Section>
         );
       })}
+
+      <FamilyTiles
+        personIds={familyIds}
+        entries={mergeEntries(calendarItems, fixtureList).filter(
+          (e) => new Date(e.end).getTime() > now.getTime(),
+        )}
+        teams={teams.data}
+        names={names}
+      />
 
       {inbox.data === undefined ? (
         <SectionQueryState
@@ -544,18 +678,36 @@ function HomeContent() {
   );
 }
 
+/** The day on the device clock and "Hi, <given name>" when the API names the person. */
+function Greeting() {
+  const now = useNow();
+  const me = useMe();
+  const given = me.data?.person?.givenName?.trim();
+  return (
+    <View style={styles.greeting} testID="home-greeting">
+      <Text style={styles.day}>{formatDay(now, displayZone(null).zone)}</Text>
+      <Text style={styles.hello} accessibilityRole="header">
+        {given ? `Hi, ${given}` : 'Home'}
+      </Text>
+    </View>
+  );
+}
+
 export function HomeScreen() {
   const router = useRouter();
   return (
     <Screen>
+      <Greeting />
       <View style={styles.quick}>
         <Button
           label="Show facility pass"
+          icon="qr_code_2"
           onPress={() => router.push('/pass')}
           testID="home-pass"
         />
         <Button
           label="Open notifications"
+          icon="notifications"
           variant="secondary"
           onPress={() => router.push('/inbox')}
           testID="home-inbox"
@@ -570,11 +722,47 @@ export function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  greeting: { paddingHorizontal: spacing.lg + 2, paddingTop: spacing.xs, gap: 2 },
+  day: { ...type.caption, ...fonts.semibold, color: colors.textMuted },
+  hello: { ...type.display, color: colors.text },
   quick: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: spacing.sm,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
   },
+  family: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  tile: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 11,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  tilePressed: { backgroundColor: colors.surface },
+  avatar: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: { ...fonts.extrabold, fontSize: 12, lineHeight: 16, color: colors.primaryText },
+  tileText: { flex: 1, gap: 2 },
+  tileName: { ...type.body, ...fonts.bold, color: colors.text },
+  tileLine: { ...type.caption, fontSize: 12, lineHeight: 16, color: colors.textMuted },
 });
