@@ -197,7 +197,8 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
     point-of-sale return is owned by the finance operator, FIN-06);
   - `finance.record_installment_notice` on its timer `finance.installment_notice_due`;
   - finance notices (FIN-05, R2-JOURNEYS-04): `finance.notify_contribution_requested` on
-    `finance.contribution_requested`, `finance.notify_checkout_recovery` on
+    `finance.contribution_requested`, `finance.notify_payment_reminder` on
+    `finance.payment_reminder_requested` (park UI redesign payment reminders), `finance.notify_checkout_recovery` on
     `finance.checkout_recovery_required`, `finance.notify_checkout_compensated` on
     `finance.checkout_compensated`, `finance.notify_payment_failed` on `finance.payment_failed`,
     `finance.notify_installment_failed` on `finance.installment_failed`,
