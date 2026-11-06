@@ -136,6 +136,58 @@ export const IdentityEvents = {
       roles: z.array(z.string()),
     }),
   ),
+  /**
+   * Migration 0181 (§4.14): a care note was recorded or retired. Never the note's text; a consumer
+   * reads the note through the protected read, which is audited.
+   */
+  careNoteChanged: defineEvent(
+    'identity.care_note_changed',
+    z.object({
+      noteId: z.uuid(),
+      personId: z.uuid(),
+      status: z.enum(['active', 'retired']),
+    }),
+  ),
+  /** §4.14: a staff member's roles were reviewed by another administrator. */
+  staffAccessReviewed: defineEvent(
+    'identity.staff_access_reviewed',
+    z.object({
+      reviewId: z.uuid(),
+      personId: z.uuid(),
+      outcome: z.enum(['confirmed', 'changes_required']),
+      nextReviewDueAt: z.iso.datetime(),
+    }),
+  ),
+  /**
+   * §2.1, SPK-IAM-004: a staff invitation was issued. No messaging channel is selected (DEC-012,
+   * DEC-062), so delivery is this recorded event; the payload never carries the address or token.
+   */
+  staffInvitationCreated: defineEvent(
+    'identity.staff_invitation_created',
+    z.object({
+      invitationId: z.uuid(),
+      recipientContactKind: z.literal('email'),
+      roles: z.array(z.string()),
+      facilityIds: z.array(z.uuid()),
+      expiresAt: z.iso.datetime(),
+    }),
+  ),
+  staffInvitationAccepted: defineEvent(
+    'identity.staff_invitation_accepted',
+    z.object({
+      invitationId: z.uuid(),
+      acceptedByPersonId: z.uuid(),
+      staffMembershipId: z.uuid(),
+    }),
+  ),
+  staffInvitationRevoked: defineEvent(
+    'identity.staff_invitation_revoked',
+    z.object({ invitationId: z.uuid(), reason: z.string() }),
+  ),
+  staffInvitationExpired: defineEvent(
+    'identity.staff_invitation_expired',
+    z.object({ invitationId: z.uuid(), via: z.enum(['acceptance_attempt', 'reissue']) }),
+  ),
   accessReviewOpened: defineEvent(
     'identity.access_review_opened',
     z.object({ reviewId: z.uuid(), subjectPersonId: z.uuid(), ownerRole: z.string() }),

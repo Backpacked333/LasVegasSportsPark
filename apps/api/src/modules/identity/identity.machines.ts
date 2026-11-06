@@ -2,10 +2,12 @@ import { defineStateMachine } from '@sportspark/contracts';
 import type {
   AccessReviewDecisionKind,
   AccessReviewStatus,
+  CareNoteStatus,
   ClaimStatus,
   DuplicateCandidateStatus,
   InvitationStatus,
   RelationshipStatus,
+  StaffInvitationStatus,
   StaffMembershipStatus,
 } from '@sportspark/db';
 
@@ -67,6 +69,34 @@ export const StaffMembershipMachine = defineStateMachine<
   states: ['active', 'ended'],
   terminal: ['ended'],
   transitions: { active: { end: 'ended' }, ended: {} },
+});
+
+/** Migration 0181 (§2.1, SPK-IAM-004): a staff invitation is accepted, revoked or expires once. */
+export type StaffInvitationEvent = 'accept' | 'revoke' | 'expire';
+export const StaffInvitationMachine = defineStateMachine<
+  StaffInvitationStatus,
+  StaffInvitationEvent
+>({
+  name: 'StaffInvitation',
+  initial: 'pending',
+  states: ['pending', 'accepted', 'revoked', 'expired'],
+  terminal: ['accepted', 'revoked', 'expired'],
+  transitions: {
+    pending: { accept: 'accepted', revoke: 'revoked', expire: 'expired' },
+    accepted: {},
+    revoked: {},
+    expired: {},
+  },
+});
+
+/** Migration 0181 (§4.7): an active care note is retired once; a correction is a new note. */
+export type CareNoteEvent = 'retire';
+export const CareNoteMachine = defineStateMachine<CareNoteStatus, CareNoteEvent>({
+  name: 'CareNote',
+  initial: 'active',
+  states: ['active', 'retired'],
+  terminal: ['retired'],
+  transitions: { active: { retire: 'retired' }, retired: {} },
 });
 
 export type AccessReviewEvent = 'escalate' | 'decide' | 'close';

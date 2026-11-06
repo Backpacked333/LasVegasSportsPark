@@ -858,8 +858,33 @@ export const MyHouseholdListSchema = z
   .openapi('MyHouseholdList');
 
 /** ID-05 (§2.1): staff memberships for administrators. */
+export const StaffAccessReviewOutcomeSchema = z
+  .enum(['confirmed', 'changes_required'])
+  .openapi('StaffAccessReviewOutcome');
+export type StaffAccessReviewOutcome = z.infer<typeof StaffAccessReviewOutcomeSchema>;
+
+/** The person's latest staff access review (§4.14 least privilege; migration 0181). */
+export const StaffAccessReviewSummarySchema = z
+  .object({
+    reviewId: z.uuid(),
+    outcome: StaffAccessReviewOutcomeSchema,
+    reviewedAt: Instant,
+    reviewedByPersonId: z.uuid(),
+    nextReviewDueAt: Instant,
+  })
+  .openapi('StaffAccessReviewSummary');
+export type StaffAccessReviewSummary = z.infer<typeof StaffAccessReviewSummarySchema>;
+
 export const StaffMembershipViewSchema = StaffMembershipSchema.extend({
   personDisplayName: z.string().nullable(),
+  /**
+   * When the person's active login account last authenticated a request. The principal resolver
+   * records it at most once an hour (accounts.last_login_at), so it is accurate to the hour; null
+   * when no active account represents the person or it never signed in.
+   */
+  lastSeenAt: Instant.nullable(),
+  /** The person's latest staff access review (§4.14), or null when none is recorded. */
+  lastAccessReview: StaffAccessReviewSummarySchema.nullable(),
 }).openapi('StaffMembershipView');
 export type StaffMembershipView = z.infer<typeof StaffMembershipViewSchema>;
 export const StaffMembershipPageSchema =

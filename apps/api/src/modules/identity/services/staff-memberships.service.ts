@@ -39,6 +39,7 @@ import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { StaffMembershipMachine } from '../identity.machines';
+import { staffAccessFactsOf } from './staff-access-facts';
 import type { StaffDirectoryPort } from '../identity.ports';
 import {
   displayNameOf,
@@ -147,6 +148,75 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       });
       return this.load(trx, organizationId, id);
     });
+  }
+
+  /**
+   * Migration 0181 (§2.1, SPK-IAM-004): the membership a staff invitation creates when the invited
+   * person accepts, in the acceptance's transaction. The roles and facilities are the invitation's,
+   * re-checked against the inviter's administration scope by the caller; the record names both the
+   * accepting principal and the invitation it came from.
+   */
+  async createFromInvitationIn(
+    trx: Trx,
+    principal: Principal,
+    input: {
+      organizationId: string;
+      personId: string;
+      roles: string[];
+      facilityIds: string[];
+      invitationId: string;
+      invitedBy: Record<string, unknown>;
+      correlationId: string | null;
+    },
+  ): Promise<StaffMembership> {
+    const { organizationId } = input;
+    await lockPersonsForShare(trx, organizationId, [input.personId]);
+    await this.assertFacilities(trx, organizationId, input.facilityIds);
+    const id = newId();
+    await trx
+      .insertInto('staff_memberships')
+      .values({
+        id,
+        organization_id: organizationId,
+        person_id: input.personId,
+        roles: input.roles,
+        facility_ids: input.facilityIds,
+        effective_from: this.clock.now(),
+        effective_to: null,
+        ended_at: null,
+        ended_reason: null,
+        created_by: json({
+          ...snapshotActor(principal),
+          via: 'staff_invitation',
+          invitationId: input.invitationId,
+          invitedBy: input.invitedBy,
+        }),
+      })
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: IdentityActions.manageStaffMembership.id,
+      targetType: 'staff_membership',
+      targetId: id,
+      afterRevision: 1,
+      correlationId: input.correlationId,
+      details: {
+        operation: 'create',
+        via: 'staff_invitation',
+        invitationId: input.invitationId,
+        personId: input.personId,
+        roles: input.roles,
+      },
+    });
+    await this.outbox.enqueue(trx, IdentityEvents.staffMembershipChanged, {
+      organizationId,
+      aggregateType: 'staff_membership',
+      aggregateId: id,
+      payload: { membershipId: id, personId: input.personId, status: 'active', roles: input.roles },
+      correlationId: input.correlationId,
+    });
+    return this.load(trx, organizationId, id);
   }
 
   async update(
@@ -385,11 +455,19 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       organizationId,
       page.map((r) => r.person_id),
     );
+    // Migration 0181 (§2.1, §4.14): last seen and the latest access review for the accounts screen.
+    const facts = await staffAccessFactsOf(
+      this.db,
+      organizationId,
+      page.map((r) => r.person_id),
+    );
     const last = page[page.length - 1];
     return {
       items: page.map((r) => ({
         ...toStaffMembership(r),
         personDisplayName: names.get(r.person_id) ?? null,
+        lastSeenAt: facts.get(r.person_id)?.lastSeenAt ?? null,
+        lastAccessReview: facts.get(r.person_id)?.lastAccessReview ?? null,
       })),
       nextCursor:
         found.length > query.limit && last
@@ -424,7 +502,13 @@ export class StaffMembershipsService implements StaffDirectoryPort {
       .executeTakeFirst();
     if (!row) throw errors.notFound('staff_membership', id);
     const names = await displayNamesOf(this.db, organizationId, [row.person_id]);
-    return { ...toStaffMembership(row), personDisplayName: names.get(row.person_id) ?? null };
+    const facts = await staffAccessFactsOf(this.db, organizationId, [row.person_id]);
+    return {
+      ...toStaffMembership(row),
+      personDisplayName: names.get(row.person_id) ?? null,
+      lastSeenAt: facts.get(row.person_id)?.lastSeenAt ?? null,
+      lastAccessReview: facts.get(row.person_id)?.lastAccessReview ?? null,
+    };
   }
 
   /**

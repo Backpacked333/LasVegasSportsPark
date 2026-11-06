@@ -21,6 +21,11 @@ export {
 } from './services/invitations.service';
 export { ClaimsService } from './services/claims.service';
 export { StaffMembershipsService } from './services/staff-memberships.service';
+export { CareNotesService, type CareNoteReadContext } from './services/care-notes.service';
+export {
+  StaffAccessService,
+  effectiveStaffInvitationStatus,
+} from './services/staff-access.service';
 export { AccessReviewsService, RESTRICTION_WINDOW_ACTOR } from './services/access-reviews.service';
 export { AuthorityReadsService, grantStatus } from './services/authority-reads.service';
 export {

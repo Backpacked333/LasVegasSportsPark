@@ -49,6 +49,12 @@ const READ_STAFF_DIRECTORY: readonly StaffRole[] = [
   'system_administrator',
   'support_operator',
 ];
+/** Migration 0181 (§4.14): staff who read and keep operational care notes. */
+export const CARE_NOTE_STAFF: readonly StaffRole[] = [
+  'front_desk',
+  'program_manager',
+  'general_manager',
+];
 const REVIEW_DECIDERS: readonly StaffRole[] = [
   'general_manager',
   'system_administrator',
@@ -315,6 +321,64 @@ export const IdentityActions = defineActions({
     description: 'List and read duplicate candidates with both names and detection signals',
     staffRoles: AUTHORITY_READERS,
     requirements: ['SPK-IAM-007'],
+  },
+  // -------------------------------------------------------------------------------------------
+  // Migration 0181: operational care notes, staff access reviews, staff invitations.
+  // -------------------------------------------------------------------------------------------
+  /**
+   * Care notes are protected (§4.14): the staff who act on them at arrival and in programs read
+   * them, named here explicitly; league, finance, scheduling, support and administrator roles do
+   * not. The person reads their own, and a holder of `view` over them reads theirs. Every read is
+   * audited. Coaches see them only through an assignment-scoped read, which is not built yet.
+   */
+  readCareNotes: {
+    id: 'identity.read_care_notes',
+    description:
+      'Read operational care notes of a person (protected, audited; front desk, program and general managers)',
+    staffRoles: CARE_NOTE_STAFF,
+    allowSelf: true,
+    subjectPermission: 'view',
+    requirements: ['§1.7', '§4.14', 'SPK-DISC-005', 'SPK-ENTRY-004'],
+  },
+  manageCareNotes: {
+    id: 'identity.manage_care_notes',
+    description:
+      'Record or retire an operational care note (staff readers, the adult themselves, or a guardian holding complete_forms)',
+    staffRoles: CARE_NOTE_STAFF,
+    allowSelf: true,
+    subjectPermission: 'complete_forms',
+    requirements: ['§1.7', '§4.14', 'SPK-DISC-005', 'SPK-IAM-003'],
+  },
+  recordStaffAccessReview: {
+    id: 'identity.record_staff_access_review',
+    description: "Record a review of another staff member's roles and the next review date",
+    staffRoles: ['system_administrator'],
+    requirements: ['§2.1', '§4.14'],
+  },
+  readStaffAccessReviews: {
+    id: 'identity.read_staff_access_reviews',
+    description: 'Read staff access reviews and the review summary',
+    staffRoles: ['general_manager', 'system_administrator'],
+    requirements: ['§2.1', '§4.14'],
+  },
+  manageStaffInvitation: {
+    id: 'identity.manage_staff_invitation',
+    description: 'Invite an email address to take staff roles, or revoke the invitation',
+    staffRoles: ['system_administrator'],
+    requirements: ['§2.1', '§4.14', 'SPK-IAM-004'],
+  },
+  readStaffInvitations: {
+    id: 'identity.read_staff_invitations',
+    description: 'List staff invitations',
+    staffRoles: ['general_manager', 'system_administrator'],
+    requirements: ['§2.1', 'SPK-IAM-004'],
+  },
+  acceptStaffInvitation: {
+    id: 'identity.accept_staff_invitation',
+    description: 'Accept a staff invitation sent to a verified email of the caller',
+    staffRoles: [],
+    allowSelf: true,
+    requirements: ['§2.1', 'SPK-IAM-004'],
   },
   /** System-only (ID-07): the background sweep records an invitation's expiry. */
   expireInvitation: {

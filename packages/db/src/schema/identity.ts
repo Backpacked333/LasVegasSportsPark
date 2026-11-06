@@ -307,6 +307,67 @@ export interface PersonMergesTable {
   occurred_at: GeneratedTimestamp;
 }
 
+/** Migration 0181: operational care notes (§1.7, SPK-DISC-005, §4.14); never a diagnosis. */
+export type CareNoteKind = 'allergy' | 'care_instruction';
+export type CareNoteStatus = 'active' | 'retired';
+export interface PersonCareNotesTable {
+  id: string;
+  organization_id: string;
+  person_id: string;
+  kind: CareNoteKind;
+  body: string;
+  status: Generated<CareNoteStatus>;
+  recorded_by: Json<Record<string, unknown>>;
+  recorded_by_person_id: string | null;
+  retired_at: NullableTimestamp;
+  retired_by: Json<Record<string, unknown>> | null;
+  retired_reason: string | null;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+/** Migration 0181: append-only staff access reviews (§4.14 least privilege). */
+export type StaffAccessReviewOutcome = 'confirmed' | 'changes_required';
+export interface StaffAccessReviewsTable {
+  id: string;
+  organization_id: string;
+  person_id: string;
+  outcome: StaffAccessReviewOutcome;
+  notes: string | null;
+  roles_reviewed: string[];
+  reviewed_by: Json<Record<string, unknown>>;
+  reviewed_by_person_id: string;
+  reviewed_at: Timestamp;
+  next_review_due_at: Timestamp;
+  created_at: GeneratedTimestamp;
+}
+
+/** Migration 0181: staff invitations (§2.1, SPK-IAM-004 applied to staff roles). */
+export type StaffInvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+export interface StaffInvitationsTable {
+  id: string;
+  organization_id: string;
+  recipient_email: string;
+  roles: string[];
+  facility_ids: Generated<string[]>;
+  invited_by: Json<Record<string, unknown>>;
+  invited_by_person_id: string;
+  token_hash: string;
+  status: Generated<StaffInvitationStatus>;
+  expires_at: Timestamp;
+  accepted_at: NullableTimestamp;
+  accepted_by_person_id: string | null;
+  staff_membership_id: string | null;
+  revoked_at: NullableTimestamp;
+  revoked_by: Json<Record<string, unknown>> | null;
+  revocation_reason: string | null;
+  expired_at: NullableTimestamp;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
 export interface IdentityTables {
   persons: PersonsTable;
   contact_points: ContactPointsTable;
@@ -324,4 +385,7 @@ export interface IdentityTables {
   access_review_decisions: AccessReviewDecisionsTable;
   duplicate_candidates: DuplicateCandidatesTable;
   person_merges: PersonMergesTable;
+  person_care_notes: PersonCareNotesTable;
+  staff_access_reviews: StaffAccessReviewsTable;
+  staff_invitations: StaffInvitationsTable;
 }

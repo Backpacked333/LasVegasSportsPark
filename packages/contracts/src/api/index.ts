@@ -14,6 +14,7 @@ export * from './facilities';
 export * from './finance-accounting';
 export * from './finance-pos';
 export * from './finance';
+export * from './identity-staff-access';
 export * from './identity';
 export * from './migration';
 export * from './operations';
