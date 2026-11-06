@@ -23,10 +23,18 @@ export function useMatchSheet(fixtureId: string, enabled = true) {
   });
 }
 
-function playerLabel(p: MatchSheet['sides'][number]['players'][number]): string {
-  const number = p.jerseyNumber !== null ? `#${p.jerseyNumber} ` : '';
+type Player = MatchSheet['sides'][number]['players'][number];
+
+function playerExtras(p: Player): { roles: string[]; status: string[] } {
   const roles = p.roles.filter((r) => r !== 'member').map(humanize);
   const status = p.playingStatus && p.playingStatus !== 'active' ? [humanize(p.playingStatus)] : [];
+  return { roles, status };
+}
+
+/** "#7 Jo Park (Captain, Guest)": the row's accessible name, in one phrase. */
+function playerLabel(p: Player): string {
+  const number = p.jerseyNumber !== null ? `#${p.jerseyNumber} ` : '';
+  const { roles, status } = playerExtras(p);
   const extra = [...roles, ...status];
   return `${number}${p.displayName}${extra.length > 0 ? ` (${extra.join(', ')})` : ''}`;
 }
@@ -34,7 +42,7 @@ function playerLabel(p: MatchSheet['sides'][number]['players'][number]): string 
 export function MatchSheetPlayers({ fixtureId }: { fixtureId: string }) {
   const sheet = useMatchSheet(fixtureId);
   return (
-    <section className="ops-section" aria-labelledby="match-sheet-title">
+    <section className="ops-section ws-sheet" aria-labelledby="match-sheet-title">
       <h4 id="match-sheet-title">Players</h4>
       <QueryBoundary
         query={sheet}
@@ -49,15 +57,37 @@ export function MatchSheetPlayers({ fixtureId }: { fixtureId: string }) {
         {(s) => (
           <>
             {s.sides.map((side) => (
-              <div key={side.entryId}>
+              <div key={side.entryId} className="ws-sheet-side">
                 <h5>{side.teamName}</h5>
                 {side.players.length === 0 ? (
                   <p className="caption">No player listed.</p>
                 ) : (
-                  <ul className="ops-history" aria-label={`Players: ${side.teamName}`}>
-                    {side.players.map((p, index) => (
-                      <li key={p.personId ?? `${side.entryId}-${index}`}>{playerLabel(p)}</li>
-                    ))}
+                  <ul className="ws-roster" aria-label={`Players: ${side.teamName}`}>
+                    {side.players.map((p, index) => {
+                      const { roles, status } = playerExtras(p);
+                      return (
+                        <li
+                          key={p.personId ?? `${side.entryId}-${index}`}
+                          aria-label={playerLabel(p)}
+                          data-status={status.length > 0 ? 'flagged' : undefined}
+                        >
+                          <span className="ws-jersey" aria-hidden="true">
+                            {p.jerseyNumber ?? '–'}
+                          </span>
+                          <span className="ws-roster-name" aria-hidden="true">
+                            {p.displayName}
+                            {roles.length > 0 ? (
+                              <span className="caption"> {roles.join(', ')}</span>
+                            ) : null}
+                          </span>
+                          {status.length > 0 ? (
+                            <span className="ws-roster-status" aria-hidden="true">
+                              ▲ {status.join(', ')}
+                            </span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>

@@ -33,8 +33,17 @@ operator approval. **Pending decision** = the screen shows the pending state; ow
 | SCR-W-09 | `…/release`                                                                           | `GET /attendance`, `POST /releases/collector-checks`, `POST /releases`                                                                                                                                                                                                                                                                                                  | **Verified** (SPK-AT-016, ENT-02): the coach checks the collector by pass before recording; procedure DEC-005, DEC-034, DEC-075 **pending decision**                                                                                                                                                                                                                                                                                                                                                        | same                                                                 |
 | SCR-W-10 | queue status on every workspace and arrival screen                                    | `POST /offline-sync`                                                                                                                                                                                                                                                                                                                                                    | **Verified**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `AssignmentWorkspaceScreen.test.tsx`                                 |
 
-Phone width (SPK-UX-007) is CSS (`operations.css`, one column below 768 px, 44 px targets); it needs
-the actual devices of §6.3.
+Phone width (SPK-UX-007) is CSS (`operations.css` for the shared `ops-*` classes,
+`screens/arrival/arrival.css` and `screens/workspace/workspace.css` for the screens: one column below
+768 px, 44 px targets, 52 to 56 px for the field actions); it needs the actual devices of §6.3
+(**Verified** only in jsdom and in browser screenshots at 390 px).
+
+Desk view (SCR-S-28, **Verified** in jsdom): each check-in answer leads with "Cleared" (admitted) or
+"Not cleared" (held), glyph and word; the side rail shows today's remaining sessions with their
+observed fill (present or late of expected, from the attendance, enrollment and booking reads; never
+occupancy) and the sessions ending next, each opening `/arrival/release?session=<id>` (an opaque
+session id) to release from that session. Care notes and pickup lists are not shown on the desk: the
+scan and session reads carry neither (a follow-up for the entry module).
 
 ## SCR-W-07 Assessments (Package G, youth_progression)
 

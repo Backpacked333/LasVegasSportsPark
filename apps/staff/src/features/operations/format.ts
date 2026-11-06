@@ -33,6 +33,25 @@ export function formatRange(startIso: string, endIso: string, timeZone?: string 
   return `${formatInstant(startIso, timeZone)} to ${endText}`;
 }
 
+/** "16:30" in the given IANA zone (the device zone when unknown): a scoreboard-style clock. */
+export function formatClock(iso: string, timeZone?: string | null): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date);
+}
+
+/** "AR" for "Alex Rivera": decorative initials shown beside the written name. */
+export function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const first = parts[0]?.[0] ?? '';
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '';
+  return `${first}${last}`.toUpperCase() || '?';
+}
+
 /** The calendar date (YYYY-MM-DD) of an instant in a zone, for report and list queries. */
 export function localDate(at: Date, timeZone?: string | null): string {
   const parts = new Intl.DateTimeFormat('en-CA', {

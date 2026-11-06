@@ -271,13 +271,13 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
           }}
         >
           <fieldset
-            className="ops-fieldset"
+            className="ops-fieldset ws-chips"
             aria-invalid={problems.classification ? true : undefined}
             aria-describedby={problems.classification ? 'report-classification-error' : undefined}
           >
             <legend>How did the match end?</legend>
             {CLASSIFICATIONS.map((c) => (
-              <label key={c} className="ops-check">
+              <label key={c} className="ws-chip">
                 <input
                   type="radio"
                   name="classification"
@@ -295,25 +295,28 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
           </fieldset>
           {showsScore ? (
             <fieldset
-              className="ops-fieldset"
+              className="ops-fieldset ws-scoreboard"
               aria-invalid={problems.score ? true : undefined}
               aria-describedby={problems.score ? 'report-score-error' : undefined}
             >
               <legend>{needsScore ? 'Score' : 'Score when the match stopped (optional)'}</legend>
-              <TextField
-                label={`${home} score`}
-                value={homeScore}
-                onChange={setHomeScore}
-                inputMode="numeric"
-                error={apiErrors.homeScore}
-              />
-              <TextField
-                label={`${away} score`}
-                value={awayScore}
-                onChange={setAwayScore}
-                inputMode="numeric"
-                error={apiErrors.awayScore}
-              />
+              <div className="ws-score-grid">
+                <ScoreSide
+                  team={home}
+                  value={homeScore}
+                  onChange={setHomeScore}
+                  error={apiErrors.homeScore}
+                />
+                <span className="ws-score-dash" aria-hidden="true">
+                  –
+                </span>
+                <ScoreSide
+                  team={away}
+                  value={awayScore}
+                  onChange={setAwayScore}
+                  error={apiErrors.awayScore}
+                />
+              </div>
               {problems.score ? (
                 <span className="error-text" id="report-score-error" role="alert">
                   {problems.score}
@@ -372,12 +375,23 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
                 onRemove={() => setIncidents((prev) => prev.filter((_, i) => i !== n))}
               />
             ))}
-            <Button
-              variant="secondary"
-              onClick={() => setIncidents((prev) => [...prev, EMPTY_INCIDENT])}
-            >
-              Add an incident
-            </Button>
+            <div className="ops-actions ws-quick">
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  setIncidents((prev) => [...prev, { ...EMPTY_INCIDENT, kind: 'injury' }])
+                }
+              >
+                <span className="ws-swatch" data-kind="injury" aria-hidden="true" />
+                Injury
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setIncidents((prev) => [...prev, EMPTY_INCIDENT])}
+              >
+                Add an incident
+              </Button>
+            </div>
           </fieldset>
           <CardsEditor
             sheet={sheet.data}
@@ -394,7 +408,7 @@ function MatchReport({ item }: { item: WorkspaceAssignment }) {
             decisions={['DEC-065']}
             owner="League manager"
           />
-          <div className="ops-actions">
+          <div className="ops-actions ws-submit">
             <Button type="submit" busy={submit.isProcessing} disabled={!online}>
               Submit report
             </Button>
@@ -613,9 +627,80 @@ function CardsEditor({
           </div>
         );
       })}
-      <Button variant="secondary" onClick={() => onChange([...cards, EMPTY_CARD])}>
-        Add a card
-      </Button>
+      <div className="ops-actions ws-quick">
+        <Button
+          variant="secondary"
+          onClick={() => onChange([...cards, { ...EMPTY_CARD, kind: 'yellow' }])}
+        >
+          <span className="ws-swatch" data-kind="yellow" aria-hidden="true" />
+          Yellow card
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => onChange([...cards, { ...EMPTY_CARD, kind: 'red' }])}
+        >
+          <span className="ws-swatch" data-kind="red" aria-hidden="true" />
+          Red card
+        </Button>
+        <Button variant="secondary" onClick={() => onChange([...cards, EMPTY_CARD])}>
+          Add a card
+        </Button>
+      </div>
     </fieldset>
+  );
+}
+
+/**
+ * One side of the scoreboard (SPK-UX-007): the team's score as a big number with 56 px "−" and
+ * "+" beside it; the number stays a labelled text field, so it can also be typed.
+ */
+function ScoreSide({
+  team,
+  value,
+  onChange,
+  error,
+}: {
+  team: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+}) {
+  const current = /^\d{1,3}$/.test(value.trim()) ? Number(value.trim()) : null;
+  const step = (delta: number) => {
+    const next = Math.min(999, Math.max(0, (current ?? 0) + delta));
+    onChange(String(next));
+  };
+  return (
+    <div className="ws-score-side">
+      <span className="ws-score-team" aria-hidden="true">
+        {team}
+      </span>
+      <TextField
+        label={`${team} score`}
+        value={value}
+        onChange={onChange}
+        inputMode="numeric"
+        error={error}
+      />
+      <div className="ws-score-steps">
+        <button
+          type="button"
+          className="ws-step"
+          aria-label={`Lower ${team} score`}
+          disabled={current === null || current === 0}
+          onClick={() => step(-1)}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="ws-step ws-step-up"
+          aria-label={`Raise ${team} score`}
+          onClick={() => step(1)}
+        >
+          +
+        </button>
+      </div>
+    </div>
   );
 }

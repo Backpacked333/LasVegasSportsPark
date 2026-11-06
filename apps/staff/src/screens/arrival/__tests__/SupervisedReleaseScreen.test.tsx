@@ -312,6 +312,18 @@ describe('SCR-S-30 SupervisedReleaseScreen', () => {
       await user.click(await screen.findByRole('radio', { name: 'Alex Rivera' }));
     }
 
+    it('SPK-ENTRY-007: opened from the desk rail with ?session=, starts from that session and checks the collector first', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({ routes: sessionRoutes() });
+      render(app.at(`/arrival/release?session=${SESSION_1}`));
+      await user.click(await screen.findByRole('radio', { name: 'Alex Rivera' }));
+      expect(
+        screen.getByRole('group', { name: 'Collecting person for Alex Rivera' }),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText('Release from')).toHaveValue(SESSION_1);
+      expect(app.fake.requests.some((r) => r.route === '/visits')).toBe(false);
+    });
+
     it('SPK-ENTRY-007: names the collector the check confirms, then records the release with the grant relied on', async () => {
       const user = userEvent.setup();
       const app = createTestApp({

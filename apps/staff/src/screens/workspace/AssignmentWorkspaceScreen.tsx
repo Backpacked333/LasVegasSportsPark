@@ -30,10 +30,16 @@ import { effectiveReadiness } from '../../features/competition/readiness';
 import { activityFromAssignment } from '../../features/operations/activity';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
 import { TextAreaField, fieldErrorsOf } from '../../features/operations/fields';
-import { formatInstant, formatRange, humanize } from '../../features/operations/format';
+import {
+  formatClock,
+  formatInstant,
+  formatRange,
+  humanize,
+} from '../../features/operations/format';
 import { FEE_STATUS } from '../../features/operations/labels';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Icon, type IconName } from '../../ui/Icon';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
@@ -50,8 +56,8 @@ export function AssignmentWorkspaceScreen() {
       {(item) => (
         <>
           <OfferAndResponse item={item} />
-          <ActivityDetail item={item} />
           <WorkspaceLinks item={item} />
+          <ActivityDetail item={item} />
         </>
       )}
     </MyAssignmentPage>
@@ -99,12 +105,25 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
   };
   const outcome = accept.data ?? decline.data ?? withdraw.data;
   return (
-    <section className="ops-section" aria-labelledby="offer-title">
-      <h3 id="offer-title">
-        {humanize(a.role)}
-        {a.slot > 1 ? `, slot ${a.slot}` : ''}
-      </h3>
-      <StatusBadge tone={badge.tone} label={badge.label} />
+    <section className="card card-dark ws-hero" aria-labelledby="offer-title">
+      <div className="ws-hero-top">
+        <h3 id="offer-title">
+          {humanize(a.role)}
+          {a.slot > 1 ? `, slot ${a.slot}` : ''}
+        </h3>
+        <StatusBadge tone={badge.tone} label={badge.label} />
+      </div>
+      <div className="ws-hero-time" aria-hidden="true">
+        <span className="ws-hero-clock">
+          {formatClock(a.scheduledStart, zone)}–{formatClock(a.scheduledEnd, zone)}
+        </span>
+        {item.activity.facility?.name ? (
+          <span className="ws-hero-place">
+            <Icon name="location_on" size={18} />
+            {item.activity.facility.name}
+          </span>
+        ) : null}
+      </div>
       <p>{formatRange(a.scheduledStart, a.scheduledEnd, zone)}</p>
       <p className="caption">
         You are held until {formatInstant(a.committedUntil, zone)} including {a.turnaroundMinutes}{' '}
@@ -116,7 +135,7 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
       {a.declineReason ? <p className="caption">Declined: {a.declineReason}</p> : null}
       {a.withdrawnReason ? <p className="caption">Withdrawn: {a.withdrawnReason}</p> : null}
       {online ? (
-        <div className="ops-actions">
+        <div className="ops-actions ws-hero-actions">
           {can('accept') ? (
             <Button
               busy={accept.isProcessing}
@@ -145,7 +164,7 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
       ) : null}
       {mode && online ? (
         <form
-          className="ops-form"
+          className="ops-form ws-hero-form"
           aria-label={mode === 'decline' ? 'Decline this offer' : 'Withdraw from this assignment'}
           onSubmit={(event) => {
             event.preventDefault();
@@ -172,9 +191,15 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
           </div>
         </form>
       ) : null}
-      {error ? <CommandError error={error} onReload={reload} subject="This assignment" /> : null}
+      {error ? (
+        <div className="ws-hero-feedback">
+          <CommandError error={error} onReload={reload} subject="This assignment" />
+        </div>
+      ) : null}
       {outcome ? (
-        <CommandSuccess label={ASSIGNMENT_BADGE[outcome.assignment.status].label} />
+        <div className="ws-hero-feedback">
+          <CommandSuccess label={ASSIGNMENT_BADGE[outcome.assignment.status].label} />
+        </div>
       ) : null}
     </section>
   );
@@ -192,6 +217,9 @@ function ActivityDetail({ item }: { item: WorkspaceAssignment }) {
   const now = useNow();
   const a = item.assignment;
   const isFixture = item.activity.targetType === 'fixture';
+  const home = item.activity.participants.find((p) => p.side === 'home');
+  const away = item.activity.participants.find((p) => p.side === 'away');
+  const sides = home && away ? [home.name, away.name] : [];
   const readiness = useApiQuery({
     path: '/fixtures/{id}/readiness',
     request: { path: { id: item.activity.targetId } },
@@ -203,10 +231,17 @@ function ActivityDetail({ item }: { item: WorkspaceAssignment }) {
     (n) => n.subject && ids.has(n.subject.id) && (n.detailsBefore || n.detailsAfter),
   );
   return (
-    <section className="ops-section" aria-labelledby="activity-title">
+    <section className="ops-section ws-activity" aria-labelledby="activity-title">
       <h3 id="activity-title">Activity</h3>
+      {sides.length === 2 ? (
+        <div className="ws-matchup" aria-hidden="true">
+          <span>{sides[0]}</span>
+          <span className="ws-matchup-v">v</span>
+          <span>{sides[1]}</span>
+        </div>
+      ) : null}
       {item.activity.participants.length > 0 ? (
-        <p>
+        <p className={sides.length === 2 ? 'caption' : undefined}>
           {item.activity.participants
             .map((p) => `${p.name}${p.side ? ` (${p.side})` : ''}`)
             .join(' v ')}
@@ -252,7 +287,7 @@ function ActivityDetail({ item }: { item: WorkspaceAssignment }) {
                 <p className="caption">
                   Evaluated {formatInstant(r.evaluatedAt, activityZone(item))}.
                 </p>
-                <ul className="ops-history" aria-label="Readiness checks">
+                <ul className="ws-checks" aria-label="Readiness checks">
                   {r.checks.map((c) => (
                     <li key={c.name}>
                       <StatusBadge
@@ -340,7 +375,7 @@ function WorkspaceLinks({ item }: { item: WorkspaceAssignment }) {
   const working = a.status === 'accepted' || a.status === 'completed';
   const activity = activityFromAssignment(a);
   return (
-    <nav className="ops-section" aria-label="For this assignment">
+    <nav className="ops-section ws-tools" aria-label="For this assignment">
       <h3>For this assignment</h3>
       {!working ? (
         <StateView
@@ -349,32 +384,58 @@ function WorkspaceLinks({ item }: { item: WorkspaceAssignment }) {
           description="Attendance, match reports and release open once you have accepted the assignment."
         />
       ) : (
-        <ul className="ops-history">
+        <ul className="ws-tiles">
           {activity ? (
-            <li>
-              <Link to={`${base}/attendance`}>Record attendance</Link>
-            </li>
+            <Tile to={`${base}/attendance`} icon="fact_check" note="Present, late, absent">
+              Record attendance
+            </Tile>
           ) : null}
           {a.targetType === 'fixture' && a.kind === 'official' ? (
-            <li>
-              <Link to={`${base}/report`}>Match report</Link>
-            </li>
+            <Tile to={`${base}/report`} icon="scoreboard" note="Score, cards, incidents" primary>
+              Match report
+            </Tile>
           ) : null}
           {a.targetType === 'session' && a.kind === 'coach' ? (
-            <li>
-              <Link to={`${base}/release`}>Supervised release</Link>
-            </li>
+            <Tile to={`${base}/release`} icon="family_restroom" note="Needs a connection">
+              Supervised release
+            </Tile>
           ) : null}
-          <li>
-            <Link to={`${base}/message`}>Message participants</Link>
-          </li>
+          <Tile to={`${base}/message`} icon="chat" note="Not offered yet">
+            Message participants
+          </Tile>
           {item.availableActions.includes('submit_fee') || item.fee ? (
-            <li>
-              <Link to="/workspace/fees">Hours and fees</Link>
-            </li>
+            <Tile to="/workspace/fees" icon="payments" note="Submit hours or a fee">
+              Hours and fees
+            </Tile>
           ) : null}
         </ul>
       )}
     </nav>
+  );
+}
+
+/**
+ * A big field-side tile (SPK-UX-007): the link's name is only its label, so the note beside it is
+ * extra text, and the whole tile is the target.
+ */
+function Tile({
+  to,
+  icon,
+  note,
+  primary,
+  children,
+}: {
+  to: string;
+  icon: IconName;
+  note: string;
+  primary?: boolean;
+  children: string;
+}) {
+  return (
+    <li className="ws-tile" data-primary={primary || undefined}>
+      <Icon name={icon} size={26} />
+      <Link to={to}>{children}</Link>
+      <span className="caption">{note}</span>
+    </li>
   );
 }

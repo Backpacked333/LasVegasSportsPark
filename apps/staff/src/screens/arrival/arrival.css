@@ -1,0 +1,525 @@
+/*
+ * Arrival and attendance (SCR-S-28 to SCR-S-31): scan-first desk view. A night-pitch scanner, one
+ * giant cleared / not-cleared answer per check-in, session fill and supervised release side by
+ * side; at phone width (SPK-UX-007) one column with 52 to 56 px targets. Colour never carries a
+ * status alone: every band and badge writes its glyph and word (SPK-UX-009).
+ */
+
+/* ---------- Scanner ---------- */
+.scanner {
+  padding: 18px;
+  gap: 14px;
+}
+.scanner-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.scanner-offline {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #4a3510;
+  color: #f5c46b;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.scanner-frame {
+  position: relative;
+  min-height: 190px;
+  border-radius: 12px;
+  background: radial-gradient(circle at 50% 45%, #1c3e30, #0a1c15);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 22px 16px 16px;
+  overflow: hidden;
+}
+.scanner-box {
+  position: relative;
+  width: 132px;
+  height: 108px;
+  border: 3px solid var(--floodlight);
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: rgba(198, 243, 107, 0.45);
+}
+.scanner-line {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 50%;
+  height: 2px;
+  background: var(--floodlight);
+  box-shadow: 0 0 12px var(--floodlight);
+  animation: pulse 1.4s infinite;
+}
+.scanner-frame[data-online='false'] .scanner-box {
+  border-color: var(--night-3);
+  color: var(--night-3);
+}
+.scanner-frame[data-online='false'] .scanner-line {
+  display: none;
+}
+.scanner-hint {
+  font-size: 12.5px;
+  color: #b9cbc1;
+  text-align: center;
+}
+.scanner-form {
+  max-width: none;
+}
+.scanner .ops-field label {
+  color: #fff;
+  font-size: 13px;
+}
+.scanner .ops-field .caption {
+  color: var(--night-muted);
+}
+.shell-main .ops-screen .scanner .ops-field input:not([type='checkbox']) {
+  min-height: 52px;
+  background: var(--night-2);
+  border-color: var(--night-3);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.shell-main .ops-screen .scanner .ops-field input::placeholder {
+  color: var(--night-muted);
+}
+.shell-main .ops-screen .scanner .ops-field input:disabled {
+  opacity: 0.6;
+}
+.scanner .error-text {
+  color: #ff9c92;
+}
+.scanner .button-primary {
+  min-height: 48px;
+  padding: 0 20px;
+  background: var(--floodlight);
+  color: var(--night);
+  font-weight: 800;
+  font-size: 14.5px;
+}
+.scanner .button-primary:hover:not([disabled]) {
+  background: #d4f78c;
+}
+.scanner-error {
+  background: var(--card);
+  color: var(--ink);
+  border-radius: var(--radius);
+  padding: 4px 12px;
+}
+.scanner-error .state {
+  background: transparent;
+  border: 0;
+  padding: 8px 0;
+}
+
+/* ---------- Selection after a scan ---------- */
+.selection-band {
+  background: var(--night);
+  color: #fff;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.selection-band .icon {
+  color: var(--floodlight);
+}
+.selection-band-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.selection-band-title {
+  font-size: 18px;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.selection-band .caption,
+.selection-band [data-testid='last-updated'] {
+  color: var(--night-muted);
+}
+.selection-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.selection-actions {
+  padding: 12px 18px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--sand-2);
+}
+.selection-actions .button {
+  min-height: 46px;
+}
+.arrival-person {
+  gap: 10px;
+}
+.arrival-person[data-on-site='true'] {
+  border-color: #b9dcc6;
+}
+.arrival-person-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.arrival-person[data-on-site='true'] .ops-avatar {
+  background: var(--pitch);
+  color: #fff;
+}
+.arrival-person-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.arrival-person-name {
+  font-size: 21px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.arrival-person .ops-history {
+  list-style: none;
+  padding: 0;
+  gap: 8px;
+}
+.arrival-person .ops-history > li {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* ---------- The big answer: cleared / not cleared ---------- */
+.verdict {
+  border: 2px solid var(--tone-neutral);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--card);
+  width: 100%;
+}
+.verdict-band {
+  background: var(--tone-neutral);
+  color: #fff;
+  padding: 10px 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.verdict-word {
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+}
+.verdict-meta {
+  margin-left: auto;
+  font-size: 12.5px;
+  opacity: 0.88;
+}
+.verdict-body {
+  padding: 12px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+.verdict[data-verdict='admitted'] {
+  border-color: var(--pitch);
+}
+.verdict[data-verdict='admitted'] .verdict-band {
+  background: var(--pitch);
+}
+.verdict[data-verdict='held'] {
+  border-color: var(--tone-danger);
+}
+.verdict[data-verdict='held'] .verdict-band {
+  background: var(--tone-danger);
+}
+.verdict-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.verdict-issues > li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.verdict-issues > li[data-severity='blocking'] .verdict-issue-text {
+  font-weight: 700;
+  color: #8e1d17;
+}
+.verdict-issue-text {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+/* ---------- Side rail: session fill and release ---------- */
+.arrival-occupancy .ops-tally {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.fill-row,
+.release-next-row {
+  color: var(--ink);
+  font-weight: 400;
+  text-decoration: none;
+}
+.fill-row:hover,
+.release-next-row:hover {
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--sand-2);
+}
+.fill-row .row-title,
+.release-next-row .row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fill-row[data-live='true'] .ops-time {
+  color: var(--pitch);
+}
+.fill-bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line-soft);
+  overflow: hidden;
+  margin: 3px 0 1px;
+}
+.fill-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--kind-program);
+  border-radius: 3px;
+}
+.fill-count {
+  font-size: 17px;
+  font-weight: 800;
+  font-stretch: 75%;
+  white-space: nowrap;
+}
+.ops-link-list .ops-link-row {
+  margin: 0 -18px;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+
+/* ---------- Attendance ---------- */
+.attendance-panel .ops-tally {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.attendance-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+}
+.shell-main .attendance-list > li.attendance-row {
+  display: grid;
+}
+.attendance-row > .row-text {
+  flex: none;
+}
+.attendance-row > .row-text .badge {
+  align-self: flex-start;
+}
+.attendance-row > :not(.ops-avatar):not(.row-text):not(.attendance-states) {
+  grid-column: 2 / -1;
+}
+.attendance-states {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, auto));
+  gap: 4px;
+  padding: 4px;
+  background: var(--sand-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+.attendance-states .button {
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 7px;
+}
+.attendance-states .button-secondary {
+  background: transparent;
+  border-color: transparent;
+}
+.attendance-states .button-secondary:hover:not([disabled]) {
+  background: var(--card);
+}
+.attendance-states .button-primary {
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.15);
+}
+.attendance-row[data-state='present'] .ops-avatar,
+.attendance-row[data-state='late'] .ops-avatar {
+  background: var(--pitch);
+  color: #fff;
+}
+.attendance-row[data-state='conflict'] .ops-avatar {
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger);
+}
+
+/* ---------- Supervised release ---------- */
+.release-children {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.release-child {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 700;
+}
+.release-child:hover {
+  border-color: var(--line-strong);
+}
+.release-child:has(input:checked) {
+  border: 2px solid var(--pitch);
+  background: var(--tone-success-bg);
+  padding: 7px 11px;
+}
+.release-child:has(input:focus-visible) {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.release-child .ops-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 12.5px;
+}
+.release-online {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.release-online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1f9d55;
+  flex: none;
+}
+.release-submit .button-primary {
+  min-height: 52px;
+  padding: 0 22px;
+  font-size: 15px;
+}
+.release-record[data-outcome='released'] {
+  border-left: 4px solid var(--pitch);
+  padding-left: 12px;
+}
+.release-record[data-outcome='not_released'] {
+  border-left: 4px solid var(--tone-danger);
+  padding-left: 12px;
+}
+
+/* ---------- Offline queue ---------- */
+.queue-device {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+}
+
+/* ---------- Phones beside a field (SPK-UX-007) ---------- */
+@media (max-width: 600px) {
+  .scanner {
+    padding: 14px;
+    border-radius: 18px;
+  }
+  .scanner-frame {
+    min-height: 210px;
+  }
+  .scanner-box {
+    width: 170px;
+    height: 150px;
+    border-radius: 22px;
+  }
+  .scanner .button-primary,
+  .selection-actions .button,
+  .release-submit .button-primary {
+    min-height: 56px;
+    border-radius: 14px;
+    font-size: 16px;
+  }
+  .verdict-word {
+    font-size: 28px;
+  }
+  .attendance-panel .ops-tally {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .attendance-panel .ops-tally > li {
+    padding: 6px 6px 8px;
+  }
+  .attendance-panel .ops-tally-value {
+    font-size: 26px;
+  }
+  .attendance-panel .ops-tally-label {
+    font-size: 10.5px;
+    line-height: 1.15;
+  }
+  .attendance-row {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+  .attendance-states {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .attendance-states .button {
+    min-height: 48px;
+    padding: 0 4px;
+    font-size: 13px;
+    white-space: normal;
+    line-height: 1.1;
+  }
+  .release-children {
+    grid-template-columns: 1fr;
+  }
+  .release-child {
+    min-height: 60px;
+    font-size: 16px;
+  }
+}

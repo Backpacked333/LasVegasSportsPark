@@ -713,6 +713,80 @@ describe('SCR-S-28 ArrivalScannerScreen', () => {
     expect(await screen.findByText('Nobody found')).toBeInTheDocument();
   });
 
+  it('SPK-ENTRY-008 / SPK-ENTRY-007: the desk rail shows each session’s observed fill (present or late of expected) and opens release for it', async () => {
+    const OTHER = '0192f1a0-0000-7000-8000-0000000000f2';
+    const app = createTestApp({
+      routes: routes({
+        'GET /sessions': {
+          status: 200,
+          body: {
+            items: [
+              {
+                sessionId: SESSION_1,
+                offeringId: OFFERING,
+                offeringName: 'Junior skills',
+                sequence: 2,
+                title: null,
+                scheduledStart: '2026-10-24T16:00:00.000Z',
+                scheduledEnd: '2026-10-24T17:00:00.000Z',
+                status: 'scheduled',
+                facilityId: FACILITY_A,
+                timezone: 'America/Los_Angeles',
+              },
+            ],
+            nextCursor: null,
+          },
+        },
+        'GET /attendance': {
+          status: 200,
+          body: {
+            activity: {
+              type: 'session',
+              id: SESSION_1,
+              offeringId: OFFERING,
+              sessionId: SESSION_1,
+              eventId: null,
+            },
+            people: [
+              {
+                personId: CHILD_1,
+                givenName: 'Alex',
+                familyName: 'Rivera',
+                displayName: 'Alex Rivera',
+                effectiveState: 'late',
+                status: 'recorded',
+                currentObservationIds: [],
+                history: [],
+              },
+            ],
+          },
+        },
+        'GET /enrollments': {
+          status: 200,
+          body: {
+            items: [{ participantPersonId: CHILD_1 }, { participantPersonId: OTHER }],
+            nextCursor: null,
+          },
+        },
+        'GET /session-bookings': { status: 200, body: [] },
+      }),
+    });
+    render(app.at('/arrival'));
+    const rail = await screen.findByRole('list', { name: 'Sessions now and next' });
+    // One recorded late of two expected; counts are observed attendance, not occupancy.
+    await waitFor(() => expect(rail).toHaveTextContent('1 / 2 present of expected'));
+    expect(within(rail).getByRole('link', { name: /Junior skills, session 2/ })).toHaveAttribute(
+      'href',
+      expect.stringContaining(`sessionId=${SESSION_1}`),
+    );
+    const release = screen.getByRole('list', { name: 'Sessions ending next' });
+    expect(within(release).getByRole('link')).toHaveAttribute(
+      'href',
+      `/arrival/release?session=${SESSION_1}`,
+    );
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+  });
+
   it('asks for a facility when the viewer works across several', async () => {
     const app = createTestApp();
     render(app.at('/arrival'));
