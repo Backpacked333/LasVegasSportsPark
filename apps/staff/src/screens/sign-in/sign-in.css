@@ -1,0 +1,241 @@
+/*
+ * Staff sign-in: a night-pitch split screen (SPK-UX-010). The pitch panel is decoration; the form
+ * card carries every word that matters. Below 900 px the pitch becomes a short band above the card.
+ */
+.signin {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(420px, 1fr);
+  background: var(--sand);
+}
+
+/* ---------- The pitch ---------- */
+.signin-pitch {
+  position: relative;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.025) 0 64px,
+      rgba(0, 0, 0, 0.05) 64px 128px
+    ),
+    radial-gradient(120% 80% at 50% 50%, #12392a 0%, var(--night) 70%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 32px 44px 44px;
+  isolation: isolate;
+}
+.signin-pitch-lines {
+  position: absolute;
+  inset: -4% -8%;
+  width: 116%;
+  height: 108%;
+  color: rgba(198, 243, 107, 0.16);
+  z-index: -1;
+  transform: perspective(1400px) rotateX(18deg) scale(1.05);
+  transform-origin: 50% 70%;
+}
+.signin-glow {
+  position: absolute;
+  width: 520px;
+  height: 520px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(198, 243, 107, 0.22) 0%, rgba(198, 243, 107, 0) 65%);
+  z-index: -1;
+  pointer-events: none;
+}
+.signin-glow-a {
+  top: -220px;
+  left: -160px;
+}
+.signin-glow-b {
+  top: -240px;
+  right: -200px;
+  opacity: 0.7;
+}
+.signin-pitch-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.signin-pitch .brand-text {
+  color: #fff;
+}
+.signin-pitch-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 660px;
+}
+.signin-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--floodlight);
+}
+.signin-kicker .live-dot {
+  background: var(--floodlight);
+}
+.signin-headline {
+  margin: 0;
+  font-size: clamp(54px, 7vw, 96px);
+  line-height: 0.88;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: -0.005em;
+  color: #fff;
+}
+.signin-sub {
+  margin: 0;
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: var(--night-text);
+  max-width: 44ch;
+}
+.signin-sports {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.signin-sports li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(198, 243, 107, 0.28);
+  background: rgba(12, 34, 25, 0.55);
+  color: var(--night-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.signin-sports .icon {
+  color: var(--floodlight);
+}
+
+/* ---------- The form side ---------- */
+.signin-main.shell-main {
+  padding: 40px;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
+}
+.signin-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 32px;
+  box-shadow: 0 24px 60px rgba(12, 34, 25, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.signin-card h1 {
+  margin: 0;
+  font-size: 40px;
+  line-height: 0.95;
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+.signin-intro {
+  color: var(--muted);
+}
+.signin-expired {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--tone-warning-bg);
+  border: 1px solid var(--tone-warning-line);
+  color: #5c3a00;
+  font-weight: 600;
+}
+/* The development sign-in renders a state card; inside the sign-in card it reads as a form. */
+.signin-card .state {
+  border: 0;
+  background: transparent;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0;
+  gap: 10px;
+}
+.signin-card .state h2 {
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+.signin-card .state > p {
+  color: var(--muted);
+  font-size: 13px;
+}
+.signin-card .form {
+  width: 100%;
+  max-width: none;
+  gap: 8px;
+}
+.signin-card .form input {
+  width: 100%;
+  min-height: 46px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+}
+.signin-card .form .error-text {
+  min-height: 1.2em;
+  font-size: 12.5px;
+}
+.signin-card .form .button-primary {
+  min-height: 48px;
+  font-size: 15px;
+  width: 100%;
+}
+.signin-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 440px;
+  text-align: center;
+  justify-content: center;
+}
+
+@media (max-width: 900px) {
+  .signin {
+    grid-template-columns: 1fr;
+  }
+  .signin-pitch {
+    padding: 20px 20px 24px;
+    min-height: 0;
+    gap: 22px;
+  }
+  .signin-sub,
+  .signin-sports {
+    display: none;
+  }
+  .signin-headline {
+    font-size: 48px;
+  }
+  .signin-main.shell-main {
+    padding: 20px 16px 32px;
+    justify-content: flex-start;
+  }
+  .signin-card {
+    padding: 22px 18px;
+  }
+  .signin-card h1 {
+    font-size: 32px;
+  }
+}

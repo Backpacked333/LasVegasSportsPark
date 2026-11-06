@@ -9,6 +9,7 @@ import { CapabilityGate } from '../../ui/CapabilityGate';
 import { Placeholder } from '../../ui/Placeholder';
 import { StateView } from '../../ui/StateView';
 import type { PackageGScreen } from './registry';
+import '../area/area.css';
 
 export function PackageGPlaceholder({
   screen,
@@ -24,7 +25,11 @@ export function PackageGPlaceholder({
   const headingId = `package-g-${screen.slug}`;
   const Heading = headingLevel === 2 ? 'h2' : 'h3';
   return (
-    <section aria-labelledby={headingId} data-testid={`package-g-${screen.slug}`}>
+    <section
+      aria-labelledby={headingId}
+      data-testid={`package-g-${screen.slug}`}
+      className="pg-placeholder"
+    >
       <Heading id={headingId}>{screen.title}</Heading>
       {nav}
       <CapabilityGate capability={screen.capability} subject={screen.title}>

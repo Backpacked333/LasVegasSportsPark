@@ -278,11 +278,11 @@
   gap: 6px;
   min-width: 0;
 }
-.fin-body > .fin-rows,
-.fin-body > .fin-table {
+.fin-body > div > .fin-rows,
+.fin-body > div > .fin-table {
   margin: 0 -18px -14px;
 }
-.fin-body > [data-testid='last-updated'] {
+.fin-body > div > [data-testid='last-updated'] {
   font-size: 11px;
   color: var(--faint);
 }
