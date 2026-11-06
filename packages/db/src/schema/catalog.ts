@@ -205,6 +205,8 @@ export interface OfferingSessionsTable {
   scheduled_end: Timestamp;
   scheduling_event_id: string | null;
   capacity_override: Json<JsonObject> | null;
+  /** 0210: the session's own place ({ label?, resourceIds? }); null = the offering's location. */
+  location: Json<JsonObject> | null;
   status: Generated<OfferingSessionStatus>;
   canceled_at: NullableTimestamp;
   cancel_reason: string | null;

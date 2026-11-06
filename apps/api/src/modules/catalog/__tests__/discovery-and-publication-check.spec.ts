@@ -405,6 +405,8 @@ describe('catalog discovery and publication check (CAT-01)', () => {
         status: 'scheduled',
         facilityId: t.facilityId,
         timezone: 'America/Los_Angeles',
+        location: { source: 'offering', label: 'Main complex', resources: [] },
+        capacity: { source: 'offering', units: [{ unit: 'seats', limit: 20 }] },
       },
       expect.objectContaining({ sessionId: s2, offeringId: draft.offeringId }),
       expect.objectContaining({ sessionId: canceled, status: 'canceled' }),
