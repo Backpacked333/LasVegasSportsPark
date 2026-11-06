@@ -53,6 +53,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import '../../features/grow/grow.css';
 
 type Enrollment = Schema<'Enrollment'>;
 const ENROLLMENT_KEY = ['api', '/enrollments/{id}'] as const;
@@ -472,8 +473,9 @@ export function EnrollmentChangeScreen() {
     request: { path: { id: enrollmentId } },
   });
   return (
-    <section aria-labelledby="enrollment-title">
+    <section aria-labelledby="enrollment-title" className="grow">
       {/* SPK-UX-009: the region keeps its name and the area navigation in every state. */}
+      <span className="eyebrow">Grow · Registrations · Changes</span>
       <h2 id="enrollment-title">Enrollment</h2>
       <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <QueryBoundary

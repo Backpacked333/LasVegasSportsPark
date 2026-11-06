@@ -37,7 +37,12 @@ import { PENDING } from '../../features/registration-finance/pending';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { StatusBadge } from '../../ui/StatusBadge';
+import { STATUS_GLYPHS, StatusBadge } from '../../ui/StatusBadge';
+import { StateView } from '../../ui/StateView';
+import { PageHeader } from '../../ui/Page';
+import { CapacityMeter } from '../../features/grow/Grow';
+import { useNow } from '../../providers/AppProviders';
+import './registrations.css';
 
 type Entry = Schema<'WaitlistEntry'>;
 type EntryStatus = Schema<'WaitlistEntryStatus'>;
@@ -173,6 +178,44 @@ function OfferPlace({
   );
 }
 
+/** "4h 48m left" (or "Expired") from now to the offer's expiry. */
+export function timeLeft(expiresAt: string, now: Date): string {
+  const ms = new Date(expiresAt).getTime() - now.getTime();
+  if (ms <= 0) return 'Expired';
+  const minutes = Math.ceil(ms / 60_000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) return `${days}d ${hours}h left`;
+  return hours > 0 ? `${hours}h ${mins}m left` : `${mins}m left`;
+}
+
+/**
+ * An open offer with its live expiry: the time left is written and the bar repeats it (the API's
+ * expiry decides; nothing here expires an offer).
+ */
+function OfferLive({ offer, zone }: { offer: Entry['offers'][number]; zone: string | null }) {
+  const now = useNow(30_000);
+  const start = new Date(offer.offeredAt).getTime();
+  const end = new Date(offer.expiresAt).getTime();
+  const used =
+    end > start ? Math.min(100, Math.max(0, ((now.getTime() - start) / (end - start)) * 100)) : 100;
+  const left = timeLeft(offer.expiresAt, now);
+  return (
+    <div className="offer-live" data-expired={left === 'Expired'}>
+      <span className="offer-live-head">
+        <span>
+          <b>Offer out</b> until {formatInstant(offer.expiresAt, zone)}
+        </span>
+        <span className="offer-live-left">◷ {left}</span>
+      </span>
+      <span className="offer-live-bar" aria-hidden="true">
+        <span style={{ width: `${100 - Math.round(used)}%` }} />
+      </span>
+    </div>
+  );
+}
+
 function EntryCard({
   entry,
   entries,
@@ -196,7 +239,12 @@ function EntryCard({
     void queryClient.invalidateQueries({ queryKey: WAITLIST_KEY });
   };
   return (
-    <li aria-labelledby={`entry-${entry.id}`}>
+    <li aria-labelledby={`entry-${entry.id}`} className="entry" data-status={entry.status}>
+      <span className="entry-position" aria-hidden="true">
+        {entry.position !== null
+          ? entry.position
+          : STATUS_GLYPHS[WAITLIST_ENTRY_STATUS[entry.status].tone]}
+      </span>
       <div className="row-text">
         <span className="row-title" id={`entry-${entry.id}`}>
           {entry.position !== null ? `${entry.position}. ` : ''}
@@ -207,7 +255,14 @@ function EntryCard({
           {entry.priorityRank}) · joined {formatInstant(entry.joinedAt, zone)}
         </span>
         <span className="caption">Preferences: {preferenceText(entry.preferences)}</span>
-        <StatusBadge {...WAITLIST_ENTRY_STATUS[entry.status]} />
+        <span className="actions-row">
+          <StatusBadge {...WAITLIST_ENTRY_STATUS[entry.status]} />
+        </span>
+        {entry.offers
+          .filter((offer) => offer.status === 'offered')
+          .map((offer) => (
+            <OfferLive key={offer.id} offer={offer} zone={zone} />
+          ))}
         {entry.offers.length > 0 ? (
           <ul aria-label="Offer history">
             {entry.offers.map((offer) => (
@@ -311,77 +366,107 @@ function OfferingWaitlist({ offeringId }: { offeringId: string }) {
   });
   return (
     <>
-      <h3>
-        <OfferingName id={offeringId} />
-      </h3>
-      <section className="rf-panel" aria-labelledby="pools-title">
-        <h4 id="pools-title">Capacity</h4>
-        <QueryBoundary
-          query={pools}
-          label="capacity"
-          isEmpty={(list) => list.length === 0}
-          empty={{
-            title: 'No capacity pools',
-            description: 'This offering has no capacity pools yet.',
-          }}
-        >
-          {(list) => (
-            <ul className="list" aria-label="Capacity pools">
-              {list.map((pool) => (
-                <li key={pool.id}>
-                  <div className="row-text">
-                    <span className="row-title">
-                      {CAPACITY_UNIT[pool.unit]} ({pool.constraintKind})
-                    </span>
-                    <span className="caption">
-                      Capacity {pool.capacity} · committed {pool.committed} · held {pool.held} ·
-                      available {pool.available}
-                    </span>
-                  </div>
-                  <StatusBadge
-                    tone={pool.available > 0 ? 'success' : 'warning'}
-                    label={pool.available > 0 ? `${pool.available} available` : 'Full'}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </QueryBoundary>
-      </section>
-      <p className="caption">
-        Priority basis and offer expiry come from the waitlist policy, pending{' '}
-        {PENDING.waitlistPolicy.ids.join(', ')} (owner: {PENDING.waitlistPolicy.owner}). A late
-        payment never displaces a valid offer.
-      </p>
-      <SelectField
-        label="Entries"
-        value={status}
-        placeholder="All statuses"
-        onChange={(v) => setStatus(v as EntryStatus | '')}
-        options={Object.entries(WAITLIST_ENTRY_STATUS).map(([value, badge]) => ({
-          value,
-          label: badge.label,
-        }))}
-      />
-      <QueryBoundary
-        query={entries}
-        label="the waitlist"
-        isEmpty={(list) => list.length === 0}
-        empty={{
-          title: 'No waitlist',
-          description: 'Nobody is on the waitlist for this offering.',
-        }}
-        unavailableOffline={['offering places', 'removing entries']}
-      >
-        {(list) => (
-          <ul className="list" aria-label="Waitlist entries">
-            {orderEntries(list).map((entry) => (
-              <EntryCard key={entry.id} entry={entry} entries={list} zone={zone} />
-            ))}
-          </ul>
-        )}
-      </QueryBoundary>
-      <OfflineCaption action="offering places or removing entries" />
+      <div className="waitlist-head">
+        <h3>
+          <OfferingName id={offeringId} />
+        </h3>
+      </div>
+      <div className="split">
+        <div className="split-main">
+          <section className="card card-flush queue-card" aria-labelledby="entries-title">
+            <div className="card-head">
+              <h4 id="entries-title">Queue</h4>
+              {entries.data ? (
+                <span className="queue-count">
+                  {entries.data.filter((e) => e.status === 'waiting').length} waiting ·{' '}
+                  {entries.data.filter((e) => e.status === 'offered').length} offers out
+                </span>
+              ) : null}
+            </div>
+            <div className="queue-note">
+              <SelectField
+                label="Entries"
+                value={status}
+                placeholder="All statuses"
+                onChange={(v) => setStatus(v as EntryStatus | '')}
+                options={Object.entries(WAITLIST_ENTRY_STATUS).map(([value, badge]) => ({
+                  value,
+                  label: badge.label,
+                }))}
+              />
+            </div>
+            <QueryBoundary
+              query={entries}
+              label="the waitlist"
+              isEmpty={(list) => list.length === 0}
+              empty={{
+                title: 'No waitlist',
+                description: 'Nobody is on the waitlist for this offering.',
+              }}
+              unavailableOffline={['offering places', 'removing entries']}
+            >
+              {(list) => (
+                <ul className="list approvals waitlist-entries" aria-label="Waitlist entries">
+                  {orderEntries(list).map((entry) => (
+                    <EntryCard key={entry.id} entry={entry} entries={list} zone={zone} />
+                  ))}
+                </ul>
+              )}
+            </QueryBoundary>
+          </section>
+          <OfflineCaption action="offering places or removing entries" />
+        </div>
+        <aside className="split-side" aria-label="Capacity and policy">
+          <section className="card" aria-labelledby="pools-title">
+            <h4 id="pools-title">Capacity</h4>
+            <QueryBoundary
+              query={pools}
+              label="capacity"
+              isEmpty={(list) => list.length === 0}
+              empty={{
+                title: 'No capacity pools',
+                description: 'This offering has no capacity pools yet.',
+              }}
+            >
+              {(list) => (
+                <ul className="list pool-list" aria-label="Capacity pools">
+                  {list.map((pool) => (
+                    <li key={pool.id}>
+                      <span className="pool-head">
+                        <span className="row-title">
+                          {CAPACITY_UNIT[pool.unit]} ({pool.constraintKind})
+                        </span>
+                        <StatusBadge
+                          tone={pool.available > 0 ? 'success' : 'warning'}
+                          label={pool.available > 0 ? `${pool.available} available` : 'Full'}
+                        />
+                      </span>
+                      <CapacityMeter
+                        capacity={pool.capacity}
+                        committed={pool.committed}
+                        held={pool.held}
+                        note=" "
+                      />
+                      <span className="caption">
+                        Capacity {pool.capacity} · committed {pool.committed} · held {pool.held} ·
+                        available {pool.available}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </QueryBoundary>
+          </section>
+          <section className="card">
+            <h4>Waitlist policy</h4>
+            <p className="caption">
+              Priority basis and offer expiry come from the waitlist policy, pending{' '}
+              {PENDING.waitlistPolicy.ids.join(', ')} (owner: {PENDING.waitlistPolicy.owner}). A
+              late payment never displaces a valid offer.
+            </p>
+          </section>
+        </aside>
+      </div>
     </>
   );
 }
@@ -391,8 +476,12 @@ export function WaitlistScreen() {
   const navigate = useNavigate();
   const [choice, setChoice] = useState('');
   return (
-    <section aria-labelledby="waitlist-title">
-      <h2 id="waitlist-title">Waitlist management</h2>
+    <section aria-labelledby="waitlist-title" className="grow">
+      <PageHeader
+        eyebrow="Grow · Registrations · Waitlists and live offers"
+        title="Waitlist management"
+        titleId="waitlist-title"
+      />
       <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <OfferingPicker
         label="Waitlist of"
@@ -405,7 +494,11 @@ export function WaitlistScreen() {
       {offeringId ? (
         <OfferingWaitlist key={offeringId} offeringId={offeringId} />
       ) : (
-        <p>Choose a program and an offering to see its waitlist.</p>
+        <StateView
+          variant="empty"
+          title="Choose an offering"
+          description="Choose a program and an offering to see its waitlist."
+        />
       )}
     </section>
   );

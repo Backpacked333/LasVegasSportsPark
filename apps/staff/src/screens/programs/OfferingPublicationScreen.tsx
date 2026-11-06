@@ -262,6 +262,7 @@ export function OfferingPublicationScreen() {
   return (
     <section aria-labelledby="offering-title" className="grow">
       {/* SPK-UX-009: the region keeps its name in every state. */}
+      <span className="eyebrow">Grow · Programs and camps</span>
       <h2 id="offering-title">Offering publication and registration</h2>
       <QueryBoundary
         query={offering}

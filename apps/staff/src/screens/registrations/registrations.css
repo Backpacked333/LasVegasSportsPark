@@ -1,0 +1,271 @@
+/*
+ * Registrations and waitlists (SCR-S-24 to SCR-S-27): one approval queue with a row per request
+ * (type icon, who and what, why, decision on the right) and waitlist offers with their live
+ * expiry. The tone accents repeat what the badges say (SPK-UX-009).
+ */
+.queue-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.queue-toolbar .rf-field {
+  min-width: min(100%, 340px);
+}
+.queue-card .card-head h3 {
+  font-size: 20px;
+}
+.queue-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.queue-note {
+  padding: 0 18px 10px;
+}
+.queue-card > div > .state,
+.queue-card > .state {
+  margin: 0 18px 16px;
+}
+.queue-card > div > .caption:first-child {
+  padding: 0 18px;
+}
+.queue-card > .button,
+.queue-card > div > .button {
+  margin: 0 18px 16px;
+}
+
+.approvals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.list.approvals > li.approval {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: start;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.list.approvals > li.approval:first-child {
+  border-top: 1px solid var(--line-soft);
+}
+.approval[data-tone='danger'] {
+  background: #fffafa;
+  box-shadow: inset 3px 0 0 var(--tone-danger);
+}
+.approval[data-tone='success'] {
+  background: #f7fbf8;
+}
+.approval > .icon-tile {
+  grid-column: 1;
+  grid-row: 1;
+}
+.approval > .row-text {
+  grid-column: 2;
+  grid-row: 1;
+  gap: 4px;
+}
+.approval .row-title {
+  font-size: 15px;
+}
+.approval-arrow {
+  color: var(--muted);
+  font-weight: 500;
+}
+.approval[data-tone='danger'] .type-caps {
+  --tile: var(--tone-danger);
+}
+.approval[data-tone='info'] .type-caps {
+  --tile: var(--tone-info);
+}
+.approval[data-tone='success'] .type-caps {
+  --tile: var(--tone-success);
+}
+.approval[data-tone='pending'] .type-caps {
+  --tile: var(--tone-pending);
+}
+.approval > .rf-actions {
+  grid-column: 3;
+  grid-row: 1;
+  margin: 0;
+  justify-content: flex-end;
+}
+.approval > form,
+.approval > p,
+.approval > .state,
+.approval > [role='status'],
+.approval > [role='alert'],
+.approval > .caption {
+  grid-column: 2 / -1;
+  margin: 6px 0 0;
+}
+.approval > form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sand-2);
+}
+.approval .row-text > ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+@media (max-width: 760px) {
+  .list.approvals > li.approval {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+  .approval > .rf-actions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+  .approval > form,
+  .approval > p,
+  .approval > .state,
+  .approval > [role='status'],
+  .approval > [role='alert'],
+  .approval > .caption {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---------- Waitlists (SCR-S-26) ---------- */
+.waitlist-head h3 {
+  font-size: 24px;
+}
+.list.pool-list > li {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.pool-list .pool-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.waitlist-entries > li.entry {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  align-items: start;
+  padding: 14px 18px;
+}
+.entry-position {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  font-weight: 800;
+  font-stretch: 75%;
+  background: var(--tone-neutral-bg);
+  color: var(--ink-2);
+}
+.entry[data-status='offered'] .entry-position {
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+}
+.entry[data-status='offered'] {
+  background: #fbfaff;
+  box-shadow: inset 3px 0 0 var(--tone-pending);
+}
+.entry > .row-text {
+  grid-column: 2;
+}
+.entry > .rf-actions {
+  grid-column: 3;
+  grid-row: 1;
+  margin: 0;
+  justify-content: flex-end;
+}
+.entry > form,
+.entry > .state,
+.entry > [role='alert'],
+.entry > .caption {
+  grid-column: 2 / -1;
+}
+.entry > form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sand-2);
+}
+.entry .row-text > ul {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+@media (max-width: 760px) {
+  .waitlist-entries > li.entry {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+  .entry > .rf-actions,
+  .entry > form,
+  .entry > .state,
+  .entry > [role='alert'],
+  .entry > .caption {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+}
+
+/* An open offer with its live expiry (the time left is written; the bar repeats it). */
+.offer-live {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: #f6f4fc;
+  border: 1px solid #e5def6;
+}
+.offer-live-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.offer-live-left {
+  color: var(--tone-pending);
+  font-weight: 700;
+}
+.offer-live-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: #e5def6;
+  overflow: hidden;
+}
+.offer-live-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--tone-pending);
+}
+.offer-live[data-expired='true'] .offer-live-left {
+  color: var(--tone-danger);
+}
+
+/* ---------- Area home ---------- */
+.list.reg-screens > li {
+  padding: 12px 18px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}

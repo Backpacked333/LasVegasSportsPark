@@ -25,6 +25,7 @@ import type { Schema } from '@sportspark/api-client';
 import { formatAge } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
@@ -45,7 +46,10 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { LoadMore } from '../../ui/LoadMore';
-import { StatusBadge } from '../../ui/StatusBadge';
+import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
+import { Icon, type IconName } from '../../ui/Icon';
+import { PageHeader } from '../../ui/Page';
+import './registrations.css';
 
 type Application = Schema<'Application'>;
 type ApplicationStatus = Schema<'ApplicationStatus'>;
@@ -53,6 +57,32 @@ type ApplicationStatus = Schema<'ApplicationStatus'>;
 const QUEUE_KEY = ['api', '/applications'] as const;
 
 type Mode = 'idle' | 'decline' | 'override';
+
+/** The icon of a request's kind in the approval queue (decorative; the kind is written). */
+const INTENT_ICON: Record<Application['intent'], IconName> = {
+  individual_league: 'sports_soccer',
+  join_team: 'group_add',
+  create_team_entry: 'groups',
+  youth: 'family_restroom',
+  trial: 'event_seat',
+  makeup: 'event_repeat',
+  pickup: 'event_seat',
+  rental_request: 'event',
+  membership: 'badge',
+  package_purchase: 'confirmation_number',
+  party_request: 'cake',
+};
+
+/** Accent of a queue row: an eligibility failure stands out; the badges carry the words. */
+function approvalTone(application: Application): StatusTone {
+  if (application.eligibility && !application.eligibility.eligible && !application.override) {
+    return 'danger';
+  }
+  if (application.status === 'accepted') return 'success';
+  if (application.status === 'declined' || application.status === 'withdrawn') return 'neutral';
+  if (application.eligibility === null) return 'pending';
+  return 'info';
+}
 
 function ApplicationCard({ application }: { application: Application }) {
   const online = useOnline();
@@ -115,14 +145,23 @@ function ApplicationCard({ application }: { application: Application }) {
   };
 
   return (
-    <li aria-labelledby={`application-${subject}`}>
+    <li
+      aria-labelledby={`application-${subject}`}
+      className="approval"
+      data-tone={approvalTone(application)}
+    >
+      <span className="icon-tile" data-tone={approvalTone(application)} aria-hidden="true">
+        <Icon name={INTENT_ICON[application.intent]} size={20} />
+      </span>
       <div className="row-text">
+        <span className="type-caps">{REGISTRATION_INTENT[application.intent]}</span>
         <span className="row-title" id={`application-${subject}`}>
-          <PersonName id={application.participantPersonId} fallback="Participant" />:{' '}
+          <PersonName id={application.participantPersonId} fallback="Participant" />
+          <span className="approval-arrow"> → </span>
           <OfferingName id={application.offeringId} />
         </span>
         <span className="caption">
-          {REGISTRATION_INTENT[application.intent]} · submitted{' '}
+          submitted{' '}
           {application.submittedAt ? formatAge(new Date(application.submittedAt), now) : 'not yet'}{' '}
           by {application.submittedBy.actorLabel} ({application.submittedBy.kind})
           {application.requiresApproval ? ' · approval required before payment' : ''}
@@ -131,7 +170,9 @@ function ApplicationCard({ application }: { application: Application }) {
           Review deadline: pending {PENDING.reviewDeadline.ids.join(', ')} (none is set). Resolver:
           not stated per application.
         </span>
-        <StatusBadge {...APPLICATION_STATUS[application.status]} />
+        <span className="actions-row">
+          <StatusBadge {...APPLICATION_STATUS[application.status]} />
+        </span>
         <EligibilityView
           result={application.eligibility}
           override={application.override}
@@ -237,7 +278,7 @@ function ApplicationList({
   label?: string;
 }) {
   return (
-    <ul className="list" aria-label={label}>
+    <ul className="list approvals" aria-label={label}>
       {items.map((application) => (
         <ApplicationCard key={application.id} application={application} />
       ))}
@@ -281,9 +322,17 @@ function WaitingList({ state }: { state: (typeof WAITING)[number] }) {
   });
   const id = `queue-${state.status}`;
   return (
-    <section className="rf-panel" aria-labelledby={id}>
-      <h3 id={id}>{state.title}</h3>
-      <p className="caption">
+    <section className="card card-flush queue-card" aria-labelledby={id}>
+      <div className="card-head">
+        <h3 id={id}>{state.title}</h3>
+        {pages.data ? (
+          <span className="queue-count">
+            {pages.data.length}
+            {pages.hasNextPage ? '+' : ''} waiting
+          </span>
+        ) : null}
+      </div>
+      <p className="caption queue-note">
         {state.description} Newest first, as the API lists them
         {pages.hasNextPage ? '; older applications follow under “Load more”' : ''}.
       </p>
@@ -344,7 +393,7 @@ function StatusQueue({ status }: { status: ApplicationStatus | '' }) {
     request: { query: { limit: 50, ...(status ? { status } : {}) } },
   });
   return (
-    <>
+    <section className="card card-flush queue-card" aria-label="Applications by status">
       <QueryBoundary
         query={applications}
         label="applications"
@@ -355,7 +404,7 @@ function StatusQueue({ status }: { status: ApplicationStatus | '' }) {
         {(items) => <ApplicationList items={items} />}
       </QueryBoundary>
       <LoadMore pages={applications} label="applications" />
-    </>
+    </section>
   );
 }
 
@@ -381,26 +430,51 @@ function DecisionAuthority() {
 export function RegistrationQueueScreen() {
   const [status, setStatus] = useState<Filter>(NEEDS_DECISION);
   return (
-    <section aria-labelledby="queue-title">
-      <h2 id="queue-title">Registration queue and approvals</h2>
-      <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
-      <p className="caption">
-        Approval comes before any payment is captured, and it reserves no place unless an approved
-        policy says so: pending {PENDING.approvals.ids.join(', ')} (owner: {PENDING.approvals.owner}
-        ).
-      </p>
-      <DecisionAuthority />
-      <SelectField
-        label="Applications"
-        value={status}
-        placeholder="All statuses"
-        onChange={(v) => setStatus(v as Filter)}
-        options={[
-          { value: NEEDS_DECISION, label: 'Waiting for a decision (submitted or awaiting review)' },
-          ...STATUS_FILTERS.map((s) => ({ value: s, label: APPLICATION_STATUS[s].label })),
-        ]}
+    <section aria-labelledby="queue-title" className="grow">
+      <PageHeader
+        eyebrow="Grow · Registrations · One queue for every approval"
+        title="Registration queue and approvals"
+        titleId="queue-title"
+        actions={
+          <Link className="button button-primary" to="/registrations/assisted">
+            <Icon name="person_add" size={19} />
+            Register someone at the desk
+          </Link>
+        }
       />
-      {status === NEEDS_DECISION ? <DecisionQueue /> : <StatusQueue status={status} />}
+      <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
+      <div className="split">
+        <div className="split-main">
+          <div className="queue-toolbar">
+            <SelectField
+              label="Applications"
+              value={status}
+              placeholder="All statuses"
+              onChange={(v) => setStatus(v as Filter)}
+              options={[
+                {
+                  value: NEEDS_DECISION,
+                  label: 'Waiting for a decision (submitted or awaiting review)',
+                },
+                ...STATUS_FILTERS.map((s) => ({ value: s, label: APPLICATION_STATUS[s].label })),
+              ]}
+            />
+          </div>
+          {status === NEEDS_DECISION ? <DecisionQueue /> : <StatusQueue status={status} />}
+        </div>
+        <aside className="split-side" aria-label="How approval works">
+          <section className="card">
+            <h4>Before you decide</h4>
+            <p className="caption">
+              Approval comes before any payment is captured, and it reserves no place unless an
+              approved policy says so: pending {PENDING.approvals.ids.join(', ')} (owner:{' '}
+              {PENDING.approvals.owner}).
+            </p>
+            <DecisionAuthority />
+            <Link to="/registrations/waitlists">Waitlists and offers →</Link>
+          </section>
+        </aside>
+      </div>
     </section>
   );
 }

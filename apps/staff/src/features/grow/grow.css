@@ -12,9 +12,17 @@
   gap: 18px;
   min-width: 0;
 }
+.grow > .eyebrow + h2 {
+  margin-top: -10px;
+}
 .grow > p,
 .grow > .caption {
   margin: 0;
+}
+
+/* A row text nested in a row text is stacked, not a 280px-tall flex item. */
+.grow .row-text .row-text {
+  flex: none;
 }
 
 /* Panels read as cards. */
