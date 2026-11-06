@@ -30,7 +30,8 @@ import { CommandError } from '../../ui/CommandFeedback';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
-import { Icon, type IconName } from '../../ui/Icon';
+import { Icon } from '../../ui/Icon';
+import { Kpi, KpiRow } from '../../ui/Page';
 import { formatDateTime, formatMinutes, formatTime, formatTimeRange } from '../../ui/time';
 import './today.css';
 import '../../ui/form-fields.css';
@@ -574,35 +575,6 @@ function FacilityToday({ facility, now }: { facility: TodayFacility; now: Date }
   );
 }
 
-function Kpi({
-  icon,
-  tone,
-  label,
-  value,
-  sub,
-}: {
-  icon: IconName;
-  tone: string;
-  label: string;
-  value: string;
-  sub: string;
-}) {
-  return (
-    <div className="kpi">
-      <span className="kpi-label">
-        <span className={`tone-${tone}`}>
-          <Icon name={icon} size={17} />
-        </span>
-        {label}
-      </span>
-      <span className="kpi-value-row">
-        <span className="kpi-value">{value}</span>
-        <span className="kpi-sub">{sub}</span>
-      </span>
-    </div>
-  );
-}
-
 function TodayKpis({ feed }: { feed: Schema<'TodayFeed'> }) {
   const visible = feed.facilities.filter((f) => f.activities.visible);
   const total = visible.reduce((n, f) => n + f.activities.total, 0);
@@ -611,7 +583,7 @@ function TodayKpis({ feed }: { feed: Schema<'TodayFeed'> }) {
   const overdue = feed.items.filter((i) => i.overdue).length;
   const recovery = feed.items.filter(isRecoveryRequired).length;
   return (
-    <div className="kpis" aria-label="Today at a glance" role="group">
+    <KpiRow label="Today at a glance">
       <Kpi
         icon="warning"
         tone="danger"
@@ -640,7 +612,7 @@ function TodayKpis({ feed }: { feed: Schema<'TodayFeed'> }) {
         value={String(recovery)}
         sub="money moved, not fulfilled"
       />
-    </div>
+    </KpiRow>
   );
 }
 
