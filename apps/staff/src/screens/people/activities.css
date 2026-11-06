@@ -1,0 +1,40 @@
+/* SCR-S-20 Activities card: attendance of the last sessions, glyph and text (SPK-UX-009). */
+.recent-attendance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 2px;
+}
+.attendance-marks {
+  display: inline-flex;
+  gap: 3px;
+}
+.attendance-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+  background: var(--tone-neutral-bg);
+  color: var(--tone-neutral);
+}
+.attendance-mark[data-tone='success'] {
+  background: var(--tone-success-bg);
+  color: var(--tone-success);
+}
+.attendance-mark[data-tone='pending'] {
+  background: var(--tone-pending-bg);
+  color: var(--tone-pending);
+}
+.attendance-mark[data-tone='warning'] {
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+}
+.attendance-mark[data-tone='danger'] {
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger);
+}

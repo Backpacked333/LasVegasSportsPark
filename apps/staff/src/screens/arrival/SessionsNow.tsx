@@ -6,6 +6,8 @@
  *   late of the expected participants (confirmed enrollments and session bookings, plus anyone
  *   with an observation), from the same reads as the attendance screen. Observed attendance, never
  *   verified occupancy; a read the viewer may not make shows "not available", never a guess.
+ *   Each row also names where the session is (the resources its scheduling event reserves, else the
+ *   session's or the offering's location) and its configured capacity (CAT-01 session location).
  * - "Supervised release": the sessions ending next, each opening the release screen for that
  *   session (the collector is checked there, online, before anything is recorded).
  */
@@ -25,6 +27,24 @@ import { Icon } from '../../ui/Icon';
 import { StateView } from '../../ui/StateView';
 
 const SHOWN = 6;
+
+/** Where a session takes place: reserved resources by name, else the location label. */
+export function sessionPlace(session: FacilitySession): string | null {
+  // Tolerates a service that predates CAT-01 session locations (no location on the row).
+  const location = session.location as FacilitySession['location'] | undefined;
+  if (!location) return null;
+  const names = location.resources.map((r) => r.name).filter((n): n is string => n !== null);
+  if (names.length > 0) return names.join(' + ');
+  return location.label;
+}
+
+/** The configured capacity of a session: its first unit's limit, written as places. */
+export function sessionCapacity(session: FacilitySession): string | null {
+  const capacity = session.capacity as FacilitySession['capacity'] | undefined;
+  const unit = capacity?.units[0];
+  if (!unit) return null;
+  return `${unit.limit} ${unit.limit === 1 ? 'place' : 'places'}`;
+}
 
 export function SessionsNow({
   facilityId,
@@ -171,6 +191,8 @@ function SessionFillRow({
   const known = attendance.data !== undefined;
   const started = new Date(session.scheduledStart).getTime() <= now.getTime();
   const pct = expected.size > 0 ? Math.min(100, Math.round((present / expected.size) * 100)) : 0;
+  const place = sessionPlace(session);
+  const capacity = sessionCapacity(session);
   return (
     <li>
       <Link
@@ -189,6 +211,18 @@ function SessionFillRow({
           <span className="caption">
             {started ? 'In progress' : 'Starts'} · until {formatClock(session.scheduledEnd, zone)}
           </span>
+          {place || capacity ? (
+            <span className="caption session-place">
+              {place ? (
+                <>
+                  <Icon name="location_on" size={14} />
+                  {place}
+                </>
+              ) : null}
+              {place && capacity ? ' · ' : null}
+              {capacity}
+            </span>
+          ) : null}
         </span>
         <span className="fill-count">
           {known ? (

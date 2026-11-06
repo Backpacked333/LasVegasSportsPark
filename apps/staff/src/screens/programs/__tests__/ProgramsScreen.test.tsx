@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { createTestApp } from '../../../testing/test-app';
 import {
   OFFERING_B_ID,
+  OFFERING_ID,
   PROGRAM_ID,
   apiError,
   capacityPool,
@@ -84,6 +85,78 @@ describe('SCR-S-14 ProgramsScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Readiness: Winter camp' }));
     expect(screen.getByRole('region', { name: 'Readiness: Winter camp' })).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/offerings')?.query.view).toBe('staff');
+  });
+
+  it('SPK-REG-008/SPK-CAT-001: the rail shows enrollment by age, form completion and the waitlist from the offering summaries', async () => {
+    const summary = (offeringId: string, extra: Record<string, unknown> = {}) => ({
+      offeringId,
+      referenceDate: '2026-12-01',
+      enrolled: { confirmed: 3, pending: 1 },
+      byAge: [
+        { ageYears: 8, confirmed: 1, pending: 1 },
+        { ageYears: 10, confirmed: 1, pending: 0 },
+        { ageYears: null, confirmed: 1, pending: 0 },
+      ],
+      forms: {
+        requiredFormCount: 1,
+        participantCount: 4,
+        participantsComplete: 2,
+        percentComplete: 50,
+      },
+      waitlist: { waiting: 2, offered: 1 },
+      ...extra,
+    });
+    const app = createTestApp({
+      routes: {
+        'GET /programs': LIST,
+        'GET /offerings': ok({
+          items: [
+            offering({
+              publicationState: 'registration_open',
+              requiredFormPolicyVersionIds: [`${PROGRAM_ID.slice(0, -1)}7`],
+            }),
+          ],
+          nextCursor: null,
+        }),
+        'GET /capacity-pools': ok([capacityPool()]),
+        'GET /offering-enrollment-summaries': ok({
+          items: [summary(OFFERING_ID)],
+          unavailableOfferingIds: [],
+        }),
+      },
+    });
+    render(app.at('/programs'));
+    const rail = await screen.findByRole('region', { name: 'Readiness: Spring academy' });
+    expect(
+      await within(rail).findByText(/Age 8: 2, Age 10: 1, Age not recorded: 1/),
+    ).toBeInTheDocument();
+    const checks = within(rail).getByRole('list', { name: 'Readiness checks' });
+    expect(within(checks).getByText('Forms complete')).toBeInTheDocument();
+    expect(within(checks).getByText('2 of 4 participants')).toBeInTheDocument();
+    expect(within(checks).getByText('2 waiting · 1 offer open')).toBeInTheDocument();
+    expect(within(rail).getByText(/Ages are counted in whole years/)).toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Programs' });
+    expect(within(list).getAllByText(/2 waiting · 1 offer open/).length).toBeGreaterThan(0);
+    const request = app.fake.requests.find((r) => r.route === '/offering-enrollment-summaries');
+    expect(request?.query.offeringIds).toBe(OFFERING_ID);
+  });
+
+  it('says enrollment summaries are not available when the API refuses them', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /programs': LIST,
+        'GET /offerings': ok({ items: [offering()], nextCursor: null }),
+        'GET /capacity-pools': ok([capacityPool()]),
+        'GET /offering-enrollment-summaries': apiError(403, 'ACCESS_DENIED'),
+      },
+    });
+    render(app.at('/programs'));
+    const rail = await screen.findByRole('region', { name: 'Readiness: Spring academy' });
+    expect(
+      await within(rail).findByText(
+        'Enrollment by age, form completion and waitlist counts are not available to you.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('keeps the programs when capacity is not available, and says capacity is not shown', async () => {
