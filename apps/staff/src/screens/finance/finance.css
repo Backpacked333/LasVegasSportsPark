@@ -142,6 +142,28 @@
   }
 }
 
+/* Past due with a reminder column (POST /v1/obligations/{id}/reminders). */
+.fin-table-remind .fin-table-head,
+.fin-table-remind .fin-table-row {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.5fr) 100px 100px 104px;
+}
+.fin-table-remind .fin-table-row a {
+  color: var(--ink);
+}
+.fin-remind {
+  display: flex;
+  justify-content: flex-end;
+}
+.fin-remind-note {
+  padding: 8px 18px 12px;
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .fin-table-remind .fin-table-row {
+    grid-template-columns: 1fr auto;
+  }
+}
+
 /* Reconciliation: the dark side card. */
 .fin-recon {
   padding: 18px;

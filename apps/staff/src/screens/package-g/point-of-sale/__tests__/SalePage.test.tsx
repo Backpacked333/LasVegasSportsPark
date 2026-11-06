@@ -78,6 +78,59 @@ describe('SCR-S-55 SalePage', () => {
     expect(within(totals).getByText('$0.42')).toBeInTheDocument();
   });
 
+  it('§3.16 POS: − and + change a ticket line through the quantity command; the configured tax line and the household account are on the ticket', async () => {
+    const user = userEvent.setup();
+    let current = saleWithLine({
+      customerPersonId: CUSTOMER_ID,
+      charges: [{ code: 'TAX', label: 'Sales tax 8.375%', kind: 'tax', amountMinor: 42 }],
+    });
+    const app = createTestApp({
+      routes: saleRoutes(() => current, {
+        'GET /me/permissions': permissions(
+          ['point_of_sale'],
+          [...SELLER, 'finance.read_person_money'],
+        ),
+        'GET /people/{id}/money-summary': ok({
+          personId: CUSTOMER_ID,
+          accountBalance: [{ currency: 'USD', amountMinor: 4500 }],
+          openObligations: 1,
+          pastDueObligations: 0,
+          creditsAvailable: [{ currency: 'USD', amountMinor: 1000 }],
+          creditsPendingApproval: [],
+          paidThisYear: [],
+          refundedThisYear: [],
+          paidSince: '2026-01-01T08:00:00.000Z',
+          yearTimeZone: 'America/Los_Angeles',
+          asOf: '2026-10-24T12:00:00.000Z',
+        }),
+        'POST /pos-sales/{id}/lines/{lineId}/quantity': () => {
+          current = saleWithLine({
+            customerPersonId: CUSTOMER_ID,
+            revision: 2,
+            lines: [line({ id: '0192f1a0-0000-7000-8000-00000000f0f1', quantity: 3 })],
+          });
+          return fakeResponse(200, current);
+        },
+      }),
+    });
+    render(app.at(SALE_PATH));
+    const ticket = await screen.findByRole('complementary', { name: /Ticket of sale/ });
+    expect(
+      within(ticket).getByRole('list', { name: 'Taxes and fees on this ticket' }),
+    ).toHaveTextContent('Sales tax 8.375%$0.42');
+    expect(await within(ticket).findByTestId('pos-household-account')).toHaveTextContent(
+      'Owes $45.00 · credit $10.00',
+    );
+    await user.click(within(ticket).getByRole('button', { name: 'One more Water bottle' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/pos-sales/{id}/lines/{lineId}/quantity')?.body,
+      ).toEqual({ quantity: 3, expectedRevision: 1 }),
+    );
+    expect(await within(ticket).findByLabelText('Quantity 3')).toBeInTheDocument();
+    expect(within(ticket).getByRole('button', { name: 'One fewer Water bottle' })).toBeEnabled();
+  });
+
   it('SPK-PAY-001: a product tile adds one unit with the same command, no price, and counts it on the tile', async () => {
     const user = userEvent.setup();
     let current = sale();

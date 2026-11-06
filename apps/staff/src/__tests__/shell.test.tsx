@@ -138,6 +138,42 @@ describe('navigation from GET /v1/me/permissions (SPK-UX-005, K-05)', () => {
     expect(app.fake.requests.filter((r) => r.route === '/me/permissions')).toHaveLength(1);
   });
 
+  it('SPK-UX-005: attention counts show as pills beside the areas; link names stay the area titles', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({ areas: ['finance', 'today', 'communications'] }),
+        'GET /me/attention': {
+          status: 200,
+          body: {
+            computedAt: '2026-11-06T12:00:00.000Z',
+            cap: 99,
+            areas: [
+              {
+                area: 'finance',
+                count: 3,
+                capped: false,
+                counts: 'unknown payment and refund outcomes',
+              },
+              { area: 'today', count: 99, capped: true, counts: 'open exceptions' },
+              { area: 'communications', count: 0, capped: false, counts: 'notices composed' },
+            ],
+          },
+        },
+      },
+    });
+    render(app.at('/today'));
+    const nav = await mainLinks();
+    await nav.findByText('Finance: 3 unknown payment and refund outcomes');
+    expect(nav.getByRole('link', { name: 'Finance' })).toBeInTheDocument();
+    expect(nav.getByRole('link', { name: 'Today' })).toBeInTheDocument();
+    const pill = nav.getByTestId('nav-count-finance');
+    expect(pill).toHaveTextContent('3');
+    expect(pill).toHaveAttribute('aria-hidden', 'true');
+    expect(nav.getByTestId('nav-count-today')).toHaveTextContent('99+');
+    // A zero shows no pill.
+    expect(nav.queryByTestId('nav-count-communications')).toBeNull();
+  });
+
   it('a page of an area not listed still opens by address and renders ACCESS_DENIED as not available', async () => {
     const app = createTestApp({
       routes: {

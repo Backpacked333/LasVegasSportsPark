@@ -3,7 +3,8 @@
  * its lines at the product's price with the approved taxes and fees the API applied, its totals,
  * tenders and returns (`GET /v1/pos-sales/{id}`), and the commands its state allows:
  *
- * - open: add a line (only while `point_of_sale` is on), take a cash, external or card tender
+ * - open: add a line and change a line's quantity with − and + (only while `point_of_sale` is on),
+ *   take a cash, external or card tender
  *   (SaleForms; never gated, a tender settles an existing sale, DEC-016), void it with a reason
  *   while it holds no card tender (`POST /v1/pos-sales/{id}/void`, never gated);
  * - paid or partially returned: return lines within what was paid (ReturnForm), and the receipt.
@@ -12,9 +13,14 @@
  * leaves the sale open: the page says recovery is required, that the card must not be taken again,
  * and links to the payment attempt to reconcile from the provider's evidence (SPK-PAY-007). A card
  * payment still processing is "not paid yet", never success. Times are in the facility's zone.
+ *
+ * The ticket names the customer's household account: the open balance and credits from
+ * `GET /v1/people/{id}/money-summary` (protected; shown only to roles that read it), and lists the
+ * configured tax and fee lines the API applied (`charges`, approved `tax_fee` versions).
  */
 import type { Schema } from '@sportspark/api-client';
 import { Link } from 'react-router';
+import { usePermissions } from '../../../api/permissions';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiQuery } from '../../../api/useApiQuery';
 import { CommandError } from '../../../features/pos-access-accounting/CommandError';
@@ -43,10 +49,12 @@ import { Icon } from '../../../ui/Icon';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { POS_PATHS, SALE_QUERY_PREFIX } from './paths';
-import { AddLineForm, ReturnForm, TenderForm } from './SaleForms';
+import { AddLineForm, LineQuantity, ReturnForm, TenderForm } from './SaleForms';
 import './pos.css';
 
 type Sale = Schema<'PosSale'>;
+
+const READ_PERSON_MONEY = 'finance.read_person_money';
 
 export function SalePage() {
   const saleId = useRecordParam('saleId');
@@ -163,7 +171,8 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
             {sale.customerPersonId ? (
               <>
                 <PersonName id={sale.customerPersonId} fallback="Customer" />{' '}
-                <span className="caption">· customer account</span>
+                <span className="caption">· household account</span>
+                <HouseholdAccount personId={sale.customerPersonId} />
               </>
             ) : (
               <span className="caption">Walk-in sale, no customer named</span>
@@ -176,7 +185,11 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
           ) : (
             sale.lines.map((line) => (
               <li key={line.id}>
-                <span className="pos-qty">{line.quantity}×</span>
+                {selling ? (
+                  <LineQuantity sale={sale} line={line} onReload={onReload} />
+                ) : (
+                  <span className="pos-qty">{line.quantity}×</span>
+                )}
                 <span className="pos-ticket-name">{line.name}</span>
                 <span className="pos-ticket-amount">{formatMoney(line.lineTotalMinor, c)}</span>
               </li>
@@ -184,6 +197,16 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
           )}
         </ul>
         <div className="pos-ticket-totals">
+          {(sale.charges ?? []).length > 0 ? (
+            <ul className="pos-ticket-charges" aria-label="Taxes and fees on this ticket">
+              {(sale.charges ?? []).map((charge) => (
+                <li key={`${charge.kind}:${charge.code}:${charge.label}`}>
+                  <span>{charge.label}</span>
+                  <span>{formatMoney(charge.amountMinor, c)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <Facts
             label="Sale totals"
             items={[
@@ -222,6 +245,34 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
         </div>
       </aside>
     </div>
+  );
+}
+
+/**
+ * The customer's household account on the ticket: open balance and available credits per currency
+ * (finance.read_person_money, protected). Roles that do not read it see only the name; a failed or
+ * refused read shows nothing more (never a zero balance it did not read).
+ */
+function HouseholdAccount({ personId }: { personId: string }) {
+  const permissions = usePermissions();
+  const permitted = permissions.isPermitted(READ_PERSON_MONEY) === true;
+  const money = useApiQuery({
+    path: '/people/{id}/money-summary',
+    request: { path: { id: personId } },
+    enabled: permitted,
+  });
+  if (!permitted || !money.data) return null;
+  const balance = money.data.accountBalance;
+  const credits = money.data.creditsAvailable;
+  return (
+    <span className="pos-ticket-account" data-testid="pos-household-account">
+      {balance.length === 0
+        ? 'Nothing owed'
+        : `Owes ${balance.map((b) => formatMoney(b.amountMinor, b.currency)).join(' + ')}`}
+      {credits.length > 0
+        ? ` · credit ${credits.map((b) => formatMoney(b.amountMinor, b.currency)).join(' + ')}`
+        : ''}
+    </span>
   );
 }
 

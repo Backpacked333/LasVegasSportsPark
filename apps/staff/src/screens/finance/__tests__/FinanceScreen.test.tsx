@@ -5,12 +5,15 @@
  * reconciliation uses the currency the loaded records carry (amounts are never added across
  * currencies).
  */
-import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { render, screen, within } from '@testing-library/react';
+import { fakePermissions, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { createTestApp } from '../../../testing/test-app';
 import {
+  ADULT_ID,
   CHECKOUT_ID,
+  OBLIGATION_ID,
   PAYMENT_ID,
   exception,
   nameRoutes,
@@ -95,6 +98,62 @@ describe('Finance overview', () => {
     // The reconciliation card reads the month in the records' currency.
     expect(await screen.findByRole('progressbar', { name: 'Settlements balanced' })).toBeVisible();
     expect(screen.getByRole('region', { name: 'Reconciliation' })).toHaveTextContent('USD');
+  });
+
+  it('SPK-COMMS-002: a finance operator reminds the debtor of a past-due obligation; a recent reminder is shown, not repeated', async () => {
+    const reminders: unknown[] = [];
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': {
+          status: 200,
+          body: fakePermissions({ actions: ['finance.send_payment_reminder'] }),
+        },
+        'GET /obligations': ok({
+          items: [
+            obligation({ dueAt: '2026-10-01T00:00:00.000Z' }),
+            obligation({
+              id: '0192f1a0-0000-7000-8000-00000000a0b2',
+              description: 'Winter league team fee',
+              dueAt: '2026-10-02T00:00:00.000Z',
+              lastReminderAt: '2026-10-24T11:00:00.000Z',
+            }),
+          ],
+          nextCursor: null,
+        }),
+        'POST /obligations/{id}/reminders': (request) => {
+          reminders.push(request.path);
+          return fakeResponse(201, {
+            id: '0192f1a0-0000-7000-8000-00000000a0c1',
+            obligationId: OBLIGATION_ID,
+            recipientPersonId: ADULT_ID,
+            remainingMinor: 7500,
+            currency: 'USD',
+            dueAt: '2026-10-01T00:00:00.000Z',
+            reason: null,
+            requestedByPersonId: null,
+            requestedAt: '2026-10-24T12:00:00.000Z',
+          });
+        },
+      }),
+    });
+    render(app.at('/finance'));
+    const table = await screen.findByRole('table', { name: 'Past-due obligations' });
+    // The fee reminded an hour ago shows as reminded; only the other one can be reminded.
+    expect(within(table).getByText('Reminded')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Remind all 1' })).toBeInTheDocument();
+    await userEvent.click(
+      within(table).getByRole('button', { name: 'Remind about Spring academy U10 installments' }),
+    );
+    await waitFor(() => expect(reminders).toHaveLength(1));
+    expect(await within(table).findAllByText('Reminded')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /Remind all/ })).toBeNull();
+  });
+
+  it('without the reminder action, past-due rows offer no reminder', async () => {
+    render(createTestApp({ routes: routes() }).at('/finance'));
+    const table = await screen.findByRole('table', { name: 'Past-due obligations' });
+    expect(within(table).queryByRole('button', { name: /Remind/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Remind all/ })).toBeNull();
   });
 
   it('says plainly when there is nothing to reconcile and no money recorded', async () => {

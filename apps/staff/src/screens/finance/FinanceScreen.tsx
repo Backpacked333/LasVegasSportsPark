@@ -11,7 +11,10 @@
  *   is pinned first in the finance operator's exceptions (`GET /v1/exceptions`), with its owner;
  * - unknown provider outcomes (`GET /v1/payments?status=unknown`, `GET /v1/refunds?status=unknown`)
  *   are listed explicitly, never shown as paid or failed (SPK-PAY-007);
- * - open obligations past their due date (`GET /v1/obligations?status=open`);
+ * - open obligations past their due date (`GET /v1/obligations?status=open`), each with "Remind"
+ *   and a "Remind all" for the ones not reminded in the last day (`POST
+ *   /v1/obligations/{id}/reminders`, finance.send_payment_reminder; an essential payment notice
+ *   whose channels stay pending DEC-062);
  * - refunds still in flight and the month's reconciliation (`GET /v1/finance/reconciliation-report`)
  *   on the side, in the currency the loaded records carry.
  *
@@ -19,7 +22,10 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { formatAge } from '@sportspark/api-client';
+import { useState } from 'react';
 import { Link } from 'react-router';
+import { usePermissions } from '../../api/permissions';
+import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages, type ApiPagesResult } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { dateToInstant, formatMoney, humanize } from '../../features/registration-finance/format';
@@ -286,6 +292,43 @@ function UnknownOutcomesCard({
   );
 }
 
+const REMINDER_ACTION = 'finance.send_payment_reminder';
+/** The API refuses a second reminder within a day (engineering placeholder, DEC-062). */
+const REMINDER_INTERVAL_MS = 24 * 3_600_000;
+
+function remindedRecently(o: Schema<'Obligation'>, now: Date): boolean {
+  return (
+    !!o.lastReminderAt &&
+    now.getTime() - new Date(o.lastReminderAt).getTime() < REMINDER_INTERVAL_MS
+  );
+}
+
+/** One reminder command for the card: rows and "Remind all" send through it, one at a time. */
+function useReminders() {
+  const remind = useApiCommand('post', '/obligations/{id}/reminders', {
+    invalidate: [['api', '/obligations']],
+  });
+  const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
+  const [failed, setFailed] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const send = async (ids: readonly string[]) => {
+    setFailed(null);
+    for (const id of ids) {
+      setBusy(id);
+      try {
+        await remind.submit({ path: { id }, body: {} });
+        setSent((prev) => new Set([...prev, id]));
+      } catch (error) {
+        const code = (error as { code?: string }).code ?? 'UNKNOWN';
+        setFailed(`A reminder could not be sent (${code}).`);
+        break;
+      }
+    }
+    setBusy(null);
+  };
+  return { send, sent, failed, busy };
+}
+
 function PastDueCard({
   obligations,
   now,
@@ -293,15 +336,35 @@ function PastDueCard({
   obligations: ApiPagesResult<Schema<'Obligation'>>;
   now: Date;
 }) {
+  const permissions = usePermissions();
+  const canRemind = permissions.isPermitted(REMINDER_ACTION) === true;
+  const reminders = useReminders();
+  const due = pastDue(obligations.data ?? [], now).slice(0, 8);
+  const toRemind = due.filter((o) => !remindedRecently(o, now) && !reminders.sent.has(o.id));
   return (
     <section className="card card-flush fin-card" aria-labelledby="fin-pastdue-title">
       <div className="card-head">
         <h3 id="fin-pastdue-title">Past due</h3>
+        {canRemind && toRemind.length > 0 ? (
+          <button
+            type="button"
+            className="button button-secondary button-sm"
+            disabled={reminders.busy !== null}
+            onClick={() => void reminders.send(toRemind.map((o) => o.id))}
+          >
+            Remind all {toRemind.length}
+          </button>
+        ) : null}
         <Link to="/finance/obligations" className="fin-head-link">
           All obligations <Icon name="chevron_right" size={18} />
         </Link>
       </div>
       <div className="fin-body">
+        {reminders.failed ? (
+          <p className="notice" role="alert">
+            {reminders.failed}
+          </p>
+        ) : null}
         <QueryBoundary
           query={obligations}
           label="open obligations"
@@ -316,7 +379,11 @@ function PastDueCard({
           {(items) => {
             const late = pastDue(items, now);
             return (
-              <div className="fin-table" role="table" aria-label="Past-due obligations">
+              <div
+                className="fin-table fin-table-remind"
+                role="table"
+                aria-label="Past-due obligations"
+              >
                 <div className="fin-table-head" role="row">
                   <span role="columnheader">Account</span>
                   <span role="columnheader">For</span>
@@ -324,32 +391,54 @@ function PastDueCard({
                     Remaining
                   </span>
                   <span role="columnheader">Late</span>
+                  <span role="columnheader">Reminder</span>
                 </div>
-                {late.slice(0, 8).map((o) => (
-                  <Link
-                    key={o.id}
-                    to={`/finance/obligations/${o.id}`}
-                    className="fin-table-row"
-                    role="row"
-                  >
-                    <span role="cell" className="row-title">
-                      <Debtor obligation={o} />
-                    </span>
-                    <span role="cell" className="caption">
-                      {o.description}
-                    </span>
-                    <span role="cell" className="num fin-amount">
-                      {formatMoney(o.totals.remainingMinor, o.totals.currency)}
-                    </span>
-                    <span role="cell" className="fin-late">
-                      {formatAge(new Date(o.dueAt), now)}
-                    </span>
-                  </Link>
-                ))}
+                {late.slice(0, 8).map((o) => {
+                  const recent = remindedRecently(o, now) || reminders.sent.has(o.id);
+                  return (
+                    <div key={o.id} className="fin-table-row" role="row">
+                      <span role="cell" className="row-title">
+                        <Link to={`/finance/obligations/${o.id}`}>
+                          <Debtor obligation={o} />
+                        </Link>
+                      </span>
+                      <span role="cell" className="caption">
+                        {o.description}
+                      </span>
+                      <span role="cell" className="num fin-amount">
+                        {formatMoney(o.totals.remainingMinor, o.totals.currency)}
+                      </span>
+                      <span role="cell" className="fin-late">
+                        {formatAge(new Date(o.dueAt), now)}
+                      </span>
+                      <span role="cell" className="fin-remind">
+                        {recent ? (
+                          <StatusBadge tone="success" label="Reminded" />
+                        ) : canRemind ? (
+                          <button
+                            type="button"
+                            className="button button-secondary button-sm"
+                            aria-label={`Remind about ${o.description}`}
+                            disabled={reminders.busy !== null}
+                            onClick={() => void reminders.send([o.id])}
+                          >
+                            {reminders.busy === o.id ? 'Sending…' : 'Remind'}
+                          </button>
+                        ) : (
+                          <span className="caption">—</span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             );
           }}
         </QueryBoundary>
+        <p className="caption fin-remind-note">
+          A reminder is an essential payment notice; which channels carry it is pending the
+          operator&apos;s channel approval (DEC-062).
+        </p>
       </div>
     </section>
   );
