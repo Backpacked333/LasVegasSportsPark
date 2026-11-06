@@ -531,3 +531,75 @@
   font-stretch: 100%;
   font-weight: 500;
 }
+
+/* Detail rail extras: teams, staff, attendees, readiness (GET /v1/events/{id}/detail) */
+.tl-extras {
+  border-top: 1px solid var(--line-soft);
+}
+.tl-extras-note {
+  padding: 8px 16px 0;
+}
+.tl-staff {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tl-readiness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.tl-check {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tl-check[data-status='blocked'] {
+  color: var(--tone-danger);
+}
+.tl-check[data-status='warning'] {
+  color: var(--tone-warning);
+}
+.tl-check[data-status='ready'] {
+  color: var(--tone-success);
+}
+.tl-message {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tl-composer {
+  width: 100%;
+  padding-top: 8px;
+}
+.tl-direct-actions {
+  border-top: 0;
+  padding-top: 0;
+}
+.tl-direct-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+.tl-direct-form input {
+  min-width: 0;
+}
+.day-summary {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

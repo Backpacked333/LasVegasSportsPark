@@ -23,6 +23,11 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
+import {
+  daySummaryParts,
+  useFacilityDaySummary,
+} from '../../features/schedule-facilities/DaySummary';
+import { kindTokenOf, sportLabel } from '../../features/schedule-facilities/sport';
 import { facilityLabel } from '../../layout/FacilitySwitcher';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -370,9 +375,10 @@ function ActivitiesSection({ facility, now }: { facility: TodayFacility; now: Da
                         <span className="caption">
                           {formatTimeRange(e.scheduledStart, e.scheduledEnd, facility.timezone)} ·{' '}
                           {e.kind}
+                          {e.sport ? ` · ${sportLabel(e.sport)}` : ''}
                         </span>
                       </div>
-                      <span className="kind-tag" data-kind={EVENT_KIND_CLASS[e.kind]}>
+                      <span className="kind-tag" data-kind={kindTokenOf(e)}>
                         <span className="kind-swatch" aria-hidden="true" />
                         {e.kind}
                       </span>
@@ -569,9 +575,27 @@ function FacilityToday({ facility, now }: { facility: TodayFacility; now: Date }
             : 'Activity counts are not available to you.'}
         </p>
       </div>
+      <FacilityDayCounts facilityId={facility.facilityId} date={facility.localDate} />
       <FieldStatusSection facility={facility} now={now} />
       <ActivitiesSection facility={facility} now={now} />
     </section>
+  );
+}
+
+/**
+ * Restriction, closure and open-task counts for the facility's local day
+ * (`GET /v1/facilities/{id}/day-summary`); sections the viewer may not read are left out, and
+ * nothing is shown until it has loaded.
+ */
+function FacilityDayCounts({ facilityId, date }: { facilityId: string; date: string }) {
+  const summary = useFacilityDaySummary(facilityId, date);
+  if (!summary.data) return null;
+  const parts = daySummaryParts(summary.data, { activities: false, tasks: true });
+  if (parts.length === 0) return null;
+  return (
+    <p className="caption facility-day-counts" data-testid={`day-counts-${facilityId}`}>
+      {parts.join(' · ')}
+    </p>
   );
 }
 

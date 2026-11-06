@@ -188,3 +188,62 @@
   flex: 1;
   font-weight: 600;
 }
+
+/* Release checks of the restriction itself (migration 0909): confirmed by staff, who and when kept */
+.checklist-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.checklist-editor h5 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.checklist-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.checklist-items > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.checklist-items > li[data-state='met'] .release-mark {
+  background: var(--pitch);
+  border-color: var(--pitch);
+  color: #fff;
+}
+.checklist-label {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.checklist-reason,
+.checklist-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+.checklist-reason label,
+.checklist-add label {
+  width: 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+.checklist-reason input,
+.checklist-add input {
+  flex: 1 1 200px;
+  min-width: 0;
+}

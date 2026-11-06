@@ -43,7 +43,7 @@ import { OPERATION_BADGE, RESTRICTION_BADGE } from '../../features/schedule-faci
 import { formatInstant, formatRange } from '../../features/schedule-facilities/time';
 import { useFacilityNames } from './maintenance-shared';
 import { RESTRICTION_INVALIDATES } from './RestrictionsScreen';
-import { ReleaseChecklist } from './ReleaseReadiness';
+import { ChecklistItemsEditor, ReleaseChecklist } from './ReleaseReadiness';
 
 type Restriction = Schema<'Restriction'>;
 type ResolutionMode = 'cancel_affected' | 'leave_for_resolution';
@@ -473,6 +473,7 @@ function Actions({
           The checklist is read from the task, its inspection and the closure; the API makes the
           final check when you release.
         </p>
+        <ChecklistItemsEditor restriction={restriction} facility={facility} />
       </div>
       <label htmlFor="release-reason">Reason for the release</label>
       <input

@@ -23,14 +23,16 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiQuery } from '../../../api/useApiQuery';
+import { useActionAllowed as useScheduleActionAllowed } from '../../../features/schedule-facilities/permission';
 import {
   addDaysToLocalDate,
+  localDateOf,
   localTimeOf,
   startOfLocalDay,
   weekdayOfLocalDate,
   zoneName,
 } from '../../../features/schedule-facilities/time';
-import { useApp } from '../../../providers/AppProviders';
+import { useApp, useNow } from '../../../providers/AppProviders';
 import { Button } from '../../../ui/Button';
 import { SelectField, TextField } from '../../../ui/FormFields';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
@@ -47,6 +49,7 @@ import {
 } from '../participation/permission';
 import { BOOKING_KEYS } from './BookingDecision';
 import { BookingTermsView } from './BookingTermsView';
+import { WeekAvailability } from './WeekAvailability';
 import { BOOKING_STATUS, KIND_CAPABILITY, KIND_PATH, KIND_WORDS, type BookingKind } from './labels';
 
 const BOOKABLE_STATES = new Set(['published', 'registration_open', 'registration_paused']);
@@ -131,9 +134,11 @@ function startLabels(starts: readonly string[], timeZone: string): Map<string, s
 
 export function NewBooking({ kind }: { kind: BookingKind }) {
   const { online, facilityId } = useApp();
+  const now = useNow();
   const words = KIND_WORDS[kind];
   const capabilityOn = useCapabilityOn(KIND_CAPABILITY[kind]);
   const allowed = useActionAllowed(ACTIONS.requestBooking, facilityId);
+  const mayReadSchedule = useScheduleActionAllowed('scheduling.read_schedule', facilityId);
   const offerings = useApiQuery({
     path: '/offerings',
     request: { query: { kind, view: 'staff', limit: 200, ...(facilityId ? { facilityId } : {}) } },
@@ -330,6 +335,22 @@ export function NewBooking({ kind }: { kind: BookingKind }) {
               hint="The facility's local date; free times are shown for that day."
               error={fieldError('date')}
             />
+            {offering && zone && mayReadSchedule ? (
+              <WeekAvailability
+                facilityId={offering.facilityId}
+                timeZone={zone}
+                fromDate={/^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateOf(now, zone)}
+                durationMinutes={
+                  kind === 'rental' && lengthValid && lengthMinutes ? lengthMinutes : 60
+                }
+                selectedDate={date}
+                onPickDate={(d) => {
+                  setDate(d);
+                  setStart('');
+                  setResourceIds([]);
+                }}
+              />
+            ) : null}
             {kind === 'rental' ? (
               <TextField
                 label="Length in minutes"

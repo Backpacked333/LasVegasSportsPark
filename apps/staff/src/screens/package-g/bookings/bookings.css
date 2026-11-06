@@ -129,3 +129,74 @@
 .slot-picker > .error-text {
   grid-column: 1 / -1;
 }
+
+/* Week grid of free blocks by space type (GET /v1/resource-availability) */
+.week-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.week-grid-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.week-grid-head h5 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.week-grid-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.week-grid-table {
+  border-collapse: separate;
+  border-spacing: 4px;
+  font-size: 12px;
+  min-width: 560px;
+}
+.week-grid-table th {
+  font-weight: 700;
+  color: var(--muted);
+  text-align: left;
+  white-space: nowrap;
+}
+.week-cell {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+button.week-cell {
+  border: 1px solid var(--tone-success-line, #cbe5d4);
+  background: var(--tone-success-bg);
+  color: var(--pitch);
+  cursor: pointer;
+}
+button.week-cell[aria-pressed='true'] {
+  background: var(--pitch);
+  color: #fff;
+}
+span.week-cell {
+  border: 1px solid var(--line);
+  color: var(--faint);
+  background: repeating-linear-gradient(135deg, var(--sand-2) 0 5px, var(--card) 5px 10px);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

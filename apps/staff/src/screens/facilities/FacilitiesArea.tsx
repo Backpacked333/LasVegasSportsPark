@@ -5,6 +5,7 @@
 import { Link, Navigate, Route, Routes } from 'react-router';
 import { Icon } from '../../ui/Icon';
 import { PageHeader } from '../../ui/Page';
+import { DaySummaryLine } from '../../features/schedule-facilities/DaySummary';
 import { SubNav } from '../../features/schedule-facilities/SubNav';
 import '../../features/schedule-facilities/schedule-facilities.css';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
@@ -22,7 +23,12 @@ export function FacilitiesArea() {
   return (
     <section aria-labelledby="area-facilities" className="area-stack">
       <PageHeader
-        eyebrow="Operate · Restrictions, work orders and assets"
+        eyebrow={
+          <>
+            Operate · Restrictions, work orders and assets
+            <DaySummaryLine include={{ activities: false, tasks: true }} />
+          </>
+        }
         title="Facilities and maintenance"
         titleId="area-facilities"
         actions={

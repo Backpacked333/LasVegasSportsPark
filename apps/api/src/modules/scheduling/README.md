@@ -57,6 +57,9 @@ Every table carries `organization_id`; references use composite `(organization_i
 | POST/GET/PATCH  | `/schedule-drafts[/{id}]`                     | `scheduling.manage_drafts`                                                                 |
 | POST            | `/schedule-drafts/{id}/validate`, `/discard`  | `scheduling.manage_drafts`                                                                 |
 | POST            | `/schedule-drafts/{id}/publish`               | `scheduling.publish_schedule`                                                              |
+| POST            | `/events/{id}/move`, `/events/{id}/cancel`    | `scheduling.manage_drafts` + `publish_schedule`; single-change draft published at once     |
+| GET             | `/events/{id}/detail`                         | `scheduling.read_event_detail` (staff; protected NOT_FOUND)                                |
+| GET             | `/resource-availability`                      | `scheduling.read_schedule`; at most 14 days, 40 resources                                  |
 
 Every POST/PATCH/DELETE is `@Idempotent()` and validated with zod; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Publication records its outcome as an
@@ -349,6 +352,44 @@ financial adjustment of an affected obligation stays a staff resolution (DEC-003
   (`__tests__/event-import.spec.ts` "R2-TENANCY-INPUT-02"). There is no direct event-creation
   route: the events controller serves only `GET /v1/events`, `GET /v1/events/{id}`,
   `GET /v1/reservations` and `GET /v1/resources/{id}/availability`.
+
+### Staff timeline gaps (park UI redesign, docs/design/park-ui-redesign.md "Operate") — verified
+
+Verified by `__tests__/timeline-commands.spec.ts`.
+
+- **Sport on events** (migration `0304_scheduling_event_sport.sql`, SPK-SCHED-001 "compatible
+  activity formats"): `events.sport` and `event_series.sport` (slug, checked by the database),
+  `resources.compatible_sports` (empty supports every sport). The port's `createEvent`, series
+  (HTTP and port) and draft changes (`proposed.sport`) accept a sport; a sport outside the
+  facility's vocabulary is `VALIDATION_FAILED details.code unknown_sport` (drafts: an
+  `unknown_sport` issue), a space that lists other sports reports an `incompatible_sport`
+  conflict. **Proposed (engineering placeholder only):** the vocabulary `DEFAULT_SPORTS`
+  (`soccer, indoor_soccer, futsal, basketball, other`) in `scheduling.policy.ts`, replaceable per
+  facility through `settings.scheduling.sports`, pending the operator's list of offered sports.
+- **Direct move and cancel** (`POST /v1/events/{id}/move`, `/cancel`; SPK-SCHED-005/006,
+  SPK-COMMS-005): `ScheduleDraftsService.publishDirect` writes a single-change draft and runs the
+  same publication steps (`commitPublication`) in one transaction. It needs both
+  `scheduling.manage_drafts` and `scheduling.publish_schedule`, the event's `expectedRevision`,
+  and a published event; the answer is `{ event, publication }`. A refusal leaves no draft; one
+  that reached the publication steps is recorded as a failed `scheduling.publish_schedule`
+  operation, like `publish`. Audit: `scheduling.event_moved_directly` / `_canceled_directly`.
+- **Event detail** (`GET /v1/events/{id}/detail`, action `scheduling.read_event_detail`, staff
+  only, protected NOT_FOUND otherwise): the event, its team commitments named through
+  competition's `TEAM_ENTRY_QUERY_PORT` with effective roster sizes (`ROSTER_PORT`), the live staff
+  assignments the workforce closure-impact contributor answers, named through identity's
+  `PERSON_DIRECTORY_PORT` (names only), attendee counts by source from the contributors (no
+  names), the fixture id for readiness, and the `messageAudience` (team entry ids and participant
+  ids) for the communications compose command. Ports are resolved lazily by token
+  (`ScheduleInsightsService`); competition, workforce and identity depend on scheduling, so their
+  services are never imported. **Not composed here:** fixture readiness, which is
+  `ReadinessService` (competition depends on scheduling); the staff UI reads
+  `GET /v1/fixtures/{id}/readiness` with the returned fixture id.
+- **Window counts** (`ScheduleInsightsService.windowSummary`, `scheduling.read_schedule`):
+  activities by status, kind and sport and active/pending closures overlapping a window; used by
+  facilities' `GET /v1/facilities/{id}/day-summary`.
+- **Cross-resource availability** (`GET /v1/resource-availability`, `scheduling.read_schedule`):
+  free starts per non-closed resource of a facility (optional `resourceKind`, `sport`), each
+  computed by `findAvailableSlots`; at most 14 days and 40 resources, default step 60 minutes.
 
 ## Known gaps / pending decisions
 

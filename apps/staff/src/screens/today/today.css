@@ -302,3 +302,8 @@
 .assistant h3 {
   color: var(--tone-pending);
 }
+
+/* Facility-local day counts from GET /v1/facilities/{id}/day-summary */
+.facility-day-counts {
+  margin: 0;
+}

@@ -15,7 +15,9 @@ import {
   EVENT_KIND_LABEL,
   eventBadge,
 } from '../../features/schedule-facilities/labels';
+import { kindTokenOf, sportLabel } from '../../features/schedule-facilities/sport';
 import { formatRange, occupiedRange } from '../../features/schedule-facilities/time';
+import { DirectChange, EventFacts, MessageAttendees } from './EventDetailExtras';
 import { KIND_TOKEN, type Selection } from './ResourceTimeline';
 
 type Resource = Schema<'Resource'>;
@@ -47,10 +49,11 @@ function EventDetail({
   const hasBuffers = event.setupMinutes > 0 || event.cleanupMinutes > 0;
   return (
     <>
-      <div className="tl-detail-head" data-kind={KIND_TOKEN[event.kind]}>
+      <div className="tl-detail-head" data-kind={kindTokenOf(event)}>
         <span className="tl-detail-kind">
           <span className="kind-swatch" aria-hidden="true" />
           {EVENT_KIND_LABEL[event.kind]}
+          {event.sport ? ` · ${sportLabel(event.sport)}` : ''}
         </span>
         <h4 className="tl-detail-title">{event.title}</h4>
         <span className="caption">
@@ -110,12 +113,15 @@ function EventDetail({
           </>
         ) : null}
       </dl>
+      <EventFacts event={event} />
       <div className="tl-detail-actions">
         <Link className="button button-secondary button-sm" to="/schedule/drafts">
           <Icon name="edit_calendar" size={17} />
           {event.status === 'draft' ? 'Review in drafts' : 'Change in a draft'}
         </Link>
+        <MessageAttendees event={event} />
       </div>
+      <DirectChange key={`${event.id}:${event.revision}`} event={event} timezone={timezone} />
     </>
   );
 }

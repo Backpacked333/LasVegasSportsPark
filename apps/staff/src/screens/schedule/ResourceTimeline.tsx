@@ -12,6 +12,7 @@
  * ("Bookings by space") carries the same information.
  */
 import type { Schema } from '@sportspark/api-client';
+import { KIND_TOKEN, kindTokenOf, sportLabel } from '../../features/schedule-facilities/sport';
 import { Fragment, type CSSProperties } from 'react';
 import { sharesSpace } from '../../features/schedule-facilities/inventory';
 import {
@@ -36,17 +37,7 @@ type Event = Schema<'Event'>;
 type Closure = Schema<'Closure'>;
 type EventKind = Event['kind'];
 
-/** Activity kinds share one colour family across Today and the schedule (`--kind-*` tokens). */
-export const KIND_TOKEN: Record<EventKind, string> = {
-  game: 'league',
-  practice: 'league',
-  session: 'program',
-  rental: 'rental',
-  party: 'party',
-  pickup: 'dropin',
-  maintenance: 'dropin',
-  block: 'dropin',
-};
+export { KIND_TOKEN };
 
 export const KIND_ORDER: readonly EventKind[] = [
   'game',
@@ -361,12 +352,12 @@ export function ResourceTimeline({
                               <button
                                 type="button"
                                 className="tl-block tl-event"
-                                data-kind={KIND_TOKEN[e.kind]}
+                                data-kind={kindTokenOf(e)}
                                 data-status={e.status}
                                 data-dim={hiddenKinds.has(e.kind) || undefined}
                                 style={style}
                                 aria-pressed={key === k}
-                                aria-label={`${e.title}, ${EVENT_KIND_LABEL[e.kind]}, ${formatRange(e.scheduledStart, e.scheduledEnd, tz)}, ${badge.label}`}
+                                aria-label={`${e.title}, ${EVENT_KIND_LABEL[e.kind]}${e.sport ? `, ${sportLabel(e.sport)}` : ''}, ${formatRange(e.scheduledStart, e.scheduledEnd, tz)}, ${badge.label}`}
                                 onClick={() =>
                                   onSelect(key === k ? null : { type: 'event', id: e.id })
                                 }

@@ -55,20 +55,37 @@ Home, facility pass, discover, offering detail and registration start, family sc
 and book-a-space all use the new heroes, cards, pills and time tiles. Fonts are verified by tests only, not
 yet on a device.
 
+### API gaps closed for Operate (scheduling and facilities)
+
+**Verified** by `apps/api/src/modules/scheduling/__tests__/timeline-commands.spec.ts`,
+`apps/api/src/modules/facilities/__tests__/release-checklist.spec.ts` and the staff tests
+`TimelineExtras`, `ReleaseChecks`, `TodayDayCounts` and `WeekAvailability`:
+
+- Sport on events and series (migration 0304); basketball league play has its own kind colour on
+  Today and the schedule, and the sport is written as text. The sport list is **proposed
+  (engineering placeholder only)** until the operator names the sports offered.
+- The timeline detail rail reads `GET /v1/events/{id}/detail` (teams with roster sizes, staff by
+  name, attendee counts) and, for a fixture, competition's readiness by check.
+- "Move now" and "Cancel event" publish a single-change draft at once
+  (`POST /v1/events/{id}/move`, `/cancel`) with every publication check and notice; "Message
+  attendees" opens the communications composer with the event's audience (channel policy pending
+  DEC-012, DEC-062).
+- Page headers on Schedule and Facilities and each facility on Today show the facility-local day
+  counts (`GET /v1/facilities/{id}/day-summary`); sections a role may not read are left out.
+- Restrictions carry their own release checks (confirm, reopen, remove; a release is refused while
+  one is open) and the task owner's name (migration 0909).
+- The new-booking form has a week grid of free blocks by space type
+  (`GET /v1/resource-availability`). Prices are still not in the API.
+
 ## Proposed: design elements that need API work
 
 Each item names what the API would have to provide. None of these is shown with invented data today.
 
 ### Operate
 
-- **Sport on events**, so basketball gets its own kind colour on Today and in the schedule.
-- **Event detail extras** (teams, officials, readiness and attendee counts on the event read) for the
-  timeline detail rail.
-- **Direct move, cancel and message-attendees commands** from the timeline. Today these go through
-  schedule drafts.
-- **Facility-scoped day summary** for page-header counts ("41 activities · 1 restriction").
+- **Season context on the event detail** ("Fall 2026 Adult Indoor · Div B · Wk 7"), and readiness
+  composed into the event read itself (today the rail reads competition's readiness separately).
 - **Live counts in the sidebar** (open issues, approvals waiting). There is no cheap summary read for these.
-- **Per-restriction checklist items** and the task owner's name on the release panel.
 - **Arrival**: care and medical notes on a scan result (protected, with access rules); session location
   and coach; session capacity; waiver commands ("send link", "sign on this tablet", "override with
   reason"); camera scanning.
@@ -91,7 +108,8 @@ Each item names what the API would have to provide. None of these is shown with 
 - **Organization-wide waitlist list** for the registrations home.
 - **Protected care notes, account balance, make-up credits and "paid this year"** on the person record,
   plus waiver/form status and recent attendance.
-- **Booking prices and cross-resource availability** (week grid by resource type).
+- **Booking prices** and prime/off-peak labels on the week grid (availability by resource type is
+  verified above).
 
 ### Business
 

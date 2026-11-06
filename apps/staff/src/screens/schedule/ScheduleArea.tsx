@@ -6,6 +6,7 @@
  * DEC-077; inventory section 5: "no answer yet keeps them in the inventory").
  */
 import { Navigate, Route, Routes } from 'react-router';
+import { DaySummaryLine } from '../../features/schedule-facilities/DaySummary';
 import { SubNav } from '../../features/schedule-facilities/SubNav';
 import '../../features/schedule-facilities/schedule-facilities.css';
 import { PageHeader } from '../../ui/Page';
@@ -35,7 +36,12 @@ export function ScheduleArea() {
   return (
     <section aria-labelledby="area-schedule" className="area-stack">
       <PageHeader
-        eyebrow="Operate · Spaces, bookings and closures"
+        eyebrow={
+          <>
+            Operate · Spaces, bookings and closures
+            <DaySummaryLine />
+          </>
+        }
         title="Schedule"
         titleId="area-schedule"
       />
