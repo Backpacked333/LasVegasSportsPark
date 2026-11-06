@@ -28,6 +28,8 @@ import {
   type CaseStatus,
 } from './support';
 
+import { Icon } from '../../ui/Icon';
+import { PageHeader } from '../../ui/Page';
 export const CASES_PAGE_SIZE = 25;
 
 interface Filters {
@@ -134,16 +136,24 @@ export function SupportCasesScreen() {
     setCursors([undefined]);
   };
   return (
-    <section aria-labelledby="cases-title">
-      <h2 id="cases-title">Support cases</h2>
-      <p>
-        <Link to="/admin">Administration</Link> · <Link to="/admin/cases/new">Open a case</Link>
-      </p>
-      <p className="caption">
-        Staff help customers with their own permissions, never with customer credentials. A note is
-        history only: refunds, permission changes and transfers are their own commands.
-      </p>
-      <div className="actions-row" role="group" aria-label="Filter cases">
+    <section aria-labelledby="cases-title" className="ia-screen">
+      <PageHeader
+        eyebrow={
+          <>
+            Business · <Link to="/admin">Administration</Link> · Support
+          </>
+        }
+        title="Support cases"
+        titleId="cases-title"
+        intro="Staff help customers with their own permissions, never with customer credentials. A note is history only: refunds, permission changes and transfers are their own commands."
+        actions={
+          <Link className="button button-primary" to="/admin/cases/new">
+            <Icon name="add" size={18} />
+            Open a case
+          </Link>
+        }
+      />
+      <div className="actions-row ia-filter-card" role="group" aria-label="Filter cases">
         <SelectField
           label="Status"
           placeholder="Any status"

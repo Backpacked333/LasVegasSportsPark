@@ -53,6 +53,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type Report = Schema<'ReconciliationReport'>;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -638,7 +639,11 @@ export function ReconciliationScreen() {
   });
   return (
     <section aria-labelledby="reconciliation-title">
-      <h2 id="reconciliation-title">Reconciliation</h2>
+      <PageHeader
+        eyebrow="Business · Finance"
+        title="Reconciliation"
+        titleId="reconciliation-title"
+      />
       <SectionNav label="Finance" links={FINANCE_LINKS} />
       <div className="rf-grid">
         <TextField label="From (UTC date)" type="date" value={from} onChange={setFrom} />

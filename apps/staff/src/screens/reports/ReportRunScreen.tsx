@@ -14,6 +14,7 @@ import { POINT_IN_TIME_LABELS, reportTitle } from '../../features/insight-admin/
 import { ReportsNav } from '../../features/insight-admin/nav';
 import { ReportView } from '../../features/insight-admin/ReportView';
 
+import { PageHeader } from '../../ui/Page';
 export function ReportRunScreen() {
   const { runId = '' } = useParams();
   const run = useApiQuery({
@@ -23,7 +24,7 @@ export function ReportRunScreen() {
   });
   return (
     <section aria-labelledby="run-title" className="ia-screen">
-      <h2 id="run-title">Stored report run</h2>
+      <PageHeader eyebrow="Business · Reports" title="Stored report run" titleId="run-title" />
       <ReportsNav />
       <InsightQueryBoundary
         query={run}

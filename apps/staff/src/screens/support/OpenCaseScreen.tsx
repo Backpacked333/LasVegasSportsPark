@@ -24,6 +24,7 @@ import {
   type CasePriority,
 } from './support';
 
+import { PageHeader } from '../../ui/Page';
 export function OpenCaseScreen() {
   const { online, facilityId } = useApp();
   const facilities = useFacilityDirectory();
@@ -76,8 +77,12 @@ export function OpenCaseScreen() {
   };
 
   return (
-    <section aria-labelledby="open-case-title">
-      <h2 id="open-case-title">Open a support case</h2>
+    <section aria-labelledby="open-case-title" className="ia-screen">
+      <PageHeader
+        eyebrow="Business · Administration · Support"
+        title="Open a support case"
+        titleId="open-case-title"
+      />
       <p>
         <Link to="/admin/cases">Back to support cases</Link>
       </p>

@@ -56,6 +56,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
+import { PageHeader } from '../../ui/Page';
 type Notification = Schema<'Notification'>;
 type Deliveries = Schema<'NotificationDeliveries'>;
 type Attempt = Schema<'DeliveryAttempt'>;
@@ -73,7 +74,11 @@ export function NotificationScreen() {
   const { notificationId = '' } = useParams();
   return (
     <section aria-labelledby="notification-title">
-      <h2 id="notification-title">Message</h2>
+      <PageHeader
+        eyebrow="Business · Communications"
+        title="Message"
+        titleId="notification-title"
+      />
       <AreaTabs label="Communications screens" tabs={COMMUNICATIONS_TABS} />
       <NotificationView notificationId={notificationId} backPath="/communications" />
     </section>

@@ -45,6 +45,7 @@ import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { CostInputsPanel } from './CostInputsPanel';
 
+import { PageHeader } from '../../ui/Page';
 interface Extras {
   includeBuffers: '' | 'true' | 'false';
   weighting: '' | 'conflict_units' | 'custom';
@@ -419,7 +420,11 @@ export function InsightReportsScreen() {
 
   return (
     <section aria-labelledby="insight-reports-title" className="ia-screen">
-      <h2 id="insight-reports-title">Utilization, economics, demand and retention</h2>
+      <PageHeader
+        eyebrow="Business · Reports"
+        title="Utilization, economics, demand and retention"
+        titleId="insight-reports-title"
+      />
       <ReportsNav />
       <PendingNote
         decisions={DECISIONS.benchmarkTargets.ids}

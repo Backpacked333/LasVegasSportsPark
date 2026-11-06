@@ -20,6 +20,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { inputZoneHint } from '../../ui/time';
 
+import { PageHeader } from '../../ui/Page';
 type ProviderEvent = Schema<'ProviderEvent'>;
 type ProviderEventStatus = Schema<'ProviderEventStatus'>;
 
@@ -122,7 +123,11 @@ export function ProviderEventsScreen() {
 
   return (
     <section aria-labelledby="provider-events-title" className="ia-screen">
-      <h2 id="provider-events-title">Provider events</h2>
+      <PageHeader
+        eyebrow="Business · Administration"
+        title="Provider events"
+        titleId="provider-events-title"
+      />
       <AdminNav />
       <p className="caption">
         Events received from payment, messaging and other providers, as the inbox recorded them.
