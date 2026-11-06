@@ -125,40 +125,56 @@ Still proposed from these areas: the session's coach on the arrival panel (workf
 session's location after it is created, and a binding multi-week quote without a basket (the binding
 quote stays finance's `POST /v1/registration-quotes`).
 
-## Proposed: design elements that need API work
+### API added for the redesign: identity, entry, finance, reporting and communications
 
-Each item names what the API would have to provide. None of these is shown with invented data today.
+**Verified** by the module tests named here and the staff screen tests beside each screen:
 
-### Operate
+- **Care and allergy notes** (identity, migration 0181; `identity/__tests__/care-notes.spec.ts`,
+  `entry/__tests__/scan-care-notes.spec.ts`): operational notes only (kinds `allergy` and
+  `care_instruction`; §1.7 excludes a medical assessment system). Protected, every read audited,
+  shown on the person record and on arrival scans to front desk, program managers and general managers.
+- **Sign a form on the desk tablet** at a "not cleared" scan, through catalog's existing
+  acknowledgment command, signed by the adult or a holder of `complete_forms`, never by staff
+  (SPK-REG-009).
+- **Camera scanning** in the browser through the native BarcodeDetector, falling back to the reader or
+  typed reference. Hardware stays pending DEC-023.
+- **Staff "last seen", access reviews and staff invitations** (identity, migration 0181;
+  `identity/__tests__/staff-access.spec.ts`).
+- **Field-side "report a problem"** and the workspace phone tab bar (facilities' existing command).
+- **Utilization heatmap and sales by product line** (reporting, migration 1309;
+  `reporting/__tests__/redesign-reports.spec.ts`).
+- **Payment reminders** for past-due obligations (finance, migration 0685; at most one a day, an
+  engineering placeholder until DEC-012/DEC-062).
+- **Organization default currency** (core, migration 0018), set on the admin overview by a system
+  administrator.
+- **Recipient counts by channel** while composing, and the **inbox unread count**.
+- **POS**: change a line's quantity (migration 0686), configured tax lines on the ticket, the customer's
+  household balance and credits.
+- **Person money summary** (balance, credits, paid this year) and **booking prices** from
+  `GET /v1/basket-prices/{id}`.
+- **Sidebar attention counts** from `GET /v1/me/attention` (exceptions, applications, unknown payment
+  outcomes, unsent notices, owned cases).
+- **Result reminders delivered**: communications composes one protected `result_reminder` notice to the
+  captains (migration 1012; `communications/__tests__/competition-notices.spec.ts`).
+- **Session coach** on the arrival screen's "Sessions now" from `GET /v1/assigned-staff`.
+- Every new write route carries its K-11 record-authority classification (MIG-00).
 
-- **Season context on the event detail** ("Fall 2026 Adult Indoor · Div B · Wk 7"), and readiness
-  composed into the event read itself (today the rail reads competition's readiness separately).
-- **Live counts in the sidebar** (open issues, approvals waiting). There is no cheap summary read for these.
-- **Arrival**: care and medical notes on a scan result (protected, with access rules); session location
-  and coach; session capacity; waiver commands ("send link", "sign on this tablet", "override with
-  reason"); camera scanning.
-- **Field-side "report a problem"** screen and a phone bottom tab bar for the workspace.
+## Proposed or pending: what the design still shows that is not built
 
-### Compete
+None of these is shown with invented data.
 
-- Delivery of result reminders through communications (see "Compete API gaps closed").
-
-### Grow
-
-- **Protected care notes, account balance, make-up credits and "paid this year"** on the person record,
-  plus waiver/form status and recent attendance.
-- **Booking prices** and prime/off-peak labels on the week grid (availability by resource type is
-  verified above).
-
-### Business
-
-- **Utilization by hour and weekday** (heatmap) and **revenue by product line**.
-- **Payment reminder command** for past-due obligations.
-- **Organization default currency.**
-- **Live recipient count with channel and opt-out breakdown** while composing. Channel policy is pending
-  DEC-012 and DEC-062.
-- **Account "last seen", access-review dates and staff invitations.**
-- **POS**: a household account on the ticket, a command to change line quantity, and configured tax lines.
+- **Event detail**: season context ("Fall 2026 · Div B · Wk 7"); readiness is read separately rather
+  than composed into the event read.
+- **Sidebar counts** for facilities, schedule, competition and workforce (no suitable list read yet).
+- **Waivers**: "send a form link" needs a messaging channel (pending DEC-012/DEC-062) and a link command
+  in catalog; a staff override has no approved policy (SPK-REG-009).
+- **Care notes for assigned coaches on activity days** (needs an assignment-scoped read through
+  workforce).
+- **Staff invitation delivery** by message: recorded with a one-time code to hand over until a channel is
+  approved.
+- **Make-up credits** on the person record (enrollment), and **registration refunds by product line**.
+- **POS "Account" tender**: no rule says how a sale is charged to an account.
+- **Booking**: prime and off-peak labels and prices on the week grid before a basket exists.
 
 ### Customer app
 
