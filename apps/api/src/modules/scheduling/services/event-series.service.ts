@@ -9,6 +9,7 @@ import {
   NonexistentTimePolicy,
   PartyCommitmentSchema,
   RecurrenceRuleSchema,
+  SportSlug,
   z,
   type ConflictDetail,
   type CreateEventSeriesBody,
@@ -56,6 +57,7 @@ const BufferMinutes = z
 const PortSeriesInput = z.object({
   kind: EventKind,
   title: z.string().min(1).max(200),
+  sport: SportSlug.optional(),
   facilityId: z.uuid(),
   resourceIds: z.array(z.uuid()).min(1).max(20),
   recurrence: RecurrenceRuleSchema.refine((r) => r.frequency === 'weekly', {
@@ -81,6 +83,7 @@ const PortSeriesInput = z.object({
 interface SeriesSpec {
   kind: EventKind;
   title: string;
+  sport?: string | null;
   resourceIds: string[];
   recurrence: RecurrenceRule;
   localStartTime: string;
@@ -158,6 +161,7 @@ export class EventSeriesService {
         spec: {
           kind: body.kind,
           title: body.title,
+          sport: body.sport ?? null,
           resourceIds: body.resourceIds,
           recurrence: body.recurrence,
           localStartTime: body.localStartTime,
@@ -220,6 +224,7 @@ export class EventSeriesService {
         spec: {
           kind: data.kind,
           title: data.title,
+          sport: data.sport ?? null,
           resourceIds: data.resourceIds,
           recurrence: data.recurrence,
           localStartTime: data.localStartTime,
@@ -358,6 +363,7 @@ export class EventSeriesService {
       facility.id,
       spec.resourceIds,
     );
+    this.writer.assertSport(facility, spec.sport);
     // SPK-SCHED-003: the reserved resources' turnover requirement is the minimum buffer
     const buffers = this.writer.effectiveBuffers(resources, spec);
     // R3-TIME-MONEY-04 (SPK-SCHED-007): a rule describing more occurrences than the series may
@@ -416,6 +422,7 @@ export class EventSeriesService {
       eventId: null,
       kind: spec.kind,
       format: null,
+      sport: spec.sport ?? null,
       scheduledStart: o.start,
       scheduledEnd: o.end,
       setupMinutes,
@@ -455,6 +462,7 @@ export class EventSeriesService {
         facility_id: facility.id,
         kind: spec.kind,
         title: spec.title,
+        sport: spec.sport ?? null,
         timezone: facility.timezone,
         recurrence: json(spec.recurrence),
         local_start_time: spec.localStartTime,
@@ -483,6 +491,7 @@ export class EventSeriesService {
         kind: spec.kind,
         title: spec.title,
         format: null,
+        sport: spec.sport ?? null,
         seriesId,
         occurrenceIndex: occurrence.occurrenceIndex,
         scheduledStart: occurrence.start,
@@ -963,6 +972,7 @@ export class EventSeriesService {
       facilityId: row.facility_id,
       kind: row.kind,
       title: row.title,
+      sport: row.sport ?? null,
       timezone: row.timezone,
       recurrence: RecurrenceRuleSchema.parse(row.recurrence),
       localStartTime: row.local_start_time.slice(0, 5),

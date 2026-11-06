@@ -12,6 +12,7 @@ export * from './services/closure-impact-contributors';
 export * from './services/event-series.service';
 export { EventImportService, IMPORT_SOURCE_TYPE } from './services/event-import.service';
 export * from './services/schedule-drafts.service';
+export { ScheduleInsightsService } from './services/schedule-insights.service';
 export { BOOKING_SOURCE_TYPE, EventWriter } from './services/event-writer';
 export {
   ConflictDetector,

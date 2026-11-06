@@ -17,15 +17,32 @@ export interface SchedulingPolicy {
   availabilityStepMinutes: number;
   /** Upper bound on occurrences a single series may materialize. */
   maxSeriesOccurrences: number;
+  /**
+   * The sports an event or series may name (migration 0304). Proposed (engineering placeholder
+   * only, pending the operator's list of offered sports, §6.6 "Actual facilities, spaces,
+   * subdivisions, hours"): the sports the specification's product description names. A facility
+   * may replace the list through `facilities.settings.scheduling.sports`.
+   */
+  sports: readonly string[];
 }
 
 export const SCHEDULING_POLICY = Symbol('SCHEDULING_POLICY');
+
+/** Proposed (engineering placeholder only): soccer, indoor soccer and basketball, plus other. */
+export const DEFAULT_SPORTS: readonly string[] = [
+  'soccer',
+  'indoor_soccer',
+  'futsal',
+  'basketball',
+  'other',
+];
 
 /** Proposed defaults (pending decision): teams and people rest 60 minutes, equipment needs no rest. */
 export const DEFAULT_SCHEDULING_POLICY: SchedulingPolicy = {
   requiredRestMinutes: { team: 60, person: 60, equipment: 0 },
   availabilityStepMinutes: 15,
   maxSeriesOccurrences: 366,
+  sports: DEFAULT_SPORTS,
 };
 
 /** Merges a facility's `settings.scheduling` overrides onto the policy. */
@@ -41,8 +58,16 @@ export function policyForFacility(
       ? value
       : base.requiredRestMinutes[key];
   };
+  const sports = scheduling['sports'];
+  const sportList =
+    Array.isArray(sports) &&
+    sports.length > 0 &&
+    sports.every((v) => typeof v === 'string' && /^[a-z][a-z0-9_]{0,39}$/.test(v))
+      ? (sports as string[])
+      : base.sports;
   return {
     ...base,
+    sports: sportList,
     requiredRestMinutes: {
       team: minutes('team'),
       person: minutes('person'),

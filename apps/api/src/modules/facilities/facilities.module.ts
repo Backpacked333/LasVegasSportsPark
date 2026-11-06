@@ -7,6 +7,7 @@ import { ClosureLiftGuards, ClosureLifted, SchedulingModule } from '../schedulin
 import { AssetsController } from './controllers/assets.controller';
 import { MaintenanceTasksController } from './controllers/maintenance-tasks.controller';
 import { PreventiveSchedulesController } from './controllers/preventive-schedules.controller';
+import { ReleaseChecklistController } from './controllers/release-checklist.controller';
 import { RestrictionsController } from './controllers/restrictions.controller';
 import { MaintenanceTaskDueReached } from './facilities.events';
 import { DEFAULT_FACILITIES_POLICY, FACILITIES_POLICY } from './facilities.policy';
@@ -22,8 +23,10 @@ import { AssetDirectoryService } from './services/asset-directory.service';
 import { AssetsService } from './services/assets.service';
 import { FacilitiesJobs } from './services/facilities-jobs';
 import { FacilitiesReader } from './services/facilities-reader';
+import { FacilityDaySummaryService } from './services/facility-day-summary.service';
 import { MaintenanceTasksService } from './services/maintenance-tasks.service';
 import { PreventiveSchedulesService } from './services/preventive-schedules.service';
+import { ReleaseChecklistService } from './services/release-checklist.service';
 import { RestrictionsService } from './services/restrictions.service';
 
 const providers: Provider[] = [
@@ -32,6 +35,8 @@ const providers: Provider[] = [
   AssetsService,
   MaintenanceTasksService,
   RestrictionsService,
+  ReleaseChecklistService,
+  FacilityDaySummaryService,
   PreventiveSchedulesService,
   AssetDirectoryService,
   // FAC-03 (SPK-UX-006) and R4-OPS-MODULES-02 (SPK-FAC-004): registers
@@ -71,11 +76,14 @@ const providers: Provider[] = [
     MaintenanceTasksController,
     RestrictionsController,
     PreventiveSchedulesController,
+    ReleaseChecklistController,
   ],
   exports: [
     AssetsService,
     MaintenanceTasksService,
     RestrictionsService,
+    ReleaseChecklistService,
+    FacilityDaySummaryService,
     PreventiveSchedulesService,
     MAINTENANCE_REPORT_PORT,
     OPERATING_STATUS_PORT,

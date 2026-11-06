@@ -76,6 +76,22 @@ export const SchedulingActions = defineActions({
     subjectPermission: 'view',
     requirements: ['SPK-SCHED-003', '§4.10'],
   },
+  readEventDetail: {
+    id: 'scheduling.read_event_detail',
+    description:
+      'View an event with its teams, staff assignments, attendee counts and message audience (staff only)',
+    staffRoles: [
+      'front_desk',
+      'league_manager',
+      'program_manager',
+      'scheduler',
+      'facilities_operator',
+      'general_manager',
+      'system_administrator',
+      'support_operator',
+    ],
+    requirements: ['SPK-SCHED-003', 'SPK-SCHED-009', '§4.14'],
+  },
   manageEvents: {
     id: 'scheduling.manage_events',
     description:

@@ -26,6 +26,8 @@ export interface CreateEventInput {
   kind: EventKind;
   title: string;
   format?: string | null;
+  /** The sport (migration 0304): one of the facility's sport vocabulary, supported by every resource. */
+  sport?: string | null;
   scheduledStart: string;
   scheduledEnd: string;
   /**
@@ -71,6 +73,8 @@ export interface CancelEventInput {
 export interface CreateEventSeriesInput {
   kind: EventKind;
   title: string;
+  /** Every occurrence's sport (migration 0304). */
+  sport?: string | null;
   facilityId: string;
   resourceIds: string[];
   /** Weekly recurrence (interval, byWeekday, startDate, count or until) in the facility zone. */

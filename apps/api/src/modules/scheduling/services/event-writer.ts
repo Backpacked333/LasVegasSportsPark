@@ -56,6 +56,8 @@ export interface NewEventData {
   kind: EventKind;
   title: string;
   format: string | null;
+  /** Sport slug (migration 0304), checked with `assertSport` before it is written; default null. */
+  sport?: string | null;
   seriesId?: string | null;
   occurrenceIndex?: number | null;
   scheduledStart: Date;
@@ -206,6 +208,24 @@ export class EventWriter {
     return policyForFacility(this.basePolicy, facility.settings);
   }
 
+  /**
+   * Migration 0304: a sport an event or series names is one of the facility's sport vocabulary
+   * (the policy's placeholder list or `settings.scheduling.sports`), refused as VALIDATION_FAILED
+   * `details.code = unknown_sport` otherwise. Whether each space supports it is a conflict
+   * (`incompatible_sport`, detection). Null or absent means not stated and is always accepted.
+   */
+  assertSport(facility: FacilityRow, sport: string | null | undefined, path = 'sport'): void {
+    if (sport === null || sport === undefined) return;
+    const sports = this.policyFor(facility).sports;
+    if (!sports.includes(sport)) {
+      throw errors.validation(`The sport ${sport} is not offered at this facility.`, {
+        code: 'unknown_sport',
+        path,
+        sports: [...sports],
+      });
+    }
+  }
+
   async loadEvent(
     db: Db,
     organizationId: string,
@@ -328,6 +348,7 @@ export class EventWriter {
         kind: data.kind,
         title: data.title,
         format: data.format,
+        sport: data.sport ?? null,
         series_id: data.seriesId ?? null,
         occurrence_index: data.occurrenceIndex ?? null,
         scheduled_start: data.scheduledStart,
@@ -674,6 +695,7 @@ export class EventWriter {
       eventId: event.id,
       kind: event.kind,
       format: event.format,
+      sport: event.sport,
       scheduledStart: new Date(event.scheduled_start),
       scheduledEnd: new Date(event.scheduled_end),
       setupMinutes: event.setup_minutes,
@@ -716,6 +738,7 @@ export class EventWriter {
       kind: event.kind,
       title: event.title,
       format: event.format,
+      sport: event.sport ?? null,
       seriesId: event.series_id,
       occurrenceIndex: event.occurrence_index,
       scheduledStart: new Date(event.scheduled_start).toISOString(),

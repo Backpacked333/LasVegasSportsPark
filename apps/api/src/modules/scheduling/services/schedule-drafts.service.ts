@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
+  DraftChangeInputSchema,
   errors,
   newId,
   PartyCommitmentSchema,
@@ -8,6 +9,9 @@ import {
   type AutosaveScheduleDraftBody,
   type CommandMeta,
   type CreateScheduleDraftBody,
+  type DirectCancelEventBody,
+  type DirectEventChange,
+  type DirectMoveEventBody,
   type DraftChange,
   type DraftChangeInput,
   type EventDetails,
@@ -67,6 +71,7 @@ interface ResolvedFields {
   kind: EventRow['kind'];
   title: string;
   format: string | null;
+  sport: string | null;
   scheduledStart: Date;
   scheduledEnd: Date;
   setupMinutes: number;
@@ -112,49 +117,62 @@ export class ScheduleDraftsService {
         organizationId,
         facilityId: facility.id,
       });
-      const id = newId();
-      const now = this.clock.now();
-      await trx
-        .insertInto('schedule_drafts')
-        .values({
-          id,
-          organization_id: organizationId,
-          facility_id: facility.id,
-          name: body.name,
-          base_revision: json({ capturedAt: now.toISOString(), eventRevisions: {} }),
-          author: json(this.writer.snapshotActor(principal)),
-          last_saved_at: now,
-          validation_results: null,
-          validated_at: null,
-          published_at: null,
-          publication_group_id: null,
-        })
-        .execute();
-      const eventRevisions = await this.replaceChanges(
-        trx,
-        organizationId,
-        facility.id,
-        id,
-        body.changes ?? [],
-      );
-      await trx
-        .updateTable('schedule_drafts')
-        .set({ base_revision: json({ capturedAt: now.toISOString(), eventRevisions }) })
-        .where('organization_id', '=', organizationId)
-        .where('id', '=', id)
-        .execute();
-      await this.audit.record(trx, {
-        organizationId,
-        actor: principal,
-        action: 'scheduling.draft_created',
-        targetType: 'schedule_draft',
-        targetId: id,
-        afterRevision: 1,
-        reason: body.reason ?? null,
-        correlationId: correlationId ?? null,
-      });
+      const id = await this.insertDraft(trx, principal, facility, body, correlationId);
       return this.view(trx, organizationId, id);
     });
+  }
+
+  /** Writes an authorized new draft with its changes and base revisions, audited (SPK-SCHED-005). */
+  private async insertDraft(
+    trx: Trx,
+    principal: Principal,
+    facility: FacilityRow,
+    body: CreateScheduleDraftBody,
+    correlationId?: string,
+  ): Promise<string> {
+    const organizationId = facility.organization_id;
+    const id = newId();
+    const now = this.clock.now();
+    await trx
+      .insertInto('schedule_drafts')
+      .values({
+        id,
+        organization_id: organizationId,
+        facility_id: facility.id,
+        name: body.name,
+        base_revision: json({ capturedAt: now.toISOString(), eventRevisions: {} }),
+        author: json(this.writer.snapshotActor(principal)),
+        last_saved_at: now,
+        validation_results: null,
+        validated_at: null,
+        published_at: null,
+        publication_group_id: null,
+      })
+      .execute();
+    const eventRevisions = await this.replaceChanges(
+      trx,
+      organizationId,
+      facility.id,
+      id,
+      body.changes ?? [],
+    );
+    await trx
+      .updateTable('schedule_drafts')
+      .set({ base_revision: json({ capturedAt: now.toISOString(), eventRevisions }) })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', id)
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: 'scheduling.draft_created',
+      targetType: 'schedule_draft',
+      targetId: id,
+      afterRevision: 1,
+      reason: body.reason ?? null,
+      correlationId: correlationId ?? null,
+    });
+    return id;
   }
 
   /**
@@ -310,184 +328,330 @@ export class ScheduleDraftsService {
           facilityId: draft.facility_id,
         });
         assertExpectedRevision(meta.expectedRevision, draft.revision);
-        const publishing = ScheduleDraftMachine.next(draft.status, 'publish');
-        const operationId = await this.operations.create(trx, {
-          organizationId,
-          kind: 'scheduling.publish_schedule',
-          requestedBy: principal,
-          correlationId: correlationId ?? null,
-          input: { draftId },
-          status: 'running',
-        });
-        attempt.operationId = operationId;
-        await trx
-          .updateTable('schedule_drafts')
-          .set({ status: publishing })
-          .where('organization_id', '=', organizationId)
-          .where('id', '=', draftId)
-          .execute();
-        const facility = await this.writer.loadFacility(trx, organizationId, draft.facility_id);
-
-        // 2 + 3. revalidate current records and recheck physical conflicts
-        const { plans, result, stale } = await this.plan(
-          trx,
-          organizationId,
-          facility,
-          draft,
-          true,
-        );
-        if (!result.ok) {
-          if (stale) throw errors.staleRevision(stale.expected, stale.actual);
-          throw errors.resourceConflict('The draft conflicts with current records.', {
-            issues: result.issues.filter((i) => i.severity === 'error'),
-            conflictingEventIds: [
-              ...new Set(result.issues.flatMap((i) => i.detail?.conflictingEventIds ?? [])),
-            ],
-          });
-        }
-
-        // 4. fixture obligations (competition module); blocking ones fail the group
-        const obligations = await this.obligations.verify({
-          organizationId,
-          facilityId: facility.id,
-          draftId,
-          changes: plans.map((p) => this.changeView(p.change)),
-        });
-        const blocking = obligations.filter((o) => o.blocking);
-        if (blocking.length > 0) {
-          throw errors.validation('Fixture obligations are not satisfied.', {
-            obligations: blocking,
-          });
-        }
-
-        // 5. commit: release every targeted hold first so moves within the group never collide with their own old rows
-        const publicationId = newId();
-        await this.writer.lockHolds(
-          trx,
-          organizationId,
-          facility,
-          plans.flatMap((p) => (p.proposal ? [p.proposal] : [])),
-        );
-        for (const plan of plans) {
-          if (plan.target) await this.writer.release(trx, organizationId, plan.target.id);
-        }
-        const committed: Array<{
-          sequence: number;
-          kind: ChangeRow['kind'];
-          event: EventRow;
-          change: EventChangeKind;
-          before: EventDetails | null;
-          after: EventDetails | null;
-        }> = [];
-        for (const plan of plans) {
-          committed.push(await this.applyChange(trx, organizationId, facility, plan));
-        }
-
-        // 6. durable follow-up: one notice per changed event, carrying old and new details (SPK-COMMS-005)
-        const noticeIds: string[] = [];
-        for (const c of committed) {
-          const notice = await this.writer.notifyChanged(trx, {
-            organizationId,
-            event: c.event,
-            change: c.change,
-            before: c.before,
-            after: c.after,
-            publicationId,
-            correlationId: correlationId ?? null,
-            operationId,
-          });
-          noticeIds.push(notice.id);
-        }
-        const remaining = obligations.filter((o) => !o.blocking).map(obligationView);
-        const summary = {
-          changes: committed.map((c) => ({
-            sequence: c.sequence,
-            kind: c.kind,
-            eventId: c.event.id,
-          })),
-          remainingObligations: remaining,
-        };
-        const eventIds = committed.map((c) => c.event.id);
-        const now = this.clock.now();
-        await trx
-          .insertInto('publications')
-          .values({
-            id: publicationId,
-            organization_id: organizationId,
-            facility_id: facility.id,
-            draft_id: draftId,
-            actor: json(this.writer.snapshotActor(principal)),
-            committed_at: now,
-            event_ids: eventIds,
-            notice_event_ids: noticeIds,
-            summary: json(summary),
-            operation_id: operationId,
-          })
-          .execute();
-        const published = await this.outbox.enqueue(trx, SchedulePublished, {
-          organizationId,
-          aggregateType: 'schedule_draft',
-          aggregateId: draftId,
-          correlationId: correlationId ?? null,
-          operationId,
-          payload: {
-            publicationId,
-            draftId,
-            facilityId: facility.id,
-            eventIds,
-            changes: summary.changes,
-            remainingObligations: remaining,
-          },
-        });
-
-        // 7. the approved revision is now the published one
-        await trx
-          .updateTable('schedule_drafts')
-          .set({
-            status: ScheduleDraftMachine.next(publishing, 'commit'),
-            validation_results: json(result),
-            validated_at: new Date(result.validatedAt),
-            published_at: now,
-            publication_group_id: publicationId,
-            revision: draft.revision + 1,
-          })
-          .where('organization_id', '=', organizationId)
-          .where('id', '=', draftId)
-          .where('revision', '=', draft.revision)
-          .execute();
-        await this.audit.record(trx, {
-          organizationId,
-          actor: principal,
-          action: 'scheduling.schedule_published',
-          targetType: 'schedule_draft',
-          targetId: draftId,
-          beforeRevision: draft.revision,
-          afterRevision: draft.revision + 1,
-          reason: meta.reason ?? null,
-          correlationId: correlationId ?? null,
-          operationId,
-          details: {
-            publicationId,
-            eventIds,
-            notices: noticeIds.length + 1,
-            published: published.id,
-          },
-        });
-        await this.operations.transition(trx, operationId, 'succeeded', {
-          result: { publicationId, eventIds },
-        });
-        const row = await trx
-          .selectFrom('publications')
-          .selectAll()
-          .where('organization_id', '=', organizationId)
-          .where('id', '=', publicationId)
-          .executeTakeFirstOrThrow();
-        return publicationView(row);
+        return this.commitPublication(trx, principal, draft, meta, attempt, correlationId);
       });
     } catch (error) {
       // Refused by a precondition before the publication started: nothing changed and nothing is
       // recorded (the draft and the key stay as they were).
       if (attempt.operationId === null) throw error;
+      await this.recordFailure(
+        principal,
+        organizationId,
+        draftId,
+        attempt.operationId,
+        error,
+        correlationId,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * SPK-SCHED-006 steps 2 to 7 for an authorized, locked draft, inside the caller's transaction:
+   * revalidate, recheck conflicts, verify fixture obligations, commit, record the follow-up notices
+   * and the publication, and transition the operation (created here, so it never stays running).
+   */
+  private async commitPublication(
+    trx: Trx,
+    principal: Principal,
+    draft: DraftRow,
+    meta: CommandMeta,
+    attempt: { operationId: string | null },
+    correlationId?: string,
+  ): Promise<Publication> {
+    const organizationId = draft.organization_id;
+    const draftId = draft.id;
+    const publishing = ScheduleDraftMachine.next(draft.status, 'publish');
+    const operationId = await this.operations.create(trx, {
+      organizationId,
+      kind: 'scheduling.publish_schedule',
+      requestedBy: principal,
+      correlationId: correlationId ?? null,
+      input: { draftId },
+      status: 'running',
+    });
+    attempt.operationId = operationId;
+    await trx
+      .updateTable('schedule_drafts')
+      .set({ status: publishing })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', draftId)
+      .execute();
+    const facility = await this.writer.loadFacility(trx, organizationId, draft.facility_id);
+
+    // 2 + 3. revalidate current records and recheck physical conflicts
+    const { plans, result, stale } = await this.plan(trx, organizationId, facility, draft, true);
+    if (!result.ok) {
+      if (stale) throw errors.staleRevision(stale.expected, stale.actual);
+      throw errors.resourceConflict('The draft conflicts with current records.', {
+        issues: result.issues.filter((i) => i.severity === 'error'),
+        conflictingEventIds: [
+          ...new Set(result.issues.flatMap((i) => i.detail?.conflictingEventIds ?? [])),
+        ],
+      });
+    }
+
+    // 4. fixture obligations (competition module); blocking ones fail the group
+    const obligations = await this.obligations.verify({
+      organizationId,
+      facilityId: facility.id,
+      draftId,
+      changes: plans.map((p) => this.changeView(p.change)),
+    });
+    const blocking = obligations.filter((o) => o.blocking);
+    if (blocking.length > 0) {
+      throw errors.validation('Fixture obligations are not satisfied.', {
+        obligations: blocking,
+      });
+    }
+
+    // 5. commit: release every targeted hold first so moves within the group never collide with their own old rows
+    const publicationId = newId();
+    await this.writer.lockHolds(
+      trx,
+      organizationId,
+      facility,
+      plans.flatMap((p) => (p.proposal ? [p.proposal] : [])),
+    );
+    for (const plan of plans) {
+      if (plan.target) await this.writer.release(trx, organizationId, plan.target.id);
+    }
+    const committed: Array<{
+      sequence: number;
+      kind: ChangeRow['kind'];
+      event: EventRow;
+      change: EventChangeKind;
+      before: EventDetails | null;
+      after: EventDetails | null;
+    }> = [];
+    for (const plan of plans) {
+      committed.push(await this.applyChange(trx, organizationId, facility, plan));
+    }
+
+    // 6. durable follow-up: one notice per changed event, carrying old and new details (SPK-COMMS-005)
+    const noticeIds: string[] = [];
+    for (const c of committed) {
+      const notice = await this.writer.notifyChanged(trx, {
+        organizationId,
+        event: c.event,
+        change: c.change,
+        before: c.before,
+        after: c.after,
+        publicationId,
+        correlationId: correlationId ?? null,
+        operationId,
+      });
+      noticeIds.push(notice.id);
+    }
+    const remaining = obligations.filter((o) => !o.blocking).map(obligationView);
+    const summary = {
+      changes: committed.map((c) => ({
+        sequence: c.sequence,
+        kind: c.kind,
+        eventId: c.event.id,
+      })),
+      remainingObligations: remaining,
+    };
+    const eventIds = committed.map((c) => c.event.id);
+    const now = this.clock.now();
+    await trx
+      .insertInto('publications')
+      .values({
+        id: publicationId,
+        organization_id: organizationId,
+        facility_id: facility.id,
+        draft_id: draftId,
+        actor: json(this.writer.snapshotActor(principal)),
+        committed_at: now,
+        event_ids: eventIds,
+        notice_event_ids: noticeIds,
+        summary: json(summary),
+        operation_id: operationId,
+      })
+      .execute();
+    const published = await this.outbox.enqueue(trx, SchedulePublished, {
+      organizationId,
+      aggregateType: 'schedule_draft',
+      aggregateId: draftId,
+      correlationId: correlationId ?? null,
+      operationId,
+      payload: {
+        publicationId,
+        draftId,
+        facilityId: facility.id,
+        eventIds,
+        changes: summary.changes,
+        remainingObligations: remaining,
+      },
+    });
+
+    // 7. the approved revision is now the published one
+    await trx
+      .updateTable('schedule_drafts')
+      .set({
+        status: ScheduleDraftMachine.next(publishing, 'commit'),
+        validation_results: json(result),
+        validated_at: new Date(result.validatedAt),
+        published_at: now,
+        publication_group_id: publicationId,
+        revision: draft.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', draftId)
+      .where('revision', '=', draft.revision)
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: 'scheduling.schedule_published',
+      targetType: 'schedule_draft',
+      targetId: draftId,
+      beforeRevision: draft.revision,
+      afterRevision: draft.revision + 1,
+      reason: meta.reason ?? null,
+      correlationId: correlationId ?? null,
+      operationId,
+      details: {
+        publicationId,
+        eventIds,
+        notices: noticeIds.length + 1,
+        published: published.id,
+      },
+    });
+    await this.operations.transition(trx, operationId, 'succeeded', {
+      result: { publicationId, eventIds },
+    });
+    const row = await trx
+      .selectFrom('publications')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', publicationId)
+      .executeTakeFirstOrThrow();
+    return publicationView(row);
+  }
+
+  /**
+   * Direct move or cancel from the timeline (SPK-SCHED-005/006, SPK-COMMS-005). The change is
+   * written as a single-change draft and published inside the same transaction by the same steps
+   * as `publish`: the actor needs `scheduling.manage_drafts` and `scheduling.publish_schedule` at
+   * the facility, the event's `expectedRevision` must be current (STALE_REVISION), detection and
+   * fixture obligations run in full, and the outcome is one publication, one change notice with
+   * the old and new details and a succeeded `scheduling.publish_schedule` operation. A refusal
+   * rolls everything back (no draft is left behind); one that reached the publication steps is
+   * recorded as a failed operation, as `publish` records it. Only a published event is changed
+   * this way: a draft event is published through its draft.
+   */
+  async publishDirect(
+    principal: Principal,
+    eventId: string,
+    input:
+      ({ change: 'move' } & DirectMoveEventBody) | ({ change: 'cancel' } & DirectCancelEventBody),
+    correlationId?: string,
+  ): Promise<DirectEventChange> {
+    const organizationId = organizationOf(principal);
+    const attempt: { operationId: string | null } = { operationId: null };
+    let draftId: string | null = null;
+    try {
+      return await this.uow.run(async ({ trx }) => {
+        attempt.operationId = null;
+        draftId = null;
+        const event = await this.writer.loadEvent(trx, organizationId, eventId, {
+          forUpdate: true,
+        });
+        if (!event) throw errors.protectedNotFound('event');
+        const facility = await this.writer.loadFacility(trx, organizationId, event.facility_id);
+        const target = {
+          type: 'event',
+          id: event.id,
+          organizationId,
+          facilityId: facility.id,
+        } as const;
+        await this.authorization.require(principal, SchedulingActions.manageDrafts, target);
+        await this.authorization.require(principal, SchedulingActions.publishSchedule, target);
+        assertExpectedRevision(input.expectedRevision, event.revision);
+        if (event.status !== 'published') {
+          throw errors.invalidTransition('Event', event.status, `direct ${input.change}`);
+        }
+        let change: DraftChangeInput;
+        if (input.change === 'cancel') {
+          change = {
+            kind: 'cancel',
+            targetEventId: event.id,
+            proposed: { reason: input.reason },
+          };
+        } else {
+          const sameTimes =
+            new Date(input.scheduledStart).getTime() ===
+              new Date(event.scheduled_start).getTime() &&
+            new Date(input.scheduledEnd).getTime() === new Date(event.scheduled_end).getTime();
+          const resourceIds = input.resourceIds ?? event.resource_ids;
+          const sameResources = sameResourceSet(resourceIds, event.resource_ids);
+          if (sameTimes && sameResources) {
+            throw errors.validation('The move changes neither the time nor the spaces.', {
+              code: 'no_change',
+              path: 'scheduledStart',
+            });
+          }
+          change = sameTimes
+            ? { kind: 'resource_change', targetEventId: event.id, resourceIds }
+            : {
+                kind: 'move',
+                targetEventId: event.id,
+                proposed: {
+                  scheduledStart: input.scheduledStart,
+                  scheduledEnd: input.scheduledEnd,
+                  ...(input.reason ? { reason: input.reason } : {}),
+                },
+                resourceIds,
+              };
+        }
+        const id = await this.insertDraft(
+          trx,
+          principal,
+          facility,
+          {
+            facilityId: facility.id,
+            name: `${input.change === 'cancel' ? 'Cancel' : 'Move'}: ${event.title}`.slice(0, 200),
+            changes: [DraftChangeInputSchema.parse(change)],
+            reason: input.reason,
+          },
+          correlationId,
+        );
+        draftId = id;
+        const draft = await this.load(trx, organizationId, id, true);
+        if (!draft) throw errors.notFound('schedule draft', id);
+        const publication = await this.commitPublication(
+          trx,
+          principal,
+          draft,
+          { reason: input.reason },
+          attempt,
+          correlationId,
+        );
+        const after = await this.writer.loadEvent(trx, organizationId, event.id);
+        if (!after) throw errors.protectedNotFound('event');
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action:
+            input.change === 'cancel'
+              ? 'scheduling.event_canceled_directly'
+              : 'scheduling.event_moved_directly',
+          targetType: 'event',
+          targetId: event.id,
+          beforeRevision: event.revision,
+          afterRevision: after.revision,
+          reason: input.reason ?? null,
+          correlationId: correlationId ?? null,
+          operationId: publication.operationId,
+          details: { draftId: id, publicationId: publication.id },
+        });
+        return { event: this.writer.view(after), publication };
+      });
+    } catch (error) {
+      // Refused before the publication started: nothing changed and nothing is recorded. After
+      // it started, the transaction (draft included) rolled back; the failed operation records it.
+      if (attempt.operationId === null || draftId === null) throw error;
       await this.recordFailure(
         principal,
         organizationId,
@@ -794,6 +958,17 @@ export class ScheduleDraftsService {
         });
         continue;
       }
+      // migration 0304: a sport outside the facility's vocabulary is an error of this change
+      if (fields.sport !== null && !this.writer.policyFor(facility).sports.includes(fields.sport)) {
+        issues.push({
+          severity: 'error',
+          code: 'unknown_sport',
+          message: `The sport ${fields.sport} is not offered at this facility.`,
+          changeSequence: sequence,
+          eventId: target?.id,
+        });
+        continue;
+      }
       plans.push({
         change,
         target,
@@ -804,6 +979,7 @@ export class ScheduleDraftsService {
           eventId: target?.id ?? null,
           kind: fields.kind,
           format: fields.format,
+          sport: fields.sport,
           scheduledStart: fields.scheduledStart,
           scheduledEnd: fields.scheduledEnd,
           setupMinutes: fields.setupMinutes,
@@ -882,6 +1058,7 @@ export class ScheduleDraftsService {
       kind,
       title,
       format: proposed.format === undefined ? (target?.format ?? null) : proposed.format,
+      sport: proposed.sport === undefined ? (target?.sport ?? null) : proposed.sport,
       scheduledStart: onlyResources && target ? new Date(target.scheduled_start) : scheduledStart,
       scheduledEnd: onlyResources && target ? new Date(target.scheduled_end) : scheduledEnd,
       setupMinutes: buffers.setupMinutes,
@@ -946,6 +1123,7 @@ export class ScheduleDraftsService {
         kind: fields.kind,
         title: fields.title,
         format: fields.format,
+        sport: fields.sport,
         scheduled_start: fields.scheduledStart,
         scheduled_end: fields.scheduledEnd,
         setup_minutes: fields.setupMinutes,

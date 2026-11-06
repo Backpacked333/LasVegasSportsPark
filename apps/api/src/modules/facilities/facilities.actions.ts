@@ -44,6 +44,13 @@ export const FacilitiesActions = defineActions({
     staffRoles: ['facilities_operator', 'general_manager'],
     requirements: ['SPK-FAC-003', 'SPK-AT-021'],
   },
+  manageReleaseChecklist: {
+    id: 'facilities.manage_release_checklist',
+    description:
+      "Add, confirm, reopen and remove the checks of a restriction's release checklist (migration 0909)",
+    staffRoles: ['facilities_operator', 'general_manager'],
+    requirements: ['SPK-FAC-004', 'SPK-FAC-002'],
+  },
   recordInspection: {
     id: 'facilities.record_inspection',
     description: 'Record an inspection outcome for a maintenance task',

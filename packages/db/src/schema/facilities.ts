@@ -145,10 +145,30 @@ export interface RestrictionsTable {
   updated_at: GeneratedTimestamp;
 }
 
+/**
+ * Release checklist items of a restriction (migration 0909, SPK-FAC-004): what staff confirm before
+ * the area returns to service. A release needs every item confirmed (service and database).
+ */
+export interface RestrictionChecklistItemsTable {
+  id: string;
+  organization_id: string;
+  restriction_id: string;
+  position: number;
+  label: string;
+  created_by: Json<Record<string, unknown>>;
+  completed_at: NullableTimestamp;
+  completed_by: Json<Record<string, unknown>> | null;
+  completion_note: string | null;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
 export interface FacilitiesTables {
   assets: AssetsTable;
   preventive_schedules: PreventiveSchedulesTable;
   maintenance_tasks: MaintenanceTasksTable;
   inspections: InspectionsTable;
   restrictions: RestrictionsTable;
+  restriction_checklist_items: RestrictionChecklistItemsTable;
 }

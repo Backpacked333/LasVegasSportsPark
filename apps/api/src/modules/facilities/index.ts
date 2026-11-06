@@ -7,6 +7,8 @@ export * from './ports';
 export * from './services/assets.service';
 export * from './services/maintenance-tasks.service';
 export * from './services/restrictions.service';
+export * from './services/release-checklist.service';
+export * from './services/facility-day-summary.service';
 export * from './services/preventive-schedules.service';
 export * from './services/asset-directory.service';
 export {
