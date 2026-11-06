@@ -24,6 +24,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { useNow } from '../../providers/AppProviders';
 import './admin.css';
+import { DefaultCurrencyCard } from './DefaultCurrencyCard';
 import { AccessSummaryLine, INVITE_ACTION, lastSeenText } from './StaffAccessPanels';
 
 const GATE_ICON: Record<string, IconName> = {
@@ -228,6 +229,7 @@ export function AdminOverview() {
       </div>
       <div className="split-side">
         <CapabilitiesCard />
+        <DefaultCurrencyCard />
       </div>
     </div>
   );
