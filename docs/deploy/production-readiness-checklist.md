@@ -37,7 +37,7 @@ Checked 2026-11-09 against branch `claude/clever-darwin-40w6dj` (pull request Ba
 ## 3. Verified in this repository on 2026-11-09
 
 - The assembled application boots with `NODE_ENV=production`, managed identity with its decision recorded and every provider gate `none` (`apps/api/src/__tests__/production-boot.spec.ts`).
-- Production refuses an unset or fake provider gate, the local identity provider, PGlite and `DATABASE_SSL=disable` (`kernel/__tests__/config.spec.ts`, `production-boot.spec.ts`).
+- Production refuses an unset or fake provider gate, the local identity provider, PGlite, `DATABASE_SSL=disable` and a plaintext connection to a database on another host (`kernel/__tests__/config.spec.ts`, `production-boot.spec.ts`).
 - The image layout runs in production mode against PostgreSQL: readiness refuses traffic while a migration is pending, answers 200 once migrated, sends the security headers, answers 404 for development tokens and drains on SIGTERM (exercised on the host, and with the built image in the CI job "Container image", ledger row L-022).
 - The staging database's 171 applied migrations match the repository files exactly (same SHA-256 digest over version and checksum); `0019_core_rate_limit_buckets.sql` and `1104_support_customer_replies.sql` are pending there.
 - Backup and restore rehearsed against PostgreSQL 16: 203 tables, 171 migrations, verified against the manifest.

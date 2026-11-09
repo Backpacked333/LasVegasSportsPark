@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { PRODUCTION_CONFIG_ENV } from '../../testing';
 import { loadConfig, PUBLISHED_EXAMPLE_SECRET } from '../config';
 
 describe('configuration security boundaries', () => {
@@ -46,6 +47,52 @@ describe('configuration security boundaries', () => {
         DATABASE_URL: 'postgres://prod-host/prod',
       }),
     ).toThrow(/NODE_ENV/);
+  });
+
+  it('§4.14: production refuses a plaintext connection to a database on another host', () => {
+    const { DATABASE_SSL: _ssl, ...withoutSsl } = PRODUCTION_CONFIG_ENV;
+    const remote = { ...withoutSsl, DATABASE_URL: 'postgres://db.example.test/sportspark' };
+    expect(() => loadConfig(remote)).toThrow(/DATABASE_SSL must be require or verify-full/);
+    // TLS named by DATABASE_SSL or by the URL is accepted.
+    expect(loadConfig({ ...remote, DATABASE_SSL: 'require' }).DATABASE_SSL).toBe('require');
+    expect(() =>
+      loadConfig({
+        ...remote,
+        DATABASE_URL: 'postgres://db.example.test/sportspark?sslmode=require',
+      }),
+    ).not.toThrow();
+    // A database on this host crosses no network (the container image check uses localhost).
+    for (const DATABASE_URL of [
+      'postgres://localhost:5432/sportspark',
+      'postgres://127.0.0.1/sportspark',
+      'postgres://user@/sportspark?host=/var/run/postgresql',
+    ]) {
+      expect(() => loadConfig({ ...withoutSsl, DATABASE_URL })).not.toThrow();
+    }
+    // A URL asking for no TLS, or prefer (which falls back to plaintext), is refused.
+    expect(() =>
+      loadConfig({ ...remote, DATABASE_URL: 'postgres://db.example.test/x?sslmode=prefer' }),
+    ).toThrow(/DATABASE_SSL/);
+  });
+
+  it('R3-OPERATIONS-10: the API shutdown delay must leave part of the stop budget to close', () => {
+    expect(() => loadConfig({ ...PRODUCTION_CONFIG_ENV, API_SHUTDOWN_DELAY_MS: '20000' })).toThrow(
+      /API_SHUTDOWN_DELAY_MS must be less than API_SHUTDOWN_TIMEOUT_MS/,
+    );
+    expect(() =>
+      loadConfig({
+        ...PRODUCTION_CONFIG_ENV,
+        API_SHUTDOWN_DELAY_MS: '15000',
+        API_SHUTDOWN_TIMEOUT_MS: '15000',
+      }),
+    ).toThrow(/API_SHUTDOWN_DELAY_MS/);
+    expect(
+      loadConfig({
+        ...PRODUCTION_CONFIG_ENV,
+        API_SHUTDOWN_DELAY_MS: '5000',
+        API_SHUTDOWN_TIMEOUT_MS: '15000',
+      }).API_SHUTDOWN_DELAY_MS,
+    ).toBe(5000);
   });
 
   it('§4.14: the shipped .env.example carries no usable identity secret', () => {

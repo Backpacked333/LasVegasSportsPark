@@ -409,6 +409,31 @@ export const ConfigSchema = z
         message: 'PERIODIC_JOBS_MAX_RUN_SECONDS must be at least PERIODIC_JOBS_LEASE_SECONDS',
       });
     }
+    if (cfg.API_SHUTDOWN_DELAY_MS > 0 && cfg.API_SHUTDOWN_DELAY_MS >= cfg.API_SHUTDOWN_TIMEOUT_MS) {
+      // R3-OPERATIONS-10: the delay counts against the stop budget; one at or past it would leave
+      // no time to close the server before the host's grace period ends.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['API_SHUTDOWN_DELAY_MS'],
+        message:
+          'API_SHUTDOWN_DELAY_MS must be less than API_SHUTDOWN_TIMEOUT_MS (the delay is part of the stop budget)',
+      });
+    }
+    if (
+      cfg.NODE_ENV === 'production' &&
+      cfg.DATABASE_URL &&
+      cfg.DATABASE_SSL === undefined &&
+      !databaseTransportProtected(cfg.DATABASE_URL)
+    ) {
+      // §4.14 encrypted transport: without DATABASE_SSL the URL decides; a remote database must
+      // be reached over TLS (sslmode in the URL, or DATABASE_SSL), never plaintext by default.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DATABASE_SSL'],
+        message:
+          'DATABASE_SSL must be require or verify-full in production for a database on another host (or DATABASE_URL must set sslmode=require, verify-ca or verify-full) (§4.14 encrypted transport)',
+      });
+    }
     if (cfg.NODE_ENV === 'production' && cfg.DATABASE_SSL === 'disable') {
       ctx.addIssue({
         code: 'custom',
@@ -685,6 +710,26 @@ export function providerSelection(config: AppConfig, key: ProviderSelector): Pro
     throw new Error(`${key} must be set explicitly in production`);
   }
   return 'fake';
+}
+
+/**
+ * Whether a database URL already protects its transport: it names a TLS sslmode, or the database
+ * is on this host (a loopback address or a Unix socket), so the traffic crosses no network.
+ */
+function databaseTransportProtected(url: string): boolean {
+  // A Unix socket (`?host=/var/run/postgresql`, or `socket:/path`) is local by definition; such
+  // URLs often have an empty host, which the URL parser rejects.
+  if (/^socket:/i.test(url) || /[?&]host=(?:\/|%2F)/i.test(url)) return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const sslmode = parsed.searchParams.get('sslmode');
+  if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'verify-full') return true;
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {

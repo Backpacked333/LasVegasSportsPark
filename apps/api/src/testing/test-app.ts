@@ -64,6 +64,8 @@ export const PRODUCTION_CONFIG_ENV: NodeJS.ProcessEnv = {
   ...OIDC_CONFIG_ENV,
   NODE_ENV: 'production',
   DATABASE_URL: 'postgres://unused.example.test/sportspark',
+  // §4.14: a database on another host is reached over TLS in production.
+  DATABASE_SSL: 'require',
   PAYMENT_PROVIDER: 'none',
   ACCOUNTING_PROVIDER: 'none',
   ACCESS_DEVICE_PROVIDER: 'none',

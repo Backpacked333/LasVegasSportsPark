@@ -34,15 +34,19 @@ async function bootstrap(): Promise<void> {
     logger.log(
       `${signal} received: refusing new traffic, finishing requests in flight (up to ${config.API_SHUTDOWN_TIMEOUT_MS} ms)`,
     );
+    // One budget for the whole stop: the delay for the balancer counts against it (the config
+    // refuses a delay that leaves nothing to close with), so the host's grace period is respected.
+    const startedAt = Date.now();
     if (config.API_SHUTDOWN_DELAY_MS > 0) {
       await new Promise((resolve) => setTimeout(resolve, config.API_SHUTDOWN_DELAY_MS));
     }
+    const remainingMs = Math.max(0, config.API_SHUTDOWN_TIMEOUT_MS - (Date.now() - startedAt));
     const outcome = await stopWithinBudget({
       drain: async () => undefined,
       // Closes the HTTP server (in-flight requests finish, idle connections close), runs every
       // module's shutdown hooks, then closes the database (DatabaseLifecycle).
       close: () => app.close(),
-      timeoutMs: config.API_SHUTDOWN_TIMEOUT_MS,
+      timeoutMs: remainingMs,
       logger,
     });
     logger.log(outcome.close === 'closed' ? 'stopped' : `stopped (${outcome.close})`);

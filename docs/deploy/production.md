@@ -49,18 +49,18 @@ Required in production (the configuration refuses to boot otherwise):
 
 Recommended:
 
-| Variable                                           | Value                                                                           |
-| -------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `DATABASE_SSL`                                     | `require` or `verify-full` (+ `DATABASE_SSL_CA_PATH`); `disable` is refused     |
-| `DATABASE_STATEMENT_TIMEOUT_MS`                    | e.g. `30000`                                                                    |
-| `DATABASE_POOL_MAX`                                | per process; the sum over processes under the database's connection limit       |
-| `TRUST_PROXY`                                      | the load balancer (hop count or subnet), so rate limits and HSTS see the client |
-| `CORS_ALLOWED_ORIGINS`                             | the staff dashboard's https origin (if not same-origin)                         |
-| `RATE_LIMIT_STORE`                                 | `postgres` (the production default)                                             |
-| `LOG_FORMAT`                                       | `json` (the production default)                                                 |
-| `METRICS_TOKEN` \*                                 | enables `GET /v1/metrics` (Prometheus text) for the monitoring scraper          |
-| `API_SHUTDOWN_DELAY_MS`, `API_SHUTDOWN_TIMEOUT_MS` | under the host's termination grace period                                       |
-| `CLIENT_MIN_VERSIONS`                              | when DEC-061 sets minimum app versions                                          |
+| Variable                                           | Value                                                                                                                                                                                                       |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_SSL`                                     | `require` or `verify-full` (+ `DATABASE_SSL_CA_PATH`); `disable` is refused, and unset is refused for a database on another host unless `DATABASE_URL` sets `sslmode=require`, `verify-ca` or `verify-full` |
+| `DATABASE_STATEMENT_TIMEOUT_MS`                    | e.g. `30000`                                                                                                                                                                                                |
+| `DATABASE_POOL_MAX`                                | per process; the sum over processes under the database's connection limit                                                                                                                                   |
+| `TRUST_PROXY`                                      | the load balancer (hop count or subnet), so rate limits and HSTS see the client                                                                                                                             |
+| `CORS_ALLOWED_ORIGINS`                             | the staff dashboard's https origin (if not same-origin)                                                                                                                                                     |
+| `RATE_LIMIT_STORE`                                 | `postgres` (the production default)                                                                                                                                                                         |
+| `LOG_FORMAT`                                       | `json` (the production default)                                                                                                                                                                             |
+| `METRICS_TOKEN` \*                                 | enables `GET /v1/metrics` (Prometheus text) for the monitoring scraper                                                                                                                                      |
+| `API_SHUTDOWN_DELAY_MS`, `API_SHUTDOWN_TIMEOUT_MS` | the timeout under the host's termination grace period; the delay is part of it and must be smaller                                                                                                          |
+| `CLIENT_MIN_VERSIONS`                              | when DEC-061 sets minimum app versions                                                                                                                                                                      |
 
 Never set in production: `AUTH_LOCAL_SECRET`, `DEV_TOKENS_PASSCODE`, `PGLITE_DATA_DIR`,
 `STAGING_INLINE_WORKER`. Every option is documented in `apps/api/src/kernel/config.ts`.
