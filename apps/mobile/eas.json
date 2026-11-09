@@ -1,0 +1,27 @@
+{
+  "$comment": "EAS build profiles (spec §4.13, §6.2). No project id, credentials or store identifiers are committed: the Expo account, the bundle identifier and package name, the API address and the store accounts are decisions (DEC-061, DEC-069, DEC-021) supplied as EAS environment variables. app.config.ts refuses a production build without them.",
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "distribution": "internal",
+      "env": { "SPORTSPARK_ENV": "development" },
+      "ios": { "simulator": true }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "env": { "SPORTSPARK_ENV": "preview" }
+    },
+    "production": {
+      "distribution": "store",
+      "channel": "production",
+      "env": { "SPORTSPARK_ENV": "production" }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

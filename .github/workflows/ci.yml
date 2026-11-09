@@ -43,6 +43,12 @@ jobs:
           CI: 'true'
           EXPO_NO_TELEMETRY: '1'
           EXPO_OFFLINE: '1'
+      - name: Expo export smoke check, Android
+        run: pnpm --filter @sportspark/mobile export:android
+        env:
+          CI: 'true'
+          EXPO_NO_TELEMETRY: '1'
+          EXPO_OFFLINE: '1'
 
   test-postgres:
     name: Test against PostgreSQL (true concurrency)
