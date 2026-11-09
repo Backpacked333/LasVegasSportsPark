@@ -10,3 +10,5 @@ export const ACCESS_PATHS = {
 } as const;
 
 export const DEVICES_QUERY_PREFIX = ['api', '/access-devices'] as const;
+/** ENT-07: the one-device read (`GET /v1/access-devices/{id}`), refreshed with the lists. */
+export const DEVICE_QUERY_PREFIX = ['api', '/access-devices/{id}'] as const;

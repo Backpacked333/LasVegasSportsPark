@@ -514,6 +514,24 @@ export class AccessDevicesService {
     };
   }
 
+  /**
+   * GET /v1/access-devices/{id} (ENT-07, §3.16, SCR-S-56): one device with its active policy, for
+   * readers of the device's facility (entry.read_access_devices). Reads are never gated by the
+   * access_hardware capability (DEC-016). Another organization's id is NOT_FOUND.
+   */
+  async get(principal: Principal, deviceId: string): Promise<AccessDevice> {
+    return this.uow.run(async ({ trx }) => {
+      const device = await this.requireDevice(
+        trx,
+        principal,
+        deviceId,
+        EntryActions.readAccessDevices,
+        false,
+      );
+      return toAccessDevice(device, await this.activePolicyId(trx, device));
+    });
+  }
+
   async policies(principal: Principal, deviceId: string): Promise<AccessPolicy[]> {
     const organizationId = organizationOf(principal);
     const db = this.uow.reader();

@@ -281,7 +281,7 @@ describe('access devices and policies (ENT-05, §3.16 Access hardware)', () => {
     );
   });
 
-  it('device commands: who may act, stale revisions, duplicate references and reads', async () => {
+  it('device commands: who may act, stale revisions, duplicate references and reads (one device by id, ENT-07)', async () => {
     const byDesk = await h.register(desk);
     expect(byDesk.status).toBe(403);
     const elsewhere = await staffMember(t, ['facilities_operator'], { facilityIds: [newId()] });
@@ -326,6 +326,23 @@ describe('access devices and policies (ENT-05, §3.16 Access hardware)', () => {
     expect(
       (await t.http.get(`/v1/access-devices/${newId()}/commands`).set(desk.header)).status,
     ).toBe(404);
+    // ENT-07: one device is read by id with its current state, by facility readers only.
+    const one = await t.http.get(`/v1/access-devices/${device.body.id}`).set(desk.header);
+    expect(one.status, JSON.stringify(one.body)).toBe(200);
+    expect(one.body).toMatchObject({
+      id: device.body.id,
+      name: 'West gate',
+      heartbeatTimeoutSeconds: null,
+      activePolicyId: null,
+      revision: cleared.body.revision,
+    });
+    expect(
+      (await t.http.get(`/v1/access-devices/${device.body.id}`).set(coach.header)).status,
+    ).toBe(403);
+    expect(
+      (await t.http.get(`/v1/access-devices/${device.body.id}`).set(elsewhere.header)).status,
+    ).toBe(403);
+    expect((await t.http.get(`/v1/access-devices/${newId()}`).set(desk.header)).status).toBe(404);
   });
 });
 

@@ -151,8 +151,8 @@ and the access hardware policy (POL-043).
 
 ## API issues found while building these screens
 
-- No `GET /v1/access-devices/{id}`: the device page finds the device in its facility's list
-  (`apps/api/src/modules/entry/controllers/access-hardware.controller.ts`).
+- Resolved 2026-11-09 (ENT-07): `GET /v1/access-devices/{id}` reads one device, and the device
+  page uses it instead of searching its facility's list.
 - No list of the sales of a register session, nor of a register's past sessions: a sale is reached
   from the page that started it or by its reference, and closing reports only the count of open
   sales (`apps/api/src/modules/finance/controllers/pos.controller.ts`).
