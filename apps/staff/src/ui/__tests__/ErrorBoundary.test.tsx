@@ -63,16 +63,19 @@ describe('ErrorBoundary (SPK-UX-006)', () => {
 
   it('§5.11: script errors and unhandled rejections are reported with the path, then the handlers can be removed', () => {
     const reporter = new MemoryCrashReporter();
-    const remove = installGlobalCrashHandlers(window, reporter, () => NOW);
-    window.dispatchEvent(new ErrorEvent('error', { error: new Error('boom'), message: 'boom' }));
+    // An isolated target with the window's location: events dispatched on the real window would
+    // also reach the test runner's own uncaught-error listener and fail the run.
+    const target = Object.assign(new EventTarget(), {
+      location: window.location,
+    }) as unknown as Pick<Window, 'addEventListener' | 'removeEventListener' | 'location'> &
+      EventTarget;
+    const remove = installGlobalCrashHandlers(target, reporter, () => NOW);
+    target.dispatchEvent(new ErrorEvent('error', { error: new Error('boom'), message: 'boom' }));
     const rejection = new Event('unhandledrejection') as PromiseRejectionEvent;
     Object.defineProperty(rejection, 'reason', { value: new Error('lost promise') });
-    window.dispatchEvent(rejection);
+    target.dispatchEvent(rejection);
     remove();
-    // jsdom prints an error dispatched with no listener; the point is that nothing is reported.
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    window.dispatchEvent(new ErrorEvent('error', { error: new Error('after removal') }));
-    consoleError.mockRestore();
+    target.dispatchEvent(new ErrorEvent('error', { error: new Error('after removal') }));
     expect(reporter.reports.map((r) => [r.source, r.message])).toEqual([
       ['window_error', 'boom'],
       ['unhandled_rejection', 'lost promise'],
