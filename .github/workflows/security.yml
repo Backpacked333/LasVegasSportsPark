@@ -44,6 +44,6 @@ jobs:
         run: |
           tracked=$(git ls-files | grep -E '(^|/)\.env(\..+)?$|\.pem$|\.p12$|\.key$|id_rsa' | grep -v '\.env\.example$' || true)
           if [ -n "$tracked" ]; then echo "Tracked secret-bearing files:"; echo "$tracked"; exit 1; fi
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
