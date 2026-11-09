@@ -13,9 +13,9 @@
     "restore": "tsx src/cli/restore.ts"
   },
   "dependencies": {
-    "@electric-sql/pglite": "0.5.11",
+    "@electric-sql/pglite": "0.5.15",
     "@sportspark/contracts": "workspace:*",
-    "kysely": "0.29.7",
+    "kysely": "0.29.8",
     "pg": "8.23.1"
   },
   "devDependencies": {
