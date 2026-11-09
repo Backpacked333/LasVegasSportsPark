@@ -1253,7 +1253,7 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
     expect(canceled.body).toMatchObject({ status: 'canceled' });
   });
 
-  it('SPK-YOUTH-007: one calendar for all authorized children, overlaps highlighted but not prevented', async () => {
+  it('SPK-YOUTH-007: one calendar for all authorized children, overlaps highlighted but not prevented; each booking says its kind (ENR-15)', async () => {
     const term = await offering(t);
     const trialProgram = await createProgramFixture(t, {
       ageBand: { minAgeYears: 5, maxAgeYears: 12 },
@@ -1289,6 +1289,13 @@ describe('pickup, makeups, trials and the family calendar (SPK-PLACE-004, SPK-YO
     expect(mine.map((i: { kind: string }) => i.kind).sort()).toEqual([
       'enrollment_session',
       'session_booking',
+    ]);
+    // ENR-15: a booking says what it is (here a trial); an enrolled session names no booking kind.
+    expect(
+      mine.map((i: { kind: string; bookingKind: string | null }) => [i.kind, i.bookingKind]).sort(),
+    ).toEqual([
+      ['enrollment_session', null],
+      ['session_booking', 'trial'],
     ]);
     expect(res.body.overlaps).toEqual([
       expect.objectContaining({

@@ -14,8 +14,6 @@ import {
   me,
   ok,
   names,
-  offering,
-  OFFERING_TWO,
   fixtureDetail,
   myTeamEntry,
   FIXTURE,
@@ -50,8 +48,6 @@ const OVERLAP = {
   end: '2026-10-24T18:00:00.000Z',
 };
 
-const PICKUP_OFFERING = { ...offering(OFFERING_TWO, 'Adult Pickup Night', null), kind: 'pickup' };
-
 function routes(overrides: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
     // The person holds view over two children, but the API includes only one in the calendar.
@@ -71,8 +67,6 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
     'GET /person-names': names({ [CHILD]: 'Sam' }),
     'GET /me/fixtures': ok([]),
     'GET /me/team-entries': ok([]),
-    'GET /offerings/{id}': (req) =>
-      fakeResponse(200, req.params.id === OFFERING_TWO ? PICKUP_OFFERING : offering()),
     ...overrides,
   };
 }
@@ -177,7 +171,7 @@ describe('SCR-C-19 FamilyCalendarScreen', () => {
 });
 
 describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility clocks', () => {
-  it('SPK-PLACE-004 (DEC-082): a booked pickup session is on the calendar, labelled from its offering', async () => {
+  it('SPK-PLACE-004 (DEC-082) / ENR-15: a booked pickup session is on the calendar, labelled from its booking kind', async () => {
     const app = createTestApp({ routes: routes() });
     render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
     expect(
@@ -187,7 +181,8 @@ describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility 
     ).toBeOnTheScreen();
     expect(
       screen.getByRole('button', { name: /^Sam: Junior Skills, 10:00 AM to 11:00 AM PDT\. ▲/ }),
-    ).toBeOnTheScreen();
+    ).toBeOnTheScreen(); // The label comes from the calendar item itself: no offering is read for it.
+    expect(app.fake.requests.some((r) => r.route === '/offerings/{id}')).toBe(false);
   });
 
   it('DEC-016, DEC-082: with pickup sessions turned off, says so and keeps booked ones listed; nothing to find', async () => {

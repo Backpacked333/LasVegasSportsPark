@@ -16,8 +16,8 @@
  *   are marked with a glyph and words, not colour. The parent may knowingly accept an overlap
  *   (SPK-YOUTH-007); further handling is DEC-050.
  * - Pickup sessions (SPK-PLACE-004, DEC-082, capability `pickup_sessions`, enforced): a booked
- *   pickup session is on the calendar as the API serves it, labelled "Pickup session" from its
- *   offering's kind. Finding more is offered only while the switch is on; while it is off the
+ *   pickup session is on the calendar as the API serves it, labelled "Pickup session" from the
+ *   item's `bookingKind` (ENR-15). Finding more is offered only while the switch is on; while it is off the
  *   section says so and booked ones stay listed (reads are never gated).
  * - Pickup arrangements (choosing who collects a child from a supervised session) are not offered:
  *   supervised pickup applicability is DEC-075 (Product owner, its switch only records the
@@ -44,7 +44,6 @@ import {
   useMe,
   useMyFixtures,
   useMyTeams,
-  useOfferings,
   usePersonNames,
   useSignedIn,
 } from '../../features/today/queries';
@@ -192,9 +191,6 @@ function FamilyCalendarContent() {
   const fixturesHidden =
     fixturesRead.error !== null && presentationForError(fixturesRead.error) === 'unavailable';
   const entries = mergeEntries(data?.items ?? [], fixturesHidden ? [] : (fixturesRead.data ?? []));
-  const offerings = useOfferings(
-    entries.flatMap((e) => (e.type === 'session' ? [e.item.offeringId] : [])),
-  );
   const names = usePersonNames(
     [
       ...(data?.participantPersonIds ?? []),
@@ -362,10 +358,7 @@ function FamilyCalendarContent() {
                     }
                     const item = entry.item;
                     const href = sessionHref(item);
-                    const pickup =
-                      offerings.get(item.offeringId)?.kind === 'pickup'
-                        ? PICKUP_SESSION_LABEL
-                        : null;
+                    const pickup = item.bookingKind === 'pickup' ? PICKUP_SESSION_LABEL : null;
                     return (
                       <ListRow
                         key={entry.id}

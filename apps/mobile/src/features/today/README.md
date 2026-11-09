@@ -141,8 +141,8 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
 
 ## API issues found while building these screens
 
-- `FamilyCalendarItem` does not say a session booking's kind (pickup, trial, makeup), so the
-  calendar reads each booked offering to label pickup sessions.
+- `FamilyCalendarItem.bookingKind` says a session booking's kind (ENR-15, 2026-11-09); the
+  calendar labels pickup sessions from it instead of reading each booked offering.
 - `GET /v1/me/family-calendar` `overlaps` covers sessions and bookings only; fixtures of the same
   people are compared by the client.
 - `YouthFeedback` assessments carry no author (the inventory row lists one), so none is shown.

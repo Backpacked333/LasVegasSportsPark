@@ -58502,6 +58502,7 @@ export type components = {
             to: string;
         };
         FamilyCalendarItem: {
+            bookingKind: components["schemas"]["SessionBookingKind"] | null;
             /** Format: date-time */
             end: string;
             /** Format: uuid */

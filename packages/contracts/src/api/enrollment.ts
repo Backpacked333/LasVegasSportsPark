@@ -1261,6 +1261,11 @@ export const FamilyCalendarItemSchema = z
     kind: z.enum(['enrollment_session', 'session_booking']),
     enrollmentId: z.uuid().nullable(),
     sessionBookingId: z.uuid().nullable(),
+    /**
+     * ENR-15 (SPK-YOUTH-007, SCR-C-19): what a session booking is (pickup, trial, makeup or a
+     * single session); null for a session of an enrollment.
+     */
+    bookingKind: SessionBookingKindSchema.nullable(),
     offeringId: z.uuid(),
     sessionId: z.uuid().nullable(),
     title: z.string(),

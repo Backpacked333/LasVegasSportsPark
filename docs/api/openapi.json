@@ -28793,6 +28793,16 @@
             ],
             "format": "uuid"
           },
+          "bookingKind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionBookingKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "offeringId": {
             "type": "string",
             "format": "uuid"
@@ -28838,6 +28848,7 @@
           "kind",
           "enrollmentId",
           "sessionBookingId",
+          "bookingKind",
           "offeringId",
           "sessionId",
           "title",

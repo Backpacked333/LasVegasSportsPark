@@ -511,6 +511,13 @@ PostgreSQL) unless marked **proposed** or **pending**.
   time), `placement` (team name), `registration_outcome` (an application decided, or a waitlist
   entry retired because it could never be accepted).
 
+### Family calendar booking kind (ENR-15)
+
+- **Verified** (`youth.spec.ts`, "SPK-YOUTH-007: one calendar … each booking says its kind
+  (ENR-15)"): `FamilyCalendarItem.bookingKind` is the session booking's kind (`pickup`, `trial`,
+  `makeup`, `session`) and null for a session of an enrollment, so the customer app labels a
+  pickup session without reading its offering (SCR-C-19, 2026-11-09).
+
 ### Package G behind capability switches (ENR-10 to ENR-14)
 
 Each capability is off by default per organization and changed only by an administrator with

@@ -8,6 +8,7 @@ const item = (id: string, personId: string, start: string, end: string): FamilyC
   kind: 'session_booking',
   enrollmentId: null,
   sessionBookingId: id,
+  bookingKind: 'session',
   offeringId: '01a16c09-0000-7000-8000-0000000000aa',
   sessionId: null,
   title: 'Activity',
