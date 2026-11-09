@@ -531,6 +531,15 @@ PostgreSQL) unless marked **proposed** or **pending**.
   `GET /bookings?kind=rental|party` narrows the staff list to one kind, so the Rentals and Parties
   screens page through their own bookings only (SCR-S-51, SCR-S-52).
 
+### Staff read of a membership (ENR-18)
+
+- **Verified** (`memberships.spec.ts`, "ENR-18: staff read one membership …"):
+  `GET /enrollments/{id}/membership` returns the membership's term dates, usage per period and
+  suspensions to whoever may read the enrollment (`enrollment.read_enrollment`: staff of its
+  facility, the member, or a guardian holding view); the member reads exactly what
+  `GET /me/memberships` lists. Anyone else, a non-membership enrollment and an unknown id are
+  NOT_FOUND. The staff member page shows the term and usage (SCR-S-53).
+
 ### Package G behind capability switches (ENR-10 to ENR-14)
 
 Each capability is off by default per organization and changed only by an administrator with

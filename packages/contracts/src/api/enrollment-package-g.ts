@@ -657,6 +657,12 @@ command(
   MembershipSuspensionSchema,
 );
 query(
+  '/enrollments/{id}/membership',
+  'One membership with its term, usage and suspensions (ENR-18; staff readers of its facility, the member or a guardian holding view)',
+  null,
+  MembershipSchema,
+);
+query(
   '/enrollments/{id}/membership-suspensions',
   "A membership's suspensions with the id and revision ending one needs (staff who may suspend it; GAPS-TRIAGE-02)",
   ListMembershipSuspensionsQuery,

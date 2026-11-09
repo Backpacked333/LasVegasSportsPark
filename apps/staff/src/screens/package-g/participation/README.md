@@ -80,10 +80,9 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
 
 1. Resolved 2026-11-09 (ENR-17): `GET /v1/bookings?kind=` lists rentals or parties only, and
    Rentals and Parties each page through their own kind.
-2. No staff read of a membership: term dates (`membership_starts_at`/`ends_at`), sessions used per
-   period and suspensions are only in the customer's `GET /v1/me/memberships`; `Enrollment` carries
-   none of them. Staff can suspend and end suspensions they recorded in the page, but cannot list
-   earlier ones or see the usage (`MembershipsService.listMine`, `MembershipSchema`).
+2. Resolved in the API 2026-11-09 (ENR-18): `GET /v1/enrollments/{id}/membership` gives staff
+   the term dates, usage and suspensions (suspensions alone: `GET .../membership-suspensions`,
+   GAPS-TRIAGE-02), and the member page shows them.
 3. Fixed during stage-4 integration: `POST /v1/bookings/{id}/cancel` on a held booking answers 409
    `CHECKOUT_IN_PROGRESS` while its basket is `checking_out` and 409 `BOOKING_CONFIRMATION_PENDING`
    once it is `fulfilled` (`BookingsService.cancel`, `bookings.spec.ts`). A `partially_fulfilled`

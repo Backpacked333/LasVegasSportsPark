@@ -450,9 +450,36 @@ describe('SCR-S-53 Memberships', () => {
     expect(
       app.fake.requests.find((r) => r.route === '/session-bookings' && r.method === 'GET')?.query,
     ).toEqual({ participantPersonId: MEMBER_ID });
+  });
+
+  it('ENR-18: shows the term dates and the sessions used against each period’s limit', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}/membership': ok({
+          enrollmentId: MEMBERSHIP_ENROLLMENT_ID,
+          participantPersonId: MEMBER_ID,
+          offeringId: '0192f1a0-0000-7000-8000-0000000002f1',
+          offeringName: 'Monthly membership',
+          status: 'confirmed',
+          termStartsAt: '2026-10-01T07:00:00.000Z',
+          termEndsAt: '2026-11-01T07:00:00.000Z',
+          attendance: null,
+          renewedFromEnrollmentId: null,
+          suspensions: [],
+          usage: [{ periodKey: '2026-W42', usedCount: 2, limitCount: 3 }],
+          revision: 1,
+          createdAt: '2026-10-01T07:00:00.000Z',
+        }),
+      }),
+    });
+    render(app.at(DETAIL));
+    const usage = await screen.findByRole('list', { name: 'Sessions used per period' });
+    expect(within(usage).getByText('Period 2026-W42: 2 of 3 used')).toBeInTheDocument();
+    const term = screen.getByLabelText('Term');
+    expect(within(term).getByText(/Oct 1/)).toBeInTheDocument();
     expect(
-      screen.getByText(/the count used against each period's limit are not readable/),
-    ).toBeInTheDocument();
+      app.fake.requests.find((r) => r.route === '/enrollments/{id}/membership')?.params,
+    ).toEqual({ id: MEMBERSHIP_ENROLLMENT_ID });
   });
 
   it('no session booked with the membership reads empty; without the read permission it is not available to you', async () => {
