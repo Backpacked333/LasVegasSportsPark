@@ -58438,6 +58438,8 @@ export type components = {
             scheduledEnd: string;
             /** Format: date-time */
             scheduledStart: string;
+            /** Format: uuid */
+            schedulingEventId: string | null;
             sequence: number;
             /** Format: uuid */
             sessionId: string;

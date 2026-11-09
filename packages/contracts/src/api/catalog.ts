@@ -1065,6 +1065,11 @@ export const FacilitySessionSchema = z
     scheduledStart: Instant,
     scheduledEnd: Instant,
     status: OfferingSessionStatusSchema,
+    /**
+     * CAT-05 (SPK-SCHED-001, SCR-S-03): the scheduling event through which the session holds its
+     * space; null when it holds none.
+     */
+    schedulingEventId: z.uuid().nullable(),
     facilityId: z.uuid(),
     /** IANA time zone of the facility (SPK-SCHED-008). */
     timezone: z.string(),

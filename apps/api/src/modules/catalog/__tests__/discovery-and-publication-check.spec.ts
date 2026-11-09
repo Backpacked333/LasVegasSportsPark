@@ -403,6 +403,8 @@ describe('catalog discovery and publication check (CAT-01)', () => {
         scheduledStart: '2026-11-03T01:00:00.000Z',
         scheduledEnd: '2026-11-03T02:00:00.000Z',
         status: 'scheduled',
+        // CAT-05: a session not linked to a scheduling event holds no space.
+        schedulingEventId: null,
         facilityId: t.facilityId,
         timezone: 'America/Los_Angeles',
         location: { source: 'offering', label: 'Main complex', resources: [] },

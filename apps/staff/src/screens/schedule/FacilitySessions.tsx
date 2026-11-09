@@ -6,8 +6,9 @@
  * this section says the sessions are not available, and the rest of the calendar is unaffected.
  *
  * A session holds space only through its scheduling event, which the calendar shows on its space.
- * The session list does not say which event that is (reported API issue), so sessions are listed
- * here, apart from the spaces, and never used to mark a space busy or free.
+ * The list says whether a session has one (CAT-05 `schedulingEventId`): a scheduled session
+ * without one holds no space, and is marked so the scheduler can book it. Sessions stay listed
+ * here, apart from the spaces, and are never used to mark a space busy or free.
  */
 import type { Schema } from '@sportspark/api-client';
 import { Link } from 'react-router';
@@ -82,9 +83,15 @@ export function FacilitySessions({
                         </span>
                         <span className="caption">
                           {formatRange(s.scheduledStart, s.scheduledEnd, s.timezone)}
+                          {s.schedulingEventId
+                            ? ' · space booked through its scheduling event'
+                            : ''}
                         </span>
                       </div>
                       <StatusBadge tone={badge.tone} label={badge.label} />
+                      {!s.schedulingEventId && s.status === 'scheduled' ? (
+                        <StatusBadge tone="warning" label="No space booked" />
+                      ) : null}
                       <Link to={`/programs/offerings/${s.offeringId}`}>
                         Offering setup for {s.offeringName}
                       </Link>

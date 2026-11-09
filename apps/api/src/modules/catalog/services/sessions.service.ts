@@ -177,6 +177,7 @@ export class SessionsService {
         scheduledStart: new Date(r.scheduled_start).toISOString(),
         scheduledEnd: new Date(r.scheduled_end).toISOString(),
         status: r.status,
+        schedulingEventId: r.scheduling_event_id,
         facilityId: r.facility_id,
         timezone: facility.timezone,
         location: places.get(r.id)!,

@@ -8716,6 +8716,13 @@
           "status": {
             "$ref": "#/components/schemas/OfferingSessionStatus"
           },
+          "schedulingEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "facilityId": {
             "type": "string",
             "format": "uuid"
@@ -8758,6 +8765,7 @@
           "scheduledStart",
           "scheduledEnd",
           "status",
+          "schedulingEventId",
           "facilityId",
           "timezone",
           "location",
