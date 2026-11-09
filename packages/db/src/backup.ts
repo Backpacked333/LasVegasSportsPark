@@ -17,7 +17,14 @@ export interface BackupManifest {
 }
 
 export interface RestoreVerification {
+  /**
+   * The restore is faithful to its backup and its schema is current for this build: the API and
+   * worker of this build may start on it. A faithful restore of an older backup is not ok until
+   * the pending migrations are applied (its schema would not be this build's).
+   */
   ok: boolean;
+  /** Rows and applied migrations equal the backup's (what the restore itself must achieve). */
+  faithful: boolean;
   backupId: string;
   /** Applied migrations in the restored database equal the backup's. */
   migrationsMatch: boolean;
@@ -87,8 +94,10 @@ export async function verifyRestore(
     }))
     .filter((d) => d.backup !== d.restored);
   const migrationsMatch = restored.migrations.digest === manifest.migrations.digest;
+  const faithful = migrationsMatch && rowCountDifferences.length === 0;
   return {
-    ok: migrationsMatch && rowCountDifferences.length === 0,
+    ok: faithful && schemaStatus.current,
+    faithful,
     backupId: manifest.backupId,
     migrationsMatch,
     schemaStatus,

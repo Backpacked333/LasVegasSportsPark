@@ -47,7 +47,12 @@ async function main(): Promise<void> {
     const result = await verifyRestore(db, manifest);
     console.warn(JSON.stringify(result, null, 2));
     if (!result.ok) {
-      console.error('restore verification failed: do not start the processes on this database');
+      const { pending, mismatched, missingOnDisk } = result.schemaStatus;
+      console.error(
+        result.faithful && mismatched.length === 0 && missingOnDisk.length === 0
+          ? `restored faithfully, but ${pending.length} migration(s) of this build are not applied: run pnpm db:migrate, then verify readiness before starting the processes`
+          : 'restore verification failed: do not start the processes on this database',
+      );
       process.exitCode = 1;
       return;
     }

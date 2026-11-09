@@ -2,7 +2,7 @@ import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { takeBackupManifest, verifyRestore } from './backup';
 import { createPgliteDatabase } from './client';
-import { migrateToLatest } from './migrate';
+import { loadMigrationFiles, migrateToLatest } from './migrate';
 
 describe('backup manifest and restore verification (§5.8, SPK-AT-028)', () => {
   let ctx: Awaited<ReturnType<typeof createPgliteDatabase>>;
@@ -22,6 +22,7 @@ describe('backup manifest and restore verification (§5.8, SPK-AT-028)', () => {
     const result = await verifyRestore(ctx.db, manifest);
     expect(result).toMatchObject({
       ok: true,
+      faithful: true,
       migrationsMatch: true,
       rowCountDifferences: [],
       schemaStatus: { current: true },
@@ -53,5 +54,24 @@ describe('backup manifest and restore verification (§5.8, SPK-AT-028)', () => {
       await sql`delete from schema_migrations where version = '9998'`.execute(ctx.db);
       await sql`delete from organizations where slug = 'later'`.execute(ctx.db);
     }
+  });
+
+  it('SPK-AT-028: a faithful restore of a backup older than this build is not ok until its migrations are applied', async () => {
+    const manifest = await takeBackupManifest(ctx.db);
+    // This build knows one migration more than the restored database has applied.
+    const files = [
+      ...(await loadMigrationFiles()),
+      {
+        version: '9999',
+        name: 'newer_build',
+        fileName: '9999_newer_build.sql',
+        sql: 'select 1;',
+        checksum: 'newer',
+      },
+    ];
+    const result = await verifyRestore(ctx.db, manifest, { files });
+    expect(result).toMatchObject({ faithful: true, migrationsMatch: true, ok: false });
+    expect(result.schemaStatus.current).toBe(false);
+    expect(result.schemaStatus.pending).toEqual(['9999_newer_build.sql']);
   });
 });
