@@ -65,6 +65,14 @@ Recommended:
 Never set in production: `AUTH_LOCAL_SECRET`, `DEV_TOKENS_PASSCODE`, `PGLITE_DATA_DIR`,
 `STAGING_INLINE_WORKER`. Every option is documented in `apps/api/src/kernel/config.ts`.
 
+Client builds name the identity provider with public identifiers, not secrets (**Verified**:
+`apps/staff/src/config/config.ts`, `apps/mobile/app.config.ts`): the staff site reads
+`VITE_AUTH_ISSUER`, `VITE_AUTH_CLIENT_ID` and `VITE_ORGANIZATION_SLUG`; the customer app reads
+`SPORTSPARK_AUTH_ISSUER`, `SPORTSPARK_AUTH_CLIENT_ID` and `SPORTSPARK_ORGANIZATION_SLUG`. The
+issuer must equal the API's `AUTH_ISSUER`. The provider needs two return addresses registered,
+`<staff origin>/sign-in/callback` and `sportspark://sign-in`, and must allow the staff origin on
+its token endpoint. A build without these shows sign-in as pending (DEC-018).
+
 ## 4. Observability (§5.11)
 
 - Logs: one JSON object per line on stdout/stderr with `correlationId` (also returned to clients

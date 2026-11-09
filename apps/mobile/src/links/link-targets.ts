@@ -13,6 +13,8 @@
 export const APP_SCHEME = 'sportspark';
 /** The one in-app route every external link is sent to (src/screens/link/LinkLandingScreen). */
 export const LINK_LANDING_PATH = '/link';
+/** The route the identity provider's return address (`sportspark://sign-in`) maps to. */
+export const SIGN_IN_RETURN_PATH = '/sign-in';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Invitation and claim tokens are 16 to 512 characters (`Token` in packages/contracts). */
@@ -181,5 +183,9 @@ export function safeSystemPath(path: string, options: SafeSystemPathOptions): st
   if (normalized === LINK_LANDING_PATH) {
     return query ? `${LINK_LANDING_PATH}?${query}` : LINK_LANDING_PATH;
   }
+  // The identity provider's return address (`session/managed-sign-in.ts`). The sign-in browser
+  // hands the full address to the sign-in in progress; the router is given the sign-in screen
+  // only, so the code and state in the query never reach a route or a screen.
+  if (parts.scheme === APP_SCHEME && normalized === SIGN_IN_RETURN_PATH) return SIGN_IN_RETURN_PATH;
   return UNSUPPORTED;
 }

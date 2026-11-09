@@ -77,7 +77,7 @@ describe('safeSystemPath (+native-intent, §4.13)', () => {
   });
 
   it('routes every scheme form through the closed list (no bypass without "//")', () => {
-    expect(safeSystemPath('sportspark:/sign-in', prod)).toBe('/link?problem=unsupported');
+    expect(safeSystemPath('sportspark:/recovery', prod)).toBe('/link?problem=unsupported');
     expect(safeSystemPath('sportspark:family', prod)).toBe('/link?problem=unsupported');
     expect(safeSystemPath(`sportspark:invitations/${ID}?type=team`, prod)).toBe(
       '/link?problem=unsupported',
@@ -86,6 +86,24 @@ describe('safeSystemPath (+native-intent, §4.13)', () => {
     expect(safeSystemPath('sportspark:link?to=inbox', prod)).toBe('/link?to=inbox');
     expect(safeSystemPath('family', prod)).toBe('/link?problem=unsupported');
     expect(safeSystemPath('//evil.example/link', prod)).toBe('/link?problem=unsupported');
+  });
+
+  it('the identity provider return address opens only the sign-in screen, and never carries its code or state to a route (DEC-018)', () => {
+    expect(safeSystemPath('sportspark://sign-in?code=abc&state=xyz', prod)).toBe('/sign-in');
+    expect(safeSystemPath('sportspark://sign-in', prod)).toBe('/sign-in');
+    expect(safeSystemPath('sportspark:/sign-in/?error=access_denied&state=xyz', prod)).toBe(
+      '/sign-in',
+    );
+    // Only the app's own scheme returns there: a web link with that path is not a sign-in return.
+    expect(
+      safeSystemPath('https://app.example/sign-in?code=abc', {
+        ...prod,
+        verifiedHosts: ['app.example'],
+      }),
+    ).toBe('/link?problem=unsupported');
+    expect(safeSystemPath('sportspark://sign-in/callback?code=abc', prod)).toBe(
+      '/link?problem=unsupported',
+    );
   });
 
   it('opens no https link in a release build until verified-link domains are configured (DEC-061)', () => {
@@ -103,7 +121,7 @@ describe('safeSystemPath (+native-intent, §4.13)', () => {
 
   it('opens Home for the bare scheme and refuses every other route from outside the app', () => {
     expect(safeSystemPath('sportspark://', prod)).toBe('/');
-    expect(safeSystemPath('sportspark://sign-in', prod)).toBe('/link?problem=unsupported');
+    expect(safeSystemPath('sportspark://recovery', prod)).toBe('/link?problem=unsupported');
     expect(safeSystemPath('sportspark://payments/123', prod)).toBe('/link?problem=unsupported');
     expect(safeSystemPath('javascript://alert(1)', prod)).toBe('/link?problem=unsupported');
     expect(safeSystemPath('file:///etc/passwd', prod)).toBe('/link?problem=unsupported');

@@ -41,6 +41,38 @@ export interface AppConfig {
    * `null` while pending: screens show the pending state instead of presenting pickup as decided.
    */
   supervisedPickup?: boolean | null;
+  /** Unset (`null`): no managed sign-in in this build; the sign-in screen says so (DEC-018). */
+  auth?: AuthConfig | null;
+}
+
+/**
+ * Managed sign-in (§4.13, §4.14; DEC-018): the identity provider this build signs in at. Public
+ * identifiers, not secrets. Which provider it is stays a recorded decision.
+ */
+export interface AuthConfig {
+  issuer: string;
+  clientId: string;
+  audience?: string;
+  scope?: string;
+  bearer?: 'access_token' | 'id_token';
+}
+
+/** The configured identity provider, or null when the build names none. */
+export function readAuthConfig(value: unknown): AuthConfig | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const issuer = text(v.issuer);
+  const clientId = text(v.clientId);
+  if (!issuer || !clientId) return null;
+  const audience = text(v.audience);
+  const scope = text(v.scope);
+  return {
+    issuer,
+    clientId,
+    ...(audience ? { audience } : {}),
+    ...(scope ? { scope } : {}),
+    ...(v.bearer === 'id_token' ? { bearer: 'id_token' as const } : {}),
+  };
 }
 
 export interface SupportContact {
@@ -58,6 +90,7 @@ interface Extra {
   supportContact?: unknown;
   verifiedLinkHosts?: unknown;
   supervisedPickup?: unknown;
+  auth?: unknown;
 }
 
 function text(value: unknown): string | null {
@@ -97,5 +130,6 @@ export function readAppConfig(): AppConfig {
       ? extra.verifiedLinkHosts.filter((h): h is string => typeof h === 'string' && h.length > 0)
       : [],
     supervisedPickup: typeof extra.supervisedPickup === 'boolean' ? extra.supervisedPickup : null,
+    auth: readAuthConfig(extra.auth),
   };
 }

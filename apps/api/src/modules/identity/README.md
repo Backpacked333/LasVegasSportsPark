@@ -76,6 +76,8 @@ and `touch_updated_at`; append-only tables carry `forbid_mutation`.
 | `POST /claims/accept`                                        | verified customer, token in the body (§4.14): links the account (self) or creates guardianship (guardian); a self claim stored with a recipient is refused (fails closed)                                                                                                                                                                                                                                                                                           |
 | `POST /claims/{token}/accept`                                | deprecated (token in the URL path); same behaviour, kept until clients move to `POST /claims/accept`                                                                                                                                                                                                                                                                                                                                                                |
 | `POST /claims/{id}/revoke`                                   | staff (`identity.revoke_claim`): revoke a pending claim with a reason; a revoked token is never accepted (SPK-IAM-002, SPK-IAM-006)                                                                                                                                                                                                                                                                                                                                 |
+| `POST /accounts/register`                                    | the verified identity of the bearer token, before any account exists (public route, token required): a login account in the organization named by slug, with no person and no grant; a repeat answers the same account; rate limited (`account_registration`); a disabled account or one in another organization is answered AUTHENTICATION_REQUIRED                                                                                                                |
+| `POST /me/person`                                            | the holder of an account with no person: their own adult record, linked in the same transaction; contact points only from the provider's verified claims; a verified claim that already identifies another person answers RESOURCE_CONFLICT `resolution: claim_existing_record` and creates nothing (SPK-IAM-002); other likenesses become duplicate candidates (SPK-IAM-007)                                                                                       |
 | `POST /accounts`, `POST /accounts/{id}/relink`               | system_administrator, support_operator; relink never touches grants (SPK-AT-025)                                                                                                                                                                                                                                                                                                                                                                                    |
 | `POST /households`, `POST /households/{id}/members`          | staff role, or a household member holding `view` over the person added (a staff member without a covering role is held to the member rule)                                                                                                                                                                                                                                                                                                                          |
 | `POST /relationships`                                        | staff role; self-service only as guardian of a child the adult created; another household's record reads as NOT_FOUND whatever its state (§4.10)                                                                                                                                                                                                                                                                                                                    |
@@ -409,6 +411,26 @@ every rule the directory already applies (in effect at the clock, active persons
 official roles only with `identity.read_workforce_directory`); an unknown id is simply absent. The
 staff dashboard names maintenance task owners with it instead of paging the facility's directory.
 Test: `staff-reads.spec.ts` ("… a lookup by person id (ID-10)"), 2026-11-09.
+
+## Self-registration (SPK-IAM-001, SPK-IAM-002, SPK-UX-001) — verified
+
+**Verified** by `__tests__/self-registration.spec.ts` (PGlite and PostgreSQL):
+
+- A person the identity provider verified registers their own login account
+  (`POST /v1/accounts/register`) and, when the front desk has no record of them, their own adult
+  record (`POST /v1/me/person`). Neither grants access to anyone else's record: no relationship,
+  grant, household or staff role is created.
+- The authentication guard keeps the verified identity on the request (`CurrentVerifiedIdentity`)
+  for these two commands. Contact points are recorded from the OpenID Connect claims `email` with
+  `email_verified` and `phone_number` with `phone_number_verified`; a claim the provider did not
+  mark verified is recorded unverified.
+- `POST /accounts/register` is not `@Idempotent()`: an idempotency key is scoped to a principal,
+  and none exists yet. `(issuer, subject)` is unique, so a repeat or a race answers one account.
+- **Proposed**, pending DEC-004 (Operator/privacy owner): anyone the identity provider verifies
+  may register, and an adult may create their own record. Matching a provider-verified contact to
+  a desk-made record automatically is not done; the person claims that record with a code.
+- **Not built**: a provider that does not emit the standard verified-contact claims needs them
+  mapped at the provider; multifactor claims (`amr`, `acr`) are not read (DEC-091).
 
 ## Known gaps
 

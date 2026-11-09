@@ -107,6 +107,17 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       placementFields: process.env.SPORTSPARK_PLACEMENT_FIELDS
         ? process.env.SPORTSPARK_PLACEMENT_FIELDS.split(',').map((f: string) => f.trim())
         : null,
+      // Managed sign-in (§4.13, DEC-018): the identity provider's issuer and this app's public
+      // client id there. Unset: the sign-in screen says sign-in is pending. No secret belongs here.
+      auth: process.env.SPORTSPARK_AUTH_ISSUER
+        ? {
+            issuer: process.env.SPORTSPARK_AUTH_ISSUER,
+            clientId: process.env.SPORTSPARK_AUTH_CLIENT_ID ?? null,
+            audience: process.env.SPORTSPARK_AUTH_AUDIENCE ?? null,
+            scope: process.env.SPORTSPARK_AUTH_SCOPE ?? null,
+            bearer: process.env.SPORTSPARK_AUTH_BEARER ?? null,
+          }
+        : null,
       // Verified-link domains (SCR-C-39). Pending DEC-061: unset, so release builds open no https link.
       verifiedLinkHosts,
       // Whether supervised pickup is used. Pending DEC-075 (and DEC-005): unset, so pickup shows as pending.
