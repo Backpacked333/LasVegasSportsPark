@@ -1,6 +1,6 @@
-import { Injectable, Module } from '@nestjs/common';
+import { Injectable, Logger, Module } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../../testing/test-app';
 import { customerPrincipal } from '../../testing/principals';
 import { TEAM_AUTHORITY_IMPL } from '../kernel.module';
@@ -68,5 +68,27 @@ describe('lazy ports (module-registered implementations)', () => {
     expect((port as { then?: unknown }).then).toBeUndefined();
     await expect(Promise.resolve(port)).resolves.toBe(port);
     expect(await port.ping()).toBe('fallback');
+  });
+
+  it('§5.11: warns once on the first real call that falls back, never because the container inspected the value', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const fallback = { ping: async () => 'fallback' };
+      const port = lazyPort<typeof fallback>(
+        t.app.get(ModuleRef),
+        Symbol('MISSING_IMPL'),
+        fallback,
+        'no MISSING_IMPL registered',
+      );
+      // What Nest and the Promise machinery read from a provider value while the container is built.
+      expect(port.constructor).toBe(Object);
+      expect((port as { then?: unknown }).then).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+      await port.ping();
+      await port.ping();
+      expect(warn.mock.calls).toEqual([['no MISSING_IMPL registered']]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -38,7 +38,10 @@ export function lazyPort<T extends object>(
   };
   return new Proxy(fallback, {
     get(target, prop) {
-      if (prop === 'then' || typeof prop === 'symbol') {
+      // `then` (Promise machinery) and `constructor` (Nest reads it from every provider value
+      // while the container is built, before any implementation exists) are not uses of the port:
+      // answering them from the fallback keeps the lookup, and its warning, for a real call.
+      if (prop === 'then' || prop === 'constructor' || typeof prop === 'symbol') {
         return (target as Record<PropertyKey, unknown>)[prop];
       }
       const impl = resolve();
