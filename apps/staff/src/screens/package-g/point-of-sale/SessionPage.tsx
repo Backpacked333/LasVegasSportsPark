@@ -7,13 +7,17 @@
  * finance (`finance.pos_register_variance`): no tolerance is approved (POL-018), so every
  * difference is reported, never absorbed. Times are in the facility's zone (SPK-SCHED-008).
  *
- * The API lists no sales of a session: a sale is reached from the page that started it or by its
- * reference, and closing answers SESSION_HAS_OPEN_SALES with how many are still open.
+ * The session's sales are listed newest first (`GET /v1/pos-register-sessions/{id}/sales`, FIN-08),
+ * each with its number, status and total, opening its sale page; open ones can be listed alone.
+ * The register's other sessions are listed too (`GET /v1/pos-registers/{id}/sessions`), most
+ * recently opened first, each opening its own page. Closing still answers SESSION_HAS_OPEN_SALES
+ * with how many are open.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useApiCommand } from '../../../api/useApiCommand';
+import { useApiPages } from '../../../api/useApiPages';
 import { useApiQuery } from '../../../api/useApiQuery';
 import {
   PersonReferenceField,
@@ -28,7 +32,10 @@ import {
   useRecordParam,
 } from '../../../features/pos-access-accounting/fields';
 import { useIntentForm } from '../../../features/pos-access-accounting/intent';
-import { POS_SESSION_STATUS } from '../../../features/pos-access-accounting/labels';
+import {
+  POS_SALE_STATUS,
+  POS_SESSION_STATUS,
+} from '../../../features/pos-access-accounting/labels';
 import { POS_ACTIONS, useOffer } from '../../../features/pos-access-accounting/permission';
 import {
   formatInstant,
@@ -39,7 +46,9 @@ import {
 import { PersonName } from '../../../features/registration-finance/names';
 import { OfflineCaption, useOnline } from '../../../features/registration-finance/offline';
 import { Button } from '../../../ui/Button';
+import { CheckboxField } from '../../../features/operations/fields';
 import { Facts } from '../../../ui/FormFields';
+import { LoadMore } from '../../../ui/LoadMore';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { POS_PATHS } from './paths';
@@ -107,10 +116,102 @@ function SessionView({ sessionId }: { sessionId: string }) {
                   <CloseSession session={data} onReload={() => void session.refetch()} />
                 </>
               ) : null}
+              <SessionSales session={data} />
+              <RegisterSessions session={data} />
             </>
           );
         }}
       </QueryBoundary>
+    </section>
+  );
+}
+
+/** FIN-08: the session's sales, newest first, each opening its sale page. */
+function SessionSales({ session }: { session: Session }) {
+  const directory = useFacilityDirectory();
+  const zone = directory.timeZoneOf(session.facilityId);
+  const [openOnly, setOpenOnly] = useState(false);
+  const sales = useApiPages({
+    path: '/pos-register-sessions/{id}/sales',
+    request: {
+      path: { id: session.id },
+      query: { limit: 25, ...(openOnly ? { status: 'open' as const } : {}) },
+    },
+  });
+  return (
+    <section aria-labelledby="pos-session-sales-title">
+      <h4 id="pos-session-sales-title">Sales in this session</h4>
+      <CheckboxField label="Only open sales" checked={openOnly} onChange={setOpenOnly} />
+      <QueryBoundary
+        query={sales}
+        label="the session's sales"
+        isEmpty={(items) => items.length === 0}
+        empty={
+          openOnly
+            ? { title: 'No open sales', description: 'Every sale in this session is settled.' }
+            : { title: 'No sales yet', description: 'Sales started in this session appear here.' }
+        }
+      >
+        {(items) => (
+          <ul className="list" aria-label="Sales in this session">
+            {items.map((sale) => (
+              <li key={sale.id}>
+                <div className="row-text">
+                  <Link to={POS_PATHS.sale(sale.id)}>Sale {sale.saleNumber}</Link>
+                  <span className="caption">
+                    {formatMoney(sale.totalMinor, sale.currency)} ·{' '}
+                    {formatInstant(sale.createdAt, zone)}
+                  </span>
+                </div>
+                <StatusBadge {...POS_SALE_STATUS[sale.status]} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={sales} label="sales" />
+    </section>
+  );
+}
+
+/** FIN-08: the register's other sessions, most recently opened first. */
+function RegisterSessions({ session }: { session: Session }) {
+  const sessions = useApiPages({
+    path: '/pos-registers/{id}/sessions',
+    request: { path: { id: session.registerId }, query: { limit: 25 } },
+  });
+  const others = sessions.data?.filter((s) => s.id !== session.id);
+  return (
+    <section aria-labelledby="pos-register-sessions-title">
+      <h4 id="pos-register-sessions-title">Other sessions of this register</h4>
+      <QueryBoundary
+        query={{ ...sessions, data: others }}
+        label="the register's sessions"
+        isEmpty={(items) => items.length === 0}
+        empty={{ title: 'No other sessions', description: 'This is the register’s only session.' }}
+      >
+        {(items) => (
+          <ul className="list" aria-label="Other sessions of this register">
+            {items.map((s) => (
+              <li key={s.id}>
+                <div className="row-text">
+                  <Link to={POS_PATHS.session(s.id)}>
+                    Session of {formatBusinessDate(s.businessDate)}
+                  </Link>
+                  <span className="caption">
+                    Opening float {formatMoney(s.openingFloatMinor, s.currency)}
+                    {s.varianceMinor !== null && s.varianceMinor !== 0
+                      ? ` · difference ${formatMoney(s.varianceMinor, s.currency)}`
+                      : ''}
+                  </span>
+                </div>
+                <StatusBadge {...POS_SESSION_STATUS[s.status]} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={sessions} label="sessions" />
     </section>
   );
 }

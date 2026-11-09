@@ -8,6 +8,7 @@ import {
   type CreatePosReturnInput,
   type CreatePosSaleInput,
   type ListMyPosReceiptsQuery,
+  type ListSessionSalesQuery,
   type Page,
   type PolicyKind,
   type PosReceipt,
@@ -941,6 +942,48 @@ export class PosSalesService {
       facilityId: sale.facility_id,
     });
     return this.view(this.db, sale);
+  }
+
+  /**
+   * GET /v1/pos-register-sessions/{id}/sales (FIN-08, SCR-S-53): the sales of a register session,
+   * newest first, for POS readers of its facility (finance.read_pos).
+   */
+  async listForSession(
+    principal: Principal,
+    sessionId: string,
+    query: ListSessionSalesQuery,
+  ): Promise<Page<PosSale>> {
+    const organizationId = organizationOf(principal);
+    if (principal.kind !== 'staff' && principal.kind !== 'system') throw errors.accessDenied();
+    const session = await this.db
+      .selectFrom('pos_register_sessions')
+      .select(['id', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', sessionId)
+      .executeTakeFirst();
+    if (!session) throw errors.notFound('register session', sessionId);
+    await requirePosRead(this.authorization, principal, FinanceActions.readPos, {
+      type: 'pos_register_session',
+      id: sessionId,
+      organizationId,
+      facilityId: session.facility_id,
+    });
+    const cursor = decodeKeyset(query.cursor);
+    let q = this.db
+      .selectFrom('pos_sales')
+      .selectAll()
+      .select(keysetAt('pos_sales').as('cursor_at'))
+      .where('organization_id', '=', organizationId)
+      .where('register_session_id', '=', sessionId)
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
+    if (query.status) q = q.where('status', '=', query.status);
+    if (cursor) q = q.where(afterKeysetDesc('pos_sales', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
+    const items: PosSale[] = [];
+    for (const row of page.rows) items.push(await this.view(this.db, row));
+    return { items, nextCursor: page.nextCursor };
   }
 
   /** Facility staff, or the customer the sale names; anyone else learns nothing (§4.10). */

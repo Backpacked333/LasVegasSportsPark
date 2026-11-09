@@ -24,9 +24,11 @@ import {
   baseRoutes,
   ok,
   page,
+  paidSale,
   permissions,
   product,
   register,
+  sale,
   session,
   taxVersion,
 } from '../../../../features/pos-access-accounting/__tests__/fixtures';
@@ -447,6 +449,80 @@ describe('SCR-S-55 PointOfSaleScreen: registers, products and sessions', () => {
       registerSessionId: SESSION_ID,
       customerPersonId: '0192f1a0-0000-7000-8000-000000000301',
     });
+  });
+
+  it('FIN-08: lists the session’s sales newest first, each opening its sale; open ones alone on request', async () => {
+    const user = userEvent.setup();
+    const PAID_ID = '0192f1a0-0000-7000-8000-0000000005a2';
+    const app = createTestApp({
+      routes: {
+        ...routes({
+          'GET /pos-register-sessions/{id}/sales': (req) =>
+            fakeResponse(200, {
+              items:
+                req.query['status'] === 'open'
+                  ? [sale()]
+                  : [sale(), paidSale({ id: PAID_ID, saleNumber: 'FD1-20261024-0002' })],
+              nextCursor: null,
+            }),
+        }),
+        'GET /me/permissions': permissions(ON, FINANCE),
+      },
+    });
+    render(app.at(`${POS}/sessions/${SESSION_ID}`));
+    const list = await screen.findByRole('list', { name: 'Sales in this session' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(list).getByRole('link', { name: 'Sale FD1-20261024-0001' })).toHaveAttribute(
+      'href',
+      `${POS}/sales/${SALE_ID}`,
+    );
+    expect(within(list).getByRole('link', { name: 'Sale FD1-20261024-0002' })).toHaveAttribute(
+      'href',
+      `${POS}/sales/${PAID_ID}`,
+    );
+    await user.click(screen.getByLabelText('Only open sales'));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('list', { name: 'Sales in this session' })).getAllByRole(
+          'listitem',
+        ),
+      ).toHaveLength(1),
+    );
+    const reads = app.fake.requests.filter((r) => r.route === '/pos-register-sessions/{id}/sales');
+    expect(reads.at(-1)?.params).toEqual({ id: SESSION_ID });
+    expect(reads.at(-1)?.query).toMatchObject({ status: 'open' });
+  });
+
+  it('FIN-08: lists the register’s other sessions, each opening its own page', async () => {
+    const EARLIER = '0192f1a0-0000-7000-8000-0000000005b2';
+    const app = createTestApp({
+      routes: {
+        ...routes({
+          'GET /pos-registers/{id}/sessions': page([
+            session(),
+            session({
+              id: EARLIER,
+              businessDate: '20261023',
+              status: 'closed',
+              countedCashMinor: 0,
+              varianceMinor: 0,
+            }),
+          ]),
+        }),
+        'GET /me/permissions': permissions(ON, FINANCE),
+      },
+    });
+    render(app.at(`${POS}/sessions/${SESSION_ID}`));
+    const list = await screen.findByRole('list', { name: 'Other sessions of this register' });
+    const items = within(list).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(within(list).getByRole('link', { name: /^Session of / })).toHaveAttribute(
+      'href',
+      `${POS}/sessions/${EARLIER}`,
+    );
+    expect(
+      app.fake.requests.find((r) => r.route === '/pos-registers/{id}/sessions')?.params,
+    ).toEqual({ id: REGISTER_ID });
   });
 
   it('without the operating permission the session offers no sale and names the permission', async () => {

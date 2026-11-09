@@ -764,3 +764,11 @@ Verified by `__tests__/desk.spec.ts` and `__tests__/pos-line-quantity.spec.ts`:
 - `docs/api/openapi.json` and the API client are regenerated (the parity test passes); the
   `stage3-doubles.ts` test doubles remain for module tests, while the journeys run the real
   identity and catalog members (`pos-to-accounting-export.spec.ts` approves a real `tax_fee`).
+
+## POS lists (FIN-08) — verified 2026-11-09
+
+`GET /pos-registers/{id}/sessions` (most recently opened first, `status` filter) and
+`GET /pos-register-sessions/{id}/sales` (newest first, `status` filter) list a register's sessions
+and a session's sales in keyset pages for POS readers of the facility (`finance.read_pos`); a
+customer or a role without it is refused, an unknown id is NOT_FOUND. The staff session page
+(SCR-S-55) lists both. Test: `__tests__/pos-lists.spec.ts`.

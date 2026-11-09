@@ -11,6 +11,8 @@ import {
   ListMyPosReceiptsQuery,
   ListPosProductsQuery,
   ListPosRegistersQuery,
+  ListRegisterSessionsQuery,
+  ListSessionSalesQuery,
   OpenRegisterSessionBody,
   RetirePosRecordBody,
   UpdatePosProductBody,
@@ -134,6 +136,16 @@ export class PosSetupController {
     return this.setup.openSession(principal, params.id, body, correlationId);
   }
 
+  /** FIN-08: a register's sessions, most recently opened first. */
+  @Get('pos-registers/:id/sessions')
+  listSessions(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodQuery(ListRegisterSessionsQuery) query: ListRegisterSessionsQuery,
+  ): Promise<Page<PosRegisterSession>> {
+    return this.setup.listSessions(principal, params.id, query);
+  }
+
   @Get('pos-register-sessions/:id')
   getSession(
     @CurrentPrincipal() principal: Principal,
@@ -170,6 +182,16 @@ export class PosSalesController {
     @CorrelationId() correlationId: string | null,
   ): Promise<PosSale> {
     return this.sales.create(principal, body, correlationId);
+  }
+
+  /** FIN-08: the sales of a register session, newest first. */
+  @Get('pos-register-sessions/:id/sales')
+  listForSession(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodQuery(ListSessionSalesQuery) query: ListSessionSalesQuery,
+  ): Promise<Page<PosSale>> {
+    return this.sales.listForSession(principal, params.id, query);
   }
 
   @Get('pos-sales/:id')

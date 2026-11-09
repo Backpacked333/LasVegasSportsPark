@@ -7,6 +7,7 @@ import {
   type CreatePosRegisterInput,
   type ListPosProductsQuery,
   type ListPosRegistersQuery,
+  type ListRegisterSessionsQuery,
   type OpenRegisterSessionInput,
   type Page,
   type PosProduct,
@@ -740,6 +741,49 @@ export class PosSetupService {
       });
       return toPosSession(trx, await this.lockSession(trx, organizationId, id));
     });
+  }
+
+  /**
+   * GET /v1/pos-registers/{id}/sessions (FIN-08, SCR-S-53): a register's sessions, most recently
+   * opened first, for POS readers of its facility (finance.read_pos). Another organization's
+   * register is NOT_FOUND.
+   */
+  async listSessions(
+    principal: Principal,
+    registerId: string,
+    query: ListRegisterSessionsQuery,
+  ): Promise<Page<PosRegisterSession>> {
+    const organizationId = organizationOf(principal);
+    if (principal.kind !== 'staff' && principal.kind !== 'system') throw errors.accessDenied();
+    const register = await this.db
+      .selectFrom('pos_registers')
+      .select(['id', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', registerId)
+      .executeTakeFirst();
+    if (!register) throw errors.notFound('register', registerId);
+    await requirePosRead(this.authorization, principal, FinanceActions.readPos, {
+      type: 'pos_register',
+      id: registerId,
+      organizationId,
+      facilityId: register.facility_id,
+    });
+    const cursor = decodeKeyset(query.cursor);
+    let q = this.db
+      .selectFrom('pos_register_sessions')
+      .selectAll()
+      .select(keysetAt('pos_register_sessions', 'opened_at').as('cursor_at'))
+      .where('organization_id', '=', organizationId)
+      .where('register_id', '=', registerId)
+      .orderBy('opened_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
+    if (query.status) q = q.where('status', '=', query.status);
+    if (cursor) q = q.where(afterKeysetDesc('pos_register_sessions', cursor, 'opened_at'));
+    const page = keysetPage(await q.execute(), query.limit);
+    const items: PosRegisterSession[] = [];
+    for (const row of page.rows) items.push(await toPosSession(this.db, row));
+    return { items, nextCursor: page.nextCursor };
   }
 
   async getSession(principal: Principal, id: string): Promise<PosRegisterSession> {

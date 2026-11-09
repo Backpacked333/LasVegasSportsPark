@@ -179,6 +179,12 @@ export const PosRegisterSessionSchema = z
   .openapi('PosRegisterSession');
 export type PosRegisterSession = z.infer<typeof PosRegisterSessionSchema>;
 
+/** FIN-08 (SCR-S-53): a register's sessions, most recently opened first. */
+export const ListRegisterSessionsQuery = PageRequestSchema.extend({
+  status: z.enum(['open', 'closed']).optional(),
+});
+export type ListRegisterSessionsQuery = z.infer<typeof ListRegisterSessionsQuery>;
+
 export const OpenRegisterSessionBody = withCommandMeta({
   currency: CurrencyCode,
   openingFloatMinor: NonNegativeMinor,
@@ -464,6 +470,12 @@ export const PosReceiptSchema = z
 export type PosReceipt = z.infer<typeof PosReceiptSchema>;
 
 export const ListMyPosReceiptsQuery = PageRequestSchema;
+
+/** FIN-08 (SCR-S-53): the sales of a register session, newest first. */
+export const ListSessionSalesQuery = PageRequestSchema.extend({
+  status: PosSaleStatusSchema.optional(),
+});
+export type ListSessionSalesQuery = z.infer<typeof ListSessionSalesQuery>;
 export type ListMyPosReceiptsQuery = z.infer<typeof ListMyPosReceiptsQuery>;
 
 // ---------------------------------------------------------------------------------------------
@@ -584,6 +596,22 @@ register({
   path: '/pos-register-sessions/{id}',
   summary: 'Read a register session with its expected cash',
   response: PosRegisterSessionSchema,
+});
+register({
+  method: 'get',
+  path: '/pos-registers/{id}/sessions',
+  summary:
+    'List a register’s sessions, most recently opened first (FIN-08; POS readers of its facility)',
+  query: ListRegisterSessionsQuery,
+  response: pageSchema(PosRegisterSessionSchema),
+});
+register({
+  method: 'get',
+  path: '/pos-register-sessions/{id}/sales',
+  summary:
+    'List the sales of a register session, newest first (FIN-08; POS readers of its facility)',
+  query: ListSessionSalesQuery,
+  response: pageSchema(PosSaleSchema),
 });
 register({
   method: 'post',
