@@ -19,7 +19,7 @@
     "@expo-google-fonts/archivo-narrow": "0.4.2",
     "@expo-google-fonts/material-symbols": "0.4.49",
     "@expo/log-box": "57.0.4",
-    "@expo/metro-runtime": "57.0.16",
+    "@expo/metro-runtime": "58.0.17",
     "@sportspark/api-client": "workspace:*",
     "@tanstack/react-query": "5.104.1",
     "expo": "57.0.27",
