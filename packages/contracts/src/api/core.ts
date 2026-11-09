@@ -352,10 +352,23 @@ export const ProviderEventSchema = z
   .openapi('ProviderEvent');
 export type ProviderEventView = z.infer<typeof ProviderEventSchema>;
 
+/** `?eventTypes=a,b` or repeated `eventTypes`. */
+const commaList = (value: unknown) =>
+  typeof value === 'string'
+    ? value
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0)
+    : value;
+
 export const ListProviderEventsQuery = PageRequestSchema.extend({
   provider: z.string().min(1).max(100).optional(),
   status: ProviderEventStatusSchema.optional(),
   eventType: z.string().min(1).max(200).optional(),
+  /** K-16 (SCR-S-56): any of these event types (1 to 20); combined with `eventType`, both apply. */
+  eventTypes: z
+    .preprocess(commaList, z.array(z.string().min(1).max(200)).min(1).max(20))
+    .optional(),
   from: z.iso.datetime({ offset: true }).optional(),
   to: z.iso.datetime({ offset: true }).optional(),
 });

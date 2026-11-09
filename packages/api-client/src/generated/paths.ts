@@ -39826,6 +39826,7 @@ export type paths = {
                 query?: {
                     cursor?: string;
                     eventType?: string;
+                    eventTypes?: string[];
                     from?: string;
                     limit?: number;
                     provider?: string;

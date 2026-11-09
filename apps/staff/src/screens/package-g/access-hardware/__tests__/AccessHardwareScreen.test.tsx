@@ -336,6 +336,15 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     expect(rows[1]).toHaveTextContent('Not ingested: retries are exhausted');
     expect(rows[1]).toHaveTextContent('Last error: handler entry.access_control failed');
     expect(within(list).queryByText(/payment\.succeeded/)).toBeNull();
+    // K-16: without a chosen type the API is asked for the hardware event types only.
+    const first = app.fake.requests.find((r) => r.route === '/provider-events');
+    expect(first?.queryAll?.['eventTypes']).toEqual([
+      'access.granted',
+      'access.denied',
+      'access.unknown',
+      'device.heartbeat',
+      'device.command_receipt',
+    ]);
     await user.selectOptions(screen.getByLabelText('Event type'), 'access.unknown');
     await user.selectOptions(screen.getByLabelText('Event status'), 'dead');
     await waitFor(() =>

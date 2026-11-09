@@ -235,6 +235,8 @@ export class AuditLogService {
     if (query.provider) q = q.where('provider', '=', query.provider);
     if (query.status) q = q.where('status', '=', query.status);
     if (query.eventType) q = q.where('event_type', '=', query.eventType);
+    // K-16: any of several event types (a screen reads the kinds it shows, not every event).
+    if (query.eventTypes) q = q.where('event_type', 'in', [...query.eventTypes]);
     if (query.from) q = q.where('received_at', '>=', new Date(query.from));
     if (query.to) q = q.where('received_at', '<', new Date(query.to));
     if (cursor) {

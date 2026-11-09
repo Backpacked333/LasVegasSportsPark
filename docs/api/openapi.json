@@ -77657,6 +77657,21 @@
           },
           {
             "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "minItems": 1,
+              "maxItems": 20
+            },
+            "required": false,
+            "name": "eventTypes",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "string",
               "format": "date-time"
             },

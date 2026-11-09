@@ -160,9 +160,9 @@ and the access hardware policy (POL-043).
   `affectedId`) narrows the list, so the hardware exceptions are read by category. An inbox dead
   letter (`reliability.inbox_dead_letter`) has no
   facility, so a facility's list never shows a dead access event's exception.
-- `GET /v1/provider-events` filters `eventType` by exact value and has no facility or device
-  filter: the event ingestion list is organization-wide and filtered to hardware event types on the
-  page.
+- `GET /v1/provider-events` takes `eventTypes` (K-16, 2026-11-09), so the event ingestion list
+  reads the hardware event types only; it has no facility or device filter and stays
+  organization-wide.
 - The entry module's facility operations queue (`front_desk`, an engineering proposal pending
   DEC-015) cannot be set per facility (`entry.policy.ts`); the page shows whatever queue the
   exception records.

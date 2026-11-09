@@ -275,7 +275,8 @@ function EventIngestion({ zone }: { zone: string | null }) {
     path: '/provider-events',
     request: {
       query: {
-        ...(eventType ? { eventType } : {}),
+        // K-16: the API returns access hardware events only; one chosen type narrows it further.
+        ...(eventType ? { eventType } : { eventTypes: HARDWARE_EVENT_TYPES.map((t) => t.value) }),
         ...(status ? { status: status as Schema<'ProviderEventStatus'> } : {}),
         limit: 50,
       },
@@ -318,9 +319,7 @@ function EventIngestion({ zone }: { zone: string | null }) {
         isEmpty={(items) => !items.some((e) => HARDWARE_EVENT_TYPE.has(e.eventType))}
         empty={{
           title: 'No access events',
-          description: events.hasNextPage
-            ? 'No access hardware event matches on the loaded pages.'
-            : 'No access hardware event matches.',
+          description: 'No access hardware event matches.',
         }}
       >
         {(items) => (
