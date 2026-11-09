@@ -44,12 +44,13 @@ pnpm --filter @sportspark/staff dev      # http://localhost:5173
 
 ## Commands
 
-| Command                                     | What it checks                                                                                |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `pnpm --filter @sportspark/staff test`      | vitest, jsdom, Testing Library (also a project of the root `pnpm test`)                       |
-| `pnpm --filter @sportspark/staff typecheck` | TypeScript strict (also run by the root `pnpm typecheck`)                                     |
-| `pnpm --filter @sportspark/staff lint`      | Root ESLint config, including React hooks rules                                               |
-| `pnpm --filter @sportspark/staff build`     | Typecheck, `vite build`, then `scripts/check-release-bundle.mjs` (no development sign-in; CI) |
+| Command                                     | What it checks                                                                                                                                                                                                                                                        |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @sportspark/staff test`      | vitest, jsdom, Testing Library (also a project of the root `pnpm test`)                                                                                                                                                                                               |
+| `pnpm --filter @sportspark/staff typecheck` | TypeScript strict (also run by the root `pnpm typecheck`)                                                                                                                                                                                                             |
+| `pnpm --filter @sportspark/staff lint`      | Root ESLint config, including React hooks rules                                                                                                                                                                                                                       |
+| `pnpm --filter @sportspark/staff build`     | Typecheck, `vite build`, then `scripts/check-release-bundle.mjs` (no development sign-in; CI)                                                                                                                                                                         |
+| `pnpm --filter @sportspark/staff e2e`       | Playwright smoke in Chromium against `dev:all` with the seed (after `pnpm build`; CI job "Staff dashboard in a browser"): sign-in, Today, one command with its Idempotency-Key, the not-found screen. A browser smoke, not §6.3 acceptance on the actual workstations |
 
 ## What is here and how it is verified
 
@@ -226,6 +227,7 @@ Router 7 is used (React Router 8 requires React 19.2.7 or later).
 | `@testing-library/jest-dom` (dev)   | 7.0.1   | 2026-08-09 | DOM matchers (types adapted to vitest 5 in `src/testing/jest-dom-types.ts`) |
 | `@types/react` (dev)                | 19.2.18 | 2026-07-30 | React types                                                                 |
 | `@types/react-dom` (dev)            | 19.2.7  | 2026-09-03 | React DOM types                                                             |
+| `@playwright/test` (dev)            | 1.63.0  | 2026-09-04 | Browser smoke tests (`e2e/`; added 2026-11-09)                              |
 
 The root `vitest` (5.0.5) runs these tests as the `staff` project; the root also gained
 `eslint-plugin-react-hooks` 7.1.1 (2026-04-17) for the React hooks lint rules.

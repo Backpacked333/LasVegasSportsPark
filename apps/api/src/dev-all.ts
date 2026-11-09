@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { writeFileSync } from 'node:fs';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -16,6 +17,7 @@ import { startInlineWorker } from './kernel/workers/inline-worker';
  *
  *   pnpm dev:all                       API on :3000 with the inline worker
  *   pnpm dev:all -- --seed             also creates the development seed first (seed:dev)
+ *   pnpm dev:all -- --seed --seed-summary <file>   and writes its account ids to <file>
  *
  * Production runs `dist/main.js` and `dist/worker.js` as separate processes (§4.1).
  */
@@ -35,6 +37,10 @@ async function main(): Promise<void> {
   if (process.argv.includes('--seed')) {
     const summary = await seedDevelopment(app, {});
     logger.log(`development seed ready: ${JSON.stringify(summary)}`);
+    // --seed-summary <file>: the seed's account ids for scripts (the browser smoke tests).
+    const at = process.argv.indexOf('--seed-summary');
+    const file = at > 0 ? process.argv[at + 1] : undefined;
+    if (file) writeFileSync(file, `${JSON.stringify(summary, null, 2)}\n`);
   }
   await app.listen(config.PORT);
   const worker = startInlineWorker(app, config);

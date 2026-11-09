@@ -8,3 +8,5 @@ packages/api-client/src/generated/
 .expo
 apps/mobile/ios
 apps/mobile/android
+test-results
+playwright-report

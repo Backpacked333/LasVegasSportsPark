@@ -22,3 +22,7 @@ apps/mobile/android/
 *.hbc
 # Vite (apps/staff): build output is dist/ above; local env files are .env.* above
 .vite/
+
+# Playwright (apps/staff e2e)
+test-results/
+playwright-report/
