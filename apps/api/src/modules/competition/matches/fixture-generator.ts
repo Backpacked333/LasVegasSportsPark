@@ -60,6 +60,13 @@ export interface GeneratorInput {
    * occupies its resource over [start − setup, end + cleanup). Missing resources default to none.
    */
   resourceBuffers?: Record<string, { setupMinutes: number; cleanupMinutes: number }>;
+  /**
+   * The conflict units each resource occupies (scheduling's conflict model, SPK-SCHED-002): a
+   * whole pitch occupies the units of its halves, so a game on the pitch and a game on a half at
+   * overlapping times clash here exactly as scheduling's conflict detector would refuse them at
+   * publication. A resource without an entry occupies only itself.
+   */
+  resourceConflictUnits?: Record<string, readonly string[]>;
   fairnessPreferences: FairnessPreference[];
   playoffStructure: PlayoffStructure | null;
   /** Facility-local wall clock to instant (DST-aware); null when the time does not exist. */
@@ -272,9 +279,22 @@ function buildSlots(input: GeneratorInput): Slot[] {
 }
 
 /** Whether the slot's resource is already held at an overlapping time (one game per resource). */
-function resourceBusy(occupied: Map<string, Array<[number, number]>>, slot: Slot): boolean {
-  return (occupied.get(slot.resourceId) ?? []).some(
-    ([start, end]) => start < slot.occupiedEnd && slot.occupiedStart < end,
+/** The conflict units a slot's resource occupies (itself when scheduling names none). */
+function unitsOf(input: GeneratorInput, resourceId: string): readonly string[] {
+  const units = input.resourceConflictUnits?.[resourceId];
+  return units && units.length > 0 ? units : [resourceId];
+}
+
+/** Whether any conflict unit the slot occupies is already held at an overlapping time. */
+function resourceBusy(
+  input: GeneratorInput,
+  occupied: Map<string, Array<[number, number]>>,
+  slot: Slot,
+): boolean {
+  return unitsOf(input, slot.resourceId).some((unit) =>
+    (occupied.get(unit) ?? []).some(
+      ([start, end]) => start < slot.occupiedEnd && slot.occupiedStart < end,
+    ),
   );
 }
 
@@ -467,7 +487,7 @@ function assign(
       let best: { slot: Slot; score: number } | null = null;
       let considered = 0;
       for (const slot of slots) {
-        if (resourceBusy(occupied, slot)) continue;
+        if (resourceBusy(input, occupied, slot)) continue;
         if (!feasibleForTeam(input, home, game.homeEntryId, slot, game.round, noConsecutiveHard)) {
           continue;
         }
@@ -487,10 +507,12 @@ function assign(
         assignments.push({ game, slot: null });
         continue;
       }
-      occupied.set(best.slot.resourceId, [
-        ...(occupied.get(best.slot.resourceId) ?? []),
-        [best.slot.occupiedStart, best.slot.occupiedEnd],
-      ]);
+      for (const unit of unitsOf(input, best.slot.resourceId)) {
+        occupied.set(unit, [
+          ...(occupied.get(unit) ?? []),
+          [best.slot.occupiedStart, best.slot.occupiedEnd],
+        ]);
+      }
       home.games.push({
         slot: best.slot,
         round: game.round,

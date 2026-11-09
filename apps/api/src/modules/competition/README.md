@@ -589,9 +589,12 @@ built, waiting on a decision or another module.
 - A decided dispute's consequence is not executed automatically (a correction revision carries it
   out).
 - The generator is a seeded greedy search, not an exact solver, so `proven_optimal` is claimed only
-  at zero penalty. It treats each required resource independently: a specification naming both a
-  pitch and one of its halves could place two games on shared ground, which publication validation
-  then refuses.
+  at zero penalty. **Verified 2026-11-09 (correction):** it no longer treats each required
+  resource independently: it holds the conflict units each resource occupies (from scheduling's
+  resource list), so a pitch and one of its halves are never proposed at overlapping times
+  (`matches/fixture-generator.spec.ts` "SPK-SCHED-002 / SPK-FIX-005"). Its capacity bound still
+  counts resources independently, so it can only fail to prove infeasibility, never claim it
+  wrongly.
 - Evidence is a list of references; uploads are not stored here.
 - Facility scope of commands (R3-TRACE-A-01 follow-up, **proposed**, not built): the module's own
   `authorization.require` targets for entry, roster, fixture, result, dispute and discipline
