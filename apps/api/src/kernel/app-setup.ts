@@ -4,6 +4,9 @@ import { ConfigSchema, type AppConfig } from './config';
 import { bodyDepthMiddleware } from './http/body-depth.middleware';
 import { correlationMiddleware } from './http/correlation.middleware';
 import { captureWebhookRawBody } from './http/raw-body';
+import { requestLogMiddleware } from './http/request-log.middleware';
+import type { RequestWithContext } from './http/request-context';
+import { runWithLogContext } from './logging/log-context';
 import { responseHeadersMiddleware } from './http/response-headers.middleware';
 
 export const API_PREFIX = 'v1';
@@ -43,7 +46,14 @@ const DEFAULT_BODY_MAX_DEPTH = ConfigSchema.shape.HTTP_BODY_MAX_DEPTH.parse(unde
  * - Provider webhook routes keep the exact bytes of their body (`RawBody`) so a real provider's
  *   signature over those bytes can be verified (§4.11).
  */
-export function configureApp(app: INestApplication, config?: AppConfig): INestApplication {
+export function configureApp(
+  app: INestApplication,
+  config?: AppConfig,
+  options: {
+    /** Let the framework close the application on SIGTERM; `main.ts` installs its own drain. */
+    shutdownHooks?: boolean;
+  } = {},
+): INestApplication {
   const origins = config?.CORS_ALLOWED_ORIGINS;
   if (config && origins && origins.length > 0) {
     app.enableCors({
@@ -58,6 +68,7 @@ export function configureApp(app: INestApplication, config?: AppConfig): INestAp
   const express = app.getHttpAdapter().getInstance() as { disable(setting: string): unknown };
   express.disable('x-powered-by');
   app.use(correlationMiddleware);
+  if (config?.HTTP_ACCESS_LOG ?? true) app.use(requestLogMiddleware());
   app.use(responseHeadersMiddleware);
   const limit = config?.HTTP_BODY_LIMIT_BYTES ?? DEFAULT_BODY_LIMIT_BYTES;
   const expressApp = app as NestExpressApplication;
@@ -73,7 +84,13 @@ export function configureApp(app: INestApplication, config?: AppConfig): INestAp
   } as { limit: number; extended: boolean });
   // Registered after the parsers, so it sees the parsed body; a refusal reaches the error filter.
   app.use(bodyDepthMiddleware(config?.HTTP_BODY_MAX_DEPTH ?? DEFAULT_BODY_MAX_DEPTH));
+  // The request's log context (§4.10): entered after the body parsers, whose stream callbacks
+  // would otherwise run the rest of the request outside it, so every log line written while the
+  // route runs carries the correlation id.
+  app.use((req: RequestWithContext, _res: unknown, next: () => void) =>
+    runWithLogContext({ correlationId: req.correlationId }, next),
+  );
   app.setGlobalPrefix(API_PREFIX);
-  app.enableShutdownHooks();
+  if (options.shutdownHooks ?? true) app.enableShutdownHooks();
   return app;
 }

@@ -14,6 +14,7 @@ const { NestFactory } = require('@nestjs/core');
 const { AppModule } = require('../dist/app.module');
 const { configureApp } = require('../dist/kernel/app-setup');
 const { loadConfig } = require('../dist/kernel/config');
+const { createLogger } = require('../dist/kernel/logging/json-logger');
 const { Inbox } = require('../dist/kernel/inbox/inbox');
 const { OutboxDispatcher } = require('../dist/kernel/outbox/outbox-dispatcher');
 const { BackgroundWorkers } = require('../dist/kernel/workers/background-workers');
@@ -48,7 +49,7 @@ function startInlineWorker(app, config) {
 async function boot() {
   const config = loadConfig();
   const app = await NestFactory.create(AppModule.forRoot({ config }), {
-    logger: [config.LOG_LEVEL],
+    logger: createLogger(config, 'api'),
   });
   configureApp(app, config);
   await app.init();

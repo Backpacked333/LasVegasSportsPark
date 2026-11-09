@@ -31,6 +31,13 @@ export const CoreActions = defineActions({
     staffRoles: ['general_manager', 'system_administrator'],
     requirements: ['§5.1', '§5.2'],
   },
+  viewMetrics: {
+    id: 'core.view_metrics',
+    description:
+      "Read the organization's operational signal snapshot: queue backlog, dead letters, job health, open exceptions",
+    staffRoles: ['general_manager', 'system_administrator'],
+    requirements: ['§5.11', '§4.12'],
+  },
   viewCapabilities: {
     id: 'core.view_capabilities',
     description: "Read the organization's capability switches and their applicability decisions",

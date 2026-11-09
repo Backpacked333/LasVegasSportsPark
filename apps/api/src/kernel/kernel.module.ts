@@ -45,6 +45,9 @@ import { OrganizationSettingsService } from './core/organization-settings.servic
 import { OperationalExceptions } from './exceptions/operational-exceptions.service';
 import { FacilityDirectory } from './facilities/facility-directory';
 import { HealthController } from './health/health.controller';
+import { ReadinessState } from './health/readiness-state';
+import { MetricsController } from './metrics/metrics.controller';
+import { MetricsSnapshotService } from './metrics/metrics-snapshot.service';
 import { DomainExceptionFilter } from './http/domain-exception.filter';
 import { IdempotencySweeper } from './http/idempotency-sweeper';
 import { IdempotencyInterceptor } from './http/idempotency.interceptor';
@@ -87,6 +90,7 @@ export const TEAM_AUTHORITY_IMPL = Symbol('TEAM_AUTHORITY_IMPL');
 /** The kernel's own controllers (route facts read them without building the module, K-02). */
 export const KERNEL_CONTROLLERS = [
   HealthController,
+  MetricsController,
   OperationsController,
   RecoveryController,
   FacilitiesController,
@@ -148,6 +152,8 @@ export class KernelModule implements OnModuleInit {
       { provide: APP_CONFIG, useValue: config },
       options.database ? { provide: DATABASE, useValue: options.database } : databaseProvider,
       DatabaseLifecycle,
+      ReadinessState,
+      MetricsSnapshotService,
       { provide: CLOCK, useClass: SystemClock },
       {
         provide: IDENTITY_PROVIDER,
@@ -268,6 +274,8 @@ export class KernelModule implements OnModuleInit {
         BackgroundWorkers,
         RecoveryChecks,
         RecoveryMode,
+        ReadinessState,
+        MetricsSnapshotService,
       ],
     };
   }

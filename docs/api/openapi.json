@@ -42923,6 +42923,316 @@
           "database"
         ]
       },
+      "Readiness": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "degraded",
+              "not_ready"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unavailable"
+            ]
+          },
+          "migrations": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "current": {
+                "type": "boolean"
+              },
+              "applied": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pending": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mismatched": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "missingOnDisk": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "current",
+              "applied",
+              "pending",
+              "mismatched",
+              "missingOnDisk"
+            ]
+          },
+          "outbox": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "oldestDueSeconds"
+            ]
+          },
+          "inbox": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "oldestDueSeconds"
+            ]
+          },
+          "worker": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "lastSucceededAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "secondsSinceSuccess": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "lastSucceededAt",
+              "secondsSinceSuccess"
+            ]
+          },
+          "draining": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "database",
+          "migrations",
+          "outbox",
+          "inbox",
+          "worker",
+          "draining",
+          "reasons"
+        ]
+      },
+      "MetricsSnapshot": {
+        "type": "object",
+        "properties": {
+          "takenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "organization",
+              "global"
+            ]
+          },
+          "outbox": {
+            "type": "object",
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "waitingForHandler": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "waitingForHandler",
+              "oldestDueSeconds"
+            ]
+          },
+          "inbox": {
+            "type": "object",
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "waitingForHandler": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "waitingForHandler",
+              "oldestDueSeconds"
+            ]
+          },
+          "periodicJobs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "lastSucceededAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "secondsSinceSuccess": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "consecutiveFailures": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "name",
+                "lastSucceededAt",
+                "secondsSinceSuccess",
+                "consecutiveFailures"
+              ]
+            }
+          },
+          "failedHandlerAttemptsLastHour": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "openExceptions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string"
+                },
+                "ownerQueue": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "category",
+                "severity",
+                "ownerQueue",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "takenAt",
+          "scope",
+          "outbox",
+          "inbox",
+          "periodicJobs",
+          "failedHandlerAttemptsLastHour",
+          "openExceptions"
+        ]
+      },
       "RecoveryBlocker": {
         "type": "object",
         "properties": {
@@ -101206,6 +101516,141 @@
             "$ref": "#/components/parameters/ClientInfo"
           }
         ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Deployment readiness: database, schema against this build, queue backlog, worker activity (§5.11)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready (or degraded: serving, background work behind)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready: database unavailable, schema not current for this build, or draining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/admin/metrics": {
+      "get": {
+        "summary": "The organization's operational signals: queue backlog, dead letters, job health, open exceptions (core.view_metrics, §5.11)",
+        "tags": [
+          "Operations"
+        ],
+        "responses": {
+          "200": {
+            "description": "Signal snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSnapshot"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Global operational signals in Prometheus text for an infrastructure scraper (X-Metrics-Token; absent unless METRICS_TOKEN is configured)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-metrics-token",
+            "in": "header"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong metrics token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Metrics scraping is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/recovery": {

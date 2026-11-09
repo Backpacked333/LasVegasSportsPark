@@ -10,8 +10,6 @@ type Json = Record<string, unknown>;
 
 /** Served routes that are not part of the client API, with the reason. */
 const UNPUBLISHED: Record<string, string> = {
-  'GET /ready':
-    'Deployment readiness probe (503 while the database is unavailable); clients use GET /health.',
   'GET /health': 'Liveness probe; documented as well, but parity does not depend on it.',
 };
 

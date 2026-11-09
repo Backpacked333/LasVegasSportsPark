@@ -3005,6 +3005,63 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/admin/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The organization's operational signals: queue backlog, dead letters, job health, open exceptions (core.view_metrics, §5.11) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Signal snapshot */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MetricsSnapshot"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/settings": {
         parameters: {
             query?: never;
@@ -28674,6 +28731,64 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Global operational signals in Prometheus text for an infrastructure scraper (X-Metrics-Token; absent unless METRICS_TOKEN is configured) */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    "x-metrics-token": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Prometheus text exposition */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                    };
+                };
+                /** @description Missing or wrong metrics token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Metrics scraping is not configured */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notification-audience-counts": {
         parameters: {
             query?: never;
@@ -39637,6 +39752,54 @@ export type paths = {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Deployment readiness: database, schema against this build, queue backlog, worker activity (§5.11) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Ready (or degraded: serving, background work behind) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Readiness"];
+                    };
+                };
+                /** @description Not ready: database unavailable, schema not current for this build, or draining */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Readiness"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -59268,6 +59431,38 @@ export type components = {
         MetricDefinitionList: {
             items: components["schemas"]["MetricDefinition"][];
         };
+        MetricsSnapshot: {
+            failedHandlerAttemptsLastHour: number;
+            inbox: {
+                dead: number;
+                due: number;
+                oldestDueSeconds: number | null;
+                waitingForHandler: number;
+            };
+            openExceptions: {
+                category: string;
+                count: number;
+                ownerQueue: string;
+                severity: string;
+            }[];
+            outbox: {
+                dead: number;
+                due: number;
+                oldestDueSeconds: number | null;
+                waitingForHandler: number;
+            };
+            periodicJobs: {
+                consecutiveFailures: number;
+                /** Format: date-time */
+                lastSucceededAt: string | null;
+                name: string;
+                secondsSinceSuccess: number | null;
+            }[];
+            /** @enum {string} */
+            scope: "organization" | "global";
+            /** Format: date-time */
+            takenAt: string;
+        };
         MigrationDiscrepancy: {
             actual?: unknown;
             area: components["schemas"]["ReconciliationArea"];
@@ -61398,6 +61593,37 @@ export type components = {
             /** @enum {string} */
             kind: "flat";
             rateReference?: string;
+        };
+        Readiness: {
+            /** @enum {string} */
+            database: "ok" | "unavailable";
+            draining: boolean;
+            inbox: {
+                dead: number;
+                due: number;
+                oldestDueSeconds: number | null;
+            } | null;
+            migrations: {
+                applied: number;
+                current: boolean;
+                mismatched: number;
+                missingOnDisk: number;
+                pending: number;
+            } | null;
+            outbox: {
+                dead: number;
+                due: number;
+                oldestDueSeconds: number | null;
+            } | null;
+            reasons: string[];
+            /** @enum {string} */
+            status: "ready" | "degraded" | "not_ready";
+            version: string;
+            worker: {
+                /** Format: date-time */
+                lastSucceededAt: string | null;
+                secondsSinceSuccess: number | null;
+            } | null;
         };
         ReadinessCheckOutcome: {
             issueCount: number;

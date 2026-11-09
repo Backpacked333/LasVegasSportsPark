@@ -73,6 +73,21 @@ export const ConfigSchema = z
     APP_VERSION: z.string().default('0.1.0'),
     DATABASE_URL: z.string().min(1).optional(),
     PGLITE_DATA_DIR: z.string().min(1).optional(),
+    /** Connections the API or worker process keeps open at most (technical value). */
+    DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(200).default(10),
+    /**
+     * Transport encryption to the database (§4.14 encrypted transport): `require` encrypts,
+     * `verify-full` also verifies the server certificate (against DATABASE_SSL_CA_PATH when set).
+     * Unset leaves it to the connection string's `sslmode`.
+     */
+    DATABASE_SSL: z.enum(['disable', 'require', 'verify-full']).optional(),
+    DATABASE_SSL_CA_PATH: z.string().min(1).optional(),
+    /** Server-side statement timeout for every pooled connection, in ms (unset: none). */
+    DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).optional(),
+    /** How long an idle pooled connection is kept (technical value). */
+    DATABASE_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30_000),
+    /** How long opening a new connection may take before the request fails (technical value). */
+    DATABASE_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(500).default(10_000),
     DB_AUTO_MIGRATE: z
       .enum(['true', 'false'])
       .default('true')
@@ -135,6 +150,28 @@ export const ConfigSchema = z
     /** How often the worker deletes idempotency records past their expiry (§4.9, §4.14). */
     IDEMPOTENCY_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
     LOG_LEVEL: z.enum(['debug', 'log', 'warn', 'error']).default('log'),
+    /**
+     * `json`: one JSON object per line with the request's correlation id (§5.11), the production
+     * default; `text`: the framework's readable console output, the default elsewhere.
+     */
+    LOG_FORMAT: z.enum(['json', 'text']).optional(),
+    /**
+     * `GET /v1/ready` reads `degraded` once the oldest due outbox or inbox event has waited longer
+     * than this (§5.11 worker age; technical value). It never takes the API out of rotation.
+     */
+    READY_QUEUE_LAG_SECONDS: z.coerce.number().int().min(10).default(300),
+    /** `degraded` once no periodic job has succeeded for this long (worker stopped or stuck). */
+    READY_WORKER_STALE_SECONDS: z.coerce.number().int().min(60).default(900),
+    /**
+     * Enables `GET /v1/metrics` (Prometheus text, global counts) for a scraper that sends this
+     * value in `X-Metrics-Token` (§5.11). Unset: the route does not exist.
+     */
+    METRICS_TOKEN: z.string().min(24).optional(),
+    /** One access line per answered request (method, path without ids or query, status, time). */
+    HTTP_ACCESS_LOG: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
     /** How often the worker looks for due periodic jobs (K-06, §4.12; technical value). */
     PERIODIC_JOBS_TICK_MS: z.coerce.number().int().min(100).default(5000),
     /**
@@ -242,6 +279,17 @@ export const ConfigSchema = z
      * lapses; the database rolls back a transaction left open by the exit.
      */
     WORKER_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
+    /**
+     * The whole budget of an API stop on SIGTERM or SIGINT (R3-OPERATIONS-10; technical value,
+     * under the host's termination grace period): requests in flight finish, then the modules and
+     * the database close.
+     */
+    API_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(15_000),
+    /**
+     * How long a stopping API keeps answering (with `GET /v1/ready` at 503) before it closes its
+     * server, so a load balancer notices and routes new requests elsewhere (technical value).
+     */
+    API_SHUTDOWN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.AUTH_MODE === 'local') {
@@ -328,6 +376,13 @@ export const ConfigSchema = z
         code: 'custom',
         path: ['PERIODIC_JOBS_MAX_RUN_SECONDS'],
         message: 'PERIODIC_JOBS_MAX_RUN_SECONDS must be at least PERIODIC_JOBS_LEASE_SECONDS',
+      });
+    }
+    if (cfg.NODE_ENV === 'production' && cfg.DATABASE_SSL === 'disable') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DATABASE_SSL'],
+        message: 'DATABASE_SSL=disable is refused in production (§4.14 encrypted transport)',
       });
     }
     if (cfg.NODE_ENV === 'production' && !cfg.DATABASE_URL) {

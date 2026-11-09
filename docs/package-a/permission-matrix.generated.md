@@ -3,7 +3,7 @@
 > Generated from code by `apps/api/scripts/emit-permission-matrix.ts`; do not edit by hand.
 > Regenerate with `pnpm build && pnpm permission-matrix` from the repository root.
 
-Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 324 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
+Every action registered with `defineActions` in the kernel action registry (`apps/api/src/kernel/authorization/actions.ts`) when the application module is loaded: 325 actions. This file is **Verified** in the sense of §6.7: each row is what `AuthorizationService` evaluates today. Proposed actions that are not registered, and pending decisions about who should hold an action, are in [`permission-matrix.md`](permission-matrix.md).
 
 Columns: **Staff roles** may perform the action within their organization or facility scope; **Self** means a customer may act on themselves as the subject person; **Subject permission** is the grant a customer must hold over every subject person; **Team role** is the role a customer must hold on the target team entry; **Requirements** are the specification ids the action declares.
 
@@ -17,7 +17,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `catalog`        | 16      |
 | `communications` | 12      |
 | `competition`    | 52      |
-| `core`           | 9       |
+| `core`           | 10      |
 | `enrollment`     | 46      |
 | `entry`          | 32      |
 | `exceptions`     | 3       |
@@ -30,7 +30,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `scheduling`     | 9       |
 | `support`        | 8       |
 | `workforce`      | 20      |
-| **Total**        | **324** |
+| **Total**        | **325** |
 
 ## Actions
 
@@ -128,6 +128,7 @@ The namespace is the prefix of the action id: a domain module, or `exceptions` a
 | `core.view_audit`                            | Read audited privileged actions (the read is itself audited)                                                                                                               | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §4.14                                                              |
 | `core.view_capabilities`                     | Read the organization's capability switches and their applicability decisions                                                                                              | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §1.6, §6.5, DEC-016                                                |
 | `core.view_integrations`                     | Read the integration register: provider gates, decisions and registered adapters                                                                                           | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §5.1, §5.2                                                         |
+| `core.view_metrics`                          | Read the organization's operational signal snapshot: queue backlog, dead letters, job health, open exceptions                                                              | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | §5.11, §4.12                                                       |
 | `core.view_provider_events`                  | Read provider events received by the inbox (never their payloads)                                                                                                          | `finance_operator`, `general_manager`, `system_administrator`                                                                                                                                 | no   | —                  | —            | §4.12, §4.14                                                       |
 | `core.view_settings`                         | Read the organization and facility settings with their revisions (read only)                                                                                               | `general_manager`, `system_administrator`                                                                                                                                                     | no   | —                  | —            | SPK-UX-005, §2.1                                                   |
 | `enrollment.apply`                           | Submit a registration application for a participant (adult self, guardian with register, or staff assisting)                                                               | `front_desk`, `program_manager`, `league_manager`, `general_manager`, `system_administrator`, `support_operator`                                                                              | yes  | `register`         | —            | SPK-REG-001, SPK-REG-002, SPK-REG-009, SPK-IAM-003                 |

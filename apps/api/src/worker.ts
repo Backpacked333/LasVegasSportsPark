@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { loadConfig } from './kernel/config';
+import { createLogger } from './kernel/logging/json-logger';
 import { IdempotencySweeper } from './kernel/http/idempotency-sweeper';
 import { Inbox } from './kernel/inbox/inbox';
 import { OutboxDispatcher } from './kernel/outbox/outbox-dispatcher';
@@ -27,7 +28,7 @@ import { stopWithinBudget } from './kernel/workers/graceful-stop';
 async function main(): Promise<void> {
   const config = loadConfig();
   const app = await NestFactory.createApplicationContext(AppModule.forRoot({ config }), {
-    logger: [config.LOG_LEVEL],
+    logger: createLogger(config, 'worker'),
   });
   const logger = new Logger('Worker');
   const dispatcher = app.get(OutboxDispatcher);
