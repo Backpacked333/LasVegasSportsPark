@@ -56681,9 +56681,34 @@
         }
       },
       "get": {
-        "summary": "List entitlement definitions",
+        "summary": "List entitlement definitions, optionally of one kind and status (CAT-06)",
         "tags": [
           "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/EntitlementKind"
+            },
+            "required": false,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
         ],
         "responses": {
           "200": {
@@ -56729,12 +56754,7 @@
               }
             }
           }
-        },
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ClientInfo"
-          }
-        ]
+        }
       }
     },
     "/entitlement-definitions/{id}": {

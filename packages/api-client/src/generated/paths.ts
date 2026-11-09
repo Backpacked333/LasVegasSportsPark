@@ -16419,10 +16419,13 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** List entitlement definitions */
+        /** List entitlement definitions, optionally of one kind and status (CAT-06) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    kind?: components["schemas"]["EntitlementKind"];
+                    status?: "active" | "archived";
+                };
                 header?: {
                     /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
                     "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];

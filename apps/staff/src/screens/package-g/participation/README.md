@@ -87,8 +87,8 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
    `CHECKOUT_IN_PROGRESS` while its basket is `checking_out` and 409 `BOOKING_CONFIRMATION_PENDING`
    once it is `fulfilled` (`BookingsService.cancel`, `bookings.spec.ts`). A `partially_fulfilled`
    basket is not refused by the API; the screen still avoids it (above).
-4. `GET /v1/entitlement-definitions` returns every definition unpaged and without a kind filter;
-   these screens read definitions one by one through the offerings instead.
+4. `GET /v1/entitlement-definitions` takes `kind` and `status` (CAT-06, 2026-11-09) but stays
+   unpaged; these screens still read definitions one by one through the offerings.
 
 Closed: who staffs a booking (formerly "`Booking` does not expose its staffing") is answered by
 the workforce coverage reads of each occurrence's event, which SCR-S-51 and SCR-S-52 now show.

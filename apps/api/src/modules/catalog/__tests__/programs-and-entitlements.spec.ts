@@ -274,7 +274,7 @@ describe('programs and entitlement definitions (SPK-CAT-001, SPK-YOUTH-001, §4.
     expect(patch.status).toBe(404);
   });
 
-  it('§4.4 EntitlementDefinition: managers define what a purchase grants and its equivalence scope', async () => {
+  it('§4.4 EntitlementDefinition: managers define what a purchase grants and its equivalence scope; the list filters by kind and status (CAT-06)', async () => {
     const created = await t.http
       .post('/v1/entitlement-definitions')
       .set(pm)
@@ -304,6 +304,22 @@ describe('programs and entitlement definitions (SPK-CAT-001, SPK-YOUTH-001, §4.
       .send({ expectedRevision: 1, status: 'archived' });
     expect(archived.status).toBe(200);
     expect(archived.body.status).toBe('archived');
+    // CAT-06: the list narrows to one kind and one status.
+    const seats = await t.http.get('/v1/entitlement-definitions?kind=seat').set(frontDesk);
+    expect(seats.status).toBe(200);
+    expect(seats.body.every((d: { kind: string }) => d.kind === 'seat')).toBe(true);
+    expect(seats.body.some((d: { id: string }) => d.id === id)).toBe(true);
+    const active = await t.http
+      .get('/v1/entitlement-definitions?kind=seat&status=active')
+      .set(frontDesk);
+    expect(active.body.some((d: { id: string }) => d.id === id)).toBe(false);
+    const archivedOnly = await t.http
+      .get('/v1/entitlement-definitions?status=archived')
+      .set(frontDesk);
+    expect(archivedOnly.body.map((d: { id: string }) => d.id)).toContain(id);
+    expect(
+      (await t.http.get('/v1/entitlement-definitions?kind=nonsense').set(frontDesk)).status,
+    ).toBe(400);
     const edit = await t.http
       .patch(`/v1/entitlement-definitions/${id}`)
       .set(pm)

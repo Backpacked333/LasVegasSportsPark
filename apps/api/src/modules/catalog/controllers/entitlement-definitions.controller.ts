@@ -1,12 +1,13 @@
 import { Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
 import {
   CreateEntitlementDefinitionBody,
+  ListEntitlementDefinitionsQuery,
   UpdateEntitlementDefinitionBody,
   z,
   type EntitlementDefinition,
   type Principal,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
 import { CorrelationId } from '../catalog.shared';
 import { EntitlementDefinitionsService } from '../services/entitlement-definitions.service';
 
@@ -29,8 +30,11 @@ export class EntitlementDefinitionsController {
   }
 
   @Get()
-  list(@CurrentPrincipal() principal: Principal): Promise<EntitlementDefinition[]> {
-    return this.definitions.list(principal);
+  list(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListEntitlementDefinitionsQuery) query: ListEntitlementDefinitionsQuery,
+  ): Promise<EntitlementDefinition[]> {
+    return this.definitions.list(principal, query);
   }
 
   @Get(':id')

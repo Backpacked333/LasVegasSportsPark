@@ -5,6 +5,7 @@ import {
   newId,
   type CreateEntitlementDefinitionInput,
   type EntitlementDefinition,
+  type ListEntitlementDefinitionsQuery,
   type EntitlementKind,
   type Principal,
   type UpdateEntitlementDefinitionInput,
@@ -281,19 +282,25 @@ export class EntitlementDefinitionsService {
     return toEntitlementDefinition(row);
   }
 
-  async list(principal: Principal): Promise<EntitlementDefinition[]> {
+  /** CAT-06: optionally narrowed to one kind and one status. */
+  async list(
+    principal: Principal,
+    query: ListEntitlementDefinitionsQuery = {},
+  ): Promise<EntitlementDefinition[]> {
     const organizationId = organizationOf(principal);
     await this.authorization.require(principal, CatalogActions.readCatalog, {
       type: 'entitlement_definition',
       organizationId,
     });
-    const rows = await this.db
+    let q = this.db
       .selectFrom('entitlement_definitions')
       .selectAll()
       .where('organization_id', '=', organizationId)
       .orderBy('name')
-      .orderBy('id')
-      .execute();
+      .orderBy('id');
+    if (query.kind) q = q.where('kind', '=', query.kind);
+    if (query.status) q = q.where('status', '=', query.status);
+    const rows = await q.execute();
     return rows.map(toEntitlementDefinition);
   }
 }
