@@ -78,9 +78,8 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
 
 ## API issues found (not fixed here)
 
-1. `GET /v1/bookings` has no `kind` filter, so Rentals and Parties page through both kinds and show
-   theirs among the loaded pages (`ListBookingsQuery` in
-   `packages/contracts/src/api/enrollment-package-g.ts`, `BookingsService.list`).
+1. Resolved 2026-11-09 (ENR-17): `GET /v1/bookings?kind=` lists rentals or parties only, and
+   Rentals and Parties each page through their own kind.
 2. No staff read of a membership: term dates (`membership_starts_at`/`ends_at`), sessions used per
    period and suspensions are only in the customer's `GET /v1/me/memberships`; `Enrollment` carries
    none of them. Staff can suspend and end suspensions they recorded in the page, but cannot list

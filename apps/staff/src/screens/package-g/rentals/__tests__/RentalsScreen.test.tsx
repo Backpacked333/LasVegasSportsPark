@@ -242,13 +242,24 @@ describe('SCR-S-51 Rentals', () => {
     expect(screen.getAllByTestId('booking-price')).toHaveLength(1);
   });
 
-  it('says when the loaded pages hold no rentals and offers Load more', async () => {
+  it('ENR-17: asks the API for rentals only and pages through them with Load more', async () => {
     const app = createTestApp({
-      routes: routes({ 'GET /bookings': page([partyBooking()], 'cursor-2') }),
+      routes: routes({ 'GET /bookings': page([booking()], 'cursor-2') }),
     });
     render(app.at('/schedule/rentals'));
-    expect(await screen.findByText('No rentals on the pages loaded so far')).toBeInTheDocument();
+    expect(await screen.findByRole('list', { name: 'Rental bookings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Load more bookings' })).toBeInTheDocument();
+    expect(app.fake.requests.find((r) => r.route === '/bookings')?.query).toMatchObject({
+      kind: 'rental',
+    });
+  });
+
+  it('a party in a rental answer is never shown as a rental', async () => {
+    const app = createTestApp({
+      routes: routes({ 'GET /bookings': page([partyBooking()]) }),
+    });
+    render(app.at('/schedule/rentals'));
+    expect(await screen.findByText('No rentals')).toBeInTheDocument();
   });
 
   it('shows the bookings read error with its code and Try again', async () => {

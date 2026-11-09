@@ -2167,6 +2167,7 @@ export class BookingsService implements BookingQueryPort {
     return this.page(organizationId, query, {
       facilityId: query.facilityId,
       offeringIds: offerings ?? undefined,
+      kind: query.kind,
       status: query.status,
       from: query.from ? new Date(query.from) : undefined,
       to: query.to ? new Date(query.to) : undefined,
@@ -2180,6 +2181,7 @@ export class BookingsService implements BookingQueryPort {
       bookerIds?: readonly string[];
       facilityId?: string;
       offeringIds?: readonly string[];
+      kind?: BookingRow['kind'];
       status?: BookingRow['status'];
       from?: Date;
       to?: Date;
@@ -2197,6 +2199,7 @@ export class BookingsService implements BookingQueryPort {
     if (filter.bookerIds) q = q.where('booker_person_id', 'in', [...filter.bookerIds]);
     if (filter.facilityId) q = q.where('facility_id', '=', filter.facilityId);
     if (filter.offeringIds) q = q.where('offering_id', 'in', [...filter.offeringIds]);
+    if (filter.kind) q = q.where('kind', '=', filter.kind);
     const status = filter.status ?? query.status;
     if (status) q = q.where('status', '=', status);
     if (filter.from) q = q.where('last_end', '>', filter.from);

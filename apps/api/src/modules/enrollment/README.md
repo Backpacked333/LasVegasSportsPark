@@ -525,6 +525,12 @@ PostgreSQL) unless marked **proposed** or **pending**.
   is checking out, and `payment` only for a held basket not yet paid, so no client invites a second
   payment while one is running (§4.11, SPK-PAY-007).
 
+### Bookings by kind (ENR-17)
+
+- **Verified** (`bookings.spec.ts`, "reads: … the staff list filters by kind, ENR-17 …"):
+  `GET /bookings?kind=rental|party` narrows the staff list to one kind, so the Rentals and Parties
+  screens page through their own bookings only (SCR-S-51, SCR-S-52).
+
 ### Package G behind capability switches (ENR-10 to ENR-14)
 
 Each capability is off by default per organization and changed only by an administrator with

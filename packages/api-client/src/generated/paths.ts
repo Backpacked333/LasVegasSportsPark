@@ -8517,6 +8517,7 @@ export type paths = {
                     cursor?: string;
                     facilityId?: string;
                     from?: string;
+                    kind?: components["schemas"]["BookingKind"];
                     limit?: number;
                     status?: components["schemas"]["BookingStatus"];
                     to?: string;

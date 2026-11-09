@@ -294,6 +294,8 @@ export type CancelBookingInput = z.infer<typeof CancelBookingBody>;
 
 export const ListBookingsQuery = PageRequestSchema.extend({
   facilityId: z.uuid().optional(),
+  /** ENR-17 (SCR-S-51, SCR-S-52): rentals or parties only. */
+  kind: BookingKindValueSchema.optional(),
   status: BookingStatusValueSchema.optional(),
   from: Instant.optional(),
   to: Instant.optional(),

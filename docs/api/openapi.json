@@ -89006,6 +89006,14 @@
           },
           {
             "schema": {
+              "$ref": "#/components/schemas/BookingKind"
+            },
+            "required": false,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
               "$ref": "#/components/schemas/BookingStatus"
             },
             "required": false,

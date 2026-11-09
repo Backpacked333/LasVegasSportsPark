@@ -1504,7 +1504,7 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
     }
   });
 
-  it('reads: the booker and staff see a booking, another customer learns nothing; the availability and period port answer', async () => {
+  it('reads: the booker and staff see a booking (the staff list filters by kind, ENR-17), another customer learns nothing; the availability and period port answer', async () => {
     const setup = await rental();
     const customer = await booker(setup);
     const booked = await post(t, '/v1/bookings', customer.header, {
@@ -1531,6 +1531,18 @@ describe('rental and party bookings (ENR-13, SPK-COND-003)', () => {
       .set(scheduler.header);
     expect(staffList.status).toBe(200);
     expect(staffList.body.items.map((b: { id: string }) => b.id)).toContain(booked.body.id);
+    // ENR-17: the staff list filters by kind (Rentals and Parties each read their own).
+    const rentals = await t.http
+      .get(`/v1/bookings?facilityId=${t.facilityId}&kind=rental`)
+      .set(scheduler.header);
+    expect(rentals.body.items.map((b: { id: string }) => b.id)).toContain(booked.body.id);
+    expect(rentals.body.items.every((b: { kind: string }) => b.kind === 'rental')).toBe(true);
+    const parties = await t.http
+      .get(`/v1/bookings?facilityId=${t.facilityId}&kind=party`)
+      .set(scheduler.header);
+    expect(parties.status).toBe(200);
+    expect(parties.body.items.map((b: { id: string }) => b.id)).not.toContain(booked.body.id);
+    expect((await t.http.get('/v1/bookings?kind=concert').set(scheduler.header)).status).toBe(400);
     const window = await t.http
       .get(
         `/v1/offerings/${setup.offeringId}/booking-availability?from=${start(15, 15).toISOString()}&to=${start(15, 20).toISOString()}&durationMinutes=60`,
