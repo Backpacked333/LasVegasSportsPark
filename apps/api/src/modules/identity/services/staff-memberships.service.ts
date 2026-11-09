@@ -560,6 +560,10 @@ export class StaffMembershipsService implements StaffDirectoryPort {
         ]),
       )
       .where('persons.status', '=', 'active')
+      // ID-10: a lookup by person id narrows the rows; every other rule below still applies.
+      .$if(query.personIds !== undefined, (q) =>
+        q.where('staff_memberships.person_id', 'in', query.personIds ?? []),
+      )
       .execute();
     interface Entry {
       personId: string;

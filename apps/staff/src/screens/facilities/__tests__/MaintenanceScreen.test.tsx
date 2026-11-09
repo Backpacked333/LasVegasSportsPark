@@ -121,7 +121,7 @@ describe('SCR-S-41 MaintenanceScreen', () => {
     expect(screen.queryByRole('button', { name: 'Load more tasks' })).toBeNull();
   });
 
-  it('SPK-FAC-002: owners are named from the staff directory of the facility, which a facilities operator may read', async () => {
+  it('SPK-FAC-002 / ID-10: owners are named from the staff directory looked up by id, which a facilities operator may read', async () => {
     const OWNER = '0192f1a0-0000-7000-8000-0000000000e1';
     const OTHERS = task({
       id: 't-3',
@@ -157,9 +157,11 @@ describe('SCR-S-41 MaintenanceScreen', () => {
     const row = await screen.findByTestId('task-t-3');
     expect(await within(row).findByText(/Owner: Jo Park/)).toBeInTheDocument();
     expect(row).not.toHaveTextContent('name not available');
-    expect(app.fake.requests.find((r) => r.route === '/staff-directory')?.query).toMatchObject({
-      facilityId: FACILITY_A,
-    });
+    // ID-10: the owners are looked up by id, not found by paging the facility's directory.
+    const lookup = app.fake.requests.find((r) => r.route === '/staff-directory');
+    expect(String(lookup?.query['personIds'])).toBe(OWNER);
+    expect(lookup?.query['facilityId']).toBeUndefined();
+    expect(app.fake.requests.some((r) => r.route === '/person-names')).toBe(false);
   });
 
   it('an owner whose name read failed reads "name could not be loaded", not "not available"', async () => {

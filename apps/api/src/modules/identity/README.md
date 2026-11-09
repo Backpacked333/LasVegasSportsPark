@@ -103,7 +103,7 @@ and `touch_updated_at`; append-only tables carry `forbid_mutation`.
 | `GET /people/{id}/authority`                                          | `identity.read_authority` (same staff set as invitations): relationships, grants, households with member counts, pending invitations, `accountLinked`, claims with masked `recipientHint` (never the token) for SCR-S-20/21                                                                                                                                          | `authority-reads.spec.ts`                               |
 | `GET /me/households`                                                  | members limited to myself and people I hold `view` over; the rest only counted (`otherMemberCount`)                                                                                                                                                                                                                                                                  | `authority-reads.spec.ts`                               |
 | `GET /staff-memberships?personId&role&facilityId&status`, `GET /{id}` | `identity.read_staff_membership` (general_manager, system_administrator); keyset (created_at desc, id desc)                                                                                                                                                                                                                                                          | `staff-reads.spec.ts`                                   |
-| `GET /staff-directory?role&facilityId&query`                          | `identity.read_staff_directory`; memberships in effect at the clock with per-role facility scopes; coach and official roles only with `identity.read_workforce_directory` (scheduler, league_manager, program_manager, general_manager, system_administrator)                                                                                                        | `staff-reads.spec.ts`                                   |
+| `GET /staff-directory?role&facilityId&query&personIds`                | `identity.read_staff_directory`; memberships in effect at the clock with per-role facility scopes; coach and official roles only with `identity.read_workforce_directory` (scheduler, league_manager, program_manager, general_manager, system_administrator)                                                                                                        | `staff-reads.spec.ts`                                   |
 | `GET /access-reviews?status&ownerRole&subjectPersonId`                | review deciders; default every review not closed; `allowedDecisions` from `allowedReviewDecisions` (AccessReviewMachine; also on `GET /access-reviews/{id}`), `restrictedGrantCount`                                                                                                                                                                                 | `staff-reads.spec.ts`                                   |
 | `GET /duplicate-candidates?status`, `GET /{id}`                       | `identity.read_duplicates`; default `open`; both names and the signals; dates of birth only on the single read                                                                                                                                                                                                                                                       | `staff-reads.spec.ts`                                   |
 
@@ -401,6 +401,14 @@ represent reads as the first page, never a server fault (`__tests__/keyset-pagin
   attempt or a re-invitation (no sweep job yet). **Pending**: delivery. No messaging channel is
   approved (DEC-012, DEC-062) and communications addresses people, not bare email addresses, so
   issuing records `identity.staff_invitation_created` without the address or token.
+
+## Staff directory lookup by person id (ID-10, SCR-S-41) — verified
+
+`GET /staff-directory?personIds=a,b` (1 to 100 ids, or repeated) lists only those people, under
+every rule the directory already applies (in effect at the clock, active persons, coach and
+official roles only with `identity.read_workforce_directory`); an unknown id is simply absent. The
+staff dashboard names maintenance task owners with it instead of paging the facility's directory.
+Test: `staff-reads.spec.ts` ("… a lookup by person id (ID-10)"), 2026-11-09.
 
 ## Known gaps
 

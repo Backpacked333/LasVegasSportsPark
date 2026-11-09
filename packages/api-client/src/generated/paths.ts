@@ -49012,6 +49012,7 @@ export type paths = {
                     cursor?: string;
                     facilityId?: string;
                     limit?: number;
+                    personIds?: string[];
                     query?: string;
                     role?: "front_desk" | "league_manager" | "program_manager" | "scheduler" | "finance_operator" | "facilities_operator" | "general_manager" | "system_administrator" | "support_operator" | "coach" | "official";
                 };

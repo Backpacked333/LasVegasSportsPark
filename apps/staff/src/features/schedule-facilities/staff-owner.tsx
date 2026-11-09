@@ -10,11 +10,11 @@
  *   (an inactive or non-adult person is refused with VALIDATION_FAILED on
  *   `assignedOwnerPersonId`). Without identity.read_staff_directory the picker says the directory
  *   is not available and offers no assign command; "Assign to me" stays.
- * - `useOwnerNames` names owners from the same staff directory of the facility: the facilities
- *   operator, who assigns tasks, may read it but is not given other staff names by
- *   `GET /v1/person-names` (identity.read_person). Only owners the loaded directory does not list
- *   (a former staff member, or one on a page not loaded) are read through `GET /v1/person-names`
- *   (names only, §4.14; one read per set of ids). A name the API leaves out reads "assigned (name
+ * - `useOwnerNames` names owners from the staff directory, looked up by id
+ *   (`GET /v1/staff-directory?personIds=`, ID-10): the facilities operator, who assigns tasks, may
+ *   read it but is not given other staff names by `GET /v1/person-names` (identity.read_person).
+ *   Only owners the directory does not list (a former staff member) are read through
+ *   `GET /v1/person-names` (names only, §4.14; one read per set of ids). A name the API leaves out reads "assigned (name
  *   not available)"; a failed read says the name could not be loaded, and on the task screen gives
  *   the error code and "Try again" (SPK-UX-008).
  */
@@ -35,7 +35,7 @@ function roleWords(roles: readonly string[]): string {
   return roles.map((r) => r.replace(/_/g, ' ')).join(', ');
 }
 
-/** The first page of the facility's staff directory (shared by the picker and the owner names). */
+/** The picker's page of the facility's staff directory, optionally narrowed by a name prefix. */
 function directoryRequest(facilityId: string, term = '') {
   return {
     query: { facilityId, limit: STAFF_PAGE, ...(term ? { query: term.slice(0, 100) } : {}) },
@@ -148,24 +148,28 @@ export type OwnerNameEntry =
   | { state: 'unavailable' }
   | { state: 'error'; error: ApiError; retry: () => void };
 
+/** Owner ids per directory lookup (`personIds` takes at most 100). */
+const OWNER_LOOKUP = 100;
+
 /**
- * Names of task owners at a facility, leaving out the viewer: the staff directory first, then
- * `GET /v1/person-names` for owners it does not list.
+ * Names of task owners, leaving out the viewer: the staff directory looked up by id first (ID-10;
+ * the first 100 owners), then `GET /v1/person-names` for owners it does not list. The facility is
+ * not a filter here: an owner is named whatever facility their roles now cover.
  */
 export function useOwnerNames(
   ownerIds: readonly (string | null)[],
   me: string | null,
-  facilityId: string,
 ): ReadonlyMap<string, OwnerNameEntry> {
   const key = [...new Set(ownerIds.filter((id): id is string => id !== null && id !== me))]
     .sort()
     .join(',');
   const wanted = useMemo(() => (key ? key.split(',') : []), [key]);
+  const lookup = wanted.slice(0, OWNER_LOOKUP);
   const directory = useApiPages({
     path: '/staff-directory',
-    request: directoryRequest(facilityId),
+    request: { query: { personIds: lookup, limit: OWNER_LOOKUP } },
     keyOf: staffKey,
-    enabled: wanted.length > 0,
+    enabled: lookup.length > 0,
   });
   const listed = new Map((directory.data ?? []).map((s) => [s.personId, s.displayName]));
   const settled = directory.data !== undefined || directory.error !== null;

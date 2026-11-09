@@ -2,8 +2,8 @@
  * SCR-S-41 Assets and maintenance tasks (SPK-FAC-001, SPK-FAC-002, SPK-FAC-005). Per facility:
  *
  * - Maintenance tasks (`GET /v1/maintenance-tasks`, cursor pages with "Load more tasks"): asset or
- *   space, issue, severity, reporter, evidence, owner (named from the facility's staff directory,
- *   else `GET /v1/person-names`), due date, open operating restrictions, resolution and latest
+ *   space, issue, severity, reporter, evidence, owner (named from the staff directory looked up by
+ *   id, ID-10, else `GET /v1/person-names`), due date, open operating restrictions, resolution and latest
  *   inspection; overdue tasks are marked in text. Each opens the task screen, where an owner is
  *   chosen from the staff directory.
  * - Report an issue (`POST /v1/maintenance-tasks`, any staff): asset or space and severity are
@@ -192,7 +192,6 @@ function TaskList({ facility }: { facility: FacilityContext }) {
   const ownerNames = useOwnerNames(
     (tasks.data ?? []).map((t) => t.assignedOwnerPersonId),
     me,
-    facility.id,
   );
   return (
     <section aria-labelledby="tasks-title">

@@ -67803,6 +67803,20 @@
             "in": "query"
           },
           {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "minItems": 1,
+              "maxItems": 100
+            },
+            "required": false,
+            "name": "personIds",
+            "in": "query"
+          },
+          {
             "$ref": "#/components/parameters/ClientInfo"
           }
         ],
