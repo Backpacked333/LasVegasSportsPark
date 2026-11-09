@@ -13,6 +13,7 @@ import { AuditWriter } from './audit/audit.writer';
 import { AuthGuard } from './auth/auth.guard';
 import type { IdentityProviderPort, VerifiedIdentity } from './auth/identity-provider.port';
 import { LocalJwtIdentityProvider } from './auth/local-jwt.identity-provider';
+import { OidcJwksIdentityProvider } from './auth/oidc-jwks.identity-provider';
 import type { PrincipalResolverPort } from './auth/principal-resolver.port';
 import {
   denyAllRelationshipAuthority,
@@ -44,9 +45,13 @@ import { OrganizationSettingsService } from './core/organization-settings.servic
 import { OperationalExceptions } from './exceptions/operational-exceptions.service';
 import { FacilityDirectory } from './facilities/facility-directory';
 import { HealthController } from './health/health.controller';
+import { ReadinessState } from './health/readiness-state';
+import { MetricsController } from './metrics/metrics.controller';
+import { MetricsSnapshotService } from './metrics/metrics-snapshot.service';
 import { DomainExceptionFilter } from './http/domain-exception.filter';
 import { IdempotencySweeper } from './http/idempotency-sweeper';
 import { IdempotencyInterceptor } from './http/idempotency.interceptor';
+import { RateLimitGuard, rateLimiterProvider } from './http/rate-limit';
 import { Inbox } from './inbox/inbox';
 import { INTEGRATION_REGISTRY, IntegrationRegistry } from './integrations/integration-registry';
 import { PeriodicJobRegistry, PeriodicJobRunner } from './jobs/periodic-jobs';
@@ -86,6 +91,7 @@ export const TEAM_AUTHORITY_IMPL = Symbol('TEAM_AUTHORITY_IMPL');
 /** The kernel's own controllers (route facts read them without building the module, K-02). */
 export const KERNEL_CONTROLLERS = [
   HealthController,
+  MetricsController,
   OperationsController,
   RecoveryController,
   FacilitiesController,
@@ -127,6 +133,17 @@ export class KernelModule implements OnModuleInit {
         scenarios: [],
         reconciliationOwner: null,
       });
+    } else {
+      // §5.2, DEC-018: the managed identity adapter; refused unless the decision is recorded.
+      this.integrations.register({
+        id: 'kernel.identity_provider',
+        gate: 'identity',
+        port: 'IDENTITY_PROVIDER',
+        adapter: { name: 'oidc-jwks', kind: 'provider' },
+        productionAllowed: true,
+        scenarios: [],
+        reconciliationOwner: null,
+      });
     }
   }
 
@@ -136,16 +153,17 @@ export class KernelModule implements OnModuleInit {
       { provide: APP_CONFIG, useValue: config },
       options.database ? { provide: DATABASE, useValue: options.database } : databaseProvider,
       DatabaseLifecycle,
+      ReadinessState,
+      MetricsSnapshotService,
       { provide: CLOCK, useClass: SystemClock },
       {
         provide: IDENTITY_PROVIDER,
         useFactory: (): IdentityProviderPort => {
           if (options.identityProvider) return options.identityProvider;
           if (config.AUTH_MODE === 'local') return new LocalJwtIdentityProvider(config);
-          throw new Error(
-            'AUTH_MODE=oidc: a managed identity provider has not been selected (specification §5.2). ' +
-              'Record the decision in docs/package-a/decision-register.md and implement the adapter behind IdentityProviderPort.',
-          );
+          // §5.2, DEC-018: the integration register admits this adapter only when the identity
+          // gate's decision is named in PROVIDER_DECISIONS (KernelModule.onModuleInit).
+          return new OidcJwksIdentityProvider(config);
         },
       },
       {
@@ -214,8 +232,11 @@ export class KernelModule implements OnModuleInit {
       BackgroundWorkers,
       RecoveryChecks,
       RecoveryMode,
-      // Global guards run in this order: authentication, client compatibility (SPK-AT-027, after
+      rateLimiterProvider,
+      // Global guards run in this order: rate limits (§4.14, before authentication so a stranger
+      // cannot guess at speed), authentication, client compatibility (SPK-AT-027, after
       // authentication so an unauthenticated old client still gets 401), recovery (SPK-AT-028).
+      { provide: APP_GUARD, useClass: RateLimitGuard },
       { provide: APP_GUARD, useClass: AuthGuard },
       { provide: APP_GUARD, useClass: ClientCompatibilityGuard },
       { provide: APP_GUARD, useClass: RecoveryGuard },
@@ -257,6 +278,8 @@ export class KernelModule implements OnModuleInit {
         BackgroundWorkers,
         RecoveryChecks,
         RecoveryMode,
+        ReadinessState,
+        MetricsSnapshotService,
       ],
     };
   }

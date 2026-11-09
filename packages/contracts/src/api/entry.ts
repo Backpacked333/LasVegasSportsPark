@@ -1,4 +1,4 @@
-import { z } from '../zod';
+import { QueryBoolean, z } from '../zod';
 import { Revision, withCommandMeta } from '../commands';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
@@ -701,6 +701,40 @@ export const OfflineSyncBatchSchema = z
   .openapi('OfflineSyncBatch');
 export type OfflineSyncBatch = z.infer<typeof OfflineSyncBatchSchema>;
 
+/**
+ * ENT-06 (§4.15, SPK-AT-018, SCR-S-31): the synchronized batches of a facility, newest received
+ * first, for desk readers of that facility (`entry.read_offline_batch`). `needsReview` keeps the
+ * batches with a conflict, a rejected item or a roster older than the maximum age. Each row is the
+ * batch without its item outcomes; `GET /offline-sync/{id}` reads those.
+ */
+export const ListOfflineSyncBatchesQuery = PageRequestSchema.extend({
+  facilityId: z.uuid(),
+  deviceId: z.string().trim().min(1).max(200).optional(),
+  needsReview: QueryBoolean.optional(),
+});
+export type ListOfflineSyncBatchesQuery = z.infer<typeof ListOfflineSyncBatchesQuery>;
+
+export const OfflineSyncBatchSummarySchema = OfflineSyncBatchSchema.pick({
+  id: true,
+  facilityId: true,
+  deviceId: true,
+  clientBatchId: true,
+  snapshot: true,
+  receivedAt: true,
+  snapshotAgeSeconds: true,
+  maxRosterAgeMinutes: true,
+  stale: true,
+  counts: true,
+  exceptionIds: true,
+})
+  .extend({
+    /** Conflicts, rejected items or a stale roster: the batch has something for review. */
+    needsReview: z.boolean(),
+    submittedBy: ActorSnapshotSchema,
+  })
+  .openapi('OfflineSyncBatchSummary');
+export type OfflineSyncBatchSummary = z.infer<typeof OfflineSyncBatchSummarySchema>;
+
 // ---------------------------------------------------------------------------------------------
 // Occupancy (SPK-ENTRY-008)
 // ---------------------------------------------------------------------------------------------
@@ -939,6 +973,12 @@ command(
   'Synchronize queued offline observations once; conflicts preserved for review (§4.15)',
   OfflineSyncBody,
   OfflineSyncBatchSchema,
+);
+query(
+  '/offline-sync',
+  'List the synchronized offline batches of a facility, newest first (desk readers; §4.15)',
+  ListOfflineSyncBatchesQuery,
+  pageSchema(OfflineSyncBatchSummarySchema),
 );
 query(
   '/offline-sync/{id}',

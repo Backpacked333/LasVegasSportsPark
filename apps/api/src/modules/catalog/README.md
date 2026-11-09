@@ -298,6 +298,12 @@ cannot set `source` or the id. `Program.source` is in every program read, which 
   service would take the staff-assisted path only when another signer is named by a holder of an
   `ACKNOWLEDGMENT_STAFF` role, and the constraint would keep applying to the rows recorded as
   staff-assisted.
+- Resolved (CAT-06, verified, 2026-11-09): `GET /entitlement-definitions` takes `kind` and
+  `status` filters (the response stays an unpaged array). `programs-and-entitlements.spec.ts`.
+- Resolved (CAT-05, verified, 2026-11-09): `GET /sessions` names each session's
+  `schedulingEventId`, the event through which it holds space (null when it holds none), so the
+  staff calendar can mark a scheduled session without booked space (SCR-S-03).
+  `discovery-and-publication-check.spec.ts` and `session-scheduling-follow.spec.ts`.
 - Resolved (CAT-04, verified): the per-person discount limit is now a database guarantee
   (migration 0207). `redeem()` locks the definition then the counter (the order discount updates
   use) and keeps its ledger count as early feedback; the trigger's

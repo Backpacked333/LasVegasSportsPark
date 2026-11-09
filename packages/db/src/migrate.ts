@@ -59,45 +59,128 @@ async function ensureMigrationsTable<DB>(db: Kysely<DB>): Promise<void> {
 }
 
 /**
+ * The advisory lock every migration run holds (§4.1 versioned migrations), together with a hash of
+ * the schema being migrated: two runners started at once against the same schema (a deploy job
+ * and a second replica, two deploys) apply each file once, the second waiting for the first and
+ * then finding nothing pending. Runners migrating different schemas (parallel test files) do not
+ * wait for each other.
+ */
+export const MIGRATION_LOCK_KEY = 412_058_133;
+
+export interface MigrationStatus {
+  /** Applied migrations whose file exists with the same content. */
+  applied: number;
+  /** Files on disk not applied yet, in order. */
+  pending: string[];
+  /** Applied migrations whose file changed after it was applied. */
+  mismatched: string[];
+  /** Versions applied in the database with no file on disk (a rollback to an older build). */
+  missingOnDisk: string[];
+  /** True when nothing is pending, changed or missing: the schema matches this build. */
+  current: boolean;
+}
+
+/**
+ * Compares the database's applied migrations with the files of this build (§4.1, §5.8 restore
+ * verification), without changing anything. A database without `schema_migrations` has every
+ * file pending.
+ */
+export async function migrationStatus<DB>(
+  db: Kysely<DB>,
+  options: { dir?: string; files?: MigrationFile[] } = {},
+): Promise<MigrationStatus> {
+  const files = options.files ?? (await loadMigrationFiles(options.dir));
+  const exists = await sql<{ present: boolean }>`
+    select to_regclass('schema_migrations') is not null as present
+  `.execute(db);
+  const rows = exists.rows[0]?.present
+    ? (
+        await sql<{ version: string; checksum: string }>`
+          select version, checksum from schema_migrations order by version
+        `.execute(db)
+      ).rows
+    : [];
+  return compareMigrations(files, rows);
+}
+
+function compareMigrations(
+  files: readonly MigrationFile[],
+  rows: ReadonlyArray<{ version: string; checksum: string }>,
+): MigrationStatus {
+  const applied = new Map(rows.map((r) => [r.version, r.checksum]));
+  const byVersion = new Map(files.map((f) => [f.version, f]));
+  const mismatched: string[] = [];
+  const missingOnDisk: string[] = [];
+  let matching = 0;
+  for (const [version, checksum] of applied) {
+    const file = byVersion.get(version);
+    if (!file) missingOnDisk.push(version);
+    else if (file.checksum !== checksum) mismatched.push(file.fileName);
+    else matching += 1;
+  }
+  const pending = files.filter((f) => !applied.has(f.version)).map((f) => f.fileName);
+  return {
+    applied: matching,
+    pending,
+    mismatched,
+    missingOnDisk,
+    current: pending.length === 0 && mismatched.length === 0 && missingOnDisk.length === 0,
+  };
+}
+
+/**
  * Applies pending migrations in order, each inside its own transaction, and refuses to run if an
  * already-applied migration's content changed (versioned migrations are immutable once applied).
+ * The whole run holds `MIGRATION_LOCK_KEY` on one connection, so concurrent runners serialize.
+ * `dryRun` reports what would be applied and applies nothing.
  */
 export async function migrateToLatest<DB>(
   db: Kysely<DB>,
-  options: { dir?: string; log?: (message: string) => void } = {},
+  options: { dir?: string; log?: (message: string) => void; dryRun?: boolean } = {},
 ): Promise<MigrationResult> {
   const log = options.log ?? (() => undefined);
   const files = await loadMigrationFiles(options.dir);
-  await ensureMigrationsTable(db);
-  const rows = await sql<{ version: string; checksum: string }>`
-    select version, checksum from schema_migrations order by version
-  `.execute(db);
-  const applied = new Map(rows.rows.map((r) => [r.version, r.checksum]));
-
-  for (const [version, checksum] of applied) {
-    const file = files.find((f) => f.version === version);
-    if (!file) {
-      throw new Error(`migration ${version} is applied in the database but missing from disk`);
-    }
-    if (file.checksum !== checksum) {
-      throw new Error(
-        `migration ${file.fileName} changed after it was applied (checksum mismatch); add a new migration instead`,
+  return db.connection().execute(async (conn) => {
+    await sql`select pg_advisory_lock(${MIGRATION_LOCK_KEY}, hashtext(current_schema()))`.execute(
+      conn,
+    );
+    try {
+      if (!options.dryRun) await ensureMigrationsTable(conn);
+      const status = await migrationStatus(conn, { files });
+      if (status.missingOnDisk.length > 0) {
+        throw new Error(
+          `migration ${status.missingOnDisk[0]} is applied in the database but missing from disk`,
+        );
+      }
+      if (status.mismatched.length > 0) {
+        throw new Error(
+          `migration ${status.mismatched[0]} changed after it was applied (checksum mismatch); add a new migration instead`,
+        );
+      }
+      const result: MigrationResult = { applied: [], alreadyApplied: status.applied };
+      const pending = new Set(status.pending);
+      for (const file of files) {
+        if (!pending.has(file.fileName)) continue;
+        if (options.dryRun) {
+          log(`would apply ${file.fileName}`);
+          result.applied.push(file);
+          continue;
+        }
+        log(`applying ${file.fileName}`);
+        await conn.transaction().execute(async (trx) => {
+          await sql.raw(file.sql).execute(trx);
+          await sql`
+            insert into schema_migrations (version, name, checksum)
+            values (${file.version}, ${file.name}, ${file.checksum})
+          `.execute(trx);
+        });
+        result.applied.push(file);
+      }
+      return result;
+    } finally {
+      await sql`select pg_advisory_unlock(${MIGRATION_LOCK_KEY}, hashtext(current_schema()))`.execute(
+        conn,
       );
     }
-  }
-
-  const result: MigrationResult = { applied: [], alreadyApplied: applied.size };
-  for (const file of files) {
-    if (applied.has(file.version)) continue;
-    log(`applying ${file.fileName}`);
-    await db.transaction().execute(async (trx) => {
-      await sql.raw(file.sql).execute(trx);
-      await sql`
-        insert into schema_migrations (version, name, checksum)
-        values (${file.version}, ${file.name}, ${file.checksum})
-      `.execute(trx);
-    });
-    result.applied.push(file);
-  }
-  return result;
+  });
 }

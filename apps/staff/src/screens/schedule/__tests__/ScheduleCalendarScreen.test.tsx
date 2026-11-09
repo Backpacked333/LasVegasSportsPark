@@ -50,6 +50,7 @@ const SESSION = {
   scheduledStart: '2026-10-24T23:00:00.000Z',
   scheduledEnd: '2026-10-25T00:00:00.000Z',
   status: 'scheduled' as const,
+  schedulingEventId: null as string | null,
   facilityId: FACILITY_A,
   timezone: 'America/Los_Angeles',
 };
@@ -521,6 +522,30 @@ describe('SCR-S-03 ScheduleCalendarScreen', () => {
       from: '2026-10-24T07:00:00.000Z',
       to: '2026-10-25T07:00:00.000Z',
     });
+  });
+
+  it('CAT-05: says whether each session holds space through a scheduling event', async () => {
+    const BOOKED = '0192f1a0-0000-7000-8000-0000000005e2';
+    const app = createTestApp({
+      routes: routes({
+        'GET /sessions': page([
+          SESSION,
+          {
+            ...SESSION,
+            sessionId: BOOKED,
+            sequence: 4,
+            schedulingEventId: '0192f1a0-0000-7000-8000-0000000005e3',
+          },
+        ]),
+      }),
+    });
+    render(app.at('/schedule/calendar'));
+    const unbooked = await screen.findByTestId(`facility-session-${SESSION_ID}`);
+    expect(within(unbooked).getByText('No space booked')).toBeInTheDocument();
+    const booked = screen.getByTestId(`facility-session-${BOOKED}`);
+    expect(booked).toHaveTextContent('space booked through its scheduling event');
+    expect(within(booked).queryByText('No space booked')).toBeNull();
+    expect(app.fake.requests.filter((r) => r.route === '/sessions')).toHaveLength(1);
   });
 
   it('sessions not available to the viewer (ACCESS_DENIED) leave the rest of the calendar in place', async () => {

@@ -13,9 +13,11 @@
  * The offerings and programs to recommend are paged with "Load more" (published offerings,
  * active programs), so nothing is silently cut off.
  *
- * The API has no read or list of a participant's recommendations for staff, so only the
- * recommendations made on this page are shown (Proposed handling of an API gap). Children are
- * named only: no date of birth, contact or medical detail (§4.14).
+ * A child's recommendations from this offering are listed on request
+ * (`GET /v1/participants/{personId}/progression-recommendations?offeringId=`, ENR-19: a coach sees
+ * their own drafts and shared or withdrawn ones; a program manager all), each with its share and
+ * withdraw actions; those made on this page are listed apart. Children are named only: no date of
+ * birth, contact or medical detail (§4.14).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -32,6 +34,7 @@ import { PersonName, type PersonNames } from '../../features/competition/names';
 import { Button } from '../../ui/Button';
 import { CapabilityGate } from '../../ui/CapabilityGate';
 import { LoadMore } from '../../ui/LoadMore';
+import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 
@@ -271,6 +274,67 @@ function TargetChoice({
   );
 }
 
+/** ENR-19: one child's recommendations from this offering, read on request. */
+function ChildRecommendations({
+  offeringId,
+  childOptions,
+  names,
+  canShare,
+  madeHere,
+}: {
+  offeringId: string;
+  childOptions: { value: string; label: string }[];
+  names: PersonNames;
+  canShare: boolean;
+  madeHere: readonly string[];
+}) {
+  const [child, setChild] = useState('');
+  const listed = useApiPages({
+    path: '/participants/{personId}/progression-recommendations',
+    request: { path: { personId: child }, query: { offeringId, limit: 25 } },
+    enabled: child !== '',
+  });
+  const earlier = listed.data?.filter((r) => !madeHere.includes(r.id));
+  return (
+    <section aria-labelledby="child-recommendations-title">
+      <h4 id="child-recommendations-title">A child’s recommendations</h4>
+      <SelectField
+        label="Child"
+        value={child}
+        onChange={setChild}
+        options={childOptions}
+        placeholder="Choose a child to list their recommendations"
+      />
+      {child ? (
+        <QueryBoundary
+          query={{ ...listed, data: earlier }}
+          label="the child's recommendations"
+          isEmpty={(items) => items.length === 0}
+          empty={{
+            title: 'No other recommendations',
+            description: 'No recommendation from this offering is visible to you for this child.',
+          }}
+        >
+          {(items) => (
+            <ul className="list" aria-label="The child’s recommendations">
+              {items.map((recommendation) => (
+                <RecommendationCard
+                  key={recommendation.id}
+                  recommendation={recommendation}
+                  names={names}
+                  canShare={canShare}
+                  onChange={() => void listed.refetch()}
+                />
+              ))}
+            </ul>
+          )}
+        </QueryBoundary>
+      ) : null}
+      {child ? <LoadMore pages={listed} label="recommendations" /> : null}
+    </section>
+  );
+}
+
 export function ProgressionRecommendations({
   offeringId,
   childIds,
@@ -410,10 +474,13 @@ export function ProgressionRecommendations({
           ))}
         </ul>
       ) : null}
-      <p className="caption">
-        Earlier recommendations cannot be listed here: the API has no staff read of a participant’s
-        recommendations yet. Families see shared ones in their app.
-      </p>
+      <ChildRecommendations
+        offeringId={offeringId}
+        childOptions={childOptions}
+        names={names}
+        canShare={enabled}
+        madeHere={made.map((r) => r.id)}
+      />
     </>
   );
 }

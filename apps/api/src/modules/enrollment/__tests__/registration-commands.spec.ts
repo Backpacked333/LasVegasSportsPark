@@ -591,7 +591,7 @@ describe('registration commands of stage 3 (ENR-03, ENR-04, ENR-05, ENR-06)', ()
   // ENR-06
   // -------------------------------------------------------------------------------------------
 
-  it('SPK-UX-001: an enrollment pending payment names the checkout operation', async () => {
+  it('SPK-UX-001: an enrollment pending payment names the checkout operation, and reads payment_processing while it runs (ENR-16)', async () => {
     const setup = await offering(t, { basePriceMinor: 11_000 });
     const kid = await child(t, [parent]);
     await acknowledge(t, setup, kid, parent.personId);
@@ -621,9 +621,10 @@ describe('registration commands of stage 3 (ENR-03, ENR-04, ENR-05, ENR-06)', ()
       return operationId;
     });
     const pending = await t.http.get(`/v1/enrollments/${enrollmentId}`).set(parent.header);
+    // ENR-16: a checkout in flight is not "payment outstanding".
     expect(pending.body).toMatchObject({
       status: 'pending',
-      pendingReason: 'payment',
+      pendingReason: 'payment_processing',
       lastOperationId: checkoutOperation,
     });
     // Compensation names its own operation on the enrollment it cancels.

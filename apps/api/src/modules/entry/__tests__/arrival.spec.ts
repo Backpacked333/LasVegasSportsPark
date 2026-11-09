@@ -50,14 +50,20 @@ describe('arrival: passes, visits and session check-ins (SPK-ENTRY-001..004, 006
     const reference = issued.body.reference as string;
     expect(reference.startsWith(PASS_REFERENCE_PREFIX)).toBe(true);
     expect(reference.length).toBeGreaterThanOrEqual(40);
+    // The reference is only random bytes: its payload is 32 bytes of base64url, nothing else.
+    const payload = reference.slice(PASS_REFERENCE_PREFIX.length);
+    expect(payload).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(Buffer.from(payload, 'base64url')).toHaveLength(32);
+    // No identifier of the holder, the children or the organization is in it. Short names are
+    // not searched for: a random 43-character token contains a given three-letter string about
+    // once in a thousand references by chance (the cause of a flaky run), which says nothing about
+    // what the reference encodes; the payload check above shows it encodes nothing but randomness.
     for (const secret of [
       fam.householdId,
       fam.childA,
       fam.childB,
       fam.guardian.personId,
       t.organizationId,
-      'Ava',
-      'Ben',
     ]) {
       expect(reference).not.toContain(secret);
       expect(reference.toLowerCase()).not.toContain(secret.toLowerCase().replaceAll('-', ''));

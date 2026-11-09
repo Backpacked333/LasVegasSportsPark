@@ -52,6 +52,32 @@ const VIEW_EVENTS = 'core.view_provider_events';
 const VIEW_AUDIT = 'core.view_audit';
 
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
+  const table = listRoutes(extra);
+  if (!('GET /access-devices/{id}' in extra)) {
+    // ENT-07: the device page reads one device by id; it answers from the list this test serves.
+    table['GET /access-devices/{id}'] = async (request) => {
+      const list = table['GET /access-devices'] as FakeHandler;
+      const answer =
+        typeof list === 'function'
+          ? await list({ ...request, route: '/access-devices', params: {}, query: {} })
+          : fakeResponse(list.status, list.body);
+      if (answer.status !== 200) return answer;
+      const body = JSON.parse(await answer.text()) as { items: { id: string }[] };
+      const found = body.items.find((d) => d.id === request.params['id']);
+      return found
+        ? fakeResponse(200, found)
+        : fakeResponse(404, {
+            code: 'NOT_FOUND',
+            message: 'Not found.',
+            correlationId: 'c-nf',
+            nextAction: 'verify_reference',
+          });
+    };
+  }
+  return table;
+}
+
+function listRoutes(extra: Record<string, FakeHandler>): Record<string, FakeHandler> {
   return {
     ...baseRoutes(),
     'GET /me/permissions': permissions(['access_hardware'], HARDWARE),
@@ -251,22 +277,28 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     expect(call?.query).not.toHaveProperty('status');
   });
 
-  it('with no hardware exception on the loaded pages, says so instead of implying none exist', async () => {
+  it('SUP-08: asks the API for the hardware categories only; another category is never shown', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
-        'GET /exceptions': page(
-          [hardwareException({ category: 'finance.payment_outcome_unknown' })],
-          'cursor-2',
-        ),
+        'GET /exceptions': page([
+          hardwareException({ category: 'finance.payment_outcome_unknown' }),
+        ]),
       }),
     });
     render(app.at(BASE));
     await chooseFacility(user);
-    expect(
-      await screen.findByText('No unresolved hardware exception on the loaded pages.'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Load more/ })).toBeInTheDocument();
+    expect(await screen.findByText('No unresolved hardware exception.')).toBeInTheDocument();
+    const read = app.fake.requests.find((r) => r.route === '/exceptions');
+    expect([...(read?.queryAll?.['categories'] ?? [])].sort()).toEqual(
+      [
+        'entry.access_outcome_unknown',
+        'entry.device_command_undelivered',
+        'entry.device_offline',
+        'entry.unregistered_access_device',
+      ].sort(),
+    );
+    expect(read?.query).toMatchObject({ facilityId: FACILITY_A });
   });
 
   it('event ingestion: lists the access events the inbox received; failed and dead ones were not ingested', async () => {
@@ -304,6 +336,15 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     expect(rows[1]).toHaveTextContent('Not ingested: retries are exhausted');
     expect(rows[1]).toHaveTextContent('Last error: handler entry.access_control failed');
     expect(within(list).queryByText(/payment\.succeeded/)).toBeNull();
+    // K-16: without a chosen type the API is asked for the hardware event types only.
+    const first = app.fake.requests.find((r) => r.route === '/provider-events');
+    expect(first?.queryAll?.['eventTypes']).toEqual([
+      'access.granted',
+      'access.denied',
+      'access.unknown',
+      'device.heartbeat',
+      'device.command_receipt',
+    ]);
     await user.selectOptions(screen.getByLabelText('Event type'), 'access.unknown');
     await user.selectOptions(screen.getByLabelText('Event status'), 'dead');
     await waitFor(() =>
@@ -390,7 +431,9 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     await user.clear(timeout);
     await user.click(within(form).getByRole('button', { name: 'Save the device' }));
     expect(await within(form).findByRole('status')).toHaveTextContent('Device saved.');
-    const call = app.fake.requests.find((r) => r.route === '/access-devices/{id}');
+    const call = app.fake.requests.find(
+      (r) => r.method === 'PATCH' && r.route === '/access-devices/{id}',
+    );
     // Clearing the timeout sends null: outages are then not detected.
     expect(call?.body).toEqual({
       name: 'Back door east',
@@ -454,14 +497,14 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     await user.click(within(form).getByRole('button', { name: 'Retire the device' }));
     const stale = await screen.findByTestId('state-stale');
     expect(stale).toHaveTextContent('Error code: STALE_REVISION. Reference: c-stale');
-    const reads = app.fake.requests.filter((r) => r.route === '/access-devices').length;
+    // ENT-07: the page reads the device by id.
+    const deviceReads = () =>
+      app.fake.requests.filter((r) => r.method === 'GET' && r.route === '/access-devices/{id}')
+        .length;
+    const reads = deviceReads();
     await user.click(within(stale).getByRole('button', { name: 'Reload' }));
     await waitFor(() => expect(screen.queryByTestId('state-stale')).toBeNull());
-    await waitFor(() =>
-      expect(app.fake.requests.filter((r) => r.route === '/access-devices').length).toBeGreaterThan(
-        reads,
-      ),
-    );
+    await waitFor(() => expect(deviceReads()).toBeGreaterThan(reads));
     // The device was read again (renamed meanwhile, revision 3); the reason form keeps its text.
     expect(await screen.findByRole('heading', { name: 'Main gate east' })).toBeVisible();
     const again = screen.getByRole('form', { name: 'Retire the device' });
@@ -742,7 +785,7 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     );
   });
 
-  it('§4.10: a device not in the facility’s list is "not available"; a malformed link names no record', async () => {
+  it('§4.10 / ENT-07: a device the API does not serve is "not available"; a malformed link names no record', async () => {
     const app = createTestApp({ routes: routes({ 'GET /access-devices': page([]) }) });
     const view = render(app.at(DEVICE_PATH));
     expect(await screen.findByTestId('state-unavailable')).toHaveTextContent('Not available');

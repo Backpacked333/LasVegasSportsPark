@@ -18,6 +18,7 @@ import {
   Idempotent,
   Inbox,
   Public,
+  RawBody,
   RefusedDuringRecovery,
   ZodBody,
   ZodParams,
@@ -134,9 +135,10 @@ export class PaymentWebhooksController {
     @Param('provider') provider: string,
     @Body() raw: unknown,
     @Headers(FAKE_PAYMENTS_SIGNATURE_HEADER) signature: string | undefined,
+    @RawBody() rawBody: Buffer | undefined,
   ): Promise<{ inboxEventId: string; duplicate: boolean }> {
     if (provider !== this.provider.name) throw errors.notFound('payment provider', provider);
-    if (!this.provider.verifyWebhook(raw, signature)) {
+    if (!this.provider.verifyWebhook(raw, signature, rawBody)) {
       throw errors.authenticationRequired('The webhook signature is invalid.');
     }
     const body: z.infer<typeof PaymentWebhookBody> = webhookPipe.transform(raw);

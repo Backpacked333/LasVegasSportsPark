@@ -244,6 +244,19 @@ describe('audit-log and provider-event reads (K-08, §4.14, §4.12)', () => {
     );
     const filtered = await t.http.get('/v1/provider-events?provider=fake-payments').set(finance);
     expect(filtered.body.items).toHaveLength(1);
+    // K-16: several event types at once, comma-separated or repeated.
+    const ids = (r: { body: { items: { providerEventId: string }[] } }) =>
+      r.body.items.map((e) => e.providerEventId);
+    expect(
+      ids(await t.http.get('/v1/provider-events?eventTypes=delivery.receipt').set(finance)),
+    ).toEqual(['evt-2']);
+    const both = await t.http
+      .get('/v1/provider-events?eventTypes=delivery.receipt&eventTypes=payment.succeeded')
+      .set(finance);
+    expect(ids(both)).toEqual(['evt-2', 'evt-1']);
+    expect(
+      ids(await t.http.get('/v1/provider-events?eventTypes=nothing.here').set(finance)),
+    ).toEqual([]);
     const desk = await t.authHeader(staffPrincipal(t.organizationId, ['front_desk']));
     expect((await t.http.get('/v1/provider-events').set(desk)).status).toBe(403);
   });

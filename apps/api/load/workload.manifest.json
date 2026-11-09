@@ -1,0 +1,29 @@
+{
+  "$comment": "Spec §5.10 initial synthetic test envelope. These are test inputs, not facility facts or proven capacity; replace or enlarge them with operating evidence. Targets compared in reports are the §5.9 planning targets (DEC-035 to DEC-044 pending).",
+  "envelope": {
+    "people": 25000,
+    "historicalEnrollments": 100000,
+    "attendanceAndOperationalEvents": 1000000,
+    "activeCustomerSessions": 250,
+    "activeStaffOrScannerSessions": 20,
+    "contendersForFinalPlace": 50
+  },
+  "arrivalRates": {
+    "staffLookupPerSessionPerMinute": 30,
+    "customerReadsPerSessionPerMinute": 6,
+    "readinessProbesPerMinute": 12
+  },
+  "workflowMix": {
+    "staffLookup": 0.6,
+    "customerReads": 0.35,
+    "readinessProbes": 0.05
+  },
+  "durationSeconds": 120,
+  "contention": "The final-place race (50 contenders, one place) is asserted by the concurrency journeys under PostgreSQL (SPK-AT-005, CI job test-postgres); this harness measures latency under the read mix.",
+  "infrastructure": "Recorded by the report: commit, Node version, base URL, database (from GET /v1/ready).",
+  "dependencyFailures": "Provider gates run their fakes or none; provider timeouts and duplicates are covered by the fakes' scenarios in the test suite.",
+  "targets": {
+    "staffLookupP95Ms": 750,
+    "onlineCheckInP95Ms": 1000
+  }
+}

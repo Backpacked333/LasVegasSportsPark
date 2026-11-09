@@ -39,14 +39,16 @@ import { Button } from '../../../ui/Button';
 import { CheckboxGroup, TextField } from '../../../ui/FormFields';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
-import { DEVICES_QUERY_PREFIX } from './paths';
+import { DEVICE_QUERY_PREFIX, DEVICES_QUERY_PREFIX } from './paths';
 
 type Device = Schema<'AccessDevice'>;
 type Policy = Schema<'AccessPolicy'>;
 type Window = Schema<'AccessScheduleWindow'>;
 
 const POLICIES_PREFIX = ['api', '/access-devices/{id}/policies'] as const;
-const POLICY_COMMAND = { invalidate: [POLICIES_PREFIX, DEVICES_QUERY_PREFIX] } as const;
+const POLICY_COMMAND = {
+  invalidate: [POLICIES_PREFIX, DEVICES_QUERY_PREFIX, DEVICE_QUERY_PREFIX],
+} as const;
 const DAY_LABEL = new Map(WEEKDAYS.map((d) => [d.value, d.label]));
 const LOCAL_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/;
 

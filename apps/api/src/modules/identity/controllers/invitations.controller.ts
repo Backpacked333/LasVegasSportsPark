@@ -14,6 +14,7 @@ import {
 import {
   CurrentPrincipal,
   Idempotent,
+  RateLimited,
   RecordAuthority,
   ZodBody,
   ZodParams,
@@ -40,6 +41,7 @@ export class InvitationsController {
   }
 
   @Post(':id/accept')
+  @RateLimited('invitations')
   @HttpCode(200)
   @Idempotent()
   accept(

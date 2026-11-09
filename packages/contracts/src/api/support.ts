@@ -59,7 +59,7 @@ export const CaseResolutionKindSchema = z
   ])
   .openapi('CaseResolutionKind');
 export const CaseEventKindSchema = z
-  .enum(['note', 'status', 'assignment', 'update', 'action_link'])
+  .enum(['note', 'status', 'assignment', 'update', 'action_link', 'customer_reply'])
   .openapi('CaseEventKind');
 export const CaseActionStatusSchema = z
   .enum(['requested', 'succeeded', 'failed', 'unknown'])
@@ -307,6 +307,11 @@ export const CustomerCaseSchema = z
     category: CaseCategorySchema,
     title: z.string(),
     status: CaseStatusSchema,
+    /**
+     * SUP-07 (SCR-C-38): who the request is about, as the customer chose when opening it (the
+     * subject never changes afterwards). Names come from `GET /person-names` under its own rules.
+     */
+    subjectPersonId: z.uuid().nullable(),
     createdAt: Instant,
     updatedAt: Instant,
     resolvedAt: Instant.nullable(),
@@ -316,6 +321,22 @@ export type CustomerCase = z.infer<typeof CustomerCaseSchema>;
 
 export const ListMyCasesQuery = PageRequestSchema.extend({ status: CaseStatusSchema.optional() });
 export type ListMyCasesQuery = z.infer<typeof ListMyCasesQuery>;
+
+/**
+ * SUP-06 (SPK-SUPPORT-002, SCR-C-38): the customer answers their own request while it is not
+ * resolved. A request waiting on the customer returns to the team's queue (`open`). The reply is
+ * recorded in the case history for staff; the customer reads back only their own replies.
+ */
+export const CustomerCaseReplyBody = withCommandMeta({ body: z.string().trim().min(1).max(5000) })
+  .strict()
+  .openapi('CustomerCaseReplyRequest');
+export type CustomerCaseReplyInput = z.infer<typeof CustomerCaseReplyBody>;
+
+/** One of the customer's own replies on their request (never staff notes or history). */
+export const CustomerCaseReplySchema = z
+  .object({ id: z.uuid(), body: z.string(), sentAt: Instant })
+  .openapi('CustomerCaseReply');
+export type CustomerCaseReply = z.infer<typeof CustomerCaseReplySchema>;
 
 /**
  * Links a command the operator already ran (with their own principal) to the case. The evidence
@@ -504,11 +525,35 @@ export const OperationalExceptionSchema = z
   .openapi('OperationalException');
 export type OperationalException = z.infer<typeof OperationalExceptionSchema>;
 
+/** `?categories=a,b` or repeated `categories`. */
+const commaList = (value: unknown) =>
+  typeof value === 'string'
+    ? value
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0)
+    : value;
+const ExceptionCategory = z
+  .string()
+  .regex(
+    /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/,
+    'an exception category such as entry.device_offline',
+  )
+  .max(100);
+
 export const ListExceptionsQuery = PageRequestSchema.extend({
   queue: Slug.optional(),
   status: ExceptionStatusSchema.optional(),
   facilityId: z.uuid().optional(),
   severity: ExceptionSeveritySchema.optional(),
+  /** SUP-08: only these categories (1 to 20). */
+  categories: z.preprocess(commaList, z.array(ExceptionCategory).min(1).max(20)).optional(),
+  /** SUP-08: only exceptions about this record (type and id together). */
+  affectedType: Slug.optional(),
+  affectedId: z.string().trim().min(1).max(200).optional(),
+}).refine((v) => (v.affectedType === undefined) === (v.affectedId === undefined), {
+  message: 'affectedType and affectedId go together',
+  path: ['affectedId'],
 });
 export type ListExceptionsQuery = z.infer<typeof ListExceptionsQuery>;
 
@@ -806,6 +851,20 @@ query(
   pageSchema(CustomerCaseSchema),
 );
 query('/me/cases/{id}', 'The status of one of your support requests', null, CustomerCaseSchema);
+command(
+  'post',
+  '/me/cases/{id}/replies',
+  'Reply to one of your support requests while it is not resolved; a request waiting for you returns to the team (SPK-SUPPORT-002, SCR-C-38)',
+  CustomerCaseReplyBody,
+  CustomerCaseSchema,
+  201,
+);
+query(
+  '/me/cases/{id}/replies',
+  'Your own replies on one of your support requests, oldest first',
+  null,
+  z.array(CustomerCaseReplySchema),
+);
 query('/cases/{id}', 'Read a support case with its history and actions', null, CaseDetailSchema);
 command(
   'patch',

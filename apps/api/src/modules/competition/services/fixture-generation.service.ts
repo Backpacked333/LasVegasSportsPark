@@ -466,11 +466,15 @@ export class FixtureGenerationService {
       facilityId: requested.facility_id,
     });
     const resourceBuffers: Record<string, { setupMinutes: number; cleanupMinutes: number }> = {};
+    // SPK-SCHED-002: the conflict units each resource occupies, so a pitch and its halves are
+    // never proposed at overlapping times (publication would refuse them).
+    const resourceConflictUnits: Record<string, string[]> = {};
     for (const resource of await this.resources.listResources(principal, requested.facility_id)) {
       resourceBuffers[resource.id] = {
         setupMinutes: resource.defaultSetupMinutes,
         cleanupMinutes: resource.defaultCleanupMinutes,
       };
+      resourceConflictUnits[resource.id] = [...resource.conflictUnitIds];
     }
     // R4-REPLAY-IDEMPOTENCY-01 (§4.12, §4.7 invariant 12, SPK-FIX-005): the fixtures, the solver
     // run, the scheduling draft that holds the proposed times and the operation's outcome commit
@@ -573,6 +577,7 @@ export class FixtureGenerationService {
             matchDurationMinutes: spec.match_duration_minutes,
             resourceIds: spec.required_resource_ids,
             resourceBuffers,
+            resourceConflictUnits,
             fairnessPreferences: snapshot.fairnessPreferences,
             playoffStructure: snapshot.playoffStructure,
             maxGamesPerTeamPerDay: spec.max_games_per_team_per_day ?? null,

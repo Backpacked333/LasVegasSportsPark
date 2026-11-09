@@ -8,6 +8,7 @@ import {
 import { DeliveryReceiptSchema, type EventPayload } from '@sportspark/contracts';
 import { ModuleRef } from '@nestjs/core';
 import {
+  APP_CONFIG,
   BackgroundWorkers,
   EventHandlerRegistry,
   INTEGRATION_REGISTRY,
@@ -15,7 +16,10 @@ import {
   PeriodicJobRegistry,
   lazyPort,
   moduleSettings,
+  providerSelection,
+  type AppConfig,
   type IntegrationRegistryPort,
+  type ProviderSelector,
 } from '../../kernel';
 import {
   CHANGE_NOTICE_CHECK_IMPL,
@@ -75,6 +79,13 @@ import { PushDevicesService } from './services/push-devices.service';
 import { RecipientAddresses } from './services/recipient-addresses';
 import { ScheduleNotices } from './services/schedule-notices';
 
+/** The selector that chooses each external channel's adapter (§5.2). */
+const CHANNEL_SELECTORS: Record<'push' | 'email' | 'sms', ProviderSelector> = {
+  push: 'MESSAGING_PUSH_PROVIDER',
+  email: 'MESSAGING_EMAIL_PROVIDER',
+  sms: 'MESSAGING_SMS_PROVIDER',
+};
+
 const providers: Provider[] = [
   { provide: COMMUNICATIONS_POLICY, useValue: DEFAULT_COMMUNICATIONS_POLICY },
   // K-15, IF-43: the communication policy's settings without defaults (DEC-012).
@@ -83,10 +94,14 @@ const providers: Provider[] = [
   FakePushProvider,
   FakeEmailProvider,
   FakeSmsProvider,
+  // MESSAGING_<CHANNEL>_PROVIDER (§5.2, DEC-020): `fake` outside production only (the
+  // configuration refuses it in production); with `none` the channel has no provider, so no
+  // notice is approved for it (NotificationsService) and nothing is sent on it.
   {
     provide: CHANNEL_PROVIDERS,
-    inject: [FakePushProvider, FakeEmailProvider, FakeSmsProvider],
-    useFactory: (...fakes: ChannelProviderPort[]): ChannelProviderPort[] => fakes,
+    inject: [APP_CONFIG, FakePushProvider, FakeEmailProvider, FakeSmsProvider],
+    useFactory: (config: AppConfig, ...fakes: ChannelProviderPort[]): ChannelProviderPort[] =>
+      fakes.filter((fake) => providerSelection(config, CHANNEL_SELECTORS[fake.channel]) === 'fake'),
   },
   // Team audiences and calendar scopes read the competition module's effective roster (§4.2).
   CompetitionTeamMembership,
@@ -175,13 +190,16 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
     private readonly reminders: ActivityReminders,
     private readonly periodicJobs: PeriodicJobRegistry,
     @Inject(INTEGRATION_REGISTRY) private readonly integrations: IntegrationRegistryPort,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   onModuleInit(): void {
     // §5.1, §5.2 (COM-01, K-09, DEC-020): the channel adapters this module runs, all deterministic
     // fakes refused in production; failed and unknown deliveries of essential notices reach the
     // front desk's queue, which reconciles unknown ones (POST /delivery-attempts/{id}/reconcile).
+    // A channel whose selector is `none` runs no adapter, so none is registered for it.
     for (const channel of ['push', 'email', 'sms'] as const) {
+      if (providerSelection(this.config, CHANNEL_SELECTORS[channel]) !== 'fake') continue;
       this.integrations.register({
         id: `communications.${channel}_provider`,
         gate: 'messaging',

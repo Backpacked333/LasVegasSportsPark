@@ -22,9 +22,8 @@
  * Every suspension of the membership is listed, newest first, from
  * `GET /v1/enrollments/{id}/membership-suspensions` (GAPS-TRIAGE-02; the suspension commands'
  * authority, "Load more" for older ones), with the revision ending one needs, and read again after
- * a suspension is made or ended. The API has no staff read of a membership's term dates or its
- * usage per period (only the customer's `GET /v1/me/memberships`), so the page says it cannot show
- * them. Renewal and bookings need the `memberships` switch (DEC-016, DEC-072); member pricing is
+ * a suspension is made or ended. The term dates and the sessions used against each period's limit
+ * come from `GET /v1/enrollments/{id}/membership` (ENR-18). Renewal and bookings need the `memberships` switch (DEC-016, DEC-072); member pricing is
  * not built (POL-038, DEC-007).
  */
 import type { Schema } from '@sportspark/api-client';
@@ -471,6 +470,47 @@ function Renewal({ enrollment, onDone }: { enrollment: Enrollment; onDone: (m: s
   );
 }
 
+/** ENR-18: the term dates and the sessions used against each period's limit. */
+function TermAndUsage({ enrollmentId, zone }: { enrollmentId: string; zone: string | null }) {
+  const membership = useApiQuery({
+    path: '/enrollments/{id}/membership',
+    request: { path: { id: enrollmentId } },
+  });
+  return (
+    <section className="pg-panel" aria-labelledby="member-term">
+      <h4 id="member-term">Term and usage</h4>
+      <QueryBoundary
+        query={membership}
+        label="the membership's term and usage"
+        empty={{ title: '', description: '' }}
+      >
+        {(m) => (
+          <>
+            <Facts
+              label="Term"
+              items={[
+                ['Term starts', m.termStartsAt ? formatInstant(m.termStartsAt, zone) : 'Not set'],
+                ['Term ends', m.termEndsAt ? formatInstant(m.termEndsAt, zone) : 'Not set'],
+              ]}
+            />
+            {m.usage.length === 0 ? (
+              <p className="caption">No session has been counted against a period yet.</p>
+            ) : (
+              <ul className="list" aria-label="Sessions used per period">
+                {m.usage.map((u) => (
+                  <li key={u.periodKey}>
+                    Period {u.periodKey}: {u.usedCount} of {u.limitCount} used
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </QueryBoundary>
+    </section>
+  );
+}
+
 function Detail({ enrollment }: { enrollment: Enrollment }) {
   const queryClient = useQueryClient();
   const [outcome, setOutcome] = useState<string | null>(null);
@@ -525,11 +565,7 @@ function Detail({ enrollment }: { enrollment: Enrollment }) {
           ['Revision', String(enrollment.revision)],
         ]}
       />
-      <p className="caption">
-        The term dates and the count used against each period&apos;s limit are not readable from the
-        staff API (only the customer&apos;s own view has them), so they are not shown here; the
-        sessions booked with the membership and its suspensions are listed below.
-      </p>
+      <TermAndUsage enrollmentId={enrollment.id} zone={zone} />
       <section className="pg-panel" aria-labelledby="member-includes">
         <h4 id="member-includes">What it includes</h4>
         {enrollment.entitlementDefinitionId === null ? (

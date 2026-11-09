@@ -294,6 +294,8 @@ export type CancelBookingInput = z.infer<typeof CancelBookingBody>;
 
 export const ListBookingsQuery = PageRequestSchema.extend({
   facilityId: z.uuid().optional(),
+  /** ENR-17 (SCR-S-51, SCR-S-52): rentals or parties only. */
+  kind: BookingKindValueSchema.optional(),
   status: BookingStatusValueSchema.optional(),
   from: Instant.optional(),
   to: Instant.optional(),
@@ -553,6 +555,18 @@ export const ParticipantAssessmentsQuery = PageRequestSchema.extend({
 });
 export type ParticipantAssessmentsQuery = z.infer<typeof ParticipantAssessmentsQuery>;
 
+/** ENR-19 (SCR-S-19, SCR-W-07): a program's assessment templates, optionally of one status. */
+export const ListAssessmentTemplatesQuery = z.object({
+  status: z.enum(['draft', 'approved', 'retired']).optional(),
+});
+export type ListAssessmentTemplatesQuery = z.infer<typeof ListAssessmentTemplatesQuery>;
+
+/** ENR-19 (SCR-S-19, SCR-W-07): a participant's progression recommendations, newest first. */
+export const ParticipantRecommendationsQuery = PageRequestSchema.extend({
+  offeringId: z.uuid().optional(),
+});
+export type ParticipantRecommendationsQuery = z.infer<typeof ParticipantRecommendationsQuery>;
+
 // ---------------------------------------------------------------------------------------------
 // OpenAPI registration
 // ---------------------------------------------------------------------------------------------
@@ -653,6 +667,12 @@ command(
   'Suspend a membership for a period (ENR-12)',
   CreateMembershipSuspensionBody,
   MembershipSuspensionSchema,
+);
+query(
+  '/enrollments/{id}/membership',
+  'One membership with its term, usage and suspensions (ENR-18; staff readers of its facility, the member or a guardian holding view)',
+  null,
+  MembershipSchema,
 );
 query(
   '/enrollments/{id}/membership-suspensions',
@@ -808,6 +828,18 @@ query(
   'Published feedback and shared recommendations of the participants one may view (ENR-14)',
   null,
   YouthFeedbackSchema,
+);
+query(
+  '/programs/{id}/assessment-templates',
+  "A program's assessment templates, every version (ENR-19; program managers and coaches)",
+  ListAssessmentTemplatesQuery,
+  z.array(AssessmentTemplateSchema),
+);
+query(
+  '/participants/{personId}/progression-recommendations',
+  "A participant's progression recommendations (ENR-19; program managers in facility scope, coaches of the from-offering)",
+  ParticipantRecommendationsQuery,
+  pageSchema(ProgressionRecommendationSchema),
 );
 query(
   '/participants/{personId}/assessments',

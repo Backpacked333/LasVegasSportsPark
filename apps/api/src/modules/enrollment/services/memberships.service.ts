@@ -1136,6 +1136,29 @@ export class MembershipsService {
   // GET /me/memberships
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * GET /v1/enrollments/{id}/membership (ENR-18, SCR-S-53, SPK-COND-001): one membership with its
+   * term dates, benefit usage and suspensions, for whoever may read the enrollment
+   * (enrollment.read_enrollment: staff of its facility, the member, or a guardian holding view).
+   * Anyone else, a non-membership enrollment and an unknown id are not found (§4.10).
+   */
+  async get(principal: Principal, enrollmentId: string): Promise<Membership> {
+    const organizationId = organizationOf(principal);
+    const membership = await this.enrollments.load(this.db, organizationId, enrollmentId);
+    if (!membership || membership.intent !== 'membership') {
+      throw errors.protectedNotFound('membership');
+    }
+    await this.authorization.require(principal, EnrollmentActions.readEnrollment, {
+      type: 'enrollment',
+      id: enrollmentId,
+      organizationId,
+      facilityId: await this.scope.facilityOf(organizationId, membership.offering_id),
+      subjectPersonIds: [membership.participant_person_id],
+      protected: true,
+    });
+    return this.view(this.db, organizationId, membership);
+  }
+
   async listMine(principal: Principal, query: ListMyMembershipsQuery): Promise<Page<Membership>> {
     const organizationId = organizationOf(principal);
     const subjects = await this.customers.subjectIds(principal, EnrollmentActions.readEnrollment);

@@ -141,22 +141,24 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
 
 ## API issues found while building these screens
 
-- `FamilyCalendarItem` does not say a session booking's kind (pickup, trial, makeup), so the
-  calendar reads each booked offering to label pickup sessions.
+- `FamilyCalendarItem.bookingKind` says a session booking's kind (ENR-15, 2026-11-09); the
+  calendar labels pickup sessions from it instead of reading each booked offering.
 - `GET /v1/me/family-calendar` `overlaps` covers sessions and bookings only; fixtures of the same
   people are compared by the client.
 - `YouthFeedback` assessments carry no author (the inventory row lists one), so none is shown.
-- `CustomerCase` carries neither who nor what a request is about, and there is no customer command
-  to answer a request that is "Waiting for you"; the screen says the team will make contact.
+- `CustomerCase` says who a request is about (`subjectPersonId`, SUP-07) but not its description
+  or linked records, which staff may edit. A request "Waiting for you" is answered on the request
+  screen (`POST /v1/me/cases/{id}/replies`, SUP-06). Both added 2026-11-09.
 - `POST /v1/fixtures/{id}/availability` and the inbox read/acknowledge accept a change without
   `expectedRevision` (the check runs only when one is sent); this app always sends it.
-- `POST /v1/me/inbox/{id}/read` answers STALE_REVISION for a notice already read elsewhere,
-  although reading twice is otherwise not an error; the app re-reads the list.
+- `POST /v1/me/inbox/{id}/read` once answered STALE_REVISION for a notice already read elsewhere;
+  since 2026-11-09 a repeat read or acknowledgment answers the current item (the app still
+  re-reads the list on STALE_REVISION).
 - `POST /v1/fixtures/{id}/availability` accepts a child's `personId` with `register` while DEC-090
   is pending; the app does not offer it.
-- `Enrollment.pendingReason: payment` covers both a held basket and one already checking out (a
-  payment running); the app reads the basket and order to tell them apart and never says "payment
-  outstanding" before it has.
+- `Enrollment.pendingReason` names a running checkout `payment_processing` apart from `payment`
+  (a held basket, ENR-16, 2026-11-09); for `payment` the app still reads the basket and order and
+  never says "payment outstanding" before it has, since a checkout may have started meanwhile.
 - An `availability_request` notice does not say whether it has been answered; Home treats it as
   answered once everyone it is for has an answer in the fixture's `responses`.
 - `activity_reminder` notices stay in the inbox only: the activity they remind of is already the

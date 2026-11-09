@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.pglite*
+**/coverage
+**/.expo
+**/.vite
+.git
+.github
+.claude
+.env
+.env.*
+!.env.example
+apps/mobile
+apps/staff
+packages/api-client
+docs

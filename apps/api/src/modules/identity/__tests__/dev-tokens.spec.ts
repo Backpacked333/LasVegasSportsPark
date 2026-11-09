@@ -1,6 +1,6 @@
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestApp, type TestApp } from '../../../testing/test-app';
+import { createTestApp, OIDC_CONFIG_ENV, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import { createAccountFixture, createOrganizationPeople } from '../testing/identity-fixtures';
 
@@ -45,7 +45,7 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       t = await createTestApp({
         imports: [IdentityModule],
         principalResolver: 'module',
-        env: { AUTH_MODE: 'oidc' },
+        env: OIDC_CONFIG_ENV,
       });
     });
     afterAll(async () => {
@@ -57,6 +57,10 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       const res = await t.http.post('/v1/dev/tokens').send({ accountId: people.adult.accountId });
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('NOT_FOUND');
+      // §4.14: indistinguishable from an absent route even for a body that would not validate.
+      const malformed = await t.http.post('/v1/dev/tokens').send({ accountId: 'x' });
+      expect(malformed.status).toBe(404);
+      expect(malformed.body.code).toBe('NOT_FOUND');
     });
   });
   describe('on a protected staging host (DEV_TOKENS_PASSCODE set)', () => {
@@ -85,6 +89,53 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       const right = await t.http.post('/v1/dev/tokens').send({ accountId, passcode: PASSCODE });
       expect(right.status).toBe(201);
       expect(right.body).toMatchObject({ accountId });
+    });
+  });
+
+  describe('without a passcode (§4.14)', () => {
+    let t: TestApp;
+    beforeAll(async () => {
+      t = await createTestApp({ imports: [IdentityModule], principalResolver: 'module' });
+    });
+    afterAll(async () => {
+      await t.close();
+    });
+
+    it("§4.14: the route exists only on the developer's machine or private network, never for a host reached by name or through a proxy", async () => {
+      const people = await createOrganizationPeople(t);
+      const accountId = people.adult.accountId;
+      // supertest connects over loopback with Host 127.0.0.1:<port>.
+      expect((await t.http.post('/v1/dev/tokens').send({ accountId })).status).toBe(201);
+      // The Android emulator reaches the developer's machine as 10.0.2.2, over loopback.
+      expect(
+        (await t.http.post('/v1/dev/tokens').set('Host', '10.0.2.2:3000').send({ accountId }))
+          .status,
+      ).toBe(201);
+      // A host reached by a domain name (a staging host behind a proxy on the same machine).
+      const named = await t.http
+        .post('/v1/dev/tokens')
+        .set('Host', 'staging.example.org')
+        .send({ accountId });
+      expect(named.status).toBe(404);
+      expect(named.body.code).toBe('NOT_FOUND');
+      // A request a proxy forwarded is never the developer's machine: a proxy in front of a
+      // deployment must not pass a caller-supplied loopback or private Host (§4.14).
+      for (const [name, value] of [
+        ['X-Forwarded-For', '203.0.113.7'],
+        ['X-Forwarded-Host', '10.0.0.5'],
+        ['Forwarded', 'for=203.0.113.7'],
+        ['X-Real-IP', '203.0.113.7'],
+      ] as const) {
+        // Over loopback with a loopback Host, which alone would be the developer's machine.
+        const proxied = await t.http
+          .post('/v1/dev/tokens')
+          .set('Host', 'localhost:3000')
+          .set(name, value)
+          .send({ accountId });
+        expect([name, proxied.status]).toEqual([name, 404]);
+      }
+      // Without forwarding headers, the loopback request above still works.
+      expect((await t.http.post('/v1/dev/tokens').send({ accountId })).status).toBe(201);
     });
   });
 });

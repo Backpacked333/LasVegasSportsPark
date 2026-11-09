@@ -65,6 +65,7 @@ type PendingReason = NonNullable<Enrollment['pendingReason']>;
 export const PENDING_REASON_PHRASES: Readonly<Record<PendingReason, string>> = {
   approval: 'Registration pending: awaiting approval',
   payment: 'Registration pending: payment outstanding',
+  payment_processing: 'Payment processing',
   forms: 'Registration pending: a form to complete',
   placement: 'Registration pending: awaiting placement',
 };
@@ -109,11 +110,15 @@ export function enrollmentStatus(
       }
       // ENR-02: the API names what is outstanding; without a reason the phrase stays general.
       const reason = enrollment.pendingReason ?? null;
+      // ENR-16: the API says a checkout is running; never "outstanding" (§4.11, SPK-PAY-007).
+      if (reason === 'payment_processing') {
+        return { tone: 'pending', label: PENDING_REASON_PHRASES.payment_processing };
+      }
       if (reason === 'payment') {
-        // The API's `payment` covers a held basket and one already checking out (a payment
-        // running). "Payment outstanding" is said only once the basket and order were read and no
-        // checkout runs (`checkout: null`); while they are being read, could not be read, or this
-        // caller did not read them, the phrase never invites a second payment (§4.11, SPK-PAY-007).
+        // A held basket (ENR-16). A checkout can still have started since the read, so "Payment
+        // outstanding" is said only once the basket and order were read and no checkout runs
+        // (`checkout: null`); while they are being read, could not be read, or this caller did not
+        // read them, the phrase never invites a second payment (§4.11, SPK-PAY-007).
         if (checkout === null) return { tone: 'warning', label: PENDING_REASON_PHRASES.payment };
         if (checkout === 'checking') return { tone: 'pending', label: PAYMENT_CHECKING_PHRASE };
         if (checkout === 'unknown') return { tone: 'pending', label: PAYMENT_NOT_CHECKED_PHRASE };

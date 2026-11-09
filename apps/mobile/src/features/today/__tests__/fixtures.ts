@@ -148,6 +148,8 @@ export function calendarItem(overrides: Record<string, unknown> = {}) {
     kind: 'enrollment_session',
     enrollmentId: ENROLLMENT,
     sessionBookingId: null,
+    // ENR-15: null for an enrolled session; a booking says what it is.
+    bookingKind: null,
     offeringId: OFFERING,
     sessionId: SESSION,
     title: 'Junior Skills',
@@ -168,6 +170,7 @@ export const BOOKING_ITEM = calendarItem({
   kind: 'session_booking',
   enrollmentId: null,
   sessionBookingId: BOOKING,
+  bookingKind: 'pickup',
   offeringId: OFFERING_TWO,
   sessionId: SESSION_TWO,
   title: 'Adult Pickup Night',

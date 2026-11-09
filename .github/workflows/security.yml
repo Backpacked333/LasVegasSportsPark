@@ -1,0 +1,49 @@
+name: Security
+
+# Spec §4.14 "dependency and secret scanning". Runs on every pull request, on main, and weekly so
+# a newly published advisory is noticed without a code change.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 9 * * 1'
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: Dependency advisories (production dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Fails on a high or critical advisory not accepted in .github/audit-allowlist.json.
+      - run: node scripts/audit-gate.mjs
+
+  secrets:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No environment or key files are tracked
+        run: |
+          tracked=$(git ls-files | grep -E '(^|/)\.env(\..+)?$|\.pem$|\.p12$|\.key$|id_rsa' | grep -v '\.env\.example$' || true)
+          if [ -n "$tracked" ]; then echo "Tracked secret-bearing files:"; echo "$tracked"; exit 1; fi
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

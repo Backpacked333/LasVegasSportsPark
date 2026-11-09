@@ -9,8 +9,9 @@
  * - Opening a notice marks it read (`POST /v1/me/inbox/{id}/read`); "Acknowledge" records it once
  *   (`POST /v1/me/inbox/{id}/acknowledge`). Both are idempotent commands with one key per intent
  *   and send the delivery attempt's `revision` as `expectedRevision` (§4.9): the newest the screen
- *   knows (the list's, or the one the read returned). STALE_REVISION (read or acknowledged
- *   elsewhere meanwhile) reloads the list; acknowledging shows the code with "Reload". An
+ *   knows (the list's, or the one the read returned). A notice already read or acknowledged
+ *   elsewhere answers its current state (§4.9); any STALE_REVISION still reloads the list, and
+ *   acknowledging shows the code with "Reload". An
  *   acknowledgement with no definite answer (`mayHaveTakenEffect`) reads "No answer yet" with
  *   "Check again" under the same key, never "Something went wrong" (the shared account
  *   `CommandError`).

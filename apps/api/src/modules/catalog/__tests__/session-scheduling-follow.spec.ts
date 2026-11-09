@@ -587,7 +587,9 @@ describe('catalog sessions follow their scheduling events (assembled application
     expect(
       calendar.items.filter((i) => i.sessionId === second.id).map((i) => [i.kind, i.start]),
     ).toEqual([['enrollment_session', at(NEXT, '12:00')]]);
-    const desk = await ok<{ items: Array<{ sessionId: string; scheduledStart: string }> }>(
+    const desk = await ok<{
+      items: Array<{ sessionId: string; scheduledStart: string; schedulingEventId: string | null }>;
+    }>(
       get(
         t,
         `/v1/sessions?facilityId=${t.facilityId}&from=${at('2027-01-22', '00:00')}&to=${at('2027-01-25', '00:00')}`,
@@ -597,6 +599,8 @@ describe('catalog sessions follow their scheduling events (assembled application
     expect(desk.items.find((i) => i.sessionId === second.id)?.scheduledStart).toBe(
       at(NEXT, '12:00'),
     );
+    // CAT-05: the desk's list names the scheduling event through which the session holds space.
+    expect(desk.items.find((i) => i.sessionId === second.id)?.schedulingEventId).toBe(secondEvent);
 
     // replay of the same delivery changes nothing
     const firstMove = await changeDelivery(secondEvent, 'moved', 0);

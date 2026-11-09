@@ -9,9 +9,10 @@
  *   note is never shown to a family; comments reach the family only when the visibility is
  *   "family" and another program manager approves. Visibility is chosen explicitly, nothing
  *   preselected.
- * - The API offers no read of templates, so a template's skill areas and scale are known only for
- *   templates drafted or approved on this page; otherwise staff give the template reference, the
- *   skill area key and the value, and the API answers TEMPLATE_MISMATCH when they do not fit.
+ * - The program's approved templates are listed (`GET /v1/programs/{id}/assessment-templates`,
+ *   ENR-19) together with those approved on this page, so their skill areas and scales are known;
+ *   another template can still be given by reference with the skill area key and the value, and
+ *   the API answers TEMPLATE_MISMATCH when they do not fit.
  * - Edits send `expectedRevision`; a correction of a published or recorded assessment is a new
  *   assessment naming the one it corrects (`correctsAssessmentId`) and saying why (`reason`, §4.9;
  *   the API answers 400 VALIDATION_FAILED without one). A correction corrects the same observation
@@ -24,6 +25,7 @@
  */
 import { useState } from 'react';
 import { useApiCommand } from '../../../api/useApiCommand';
+import { useApiQuery } from '../../../api/useApiQuery';
 import { CommandError, CommandSuccess } from '../../../features/operations/feedback';
 import {
   SelectField,
@@ -70,7 +72,17 @@ export function AssessmentForm({
   const programId =
     (corrects ? templates.find((t) => t.id === corrects.templateId)?.programId : undefined) ??
     subject.programId;
-  const approved = templates.filter(
+  // ENR-19: the program's approved templates, with those approved on this page (deduplicated).
+  const listed = useApiQuery({
+    path: '/programs/{id}/assessment-templates',
+    request: { path: { id: programId ?? '' }, query: { status: 'approved' } },
+    enabled: Boolean(programId),
+  });
+  const known = [
+    ...templates,
+    ...(listed.data ?? []).filter((t) => !templates.some((own) => own.id === t.id)),
+  ];
+  const approved = known.filter(
     (t) => t.status === 'approved' && (!programId || t.programId === programId),
   );
   const [templateChoice, setTemplateChoice] = useState(
@@ -198,7 +210,7 @@ export function AssessmentForm({
               ...approved.map((t) => ({ value: t.id, label: `${t.name} (version ${t.version})` })),
               { value: OTHER_TEMPLATE, label: 'Another approved template (by reference)' },
             ]}
-            hint="Templates cannot be listed by the service: those approved on this page are offered."
+            hint="The program's approved templates are offered; another can be given by reference."
             error={problems.template ?? apiErrors.templateId}
           />
           {templateChoice === OTHER_TEMPLATE ? (

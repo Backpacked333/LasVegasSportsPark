@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   Inject,
   Injectable,
@@ -19,7 +20,19 @@ const handles = new WeakMap<Db, () => Promise<void>>();
 export async function openDatabase(config: AppConfig): Promise<DatabaseHandle> {
   const logger = new Logger('Database');
   if (config.DATABASE_URL) {
-    const handle = createPgDatabase({ connectionString: config.DATABASE_URL });
+    const handle = createPgDatabase({
+      connectionString: config.DATABASE_URL,
+      max: config.DATABASE_POOL_MAX,
+      ...(config.DATABASE_SSL ? { ssl: config.DATABASE_SSL } : {}),
+      ...(config.DATABASE_SSL_CA_PATH
+        ? { sslCa: readFileSync(config.DATABASE_SSL_CA_PATH, 'utf8') }
+        : {}),
+      ...(config.DATABASE_STATEMENT_TIMEOUT_MS
+        ? { statementTimeoutMs: config.DATABASE_STATEMENT_TIMEOUT_MS }
+        : {}),
+      idleTimeoutMs: config.DATABASE_IDLE_TIMEOUT_MS,
+      connectionTimeoutMs: config.DATABASE_CONNECTION_TIMEOUT_MS,
+    });
     if (config.DB_AUTO_MIGRATE && config.NODE_ENV !== 'production') {
       const result = await migrateToLatest(handle.db, { log: (m) => logger.log(m) });
       logger.log(

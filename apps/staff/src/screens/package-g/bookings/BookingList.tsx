@@ -3,8 +3,8 @@
  * SPK-COND-003), newest first in keyset pages with "Load more" (§4.5), in the facility chosen in
  * the header (or every facility in the viewer's scope; the API narrows to it, §4.3).
  *
- * The API lists rentals and parties together (no kind filter, reported), so this list shows the
- * bookings of its kind among the loaded pages and says so; "Load more" keeps looking. Each row
+ * The list asks the API for its kind only (`kind`, ENR-17), so every loaded page holds rentals or
+ * parties and "Load more" pages through that kind alone. Each row
  * names the booker (names only, §4.14), the times in the booking's facility zone (SPK-SCHED-008),
  * its status in the machine's words and what is still outstanding. Bookings stay listed while the
  * capability is off (reads are never gated, DEC-016).
@@ -141,11 +141,13 @@ export function BookingList({ kind }: { kind: BookingKind }) {
     request: {
       query: {
         limit: 50,
+        kind,
         ...(facilityId ? { facilityId } : {}),
         ...(status ? { status } : {}),
       },
     },
   });
+  // The API filters by kind (ENR-17); the check stays as a guard against a mixed answer.
   const ofKind = pages.data?.filter((b) => b.kind === kind);
   const names = usePersonNames((ofKind ?? []).map((b) => b.bookerPersonId));
   const query = { ...pages, data: ofKind };
@@ -169,27 +171,17 @@ export function BookingList({ kind }: { kind: BookingKind }) {
           options={BOOKING_STATUSES.map((s) => ({ value: s, label: BOOKING_STATUS[s].label }))}
         />
       </div>
-      <p className="caption">
-        The API lists rentals and parties together; this list shows the {words.many} among the
-        bookings loaded so far, newest first.
-      </p>
+      <p className="caption">Newest first.</p>
       <QueryBoundary
         query={query}
         label={`${words.one} bookings`}
         isEmpty={(items) => items.length === 0}
-        empty={
-          pages.hasNextPage
-            ? {
-                title: `No ${words.many} on the pages loaded so far`,
-                description: `More bookings exist. Load more to keep looking for ${words.many}.`,
-              }
-            : {
-                title: `No ${words.many}`,
-                description: status
-                  ? `No ${words.many} are ${BOOKING_STATUS[status].label} here.`
-                  : `No ${words.many} have been booked or requested here.`,
-              }
-        }
+        empty={{
+          title: `No ${words.many}`,
+          description: status
+            ? `No ${words.many} are ${BOOKING_STATUS[status].label} here.`
+            : `No ${words.many} have been booked or requested here.`,
+        }}
       >
         {(items) => (
           <ul className="booking-cards" aria-label={`${words.title} bookings`}>

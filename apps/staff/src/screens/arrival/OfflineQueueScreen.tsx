@@ -7,7 +7,8 @@
  *
  * The stored outcome of a synchronised batch is read again with `GET /v1/offline-sync/{id}`
  * (ENT-01): this device remembers the ids of the batches it sent, and desk readers may open any
- * batch by its reference (OfflineBatch.tsx). There is no list of every device's batches.
+ * batch by its reference or from the facility's list of every device's batches (ENT-06,
+ * OfflineBatch.tsx).
  *
  * Not available from the API: device approval and a server-issued, encrypted roster snapshot
  * (entry module known gaps; DEC-023, DEC-032, DEC-033 pending). The snapshot reference stays the
@@ -39,7 +40,7 @@ import './arrival.css';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { OfflineBatchView, SyncedBatches } from './OfflineBatch';
+import { FacilityBatches, OfflineBatchView, SyncedBatches } from './OfflineBatch';
 
 function personOf(item: OfflineItem): string {
   return item.kind === 'release' ? item.childPersonId : item.personId;
@@ -265,6 +266,7 @@ export function OfflineQueueScreen({
       </section>
 
       <SyncedBatches batches={state.synced ?? []} />
+      <FacilityBatches />
     </section>
   );
 }

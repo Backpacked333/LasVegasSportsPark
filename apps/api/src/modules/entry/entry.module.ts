@@ -10,6 +10,7 @@ import {
   moduleSettings,
   PeriodicJobRegistry,
   runWithTransaction,
+  providerSelection,
   type AppConfig,
   type IntegrationRegistryPort,
 } from '../../kernel';
@@ -55,6 +56,7 @@ import {
   FAKE_ACCESS_CONTROL_PROVIDER,
   FakeAccessControlProvider,
 } from './providers/fake-access-control.provider';
+import { unselectedAccessDeviceProvider } from './providers/unselected-access-device.provider';
 import { AccessDevicesService } from './services/access-devices.service';
 import { AccessEventsService } from './services/access-events.service';
 import { ActivityResolver } from './services/activity-resolver';
@@ -100,17 +102,15 @@ const providers: Provider[] = [
   FakeAccessControlProvider,
   // IF-38 (declared by stage 3; ENT-05 uses it): device commands go to the fake, refused in
   // production like every fake adapter.
+  // ACCESS_DEVICE_PROVIDER (§5.2): `fake` outside production only (the configuration refuses it
+  // in production); `none` while DEC-023 is pending.
   {
     provide: ACCESS_DEVICE_PORT,
     inject: [APP_CONFIG, FakeAccessControlProvider],
-    useFactory: (config: AppConfig, fake: FakeAccessControlProvider): AccessDevicePort => {
-      if (config.NODE_ENV === 'production') {
-        throw new Error(
-          'No access hardware is selected (specification §5.2, DEC-023): implement the adapter behind AccessDevicePort before production.',
-        );
-      }
-      return fake;
-    },
+    useFactory: (config: AppConfig, fake: FakeAccessControlProvider): AccessDevicePort =>
+      providerSelection(config, 'ACCESS_DEVICE_PROVIDER') === 'fake'
+        ? fake
+        : unselectedAccessDeviceProvider,
   },
   ActivityResolver,
   ArrivalChecks,
@@ -191,21 +191,25 @@ export class EntryModule implements OnModuleInit {
     private readonly accessEvents: AccessEventsService,
     private readonly delivery: DeviceDeliveryService,
     private readonly followUps: EntryFollowUps,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   onModuleInit(): void {
     // §5.1, §5.2 (ENT-01, K-09, IF-04, IF-38): the hardware gate is pending DEC-023; the
     // deterministic fake is the only adapter, refused in production; device outcomes are
     // reconciled by the facilities operator.
-    this.integrations.register({
-      id: 'entry.access_device',
-      gate: 'hardware',
-      port: 'ACCESS_DEVICE_PORT',
-      adapter: { name: FAKE_ACCESS_CONTROL_PROVIDER, kind: 'fake' },
-      productionAllowed: false,
-      scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
-      reconciliationOwner: 'facilities_operator',
-    });
+    // With ACCESS_DEVICE_PROVIDER=none no adapter runs, so none is registered.
+    if (providerSelection(this.config, 'ACCESS_DEVICE_PROVIDER') === 'fake') {
+      this.integrations.register({
+        id: 'entry.access_device',
+        gate: 'hardware',
+        port: 'ACCESS_DEVICE_PORT',
+        adapter: { name: FAKE_ACCESS_CONTROL_PROVIDER, kind: 'fake' },
+        productionAllowed: false,
+        scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
+        reconciliationOwner: 'facilities_operator',
+      });
+    }
     // SPK-COND-004: hardware access is recorded as a facility arrival and nothing else.
     this.inbox.on(FAKE_ACCESS_CONTROL_PROVIDER, 'entry.access_event', (event, ctx) =>
       this.accessEvents.handle(event, ctx.trx),

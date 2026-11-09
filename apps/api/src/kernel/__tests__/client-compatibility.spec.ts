@@ -2,7 +2,12 @@ import { Controller, HttpCode, Post } from '@nestjs/common';
 import { parseClientIdentity as contractsParse, z } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { customerPrincipal } from '../../testing/principals';
-import { createTestApp, TEST_CONFIG_ENV, type TestApp } from '../../testing/test-app';
+import {
+  createTestApp,
+  PRODUCTION_CONFIG_ENV,
+  TEST_CONFIG_ENV,
+  type TestApp,
+} from '../../testing/test-app';
 import { loadConfig } from '../config';
 import { Idempotent } from '../http/idempotency.interceptor';
 import { ZodBody } from '../http/zod-validation.pipe';
@@ -177,12 +182,7 @@ describe('client compatibility gate (K-03, SPK-AT-027, §4.13)', () => {
     });
 
     it('production refuses a wildcard or plain-http origin, and a malformed origin refuses boot', () => {
-      const production = {
-        ...TEST_CONFIG_ENV,
-        NODE_ENV: 'production',
-        AUTH_MODE: 'oidc',
-        DATABASE_URL: 'postgres://localhost/x',
-      };
+      const production = PRODUCTION_CONFIG_ENV;
       expect(() => loadConfig({ ...production, CORS_ALLOWED_ORIGINS: '*' })).toThrow(
         /CORS_ALLOWED_ORIGINS/,
       );

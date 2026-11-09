@@ -7,6 +7,7 @@ import { defaultKeyGenerator } from '@sportspark/api-client';
 import { readConfig, type StaffConfig } from '../config/config';
 import { browserConnectivity, type ConnectivitySource } from '../connectivity/sources';
 import { BrowserSessionStore } from '../session/browser-session-store';
+import { consoleCrashReporter, type CrashReporter } from './crash-report';
 
 export interface StaffServices {
   config: StaffConfig;
@@ -15,6 +16,8 @@ export interface StaffServices {
   fetch?: FetchLike;
   generateKey: KeyGenerator;
   now: () => Date;
+  /** Where unexpected client failures are reported (console when absent). */
+  crashReporter?: CrashReporter;
 }
 
 export function createBrowserServices(): StaffServices {
@@ -24,5 +27,6 @@ export function createBrowserServices(): StaffServices {
     connectivity: browserConnectivity,
     generateKey: defaultKeyGenerator,
     now: () => new Date(),
+    crashReporter: consoleCrashReporter,
   };
 }

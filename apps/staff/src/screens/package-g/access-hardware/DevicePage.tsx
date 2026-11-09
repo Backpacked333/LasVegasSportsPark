@@ -2,8 +2,8 @@
  * SCR-S-56 one access device (§3.16 Access hardware "device inventory, access policy, revocation,
  * outages, audit"; SPK-COND-004, SPK-ENTRY-002):
  *
- * - the device as listed by `GET /v1/access-devices?facilityId=` (the API has no single-device
- *   read; a device not in the facility's list is "not available"), with health and outage age;
+ * - the device read by id (`GET /v1/access-devices/{id}`, ENT-07; a device the API does not let
+ *   this viewer read is "not available"), with health and outage age;
  * - renaming it or setting its heartbeat timeout with the revision it was read at
  *   (`PATCH /v1/access-devices/{id}`, entry.update_access_device), and retiring it with a reason
  *   (`POST /v1/access-devices/{id}/retire`, never gated);
@@ -28,6 +28,7 @@ import { useState, type FormEvent } from 'react';
 import { useParams } from 'react-router';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiPages } from '../../../api/useApiPages';
+import { useApiQuery } from '../../../api/useApiQuery';
 import { AuditTrail } from '../../../features/pos-access-accounting/AuditTrail';
 import { CommandError } from '../../../features/pos-access-accounting/CommandError';
 import { useFacilityDirectory } from '../../../features/pos-access-accounting/facilities';
@@ -49,10 +50,9 @@ import { Facts, SelectField, TextField } from '../../../ui/FormFields';
 import { LoadMore } from '../../../ui/LoadMore';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { isUuid } from '../../../ui/RecordRef';
-import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
 import { HealthLine, heartbeatAt } from './DevicesPage';
-import { DEVICES_QUERY_PREFIX } from './paths';
+import { DEVICE_QUERY_PREFIX, DEVICES_QUERY_PREFIX } from './paths';
 import { Policies } from './Policies';
 
 type Device = Schema<'AccessDevice'>;
@@ -60,35 +60,23 @@ type Device = Schema<'AccessDevice'>;
 export function DevicePage() {
   const { facilityId = '', deviceId = '' } = useParams();
   if (!isUuid(facilityId) || !isUuid(deviceId)) return <LinkNotAvailable />;
-  return <DeviceView facilityId={facilityId} deviceId={deviceId} />;
+  return <DeviceView deviceId={deviceId} />;
 }
 
-function DeviceView({ facilityId, deviceId }: { facilityId: string; deviceId: string }) {
-  const devices = useApiPages({
-    path: '/access-devices',
-    request: { query: { facilityId, limit: 100 } },
-  });
-  const device = devices.data?.find((d) => d.id === deviceId);
+function DeviceView({ deviceId }: { deviceId: string }) {
+  const read = useApiQuery({ path: '/access-devices/{id}', request: { path: { id: deviceId } } });
+  const device = read.data;
   return (
     <section aria-labelledby="access-device-title">
       <h3 id="access-device-title">{device ? device.name : `Device ${shortRef(deviceId)}`}</h3>
       <QueryBoundary
-        query={devices}
+        query={read}
         label="the device"
         empty={{ title: '', description: '' }}
         unavailableOffline={['changing the device', 'policies']}
       >
-        {() =>
-          device ? (
-            <DeviceBody device={device} />
-          ) : devices.hasNextPage ? (
-            <p>The device is not among the devices loaded so far.</p>
-          ) : (
-            <StateView variant="unavailable" />
-          )
-        }
+        {(d) => <DeviceBody device={d} />}
       </QueryBoundary>
-      {!device ? <LoadMore pages={devices} label="devices" /> : null}
     </section>
   );
 }
@@ -176,7 +164,7 @@ function EditDevice({ device }: { device: Device }) {
   );
   const [touched, setTouched] = useState(false);
   const command = useApiCommand('patch', '/access-devices/{id}', {
-    invalidate: [DEVICES_QUERY_PREFIX],
+    invalidate: [DEVICES_QUERY_PREFIX, DEVICE_QUERY_PREFIX],
   });
   const intent = useIntentForm(command);
   const seconds = timeout.trim() ? Number(timeout.trim()) : null;
@@ -231,6 +219,7 @@ function EditDevice({ device }: { device: Device }) {
         onReload={() => {
           intent.restart();
           void queryClient.invalidateQueries({ queryKey: DEVICES_QUERY_PREFIX });
+          void queryClient.invalidateQueries({ queryKey: DEVICE_QUERY_PREFIX });
         }}
       />
     </form>
@@ -241,7 +230,7 @@ function RetireDevice({ device }: { device: Device }) {
   const online = useOnline();
   const queryClient = useQueryClient();
   const command = useApiCommand('post', '/access-devices/{id}/retire', {
-    invalidate: [DEVICES_QUERY_PREFIX],
+    invalidate: [DEVICES_QUERY_PREFIX, DEVICE_QUERY_PREFIX],
   });
   return (
     <div>
@@ -269,6 +258,7 @@ function RetireDevice({ device }: { device: Device }) {
         onReload={() => {
           command.reset();
           void queryClient.invalidateQueries({ queryKey: DEVICES_QUERY_PREFIX });
+          void queryClient.invalidateQueries({ queryKey: DEVICE_QUERY_PREFIX });
         }}
       />
     </div>

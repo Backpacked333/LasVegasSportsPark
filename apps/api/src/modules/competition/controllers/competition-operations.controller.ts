@@ -164,6 +164,14 @@ export class CompetitionOperationsController {
     return this.pools.create(principal, params.id, body, correlationId);
   }
 
+  @Get('divisions/:id/pools')
+  listDivisionPools(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<Pool[]> {
+    return this.pools.listForDivision(principal, params.id);
+  }
+
   @Get('pools/:id')
   getPool(
     @CurrentPrincipal() principal: Principal,

@@ -57,6 +57,15 @@ export class AccessDevicesController {
     return this.devices.list(principal, query);
   }
 
+  /** ENT-07: one device with its active policy. */
+  @Get(':id')
+  get(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<AccessDevice> {
+    return this.devices.get(principal, params.id);
+  }
+
   @Patch(':id')
   @Idempotent()
   @NoRecordAuthority(NOT_A_RECORD_CATEGORY)

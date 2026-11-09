@@ -90,7 +90,7 @@ describe('staff administration reads (ID-05; §2.1, §4.14, SPK-IAM-005, SPK-IAM
     ).toBe(403);
   });
 
-  it('the staff directory lists staff in effect now with per-role facility scopes; coaches and officials only for staffing roles', async () => {
+  it('the staff directory lists staff in effect now with per-role facility scopes; coaches and officials only for staffing roles; a lookup by person id (ID-10)', async () => {
     const tag = `Dir${newId().slice(-6)}`;
     const deskPerson = await createPersonFixture(t, {
       kind: 'adult',
@@ -162,6 +162,25 @@ describe('staff administration reads (ID-05; §2.1, §4.14, SPK-IAM-005, SPK-IAM
       .get(`/v1/staff-directory?query=${tag}&role=front_desk&facilityId=${other}`)
       .set(schedulerHeader);
     expect(atOther.body.items).toEqual([]);
+    // ID-10: a lookup by person id lists only those people, under the same rules (a coach-only
+    // person stays out without identity.read_workforce_directory; an unknown id is no error).
+    const byId = await t.http
+      .get(`/v1/staff-directory?personIds=${deskPerson},${coachOnly},${scheduler.personId}`)
+      .set(await authHeaderForPerson(t, finance.personId));
+    expect(byId.status, JSON.stringify(byId.body)).toBe(200);
+    expect(byId.body.items.map((e: { personId: string }) => e.personId).sort()).toEqual(
+      [deskPerson, scheduler.personId].sort(),
+    );
+    const unknown = await t.http
+      .get(
+        `/v1/staff-directory?personIds=${coachOnly}&personIds=0192f1a0-0000-7000-8000-00000000dead`,
+      )
+      .set(await authHeaderForPerson(t, finance.personId));
+    expect(unknown.status).toBe(200);
+    expect(unknown.body.items).toEqual([]);
+    expect(
+      (await t.http.get('/v1/staff-directory?personIds=not-an-id').set(schedulerHeader)).status,
+    ).toBe(400);
     expect(JSON.stringify(staffing.body)).not.toContain('@');
     // a coach and a customer cannot read the directory
     const family = await createOrganizationPeople(t);

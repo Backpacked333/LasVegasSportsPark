@@ -2,16 +2,18 @@
   "name": "@sportspark/api",
   "version": "0.1.0",
   "private": true,
-  "description": "Sportspark operating API — NestJS modular monolith and durable workers",
+  "description": "Sportspark operating API \u2014 NestJS modular monolith and durable workers",
   "main": "./dist/main.js",
   "scripts": {
     "build": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b",
     "start": "node dist/main.js",
     "start:worker": "node dist/worker.js",
     "dev": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && node dist/main.js",
+    "dev:all": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && node dist/dev-all.js",
     "test": "vitest run",
     "openapi": "tsx scripts/emit-openapi.ts",
     "permission-matrix": "tsx scripts/emit-permission-matrix.ts",
+    "load": "tsx scripts/load.ts",
     "seed:dev": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && tsx scripts/seed-dev.ts"
   },
   "dependencies": {

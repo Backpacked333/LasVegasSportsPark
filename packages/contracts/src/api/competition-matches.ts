@@ -449,6 +449,27 @@ export type PublishBracketNodeInput = z.infer<typeof PublishBracketNodeBody>;
 
 export const ListBracketNodesQuery = z.object({ divisionId: z.uuid().optional() });
 
+export const PlayoffStructureSchema = z
+  .object({
+    kind: z.enum(['single_elimination']),
+    /** Entries that qualify (2, 4, 8 …). */
+    teams: z.number().int().min(2).max(64),
+  })
+  .openapi('PlayoffStructure');
+export type PlayoffStructure = z.infer<typeof PlayoffStructureSchema>;
+
+/**
+ * SPK-COMP-001 bracket progression: create a division's whole playoff bracket from the structure
+ * the league manager specifies. Seeds pair 1 v N; the top seeds take any byes straight into the
+ * second round. Slots are seeded later from the final standings (seed-from-standings, rank = seed).
+ */
+export const GenerateBracketBody = withCommandMeta({
+  structure: PlayoffStructureSchema,
+  /** Put in front of every node name ("Gold playoffs: Final"). */
+  namePrefix: z.string().trim().min(1).max(100).optional(),
+}).openapi('GenerateBracketRequest');
+export type GenerateBracketInput = z.infer<typeof GenerateBracketBody>;
+
 /**
  * CMP-10 / CMP-15 (SPK-COMP-001 bracket progression): seed an unpublished node's slots from the
  * standings of a division, or of a tournament pool, once every fixture of that table has an
@@ -528,15 +549,6 @@ export const FairnessPreferenceSchema = z
   })
   .openapi('FairnessPreference');
 export type FairnessPreference = z.infer<typeof FairnessPreferenceSchema>;
-
-export const PlayoffStructureSchema = z
-  .object({
-    kind: z.enum(['single_elimination']),
-    /** Entries that qualify (2, 4, 8 …). */
-    teams: z.number().int().min(2).max(64),
-  })
-  .openapi('PlayoffStructure');
-export type PlayoffStructure = z.infer<typeof PlayoffStructureSchema>;
 
 export const FixtureSpecificationSchema = z
   .object({
@@ -1533,6 +1545,13 @@ query(
 );
 command(
   'post',
+  '/divisions/{id}/bracket-nodes/generate',
+  "Create a division's single-elimination bracket from its playoff structure (SPK-COMP-001)",
+  GenerateBracketBody,
+  z.array(BracketNodeSchema),
+);
+command(
+  'post',
   '/bracket-nodes/{id}/publish',
   'Publish a bracket node',
   PublishBracketNodeBody,
@@ -1713,6 +1732,12 @@ command(
   'Create a tournament pool in a division (CMP-15; capability tournaments)',
   CreatePoolBody,
   PoolSchema,
+);
+query(
+  '/divisions/{id}/pools',
+  "A division's tournament pools, by name (CMP-15; readable while the capability is off)",
+  null,
+  z.array(PoolSchema),
 );
 query('/pools/{id}', 'Read a tournament pool', null, PoolSchema);
 command(

@@ -289,6 +289,32 @@ describe('SCR-S-19 progression recommendations (SPK-YOUTH-006, ENR-14, DEC-055)'
     ).toEqual({ expectedRevision: 1 });
   });
 
+  it('ENR-19: lists a chosen child’s recommendations from this offering, with their actions', async () => {
+    const { app, user } = await openOffering({
+      ...on,
+      'GET /participants/{personId}/progression-recommendations': ok(
+        page([recommendation({ status: 'shared', sharedAt: '2026-10-24T12:00:00.000Z' })]),
+      ),
+    });
+    const section = await screen.findByRole('region', { name: 'A child’s recommendations' });
+    await waitFor(() =>
+      expect(within(section).getByRole('option', { name: 'Mia Camper' })).toBeInTheDocument(),
+    );
+    expect(
+      app.fake.requests.some(
+        (r) => r.route === '/participants/{personId}/progression-recommendations',
+      ),
+    ).toBe(false);
+    await user.selectOptions(within(section).getByLabelText(/^Child/), ID.child);
+    const list = await within(section).findByRole('list', { name: 'The child’s recommendations' });
+    expect(within(list).getByText('Recommendation shared')).toBeInTheDocument();
+    const read = app.fake.requests.find(
+      (r) => r.route === '/participants/{personId}/progression-recommendations',
+    );
+    expect(read?.params).toEqual({ personId: ID.child });
+    expect(read?.query).toMatchObject({ offeringId: ID.offering });
+  });
+
   it('never shows unknown eligibility evidence as eligible, and withdraws only with a reason', async () => {
     const unknown = recommendation({
       eligibility: {

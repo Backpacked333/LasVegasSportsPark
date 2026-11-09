@@ -6,7 +6,7 @@ import {
   type Claim,
   type Principal,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import { CurrentPrincipal, Idempotent, RateLimited, ZodBody, ZodParams } from '../../../kernel';
 import { CorrelationId } from '../identity.shared';
 import { ClaimsService, type ClaimAccepted } from '../services/claims.service';
 
@@ -19,6 +19,7 @@ export class ClaimsController {
 
   /** §4.14: the claim token travels in the body, never in the URL path (proxies log paths). */
   @Post('accept')
+  @RateLimited('claims')
   @HttpCode(200)
   @Idempotent()
   acceptWithBody(
@@ -31,6 +32,7 @@ export class ClaimsController {
 
   /** Deprecated (token in the path); kept until clients move to `POST /claims/accept`. */
   @Post(':token/accept')
+  @RateLimited('claims')
   @HttpCode(200)
   @Idempotent()
   accept(

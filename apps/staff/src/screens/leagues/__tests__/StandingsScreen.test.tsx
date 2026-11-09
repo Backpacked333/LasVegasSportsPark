@@ -11,6 +11,7 @@ import {
   ID,
   TEAM_ROUTES,
   bracketNode,
+  created,
   division,
   fail,
   ok,
@@ -221,5 +222,43 @@ describe('SCR-S-13 brackets (SPK-COMP-001 bracket progression, SPK-AT-014)', () 
       await screen.findByText(/whether a node is under review is unknown/),
     ).toBeInTheDocument();
     expect(screen.getByText('Review status unknown')).toBeInTheDocument();
+  });
+
+  it('SPK-COMP-001: a division with no bracket offers "Create bracket"; the command names the structure and one key', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...base,
+        'POST /divisions/{id}/bracket-nodes/generate': created([
+          bracketNode({ divisionId: ID.division, name: 'Gold playoffs: Final' }),
+        ]),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/standings`));
+    // No division chosen: the season-wide list offers nothing to create.
+    await screen.findByRole('table', { name: 'Standings' });
+    expect(screen.queryByRole('form', { name: /Create the .* bracket/ })).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Division'), ID.division);
+    const form = await screen.findByRole('form', { name: 'Create the Division A bracket' });
+    await user.click(within(form).getByRole('button', { name: 'Create bracket' }));
+    expect(
+      within(form).getByText('Enter the number of qualifying teams, from 2 to 64.'),
+    ).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(/^Qualifying teams/), '6');
+    await user.type(within(form).getByLabelText(/^Name in front of each game/), 'Gold playoffs');
+    await user.click(within(form).getByRole('button', { name: 'Create bracket' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find((r) => r.route === '/divisions/{id}/bracket-nodes/generate'),
+      ).toBeTruthy(),
+    );
+    const sent = app.fake.requests.find(
+      (r) => r.route === '/divisions/{id}/bracket-nodes/generate',
+    );
+    expect(sent?.body).toEqual({
+      structure: { kind: 'single_elimination', teams: 6 },
+      namePrefix: 'Gold playoffs',
+    });
+    expect(sent?.headers['idempotency-key']).toBeTruthy();
   });
 });

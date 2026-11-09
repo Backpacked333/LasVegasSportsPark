@@ -42,6 +42,38 @@ export const TEST_CONFIG_ENV: NodeJS.ProcessEnv = {
   LOG_LEVEL: 'error',
 };
 
+/**
+ * A managed identity provider configured the way a deployment would (§5.2, DEC-018): OpenID
+ * Connect tokens verified against a key set, with the identity gate's decision named. The test
+ * harness still injects its local token provider, so no key set is fetched.
+ */
+export const OIDC_CONFIG_ENV: NodeJS.ProcessEnv = {
+  AUTH_MODE: 'oidc',
+  AUTH_JWKS_URL: 'https://identity.example.test/.well-known/jwks.json',
+  AUTH_ISSUER: 'https://identity.example.test',
+  AUTH_AUDIENCE: 'sportspark-api',
+  PROVIDER_DECISIONS: 'identity=DEC-018',
+};
+
+/**
+ * A production-shaped configuration (§5.2, §4.14): managed identity, a database URL, and every
+ * provider-selection gate set explicitly to `none` (no fake runs in production).
+ */
+export const PRODUCTION_CONFIG_ENV: NodeJS.ProcessEnv = {
+  ...TEST_CONFIG_ENV,
+  ...OIDC_CONFIG_ENV,
+  NODE_ENV: 'production',
+  DATABASE_URL: 'postgres://unused.example.test/sportspark',
+  // §4.14: a database on another host is reached over TLS in production.
+  DATABASE_SSL: 'require',
+  PAYMENT_PROVIDER: 'none',
+  ACCOUNTING_PROVIDER: 'none',
+  ACCESS_DEVICE_PROVIDER: 'none',
+  MESSAGING_PUSH_PROVIDER: 'none',
+  MESSAGING_EMAIL_PROVIDER: 'none',
+  MESSAGING_SMS_PROVIDER: 'none',
+};
+
 /** In-memory principal directory used until (or instead of) the identity module's resolver. */
 export class FakePrincipalResolver implements PrincipalResolverPort {
   private readonly bySubject = new Map<string, Principal>();

@@ -447,6 +447,13 @@ export const EntitlementDefinitionSchema = z
   .openapi('EntitlementDefinition');
 export type EntitlementDefinition = z.infer<typeof EntitlementDefinitionSchema>;
 
+/** CAT-06 (SCR-S-51 to SCR-S-53): definitions of one kind and, optionally, one status. */
+export const ListEntitlementDefinitionsQuery = z.object({
+  kind: EntitlementKindSchema.optional(),
+  status: z.enum(['active', 'archived']).optional(),
+});
+export type ListEntitlementDefinitionsQuery = z.infer<typeof ListEntitlementDefinitionsQuery>;
+
 export const CreateEntitlementDefinitionBody = withCommandMeta({
   name: Name,
   description: Description.optional(),
@@ -1065,6 +1072,11 @@ export const FacilitySessionSchema = z
     scheduledStart: Instant,
     scheduledEnd: Instant,
     status: OfferingSessionStatusSchema,
+    /**
+     * CAT-05 (SPK-SCHED-001, SCR-S-03): the scheduling event through which the session holds its
+     * space; null when it holds none.
+     */
+    schedulingEventId: z.uuid().nullable(),
     facilityId: z.uuid(),
     /** IANA time zone of the facility (SPK-SCHED-008). */
     timezone: z.string(),
@@ -1385,8 +1397,8 @@ command(
 );
 query(
   '/entitlement-definitions',
-  'List entitlement definitions',
-  null,
+  'List entitlement definitions, optionally of one kind and status (CAT-06)',
+  ListEntitlementDefinitionsQuery,
   z.array(EntitlementDefinitionSchema),
 );
 query(

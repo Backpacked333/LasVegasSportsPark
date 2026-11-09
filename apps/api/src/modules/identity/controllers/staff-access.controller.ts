@@ -23,6 +23,7 @@ import {
   CurrentPrincipal,
   Idempotent,
   NoRecordAuthority,
+  RateLimited,
   ZodBody,
   ZodParams,
   ZodQuery,
@@ -124,6 +125,7 @@ export class StaffAccessController {
   }
 
   @Post('staff-invitations/:id/accept')
+  @RateLimited('invitations')
   @NoRecordAuthority('Staff access administration, not a §5.3 record category')
   @HttpCode(200)
   @Idempotent()

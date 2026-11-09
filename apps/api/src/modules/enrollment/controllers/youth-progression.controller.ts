@@ -4,7 +4,9 @@ import {
   CreateAssessmentBody,
   CreateAssessmentTemplateBody,
   CreateProgressionRecommendationBody,
+  ListAssessmentTemplatesQuery,
   ParticipantAssessmentsQuery,
+  ParticipantRecommendationsQuery,
   RetireAssessmentTemplateBody,
   ReviewAssessmentBody,
   ShareRecommendationBody,
@@ -183,6 +185,26 @@ export class YouthProgressionController {
   @Get('me/youth-feedback')
   myFeedback(@CurrentPrincipal() principal: Principal): Promise<YouthFeedback> {
     return this.youth.myFeedback(principal);
+  }
+
+  /** ENR-19: every version of a program's assessment templates. */
+  @Get('programs/:id/assessment-templates')
+  programTemplates(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodQuery(ListAssessmentTemplatesQuery) query: ListAssessmentTemplatesQuery,
+  ): Promise<AssessmentTemplate[]> {
+    return this.youth.programTemplates(principal, params.id, query);
+  }
+
+  /** ENR-19: a participant's progression recommendations, newest first. */
+  @Get('participants/:personId/progression-recommendations')
+  participantRecommendations(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(PersonParams) params: z.infer<typeof PersonParams>,
+    @ZodQuery(ParticipantRecommendationsQuery) query: ParticipantRecommendationsQuery,
+  ): Promise<Page<ProgressionRecommendation>> {
+    return this.youth.participantRecommendations(principal, params.personId, query);
   }
 
   @Get('participants/:personId/assessments')

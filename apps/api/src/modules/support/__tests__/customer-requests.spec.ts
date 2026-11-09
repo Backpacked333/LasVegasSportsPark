@@ -68,9 +68,20 @@ describe('customer support requests (SUP-01)', () => {
     expect(opened.status, JSON.stringify(opened.body)).toBe(201);
     // The customer view: status only — no owner, queue, notes, history or actions.
     expect(Object.keys(opened.body).sort()).toEqual(
-      ['category', 'createdAt', 'id', 'resolvedAt', 'status', 'title', 'updatedAt'].sort(),
+      [
+        'category',
+        'createdAt',
+        'id',
+        'resolvedAt',
+        'status',
+        'subjectPersonId',
+        'title',
+        'updatedAt',
+      ].sort(),
     );
     expect(opened.body).toMatchObject({ category: 'team', status: 'open', resolvedAt: null });
+    // SUP-07: the customer view says who the request is about (here the captain themselves).
+    expect(opened.body.subjectPersonId).toBe(captain.personId);
     const caseId = opened.body.id as string;
     // §4.9: the same key replays the same request.
     const replay = await request(captain, body, idem);
@@ -172,7 +183,7 @@ describe('customer support requests (SUP-01)', () => {
     expect(unknown.status).toBe(404);
   });
 
-  it('SCR-C-38: a guardian asks about their child; another household’s person and records are not found', async () => {
+  it('SCR-C-38 / SUP-07: a guardian asks about their child and sees who the request is about; another household’s person and records are not found', async () => {
     const aboutChild = await request(parent, {
       category: 'registration',
       title: 'Which group is my child in?',
@@ -180,6 +191,12 @@ describe('customer support requests (SUP-01)', () => {
       subjectPersonId: childId,
     });
     expect(aboutChild.status, JSON.stringify(aboutChild.body)).toBe(201);
+    // SUP-07: the guardian's own view names the child it is about, in the list too.
+    expect(aboutChild.body.subjectPersonId).toBe(childId);
+    const listed = await get(t, '/v1/me/cases', parent);
+    expect(
+      listed.body.items.find((c: { id: string }) => c.id === aboutChild.body.id)?.subjectPersonId,
+    ).toBe(childId);
     const staffView = await get(t, `/v1/cases/${aboutChild.body.id}`, operator);
     expect(staffView.body.subject.personId).toBe(childId);
 

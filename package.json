@@ -16,10 +16,13 @@
     "test": "vitest run && pnpm test:mobile",
     "test:mobile": "pnpm --filter @sportspark/mobile test",
     "test:watch": "vitest",
+    "dev:all": "pnpm --filter @sportspark/api dev:all",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:migrate": "pnpm --filter @sportspark/db migrate",
+    "db:backup": "pnpm --filter @sportspark/db backup",
+    "db:restore": "pnpm --filter @sportspark/db restore",
     "openapi": "pnpm --filter @sportspark/api openapi",
     "api-client:generate": "pnpm --filter @sportspark/api-client generate",
     "build:staff": "pnpm --filter @sportspark/staff build",
@@ -44,6 +47,10 @@
     "onlyBuiltDependencies": [
       "@swc/core",
       "esbuild"
-    ]
+    ],
+    "overrides": {
+      "multer@>=2.0.0 <2.5.0": "2.5.0",
+      "node-forge@<1.4.1": "1.4.3"
+    }
   }
 }

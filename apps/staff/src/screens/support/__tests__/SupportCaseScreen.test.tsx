@@ -297,6 +297,38 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     expect(within(actions).getByText(/Do not repeat this action/)).toBeInTheDocument();
   });
 
+  it('SUP-06: a customer reply is marked in the history as from the customer and visible to them', async () => {
+    const reply = {
+      id: 'ev-3',
+      sequence: 3,
+      kind: 'customer_reply',
+      body: 'The second charge was on 3 January.',
+      fromStatus: null,
+      toStatus: null,
+      caseActionId: null,
+      details: {},
+      actor: { ...ACTOR, kind: 'customer', actorLabel: 'Alex Rivera' },
+      occurredAt: '2026-10-24T10:45:00.000Z',
+    };
+    const base = supportCase();
+    const app = createTestApp({
+      routes: detailRoutes({
+        'GET /cases/{id}': {
+          status: 200,
+          body: { ...base, openedVia: 'customer', events: [...base.events, reply] },
+        },
+      }),
+    });
+    render(app.at(`/admin/cases/${CASE_ID}`));
+    const history = await screen.findByRole('list', { name: 'Case history' });
+    expect(
+      within(history).getByText(/customer_reply: from the customer \(visible to them\)/),
+    ).toBeInTheDocument();
+    expect(within(history).getByText('The second charge was on 3 January.')).toBeInTheDocument();
+    // A staff note stays a plain note: nothing marks it as visible to the customer.
+    expect(within(history).getAllByText(/visible to them/)).toHaveLength(1);
+  });
+
   it('offers exactly the allowed events; resolving needs a resolution and sends the expected revision', async () => {
     const user = userEvent.setup();
     const app = createTestApp({

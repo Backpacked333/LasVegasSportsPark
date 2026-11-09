@@ -77,8 +77,10 @@ scan and session reads carry neither (a follow-up for the entry module).
 - **Templates (program managers).** Drafted with program (chosen by name, the offering's program
   by default), name, version, skill areas (key and label) and an ordinal scale; approved and
   retired (with a reason) with `expectedRevision`.
-- **Proposed handling of API gaps.** Templates and recommendations cannot be listed or read, so
-  those made on the page are the ones shown and offered; otherwise a template is given by reference
+- **Template and recommendation lists (ENR-19, 2026-11-09).** The assessment form offers the
+  program's approved templates from `GET /v1/programs/{id}/assessment-templates` when the program
+  is known (not from a coach's own session); the workspace recommendation and template pages still
+  show those made on the page; otherwise a template is given by reference
   with the skill area key and scale value, and the API checks them. A STALE_REVISION answer on
   them cannot be reloaded here: it is shown with its code and a note.
 

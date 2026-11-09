@@ -491,6 +491,75 @@ describe('SCR-W-07 AssessmentsScreen', () => {
     expect(screen.queryByText('No assessments you can see yet')).toBeNull();
   });
 
+  it('ENR-19: offers the program’s approved templates listed by the API', async () => {
+    const user = userEvent.setup();
+    const LISTED = '0192f1a0-0000-7000-8000-0000000008a9';
+    const app = createTestApp({
+      routes: routes(
+        { actions: MANAGER_ACTIONS },
+        {
+          'GET /offerings': page([
+            {
+              id: OFFERING,
+              programId: PROGRAM,
+              facilityId: FACILITY_A,
+              name: 'Junior skills',
+              startsOn: '2026-09-01',
+              endsOn: '2026-12-15',
+            },
+          ]),
+          'GET /people': page([
+            {
+              id: CHILD_1,
+              givenName: 'Alex',
+              familyName: 'Rivera',
+              kind: 'child',
+              status: 'active',
+              matchedOn: 'name',
+            },
+          ]),
+          'GET /programs/{id}/assessment-templates': {
+            status: 200,
+            body: [
+              {
+                id: LISTED,
+                programId: PROGRAM,
+                name: 'Ball skills',
+                version: 2,
+                skillAreas: [{ key: 'passing', label: 'Passing' }],
+                scale: { kind: 'ordinal', levels: ['Emerging', 'Secure'] },
+                status: 'approved',
+                approvedAt: '2026-10-01T00:00:00.000Z',
+                retiredAt: null,
+                revision: 2,
+                createdAt: '2026-09-01T00:00:00.000Z',
+                updatedAt: '2026-10-01T00:00:00.000Z',
+              },
+            ],
+          },
+        },
+      ),
+    });
+    render(app.at('/workspace/assessments'));
+    const offering = await screen.findByLabelText('Offering');
+    await waitFor(() =>
+      expect(within(offering).getByRole('option', { name: /Junior skills/ })).toBeInTheDocument(),
+    );
+    await user.selectOptions(offering, OFFERING);
+    await user.type(screen.getByRole('searchbox', { name: 'Find the participant' }), 'Alex{enter}');
+    await user.click(await screen.findByRole('button', { name: 'Assess Alex Rivera' }));
+    await user.click(await screen.findByRole('button', { name: 'Record an assessment' }));
+    const form = screen.getByRole('form', { name: 'Record an assessment of Alex Rivera' });
+    expect(
+      await within(within(form).getByLabelText('Template')).findByRole('option', {
+        name: 'Ball skills (version 2)',
+      }),
+    ).toBeInTheDocument();
+    const read = app.fake.requests.find((r) => r.route === '/programs/{id}/assessment-templates');
+    expect(read?.params).toEqual({ id: PROGRAM });
+    expect(read?.query).toMatchObject({ status: 'approved' });
+  });
+
   it('labels an author whose name the viewer may not read as a staff member, never a participant', async () => {
     const user = userEvent.setup();
     const UNNAMED = '0192f1a0-0000-7000-8000-0000000008c9';

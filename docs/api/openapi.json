@@ -8716,6 +8716,13 @@
           "status": {
             "$ref": "#/components/schemas/OfferingSessionStatus"
           },
+          "schedulingEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "facilityId": {
             "type": "string",
             "format": "uuid"
@@ -8758,6 +8765,7 @@
           "scheduledStart",
           "scheduledEnd",
           "status",
+          "schedulingEventId",
           "facilityId",
           "timezone",
           "location",
@@ -20361,6 +20369,60 @@
           "expectedRevision"
         ]
       },
+      "PlayoffStructure": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "single_elimination"
+            ]
+          },
+          "teams": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 64
+          }
+        },
+        "required": [
+          "kind",
+          "teams"
+        ]
+      },
+      "GenerateBracketRequest": {
+        "type": "object",
+        "properties": {
+          "structure": {
+            "$ref": "#/components/schemas/PlayoffStructure"
+          },
+          "namePrefix": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "structure"
+        ]
+      },
       "StandingsSeedSource": {
         "type": "object",
         "properties": {
@@ -20507,26 +20569,6 @@
         },
         "required": [
           "kind"
-        ]
-      },
-      "PlayoffStructure": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "single_elimination"
-            ]
-          },
-          "teams": {
-            "type": "integer",
-            "minimum": 2,
-            "maximum": 64
-          }
-        },
-        "required": [
-          "kind",
-          "teams"
         ]
       },
       "FixtureSpecification": {
@@ -24202,7 +24244,8 @@
           "status": {
             "type": "string",
             "enum": [
-              "pending_decision"
+              "pending_decision",
+              "decision_recorded"
             ]
           },
           "register": {
@@ -26013,6 +26056,7 @@
         "enum": [
           "approval",
           "payment",
+          "payment_processing",
           "forms",
           "placement"
         ]
@@ -28758,6 +28802,16 @@
             ],
             "format": "uuid"
           },
+          "bookingKind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionBookingKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "offeringId": {
             "type": "string",
             "format": "uuid"
@@ -28803,6 +28857,7 @@
           "kind",
           "enrollmentId",
           "sessionBookingId",
+          "bookingKind",
           "offeringId",
           "sessionId",
           "title",
@@ -31863,6 +31918,114 @@
           "exceptionIds",
           "operationId",
           "replayed"
+        ]
+      },
+      "OfflineSyncBatchSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "clientBatchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string"
+              },
+              "takenAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "reference",
+              "takenAt"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snapshotAgeSeconds": {
+            "type": "integer"
+          },
+          "maxRosterAgeMinutes": {
+            "type": "integer"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "integer"
+              },
+              "accepted": {
+                "type": "integer"
+              },
+              "acceptedWithConflict": {
+                "type": "integer"
+              },
+              "duplicate": {
+                "type": "integer"
+              },
+              "rejected": {
+                "type": "integer"
+              },
+              "stale": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "items",
+              "accepted",
+              "acceptedWithConflict",
+              "duplicate",
+              "rejected",
+              "stale"
+            ]
+          },
+          "exceptionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "needsReview": {
+            "type": "boolean"
+          },
+          "submittedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "deviceId",
+          "clientBatchId",
+          "snapshot",
+          "receivedAt",
+          "snapshotAgeSeconds",
+          "maxRosterAgeMinutes",
+          "stale",
+          "counts",
+          "exceptionIds",
+          "needsReview",
+          "submittedBy"
         ]
       },
       "OccupancySnapshot": {
@@ -42922,6 +43085,316 @@
           "database"
         ]
       },
+      "Readiness": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "degraded",
+              "not_ready"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unavailable"
+            ]
+          },
+          "migrations": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "current": {
+                "type": "boolean"
+              },
+              "applied": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pending": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mismatched": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "missingOnDisk": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "current",
+              "applied",
+              "pending",
+              "mismatched",
+              "missingOnDisk"
+            ]
+          },
+          "outbox": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "oldestDueSeconds"
+            ]
+          },
+          "inbox": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "oldestDueSeconds"
+            ]
+          },
+          "worker": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "lastSucceededAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "secondsSinceSuccess": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "lastSucceededAt",
+              "secondsSinceSuccess"
+            ]
+          },
+          "draining": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "database",
+          "migrations",
+          "outbox",
+          "inbox",
+          "worker",
+          "draining",
+          "reasons"
+        ]
+      },
+      "MetricsSnapshot": {
+        "type": "object",
+        "properties": {
+          "takenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "organization",
+              "global"
+            ]
+          },
+          "outbox": {
+            "type": "object",
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "waitingForHandler": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "waitingForHandler",
+              "oldestDueSeconds"
+            ]
+          },
+          "inbox": {
+            "type": "object",
+            "properties": {
+              "due": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "dead": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "waitingForHandler": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "oldestDueSeconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "due",
+              "dead",
+              "waitingForHandler",
+              "oldestDueSeconds"
+            ]
+          },
+          "periodicJobs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "lastSucceededAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "secondsSinceSuccess": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "consecutiveFailures": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "name",
+                "lastSucceededAt",
+                "secondsSinceSuccess",
+                "consecutiveFailures"
+              ]
+            }
+          },
+          "failedHandlerAttemptsLastHour": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "openExceptions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string"
+                },
+                "ownerQueue": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "category",
+                "severity",
+                "ownerQueue",
+                "count"
+              ]
+            }
+          }
+        },
+        "required": [
+          "takenAt",
+          "scope",
+          "outbox",
+          "inbox",
+          "periodicJobs",
+          "failedHandlerAttemptsLastHour",
+          "openExceptions"
+        ]
+      },
       "RecoveryBlocker": {
         "type": "object",
         "properties": {
@@ -44280,7 +44753,8 @@
           "status",
           "assignment",
           "update",
-          "action_link"
+          "action_link",
+          "customer_reply"
         ]
       },
       "CaseActionStatus": {
@@ -45075,6 +45549,13 @@
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
           },
+          "subjectPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -45096,9 +45577,63 @@
           "category",
           "title",
           "status",
+          "subjectPersonId",
           "createdAt",
           "updatedAt",
           "resolvedAt"
+        ]
+      },
+      "CustomerCaseReplyRequest": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerCaseReply": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "sentAt"
         ]
       },
       "LinkCaseActionRequest": {
@@ -56146,9 +56681,34 @@
         }
       },
       "get": {
-        "summary": "List entitlement definitions",
+        "summary": "List entitlement definitions, optionally of one kind and status (CAT-06)",
         "tags": [
           "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/EntitlementKind"
+            },
+            "required": false,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
         ],
         "responses": {
           "200": {
@@ -56194,12 +56754,7 @@
               }
             }
           }
-        },
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/ClientInfo"
-          }
-        ]
+        }
       }
     },
     "/entitlement-definitions/{id}": {
@@ -67277,6 +67832,20 @@
             "in": "query"
           },
           {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "minItems": 1,
+              "maxItems": 100
+            },
+            "required": false,
+            "name": "personIds",
+            "in": "query"
+          },
+          {
             "$ref": "#/components/parameters/ClientInfo"
           }
         ],
@@ -72847,6 +73416,123 @@
         }
       }
     },
+    "/divisions/{id}/bracket-nodes/generate": {
+      "post": {
+        "summary": "Create a division's single-elimination bracket from its playoff structure (SPK-COMP-001)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateBracketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BracketNode"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Eligibility failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/bracket-nodes/{id}/publish": {
       "post": {
         "summary": "Publish a bracket node",
@@ -75990,6 +76676,71 @@
             }
           }
         }
+      },
+      "get": {
+        "summary": "A division's tournament pools, by name (CMP-15; readable while the capability is off)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Pool"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/pools/{id}": {
@@ -76902,6 +77653,21 @@
             },
             "required": false,
             "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "minItems": 1,
+              "maxItems": 20
+            },
+            "required": false,
+            "name": "eventTypes",
             "in": "query"
           },
           {
@@ -86455,6 +87221,128 @@
             }
           }
         }
+      },
+      "get": {
+        "summary": "List the synchronized offline batches of a facility, newest first (desk readers; §4.15)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "deviceId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "needsReview",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OfflineSyncBatchSummary"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/offline-sync/{id}": {
@@ -87806,6 +88694,70 @@
         }
       }
     },
+    "/enrollments/{id}/membership": {
+      "get": {
+        "summary": "One membership with its term, usage and suspensions (ENR-18; staff readers of its facility, the member or a guardian holding view)",
+        "tags": [
+          "Enrollment"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Membership"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/membership-suspensions/{id}/end": {
       "post": {
         "summary": "End a membership suspension (ENR-12)",
@@ -88149,6 +89101,14 @@
             },
             "required": false,
             "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/BookingKind"
+            },
+            "required": false,
+            "name": "kind",
             "in": "query"
           },
           {
@@ -90032,6 +90992,197 @@
         ]
       }
     },
+    "/programs/{id}/assessment-templates": {
+      "get": {
+        "summary": "A program's assessment templates, every version (ENR-19; program managers and coaches)",
+        "tags": [
+          "Enrollment"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "approved",
+                "retired"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssessmentTemplate"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/participants/{personId}/progression-recommendations": {
+      "get": {
+        "summary": "A participant's progression recommendations (ENR-19; program managers in facility scope, coaches of the from-offering)",
+        "tags": [
+          "Enrollment"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "personId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "offeringId",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProgressionRecommendation"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/participants/{personId}/assessments": {
       "get": {
         "summary": "A participant's assessments (program managers in facility scope; coaches of their offerings)",
@@ -90547,6 +91698,68 @@
           },
           "409": {
             "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Read one access device with its active policy (ENT-07; readers of the facility, never gated by the capability)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessDevice"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
             "content": {
               "application/json": {
                 "schema": {
@@ -97757,6 +98970,149 @@
             }
           }
         }
+      },
+      "get": {
+        "summary": "List a register’s sessions, most recently opened first (FIN-08; POS readers of its facility)",
+        "description": "FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PosRegisterSession"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (a client price or card data is rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or the point_of_sale capability is disabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/pos-register-sessions/{id}": {
@@ -97787,6 +99143,147 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PosRegisterSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (a client price or card data is rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or the point_of_sale capability is disabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pos-register-sessions/{id}/sales": {
+      "get": {
+        "summary": "List the sales of a register session, newest first (FIN-08; POS readers of its facility)",
+        "description": "FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/PosSaleStatus"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PosSale"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
                 }
               }
             }
@@ -101205,6 +102702,141 @@
             "$ref": "#/components/parameters/ClientInfo"
           }
         ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Deployment readiness: database, schema against this build, queue backlog, worker activity (§5.11)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready (or degraded: serving, background work behind)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready: database unavailable, schema not current for this build, or draining",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/admin/metrics": {
+      "get": {
+        "summary": "The organization's operational signals: queue backlog, dead letters, job health, open exceptions (core.view_metrics, §5.11)",
+        "tags": [
+          "Operations"
+        ],
+        "responses": {
+          "200": {
+            "description": "Signal snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSnapshot"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Global operational signals in Prometheus text for an infrastructure scraper (X-Metrics-Token; absent unless METRICS_TOKEN is configured)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-metrics-token",
+            "in": "header"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong metrics token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Metrics scraping is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/recovery": {
@@ -105175,6 +106807,175 @@
         }
       }
     },
+    "/me/cases/{id}/replies": {
+      "post": {
+        "summary": "Reply to one of your support requests while it is not resolved; a request waiting for you returns to the team (SPK-SUPPORT-002, SCR-C-38)",
+        "tags": [
+          "Support"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerCaseReplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerCase"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Your own replies on one of your support requests, oldest first",
+        "tags": [
+          "Support"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerCaseReply"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/cases/{id}": {
       "get": {
         "summary": "Read a support case with its history and actions",
@@ -106211,6 +108012,40 @@
             },
             "required": false,
             "name": "severity",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 100,
+                "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+              },
+              "minItems": 1,
+              "maxItems": 20
+            },
+            "required": false,
+            "name": "categories",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            },
+            "required": false,
+            "name": "affectedType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "affectedId",
             "in": "query"
           },
           {

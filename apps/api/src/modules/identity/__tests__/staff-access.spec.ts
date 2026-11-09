@@ -343,6 +343,10 @@ describe('staff access (§2.1, §4.14, SPK-IAM-004)', () => {
       invited_by_person_id: admin.personId,
       token_hash: newId(),
       expires_at: new Date(t.clock.now().getTime() + DAY),
+      // The row check compares expires_at with created_at: both come from the test clock, not the
+      // database's now(), so the fixture does not expire with the calendar.
+      created_at: t.clock.now(),
+      updated_at: t.clock.now(),
       accepted_at: null,
       accepted_by_person_id: null,
       staff_membership_id: null,

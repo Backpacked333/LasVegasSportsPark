@@ -82,6 +82,8 @@ export interface ListExceptionsFilter {
   statuses?: readonly ExceptionStatus[];
   ownerQueue?: string;
   category?: string;
+  /** SUP-08: any of these categories (an empty list matches nothing). */
+  categories?: readonly string[];
   facilityId?: string;
   affectedType?: string;
   affectedId?: string;
@@ -244,6 +246,10 @@ export class OperationalExceptions {
     }
     if (filter.ownerQueue) query = query.where('owner_queue', '=', filter.ownerQueue);
     if (filter.category) query = query.where('category', '=', filter.category);
+    if (filter.categories) {
+      if (filter.categories.length === 0) return { items: [], nextCursor: null };
+      query = query.where('category', 'in', [...filter.categories]);
+    }
     if (filter.facilityId) query = query.where('facility_id', '=', filter.facilityId);
     if (filter.affectedType) query = query.where('affected_type', '=', filter.affectedType);
     if (filter.affectedId) query = query.where('affected_id', '=', filter.affectedId);

@@ -352,10 +352,23 @@ export const ProviderEventSchema = z
   .openapi('ProviderEvent');
 export type ProviderEventView = z.infer<typeof ProviderEventSchema>;
 
+/** `?eventTypes=a,b` or repeated `eventTypes`. */
+const commaList = (value: unknown) =>
+  typeof value === 'string'
+    ? value
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0)
+    : value;
+
 export const ListProviderEventsQuery = PageRequestSchema.extend({
   provider: z.string().min(1).max(100).optional(),
   status: ProviderEventStatusSchema.optional(),
   eventType: z.string().min(1).max(200).optional(),
+  /** K-16 (SCR-S-56): any of these event types (1 to 20); combined with `eventType`, both apply. */
+  eventTypes: z
+    .preprocess(commaList, z.array(z.string().min(1).max(200)).min(1).max(20))
+    .optional(),
   from: z.iso.datetime({ offset: true }).optional(),
   to: z.iso.datetime({ offset: true }).optional(),
 });
@@ -493,7 +506,8 @@ export const IntegrationGateSchema = z
   .object({
     gate: ProviderGateSchema,
     decisionRef: z.string(),
-    status: z.enum(['pending_decision']),
+    /** `decision_recorded` once the deployment names the gate's decision in PROVIDER_DECISIONS. */
+    status: z.enum(['pending_decision', 'decision_recorded']),
     register: IntegrationRegisterSchema,
     /** §5.1 evidence: documented, tested, accepted, live; null while pending. */
     evidenceLevel: z.enum(['documented', 'tested', 'accepted', 'live']).nullable(),

@@ -11,8 +11,8 @@
  * (open → assigned → in_progress → resolved → closed); whether the viewer may do it is the API's
  * answer (ACCESS_DENIED names the missing permission). Closing a task never returns its area to
  * service: unreleased restrictions are listed with the release they still need (SPK-FAC-004).
- * The owner is named from the facility's staff directory, else `GET /v1/person-names` (names
- * only); a failed name read shows its code with "Try again".
+ * The owner is named from the staff directory looked up by id (ID-10), else
+ * `GET /v1/person-names` (names only); a failed name read shows its code with "Try again".
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -473,7 +473,7 @@ function TaskView({ task, facility }: { task: Task; facility: FacilityContext })
   const now = useNow();
   const me = useMyPersonId();
   const { assetNames, resourceNames } = useFacilityNames(task.facilityId);
-  const ownerNames = useOwnerNames([task.assignedOwnerPersonId], me, task.facilityId);
+  const ownerNames = useOwnerNames([task.assignedOwnerPersonId], me);
   const sev = SEVERITY_BADGE[task.severity];
   const st = TASK_BADGE[task.status];
   return (

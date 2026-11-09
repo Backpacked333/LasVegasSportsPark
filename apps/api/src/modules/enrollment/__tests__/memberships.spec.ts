@@ -357,6 +357,40 @@ describe('memberships (ENR-12, SPK-COND-001)', () => {
     expect((await book(member, week1[0]!, enrollmentId)).status).toBe(201);
   });
 
+  it('ENR-18: staff read one membership with its term, usage and suspensions; the member reads their own; others learn nothing', async () => {
+    const member = await adult(t);
+    const { enrollmentId } = await join(member, includedWeekly(3));
+    const suspended = await post(
+      t,
+      `/v1/enrollments/${enrollmentId}/membership-suspensions`,
+      frontDesk.header,
+      { from: '2026-11-16T00:00:00Z', until: '2026-11-21T00:00:00Z', reason: 'travel' },
+    );
+    expect(suspended.status, JSON.stringify(suspended.body)).toBe(201);
+    const read = (actor: Actor, id = enrollmentId) =>
+      t.http.get(`/v1/enrollments/${id}/membership`).set(actor.header);
+    const asStaff = await read(frontDesk);
+    expect(asStaff.status, JSON.stringify(asStaff.body)).toBe(200);
+    expect(asStaff.body).toMatchObject({
+      enrollmentId,
+      participantPersonId: member.personId,
+      status: 'confirmed',
+      termStartsAt: expect.any(String),
+      suspensions: [expect.objectContaining({ id: suspended.body.id, status: 'active' })],
+    });
+    expect(Array.isArray(asStaff.body.usage)).toBe(true);
+    // The member reads the same membership as GET /me/memberships shows it.
+    const mine = await t.http.get('/v1/me/memberships').set(member.header);
+    const listed = mine.body.items.find(
+      (m: { enrollmentId: string }) => m.enrollmentId === enrollmentId,
+    );
+    expect((await read(member)).body).toEqual(listed);
+    // Another customer, an unknown id and a non-membership enrollment are not found.
+    const stranger = await adult(t);
+    expect((await read(stranger)).status).toBe(404);
+    expect((await read(frontDesk, newId())).status).toBe(404);
+  });
+
   it("GAPS-TRIAGE-02 / §4.9: staff read a membership's suspensions with ids and revisions, so one recorded earlier can be ended", async () => {
     const member = await adult(t);
     const { enrollmentId } = await join(member, includedWeekly(3));

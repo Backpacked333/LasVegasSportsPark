@@ -244,6 +244,45 @@ describe('operational exceptions (SPK-UX-006)', () => {
     expect(closed.body.items.map((e: { id: string }) => e.id)).toEqual([raised[4]]);
   });
 
+  it('SUP-08: GET /exceptions filters by categories and by the affected record', async () => {
+    const queue = `cat_${Date.now()}`;
+    await post(t, '/v1/exception-queues', manager, { name: queue, owningRoles: ['front_desk'] });
+    const offline = await raise({ ownerQueue: queue, category: 'entry.device_offline' });
+    t.clock.advance(1000);
+    const undelivered = await raise({
+      ownerQueue: queue,
+      category: 'entry.device_command_undelivered',
+      affectedType: 'access_device',
+      affectedId: 'device-7',
+    });
+    t.clock.advance(1000);
+    const other = await raise({ ownerQueue: queue, category: 'finance.unknown_outcome' });
+    const ids = (res: { body: { items: { id: string }[] } }) => res.body.items.map((e) => e.id);
+    const hardware = await get(
+      t,
+      `/v1/exceptions?queue=${queue}&categories=entry.device_offline,entry.device_command_undelivered`,
+      desk,
+    );
+    expect(hardware.status, JSON.stringify(hardware.body)).toBe(200);
+    expect(ids(hardware)).toEqual([undelivered, offline]);
+    expect(ids(hardware)).not.toContain(other);
+    const repeated = await get(
+      t,
+      `/v1/exceptions?queue=${queue}&categories=entry.device_offline&categories=finance.unknown_outcome`,
+      desk,
+    );
+    expect(ids(repeated)).toEqual([other, offline]);
+    const aboutDevice = await get(
+      t,
+      `/v1/exceptions?queue=${queue}&affectedType=access_device&affectedId=device-7`,
+      desk,
+    );
+    expect(ids(aboutDevice)).toEqual([undelivered]);
+    // A type without an id, or a malformed category, is a validation failure.
+    expect((await get(t, `/v1/exceptions?affectedType=access_device`, desk)).status).toBe(400);
+    expect((await get(t, `/v1/exceptions?categories=Not%20a%20category`, desk)).status).toBe(400);
+  });
+
   it('§5.11: a configured queue names its owning roles and service levels; deadlines and overdue follow them', async () => {
     const queue = `refund_review_${Date.now()}`;
     const created = await post(t, '/v1/exception-queues', manager, {

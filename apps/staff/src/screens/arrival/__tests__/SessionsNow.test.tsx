@@ -18,6 +18,7 @@ const BASE = {
   scheduledStart: '2026-10-24T16:00:00.000Z',
   scheduledEnd: '2026-10-24T17:00:00.000Z',
   status: 'scheduled' as const,
+  schedulingEventId: null,
   facilityId: FACILITY_A,
   timezone: 'America/Los_Angeles',
 };

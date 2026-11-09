@@ -22,7 +22,7 @@ import {
   personNames,
   syncBatch,
 } from '../../../features/operations/testing';
-import { FACILITY_A, TEST_SESSION, createTestApp } from '../../../testing/test-app';
+import { FACILITY_A, TEST_SESSION, createTestApp, mePermissions } from '../../../testing/test-app';
 
 const OBS_MINE = '0192f1a0-0000-7000-8000-0000000000c1';
 const OBS_OTHER = '0192f1a0-0000-7000-8000-0000000000c2';
@@ -356,5 +356,125 @@ describe('SCR-S-31 OfflineQueueScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Open batch' }));
     const batch = await screen.findByTestId('offline-batch');
     await waitFor(() => expect(within(batch).getByTestId('state-unavailable')).toBeInTheDocument());
+  });
+
+  describe('ENT-06 batches received at this facility (GET /v1/offline-sync)', () => {
+    const OTHER_BATCH = '0192f1a0-0000-7000-8000-0000000000d2';
+    function summary(id: string, overrides: Record<string, unknown> = {}) {
+      const {
+        items: _items,
+        replayed: _replayed,
+        operationId: _op,
+        ...rest
+      } = syncBatch([
+        {
+          clientObservationId: OBS_MINE,
+          kind: 'arrival',
+          outcome: 'rejected',
+          reason: 'person_not_found',
+        },
+      ]);
+      return {
+        ...rest,
+        id,
+        deviceId: 'tablet-1',
+        needsReview: true,
+        submittedBy: {
+          kind: 'staff',
+          accountId: null,
+          personId: null,
+          actorLabel: 'Desk Dana',
+        },
+        ...overrides,
+      };
+    }
+
+    it('lists every device’s batches for a desk reader, filters to those for review, and opens one', async () => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: {
+          'GET /me': oneFacilityMe(),
+          'GET /me/permissions': mePermissions({
+            actions: [{ id: 'entry.read_offline_batch', facilityIds: [FACILITY_A] }],
+          }),
+          'GET /offline-sync': (req) =>
+            fakeResponse(200, {
+              items:
+                req.query['needsReview'] === 'true'
+                  ? [summary(BATCH_ID)]
+                  : [
+                      summary(OTHER_BATCH, {
+                        deviceId: 'tablet-2',
+                        needsReview: false,
+                        counts: {
+                          items: 1,
+                          accepted: 1,
+                          acceptedWithConflict: 0,
+                          duplicate: 0,
+                          rejected: 0,
+                          stale: 0,
+                        },
+                      }),
+                      summary(BATCH_ID),
+                    ],
+              nextCursor: null,
+            }),
+          'GET /offline-sync/{id}': {
+            status: 200,
+            body: syncBatch([
+              {
+                clientObservationId: OBS_MINE,
+                kind: 'arrival',
+                outcome: 'rejected',
+                reason: 'person_not_found',
+              },
+            ]),
+          },
+        },
+      });
+      render(app.at('/arrival/offline'));
+      const list = await screen.findByRole('list', { name: 'Batches received at this facility' });
+      const rows = within(list).getAllByRole('listitem');
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveAccessibleName(/from tablet-2/);
+      expect(within(rows[1] as HTMLElement).getByText('For review')).toBeInTheDocument();
+      expect(within(rows[1] as HTMLElement).getByText(/sent by Desk Dana/)).toBeInTheDocument();
+      const reads = app.fake.requests.filter(
+        (r) => r.route === '/offline-sync' && r.method === 'GET',
+      );
+      expect(reads[0]?.query).toMatchObject({ facilityId: FACILITY_A });
+
+      await user.click(screen.getByLabelText('Only batches with something for review'));
+      await waitFor(() =>
+        expect(
+          within(
+            screen.getByRole('list', { name: 'Batches received at this facility' }),
+          ).getAllByRole('listitem'),
+        ).toHaveLength(1),
+      );
+      expect(
+        app.fake.requests.filter((r) => r.route === '/offline-sync' && r.method === 'GET').at(-1)
+          ?.query,
+      ).toMatchObject({ facilityId: FACILITY_A, needsReview: 'true' });
+
+      const row = within(
+        screen.getByRole('list', { name: 'Batches received at this facility' }),
+      ).getByRole('listitem');
+      await user.click(within(row).getByRole('button', { name: /^Show outcomes of Batch/ }));
+      const opened = await within(row).findByTestId('offline-batch');
+      expect(await within(opened).findByText('Rejected')).toBeInTheDocument();
+    });
+
+    it('is not shown, and nothing is read, without entry.read_offline_batch at the facility', async () => {
+      const app = createTestApp({ routes: { 'GET /me': oneFacilityMe() } });
+      render(app.at('/arrival/offline'));
+      expect(await screen.findByLabelText('Batch reference')).toBeInTheDocument();
+      expect(
+        screen.queryByRole('heading', { name: 'Batches received at this facility' }),
+      ).toBeNull();
+      expect(app.fake.requests.some((r) => r.route === '/offline-sync' && r.method === 'GET')).toBe(
+        false,
+      );
+    });
   });
 });

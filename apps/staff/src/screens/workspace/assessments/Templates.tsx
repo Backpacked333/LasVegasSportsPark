@@ -7,9 +7,9 @@
  * names its program (chosen by name from `GET /v1/programs`, the chosen offering's program by
  * default), a name and version, its skill areas (lower-case key and label) and an ordinal scale
  * (levels in order, lowest first, 2 to 20). Approval and retirement send `expectedRevision`;
- * retiring needs a reason and is never gated by the switch. The API has no read or list of
- * templates, so the templates drafted or approved on this page are the ones offered to the
- * assessment form, and a STALE_REVISION answer cannot be reloaded here: it is shown with its code.
+ * retiring needs a reason and is never gated by the switch. The templates drafted or approved on
+ * this page are offered to the assessment form together with the program's approved templates the
+ * API lists (ENR-19); a STALE_REVISION answer cannot be reloaded here: it is shown with its code.
  */
 import { useState } from 'react';
 import { usePermissions } from '../../../api/permissions';

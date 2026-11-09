@@ -269,6 +269,13 @@ export interface SchemaMigrationsTable {
   applied_at: GeneratedTimestamp;
 }
 
+/** Fixed-window request counters (migration 0019, §4.14 rate-limited recovery). */
+export interface RateLimitBucketsTable {
+  bucket_key: string;
+  window_start: Timestamp;
+  count: number;
+}
+
 export interface CoreTables {
   organizations: OrganizationsTable;
   facilities: FacilitiesTable;
@@ -281,6 +288,7 @@ export interface CoreTables {
   job_attempts: JobAttemptsTable;
   operational_exceptions: OperationalExceptionsTable;
   periodic_job_leases: PeriodicJobLeasesTable;
+  rate_limit_buckets: RateLimitBucketsTable;
   organization_capabilities: OrganizationCapabilitiesTable;
   organization_capability_changes: OrganizationCapabilityChangesTable;
   schema_migrations: SchemaMigrationsTable;

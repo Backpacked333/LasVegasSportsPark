@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   type Integrations,
@@ -8,12 +8,16 @@ import {
 } from '@sportspark/contracts';
 import { AuthorizationService } from '../authorization/authorization.service';
 import { CoreActions } from '../authorization/core-actions';
+import type { AppConfig } from '../config';
+import { APP_CONFIG } from '../tokens';
 
 /**
  * The integration register (K-09, IF-04; §5.1 integration register, §5.2 provider-selection
- * gates). No provider is selected: every gate is pending its decision, its §5.1 fields stay null
- * and its evidence level is null until the decision is recorded. Modules register the adapters
- * they run (all deterministic fakes today) in `onModuleInit`; a duplicate id throws at startup.
+ * gates). A gate is pending its decision until the deployment names the decision record in
+ * `PROVIDER_DECISIONS`; only then may a real provider adapter (kind `provider`) register for it.
+ * The §5.1 fields and the evidence level stay null here: they are recorded, with their evidence,
+ * in docs/package-a/integration-register.md. Modules register the adapters they run in
+ * `onModuleInit`; a duplicate id throws at startup.
  */
 export type ProviderGate = ProviderGateValue;
 export type IntegrationScenario = 'success' | 'failure' | 'timeout_unknown' | 'duplicate';
@@ -72,7 +76,24 @@ const ID = /^[a-z]+\.[a-z0-9_]+$/;
 export class IntegrationRegistry implements IntegrationRegistryPort {
   private readonly entries = new Map<string, IntegrationRegistration>();
 
-  constructor(private readonly authorization: AuthorizationService) {}
+  private readonly decisions: Readonly<Partial<Record<ProviderGate, string>>>;
+
+  constructor(
+    private readonly authorization: AuthorizationService,
+    @Inject(APP_CONFIG) config: AppConfig,
+  ) {
+    this.decisions = config.PROVIDER_DECISIONS;
+    // §5.2: a decision named for a gate must be that gate's own record, so a typo cannot admit a
+    // provider under another decision.
+    for (const [gate, decisionRef] of Object.entries(this.decisions)) {
+      const expected = PROVIDER_GATES.find((g) => g.gate === gate)?.decisionRef;
+      if (decisionRef !== expected) {
+        throw new Error(
+          `PROVIDER_DECISIONS names ${decisionRef} for gate ${gate}; that gate's decision record is ${expected}`,
+        );
+      }
+    }
+  }
 
   register(entry: IntegrationRegistration): void {
     if (!ID.test(entry.id)) {
@@ -90,10 +111,11 @@ export class IntegrationRegistry implements IntegrationRegistryPort {
         `integration ${entry.id}: a ${entry.adapter.kind} adapter is never production-allowed`,
       );
     }
-    if (entry.adapter.kind === 'provider') {
-      // §5.2: no provider is selected; a provider adapter needs its gate's recorded decision.
+    if (entry.adapter.kind === 'provider' && !this.decisions[entry.gate]) {
+      // §5.2: a provider adapter needs its gate's recorded decision.
+      const decisionRef = PROVIDER_GATES.find((g) => g.gate === entry.gate)?.decisionRef;
       throw new Error(
-        `integration ${entry.id}: no provider is selected for gate ${entry.gate} (§5.2); register a fake`,
+        `integration ${entry.id}: no provider is selected for gate ${entry.gate} (§5.2); record ${decisionRef} and name it in PROVIDER_DECISIONS, or register a fake`,
       );
     }
     if (entry.adapter.kind === 'fake' && entry.scenarios.length === 0) {
@@ -122,7 +144,9 @@ export class IntegrationRegistry implements IntegrationRegistryPort {
       gates: PROVIDER_GATES.map(({ gate, decisionRef }) => ({
         gate,
         decisionRef,
-        status: 'pending_decision' as const,
+        status: this.decisions[gate]
+          ? ('decision_recorded' as const)
+          : ('pending_decision' as const),
         register: { ...PENDING_REGISTER },
         evidenceLevel: null,
         adapters: adapters

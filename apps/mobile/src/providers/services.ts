@@ -6,6 +6,7 @@ import type { FetchLike, KeyGenerator, SessionStore } from '@sportspark/api-clie
 import { randomUUID } from 'expo-crypto';
 import { readAppConfig, type AppConfig } from '../config/app-config';
 import { SecureSessionStore } from '../session/secure-session-store';
+import { consoleCrashReporter, type CrashReporter } from './crash-report';
 import {
   expoNetworkSource,
   reactNativeAppStateSource,
@@ -23,6 +24,8 @@ export interface AppServices {
   /** Secure random idempotency keys (React Native has no `crypto.randomUUID`). */
   generateKey: KeyGenerator;
   now: () => Date;
+  /** Where unexpected failures are reported (console when absent). */
+  crashReporter?: CrashReporter;
 }
 
 export function createDeviceServices(): AppServices {
@@ -33,5 +36,6 @@ export function createDeviceServices(): AppServices {
     appState: reactNativeAppStateSource,
     generateKey: randomUUID,
     now: () => new Date(),
+    crashReporter: consoleCrashReporter,
   };
 }

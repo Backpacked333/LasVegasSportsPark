@@ -80,6 +80,15 @@ export class PackagesMembershipsController {
     return this.memberships.listMine(principal, query);
   }
 
+  /** ENR-18: one membership with its term, usage and suspensions. */
+  @Get('enrollments/:id/membership')
+  membership(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+  ): Promise<Membership> {
+    return this.memberships.get(principal, params.id);
+  }
+
   /** GAPS-TRIAGE-02: staff who may suspend the membership read its suspensions (ids, revisions). */
   @Get('enrollments/:id/membership-suspensions')
   suspensions(

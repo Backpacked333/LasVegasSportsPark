@@ -342,6 +342,12 @@ query(
   pageSchema(AccessDeviceSchema),
 );
 query(
+  '/access-devices/{id}',
+  'Read one access device with its active policy (ENT-07; readers of the facility, never gated by the capability)',
+  null,
+  AccessDeviceSchema,
+);
+query(
   '/access-devices/{id}/policies',
   'Access policies of a device (drafts, the active one and retired ones)',
   null,

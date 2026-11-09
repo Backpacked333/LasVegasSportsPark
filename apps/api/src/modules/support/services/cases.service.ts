@@ -12,6 +12,8 @@ import {
   type Case,
   type CaseDetail,
   type CustomerCase,
+  type CustomerCaseReply,
+  type CustomerCaseReplyInput,
   type CustomerSupportRequestInput,
   type DomainEvent,
   type ListCasesQuery,
@@ -63,6 +65,7 @@ import {
 import { SupportActions } from '../support.actions';
 import {
   CaseAssigned,
+  CaseCustomerReplied,
   CaseNoteAdded,
   CaseOpened,
   CaseStatusChanged,
@@ -455,15 +458,106 @@ export class CasesService implements SupportCasesPort {
     const organizationId = organizationOf(principal);
     const openers = await this.requireOwnRequests(principal, organizationId);
     const row = await this.load(this.db, organizationId, id);
-    if (
-      !row ||
-      row.opened_via !== 'customer' ||
-      !row.opened_by_person_id ||
-      !openers.includes(row.opened_by_person_id)
-    ) {
-      throw errors.protectedNotFound('case');
-    }
+    if (!row || !isOwnRequest(row, openers)) throw errors.protectedNotFound('case');
     return toCustomerCase(row);
+  }
+
+  /**
+   * POST /me/cases/{id}/replies (SUP-06: SPK-SUPPORT-002, SCR-C-38): the customer who opened the
+   * request answers it while it is not resolved. A request waiting on the customer returns to the
+   * team's queue (`resume` to `open`, the same transition staff use); otherwise the status stays.
+   * The reply is a case history row for staff; the customer reads back only their own replies.
+   * Anyone else's request, or one opened by staff, is not found (§4.10).
+   */
+  async replyToMyCase(
+    principal: Principal,
+    id: string,
+    input: CustomerCaseReplyInput,
+    correlationId: string | null,
+  ): Promise<CustomerCase> {
+    const organizationId = organizationOf(principal);
+    const openers = await this.requireOwnRequests(principal, organizationId);
+    return this.uow.run(async ({ trx }) => {
+      const row = await this.loadForUpdate(trx, organizationId, id);
+      if (!row || !isOwnRequest(row, openers)) throw errors.protectedNotFound('case');
+      if (row.status === 'resolved' || row.status === 'closed') {
+        // A resolved request is reopened by staff (or a new request is opened), never by a reply.
+        throw new DomainError(
+          'INVALID_TRANSITION',
+          'This request is resolved. Open a new request if you still need help.',
+          { details: { code: 'CASE_RESOLVED', status: row.status } },
+        );
+      }
+      const resumed = row.status === 'waiting_customer';
+      if (resumed) {
+        const to = CaseMachine.next(row.status, 'resume');
+        await this.updateRow(trx, row, { status: to });
+      }
+      const current = resumed ? await this.reload(trx, row) : row;
+      const eventId = await this.appendEvent(trx, current, {
+        kind: 'customer_reply',
+        body: input.body,
+        actor: principal,
+      });
+      if (resumed) {
+        await this.appendEvent(trx, current, {
+          kind: 'status',
+          fromStatus: row.status,
+          toStatus: current.status,
+          details: { event: 'resume', via: 'customer_reply', caseEventId: eventId },
+          actor: principal,
+        });
+      }
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: SupportActions.requestSupport.id,
+        targetType: 'support_case',
+        targetId: id,
+        ...(resumed ? { beforeRevision: row.revision, afterRevision: row.revision + 1 } : {}),
+        reason: input.reason ?? null,
+        correlationId,
+        details: {
+          change: 'customer_reply',
+          caseEventId: eventId,
+          ...(resumed ? { from: row.status, to: current.status } : {}),
+        },
+      });
+      await this.outbox.enqueue(trx, CaseCustomerReplied, {
+        organizationId,
+        aggregateType: 'support_case',
+        aggregateId: id,
+        payload: { caseId: id, caseEventId: eventId, resumed },
+        correlationId,
+      });
+      if (resumed) {
+        await this.outbox.enqueue(trx, CaseStatusChanged, {
+          organizationId,
+          aggregateType: 'support_case',
+          aggregateId: id,
+          payload: { caseId: id, from: row.status, to: current.status, resolutionKind: null },
+          correlationId,
+        });
+      }
+      return toCustomerCase(current);
+    });
+  }
+
+  /** GET /me/cases/{id}/replies (SUP-06): the caller's own replies on their request, in order. */
+  async myCaseReplies(principal: Principal, id: string): Promise<CustomerCaseReply[]> {
+    const organizationId = organizationOf(principal);
+    const openers = await this.requireOwnRequests(principal, organizationId);
+    const row = await this.load(this.db, organizationId, id);
+    if (!row || !isOwnRequest(row, openers)) throw errors.protectedNotFound('case');
+    const replies = await this.db
+      .selectFrom('case_events')
+      .select(['id', 'body', 'occurred_at'])
+      .where('organization_id', '=', organizationId)
+      .where('case_id', '=', id)
+      .where('kind', '=', 'customer_reply')
+      .orderBy('sequence')
+      .execute();
+    return replies.map((r) => ({ id: r.id, body: r.body ?? '', sentAt: iso(r.occurred_at) }));
   }
 
   /** The people whose requests are the caller's (SUP-05: their merged records resolve to them). */
@@ -1305,6 +1399,7 @@ export function toCustomerCase(row: CaseRow): CustomerCase {
     category: row.category,
     title: row.title,
     status: row.status,
+    subjectPersonId: row.subject_person_id,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     resolvedAt: isoOrNull(row.resolved_at),
@@ -1312,3 +1407,12 @@ export function toCustomerCase(row: CaseRow): CustomerCase {
 }
 
 export type { CaseOpenedVia };
+
+/** A customer's own request: opened by the customer under one of their (merged) records. */
+function isOwnRequest(row: CaseRow, openers: readonly string[]): boolean {
+  return (
+    row.opened_via === 'customer' &&
+    row.opened_by_person_id !== null &&
+    openers.includes(row.opened_by_person_id)
+  );
+}

@@ -151,18 +151,18 @@ and the access hardware policy (POL-043).
 
 ## API issues found while building these screens
 
-- No `GET /v1/access-devices/{id}`: the device page finds the device in its facility's list
-  (`apps/api/src/modules/entry/controllers/access-hardware.controller.ts`).
-- No list of the sales of a register session, nor of a register's past sessions: a sale is reached
-  from the page that started it or by its reference, and closing reports only the count of open
-  sales (`apps/api/src/modules/finance/controllers/pos.controller.ts`).
-- `GET /v1/exceptions` cannot filter by category or affected record, so the hardware exceptions are
-  the facility's unresolved exceptions filtered on the page; one may sit on a later page (the page
-  says "on the loaded pages"). An inbox dead letter (`reliability.inbox_dead_letter`) has no
-  facility, so a facility's list never shows a dead access event's exception.
-- `GET /v1/provider-events` filters `eventType` by exact value and has no facility or device
-  filter: the event ingestion list is organization-wide and filtered to hardware event types on the
+- Resolved 2026-11-09 (ENT-07): `GET /v1/access-devices/{id}` reads one device, and the device
+  page uses it instead of searching its facility's list.
+- Resolved 2026-11-09 (FIN-08): a session's sales (`GET /v1/pos-register-sessions/{id}/sales`)
+  and a register's sessions (`GET /v1/pos-registers/{id}/sessions`) are listed on the session
   page.
+- Resolved 2026-11-09 (SUP-08): `GET /v1/exceptions?categories=` (and `affectedType` with
+  `affectedId`) narrows the list, so the hardware exceptions are read by category. An inbox dead
+  letter (`reliability.inbox_dead_letter`) has no
+  facility, so a facility's list never shows a dead access event's exception.
+- `GET /v1/provider-events` takes `eventTypes` (K-16, 2026-11-09), so the event ingestion list
+  reads the hardware event types only; it has no facility or device filter and stays
+  organization-wide.
 - The entry module's facility operations queue (`front_desk`, an engineering proposal pending
   DEC-015) cannot be set per facility (`entry.policy.ts`); the page shows whatever queue the
   exception records.

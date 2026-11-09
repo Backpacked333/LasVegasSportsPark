@@ -280,6 +280,8 @@ describe('eligibility preview (SPK-REG-002)', () => {
   it('names a pending enrollment by what it waits for (journeys.md "Registration pending: <reason>")', () => {
     expect(pendingLabel('approval')).toBe('Registration pending: awaiting approval');
     expect(pendingLabel('forms')).toBe('Registration pending: a required form is not signed');
+    // ENR-16: a running checkout is named apart from a payment still to make.
+    expect(pendingLabel('payment_processing')).toBe('Registration pending: payment processing');
     expect(pendingLabel(null)).toBe('Registration pending');
     expect(
       enrollmentStatus({ status: 'confirmed' }, 'League', {

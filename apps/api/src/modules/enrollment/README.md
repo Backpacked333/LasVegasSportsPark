@@ -511,6 +511,47 @@ PostgreSQL) unless marked **proposed** or **pending**.
   time), `placement` (team name), `registration_outcome` (an application decided, or a waitlist
   entry retired because it could never be accepted).
 
+### Family calendar booking kind (ENR-15)
+
+- **Verified** (`youth.spec.ts`, "SPK-YOUTH-007: one calendar … each booking says its kind
+  (ENR-15)"): `FamilyCalendarItem.bookingKind` is the session booking's kind (`pickup`, `trial`,
+  `makeup`, `session`) and null for a session of an enrollment, so the customer app labels a
+  pickup session without reading its offering (SCR-C-19, 2026-11-09).
+
+### Payment in flight (ENR-16)
+
+- **Verified** (`registration-commands.spec.ts`, "SPK-UX-001: … reads payment_processing while it
+  runs (ENR-16)"): `Enrollment.pendingReason` is `payment_processing` while the enrollment's basket
+  is checking out, and `payment` only for a held basket not yet paid, so no client invites a second
+  payment while one is running (§4.11, SPK-PAY-007).
+
+### Bookings by kind (ENR-17)
+
+- **Verified** (`bookings.spec.ts`, "reads: … the staff list filters by kind, ENR-17 …"):
+  `GET /bookings?kind=rental|party` narrows the staff list to one kind, so the Rentals and Parties
+  screens page through their own bookings only (SCR-S-51, SCR-S-52).
+
+### Staff read of a membership (ENR-18)
+
+- **Verified** (`memberships.spec.ts`, "ENR-18: staff read one membership …"):
+  `GET /enrollments/{id}/membership` returns the membership's term dates, usage per period and
+  suspensions to whoever may read the enrollment (`enrollment.read_enrollment`: staff of its
+  facility, the member, or a guardian holding view); the member reads exactly what
+  `GET /me/memberships` lists. Anyone else, a non-membership enrollment and an unknown id are
+  NOT_FOUND. The staff member page shows the term and usage (SCR-S-53).
+
+### Youth progression lists (ENR-19)
+
+- **Verified** (`youth-progression.spec.ts`, "ENR-19: staff list a program's templates and a
+  participant's recommendations; others learn nothing"): `GET /programs/{id}/assessment-templates`
+  (every version, `status` filter; program managers and coaches, `enrollment.read_assessments`)
+  and `GET /participants/{personId}/progression-recommendations` (newest first, `offeringId`
+  filter) by the same access as the participant's assessments, now one shared rule
+  (`participantAccess`): a program manager sees those from offerings at their facilities, a coach
+  those from offerings they coach (others' shared or withdrawn ones and their own drafts); anyone
+  else is NOT_FOUND. Reads are never gated by `youth_progression`. The staff youth groups screen
+  lists a chosen child's recommendations (SCR-S-19).
+
 ### Package G behind capability switches (ENR-10 to ENR-14)
 
 Each capability is off by default per organization and changed only by an administrator with

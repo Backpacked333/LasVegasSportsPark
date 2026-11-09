@@ -920,6 +920,11 @@ export const StaffDirectoryQuery = PageRequestSchema.extend({
   facilityId: z.uuid().optional(),
   /** Name prefix. */
   query: z.string().trim().min(1).max(100).optional(),
+  /**
+   * ID-10 (SCR-S-41): only these people (1 to 100 ids, `?personIds=a,b` or repeated), so a screen
+   * names the staff it shows without paging the whole directory. Same rules as every other row.
+   */
+  personIds: z.preprocess(commaList, z.array(z.uuid()).min(1).max(100)).optional(),
 });
 export type StaffDirectoryQueryInput = z.infer<typeof StaffDirectoryQuery>;
 

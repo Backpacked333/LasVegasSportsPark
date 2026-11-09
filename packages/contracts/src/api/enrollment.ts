@@ -503,8 +503,13 @@ export type EnrollmentOffering = z.infer<typeof EnrollmentOfferingSchema>;
  * acknowledged), `payment` (its basket is held or checking out), `placement` (its placement request
  * is unassigned or proposed). Null when the enrollment is not pending or nothing is known.
  */
+/**
+ * SPK-UX-004 (ENR-02): what a pending enrollment still waits for. ENR-16: `payment` is a held
+ * basket not yet paid; `payment_processing` is one whose checkout is running, so a client never
+ * invites a second payment while one is in flight (§4.11, SPK-PAY-007).
+ */
 export const EnrollmentPendingReasonSchema = z
-  .enum(['approval', 'payment', 'forms', 'placement'])
+  .enum(['approval', 'payment', 'payment_processing', 'forms', 'placement'])
   .openapi('EnrollmentPendingReason');
 export type EnrollmentPendingReason = z.infer<typeof EnrollmentPendingReasonSchema>;
 
@@ -1261,6 +1266,11 @@ export const FamilyCalendarItemSchema = z
     kind: z.enum(['enrollment_session', 'session_booking']),
     enrollmentId: z.uuid().nullable(),
     sessionBookingId: z.uuid().nullable(),
+    /**
+     * ENR-15 (SPK-YOUTH-007, SCR-C-19): what a session booking is (pickup, trial, makeup or a
+     * single session); null for a session of an enrollment.
+     */
+    bookingKind: SessionBookingKindSchema.nullable(),
     offeringId: z.uuid(),
     sessionId: z.uuid().nullable(),
     title: z.string(),

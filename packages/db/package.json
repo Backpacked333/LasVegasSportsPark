@@ -8,7 +8,9 @@
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
-    "migrate": "tsx src/cli/migrate.ts"
+    "migrate": "tsx src/cli/migrate.ts",
+    "backup": "tsx src/cli/backup.ts",
+    "restore": "tsx src/cli/restore.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.11",

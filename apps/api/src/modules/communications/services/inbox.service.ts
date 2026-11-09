@@ -163,10 +163,12 @@ export class InboxService {
       const attempt = await this.loadMine(trx, organizationId, personIds, attemptId);
       await this.authorize(principal, organizationId, personId, CommunicationsActions.acknowledge);
       await this.assertEntitled(trx, organizationId, personId, personIds, attemptId);
-      assertExpectedRevision(input.expectedRevision, attempt.revision);
+      // Reading twice is not an error, even from a device that saw an older revision: nothing is
+      // overwritten (§4.9 refuses only a stale edit), so the current item is returned.
       if (attempt.status === 'read' || attempt.status === 'acknowledged') {
-        return this.itemFor(trx, organizationId, personIds, attemptId); // reading twice is not an error
+        return this.itemFor(trx, organizationId, personIds, attemptId);
       }
+      assertExpectedRevision(input.expectedRevision, attempt.revision);
       const now = this.clock.now();
       await trx
         .updateTable('delivery_attempts')
@@ -219,10 +221,12 @@ export class InboxService {
       const attempt = await this.loadMine(trx, organizationId, personIds, attemptId);
       await this.authorize(principal, organizationId, personId, CommunicationsActions.acknowledge);
       await this.assertEntitled(trx, organizationId, personId, personIds, attemptId);
-      assertExpectedRevision(input.expectedRevision, attempt.revision);
+      // Recorded once per recipient: an acknowledgment already recorded is returned as it stands,
+      // whatever revision the caller saw (nothing is overwritten, §4.9).
       if (attempt.status === 'acknowledged') {
-        return this.itemFor(trx, organizationId, personIds, attemptId); // recorded once per recipient
+        return this.itemFor(trx, organizationId, personIds, attemptId);
       }
+      assertExpectedRevision(input.expectedRevision, attempt.revision);
       const now = this.clock.now();
       const to = DeliveryAttemptMachine.next(attempt.status, 'acknowledge');
       await trx

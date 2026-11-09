@@ -1,0 +1,106 @@
+name: Deploy
+
+# Builds the API image, migrates the target database, and records the evidence a release ledger
+# row needs (spec §6.8 item 11: build and environment). The deploy step itself is a placeholder
+# until the hosting decision (DEC-021) names the container host; see docs/deploy/production.md.
+#
+# GitHub environments `staging` and `production` hold the secret DATABASE_URL (a direct or
+# session-pooler connection string) and, for production, required reviewers.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: Build and push the image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sportspark-api" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:${{ inputs.environment }}
+
+  migrate:
+    name: Migrate ${{ inputs.environment }}
+    needs: image
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      IMAGE: ${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pending migrations (dry run)
+        run: docker run --rm -e DATABASE_URL="${{ secrets.DATABASE_URL }}" "$IMAGE" node /app/packages/db/dist/cli/migrate.js --dry-run
+      - name: Apply (holds the migration lock)
+        run: docker run --rm -e DATABASE_URL="${{ secrets.DATABASE_URL }}" "$IMAGE" node /app/packages/db/dist/cli/migrate.js
+      - name: Schema matches this build
+        run: docker run --rm -e DATABASE_URL="${{ secrets.DATABASE_URL }}" "$IMAGE" node /app/packages/db/dist/cli/migrate.js --status
+
+  deploy:
+    name: Deploy ${{ inputs.environment }} (pending DEC-021)
+    needs: [image, migrate]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Roll out the image to the container host
+        run: |
+          echo "Hosting is pending DEC-021: no container host is selected, so nothing is rolled out."
+          echo "Roll out ${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }} as two services:"
+          echo "  api    (default command; readiness GET /v1/ready, liveness GET /v1/health)"
+          echo "  worker (command: node dist/worker.js)"
+          echo "See docs/deploy/production.md for the environment each needs."
+
+  evidence:
+    name: Record release evidence
+    needs: [image, migrate, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          {
+            echo "### Release evidence (spec §6.8 item 11)"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Image | \`${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}\` |"
+            echo "| Environment | ${{ inputs.environment }} |"
+            echo "| Migrations | applied; schema current (job migrate) |"
+            echo "| Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
+            echo ""
+            echo "Add a row to docs/package-a/release-evidence-ledger.md with these values."
+          } >> "$GITHUB_STEP_SUMMARY"

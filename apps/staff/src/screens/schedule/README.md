@@ -136,8 +136,8 @@ defaults (proposed, pending operations decisions); the screens never state their
    SPK-SCHED-007).
 2. No explicit draft rebase command: a target is rebased by one save without it and one with it
    (two revisions, two audit records); the API calls an explicit rebase a pending design choice.
-3. `GET /v1/sessions` (`FacilitySession`) does not carry the session's scheduling event id, so the
-   calendar cannot say which listed session holds a reservation on which space.
+3. Resolved 2026-11-09 (CAT-05): `GET /v1/sessions` carries each session's `schedulingEventId`;
+   the calendar marks a scheduled session that holds no space.
 4. No per-record `availableActions` on drafts, closures, tasks or restrictions and no draft
    ownership rule ("draft owned by another author: read-only" cannot be shown); the role view of
    `GET /v1/me/permissions` decides what is offered (stage 3: the permission read gives the role

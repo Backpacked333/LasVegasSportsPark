@@ -82,7 +82,8 @@ export class EnrollmentViews {
   /**
    * SPK-UX-004: what each pending enrollment still waits for, in the order it must happen:
    * approval before payment capture (SPK-REG-007), forms before the place is kept (SPK-REG-009),
-   * payment of a held basket, then the placement of an individual registrant (SPK-PLACE-003).
+   * payment of a held basket (`payment_processing` while its checkout runs, ENR-16), then the
+   * placement of an individual registrant (SPK-PLACE-003).
    */
   async pendingReasons(
     db: Reader,
@@ -171,7 +172,7 @@ export class EnrollmentViews {
       }
       const basket = row.basket_id ? baskets.get(row.basket_id) : undefined;
       if (basket === 'held' || basket === 'checking_out') {
-        out.set(row.id, 'payment');
+        out.set(row.id, basket === 'checking_out' ? 'payment_processing' : 'payment');
         continue;
       }
       const placement = placements.find(

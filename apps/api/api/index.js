@@ -8,47 +8,20 @@
  * host has no separate worker process. Production runs `dist/worker.js` as its own process.
  */
 'use strict';
-/* global console, setInterval */
 require('reflect-metadata');
 const { NestFactory } = require('@nestjs/core');
 const { AppModule } = require('../dist/app.module');
 const { configureApp } = require('../dist/kernel/app-setup');
 const { loadConfig } = require('../dist/kernel/config');
-const { Inbox } = require('../dist/kernel/inbox/inbox');
-const { OutboxDispatcher } = require('../dist/kernel/outbox/outbox-dispatcher');
-const { BackgroundWorkers } = require('../dist/kernel/workers/background-workers');
-const { IdempotencySweeper } = require('../dist/kernel/http/idempotency-sweeper');
+const { createLogger } = require('../dist/kernel/logging/json-logger');
+const { startInlineWorker } = require('../dist/kernel/workers/inline-worker');
 
 let ready = null;
-
-function startInlineWorker(app, config) {
-  app.get(OutboxDispatcher).start();
-  app.get(BackgroundWorkers).startAll();
-  const inbox = app.get(Inbox);
-  const sweeper = app.get(IdempotencySweeper);
-  let inboxRun = null;
-  let sweepRun = null;
-  const log = (what) => (error) => console.error(`${what} failed: ${String(error)}`);
-  setInterval(() => {
-    if (inboxRun) return;
-    inboxRun = inbox
-      .runOnce(config.OUTBOX_BATCH_SIZE, { shouldStop: () => false })
-      .catch(log('inbox processing'))
-      .finally(() => (inboxRun = null));
-  }, config.OUTBOX_POLL_INTERVAL_MS).unref();
-  setInterval(() => {
-    if (sweepRun) return;
-    sweepRun = sweeper
-      .sweep()
-      .catch(log('idempotency sweep'))
-      .finally(() => (sweepRun = null));
-  }, config.IDEMPOTENCY_SWEEP_INTERVAL_MS).unref();
-}
 
 async function boot() {
   const config = loadConfig();
   const app = await NestFactory.create(AppModule.forRoot({ config }), {
-    logger: [config.LOG_LEVEL],
+    logger: createLogger(config, 'api'),
   });
   configureApp(app, config);
   await app.init();

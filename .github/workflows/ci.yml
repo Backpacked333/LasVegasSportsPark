@@ -43,6 +43,12 @@ jobs:
           CI: 'true'
           EXPO_NO_TELEMETRY: '1'
           EXPO_OFFLINE: '1'
+      - name: Expo export smoke check, Android
+        run: pnpm --filter @sportspark/mobile export:android
+        env:
+          CI: 'true'
+          EXPO_NO_TELEMETRY: '1'
+          EXPO_OFFLINE: '1'
 
   test-postgres:
     name: Test against PostgreSQL (true concurrency)
@@ -73,3 +79,92 @@ jobs:
       - run: pnpm test
         env:
           TEST_DATABASE_URL: postgres://sportspark:sportspark@localhost:5432/sportspark_test
+
+  container-image:
+    name: Container image (builds, refuses fakes in production, migrates, serves, drains)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sportspark
+          POSTGRES_PASSWORD: sportspark
+          POSTGRES_DB: sportspark
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U sportspark -d sportspark"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      IMAGE: sportspark-api:ci
+      DATABASE_URL: postgres://sportspark:sportspark@localhost:5432/sportspark
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image
+        run: docker build --build-arg SOURCE_COMMIT=${{ github.sha }} -t "$IMAGE" .
+      - name: Production refuses unset provider gates (spec §5.2)
+        run: |
+          set +e
+          out=$(docker run --rm --network host -e NODE_ENV=production -e AUTH_MODE=oidc \
+            -e AUTH_JWKS_URL=https://identity.example.test/jwks.json -e AUTH_ISSUER=https://identity.example.test \
+            -e PROVIDER_DECISIONS=identity=DEC-018 -e DATABASE_URL "$IMAGE" 2>&1)
+          status=$?
+          set -e
+          echo "$out" | tail -5
+          test "$status" -ne 0
+          echo "$out" | grep -q 'PAYMENT_PROVIDER must be set explicitly in production'
+      - name: Migrations apply from the image (spec §4.1)
+        run: |
+          docker run --rm --network host -e DATABASE_URL "$IMAGE" node /app/packages/db/dist/cli/migrate.js
+          docker run --rm --network host -e DATABASE_URL "$IMAGE" node /app/packages/db/dist/cli/migrate.js --status
+      - name: The API serves in production mode and drains on SIGTERM (spec §5.11)
+        run: |
+          docker run -d --name api --network host -e NODE_ENV=production -e AUTH_MODE=oidc \
+            -e AUTH_JWKS_URL=https://identity.example.test/jwks.json -e AUTH_ISSUER=https://identity.example.test \
+            -e PROVIDER_DECISIONS=identity=DEC-018 -e DATABASE_URL \
+            -e PAYMENT_PROVIDER=none -e ACCOUNTING_PROVIDER=none -e ACCESS_DEVICE_PROVIDER=none \
+            -e MESSAGING_PUSH_PROVIDER=none -e MESSAGING_EMAIL_PROVIDER=none -e MESSAGING_SMS_PROVIDER=none \
+            "$IMAGE"
+          for i in $(seq 1 30); do curl -sf localhost:3000/v1/ready && break; sleep 2; done
+          curl -sf localhost:3000/v1/ready | tee ready.json
+          grep -q '"status":"ready"' ready.json
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:3000/v1/dev/tokens -H 'Content-Type: application/json' -d '{}')" = 404
+          docker stop --time 20 api
+          docker logs api | tail -3
+          docker logs api | grep -q '"message":"stopped"'
+      - name: The worker starts from the same image
+        run: |
+          docker run -d --name worker --network host -e NODE_ENV=production -e AUTH_MODE=oidc \
+            -e AUTH_JWKS_URL=https://identity.example.test/jwks.json -e AUTH_ISSUER=https://identity.example.test \
+            -e PROVIDER_DECISIONS=identity=DEC-018 -e DATABASE_URL \
+            -e PAYMENT_PROVIDER=none -e ACCOUNTING_PROVIDER=none -e ACCESS_DEVICE_PROVIDER=none \
+            -e MESSAGING_PUSH_PROVIDER=none -e MESSAGING_EMAIL_PROVIDER=none -e MESSAGING_SMS_PROVIDER=none \
+            "$IMAGE" node dist/worker.js
+          sleep 10
+          docker logs worker | grep -q 'started'
+          docker stop --time 25 worker
+
+  e2e-staff:
+    name: Staff dashboard in a browser (smoke; not §6.3 acceptance)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @sportspark/staff exec playwright install --with-deps chromium
+      - run: pnpm --filter @sportspark/staff e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/staff/playwright-report
+          retention-days: 7

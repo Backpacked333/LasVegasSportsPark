@@ -78,19 +78,17 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
 
 ## API issues found (not fixed here)
 
-1. `GET /v1/bookings` has no `kind` filter, so Rentals and Parties page through both kinds and show
-   theirs among the loaded pages (`ListBookingsQuery` in
-   `packages/contracts/src/api/enrollment-package-g.ts`, `BookingsService.list`).
-2. No staff read of a membership: term dates (`membership_starts_at`/`ends_at`), sessions used per
-   period and suspensions are only in the customer's `GET /v1/me/memberships`; `Enrollment` carries
-   none of them. Staff can suspend and end suspensions they recorded in the page, but cannot list
-   earlier ones or see the usage (`MembershipsService.listMine`, `MembershipSchema`).
+1. Resolved 2026-11-09 (ENR-17): `GET /v1/bookings?kind=` lists rentals or parties only, and
+   Rentals and Parties each page through their own kind.
+2. Resolved in the API 2026-11-09 (ENR-18): `GET /v1/enrollments/{id}/membership` gives staff
+   the term dates, usage and suspensions (suspensions alone: `GET .../membership-suspensions`,
+   GAPS-TRIAGE-02), and the member page shows them.
 3. Fixed during stage-4 integration: `POST /v1/bookings/{id}/cancel` on a held booking answers 409
    `CHECKOUT_IN_PROGRESS` while its basket is `checking_out` and 409 `BOOKING_CONFIRMATION_PENDING`
    once it is `fulfilled` (`BookingsService.cancel`, `bookings.spec.ts`). A `partially_fulfilled`
    basket is not refused by the API; the screen still avoids it (above).
-4. `GET /v1/entitlement-definitions` returns every definition unpaged and without a kind filter;
-   these screens read definitions one by one through the offerings instead.
+4. `GET /v1/entitlement-definitions` takes `kind` and `status` (CAT-06, 2026-11-09) but stays
+   unpaged; these screens still read definitions one by one through the offerings.
 
 Closed: who staffs a booking (formerly "`Booking` does not expose its staffing") is answered by
 the workforce coverage reads of each occurrence's event, which SCR-S-51 and SCR-S-52 now show.

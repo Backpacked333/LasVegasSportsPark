@@ -407,4 +407,44 @@ describe('fixture generator (SPK-FIX-001..004)', () => {
       expect.objectContaining({ constraint: 'capacity', message: '6 games, capacity for 2.' }),
     ]);
   });
+
+  it('SPK-SCHED-002 / SPK-FIX-005: a whole pitch and its half are never proposed at overlapping times (shared conflict units)', () => {
+    const pitch = newId();
+    const half = newId();
+    const [unitA, unitB] = [newId(), newId()];
+    const spec = input({
+      teamEntryIds: [newId(), newId(), newId(), newId()].sort(),
+      opponentFrequency: 1,
+      gamesPerTeam: 3,
+      resourceIds: [pitch, half],
+      // The whole pitch occupies both halves' units; the half occupies one of them.
+      resourceConflictUnits: { [pitch]: [unitA, unitB], [half]: [unitA] },
+    });
+    const result = generateFixtures(spec, settings, frozen);
+    const placed = (result.proposal?.games ?? []).filter(
+      (g) => g.awayEntryId !== null && g.scheduledStart !== null && g.resourceId !== null,
+    );
+    expect(placed.length).toBeGreaterThan(0);
+    for (const a of placed) {
+      for (const b of placed) {
+        if (a === b || a.resourceId === b.resourceId) continue;
+        const overlap =
+          Date.parse(a.scheduledStart as string) < Date.parse(b.scheduledEnd as string) &&
+          Date.parse(b.scheduledStart as string) < Date.parse(a.scheduledEnd as string);
+        expect(overlap).toBe(false);
+      }
+    }
+    // Without the conflict units (the earlier model) the same input does place the pitch and the
+    // half at the same time, which publication would then refuse.
+    const naive = generateFixtures({ ...spec, resourceConflictUnits: undefined }, settings, frozen);
+    const naivePlaced = (naive.proposal?.games ?? []).filter(
+      (g) => g.awayEntryId !== null && g.scheduledStart !== null,
+    );
+    const clashes = naivePlaced.some((a) =>
+      naivePlaced.some(
+        (b) => a !== b && a.resourceId !== b.resourceId && a.scheduledStart === b.scheduledStart,
+      ),
+    );
+    expect(clashes).toBe(true);
+  });
 });

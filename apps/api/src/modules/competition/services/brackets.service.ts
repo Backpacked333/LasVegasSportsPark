@@ -6,6 +6,7 @@ import {
   type BracketNode,
   type BracketSource,
   type CreateBracketNodeInput,
+  type GenerateBracketInput,
   type Principal,
   type PublishBracketNodeInput,
   type SeedFromStandingsInput,
@@ -28,6 +29,7 @@ import {
 import { MatchActions } from '../competition-matches.actions';
 import { MatchEvents } from '../competition-matches.events';
 import { toBracketNode } from '../competition-matches.shared';
+import { planSingleElimination, type PlannedSource } from '../matches/bracket-plan';
 import { loadSeasonRow, teamNamesOf, type Reader } from '../competition.queries';
 import { organizationOf, staffAuthority } from '../competition.shared';
 import { readTarget } from './competitions.service';
@@ -326,6 +328,112 @@ export class BracketsService {
       });
       const [view] = await this.views(trx, organizationId, [row]);
       return view as BracketNode;
+    });
+  }
+
+  /**
+   * `POST /v1/divisions/{id}/bracket-nodes/generate` (SPK-COMP-001 bracket progression): the
+   * division's whole single-elimination bracket from the structure the league manager gives, in
+   * one transaction: seeded first-round games, then each later node fed by the winners before it
+   * (or by a top seed that had a bye). Refused when the division already has bracket nodes, so a
+   * bracket is never duplicated or silently replaced. Nodes start unpublished and unseeded; their
+   * seeded slots take entries from the final standings (seed-from-standings, rank = seed).
+   */
+  async generate(
+    principal: Principal,
+    divisionId: string,
+    input: GenerateBracketInput,
+    correlationId: string | null,
+  ): Promise<BracketNode[]> {
+    const organizationId = organizationOf(principal);
+    return this.uow.run(async ({ trx }) => {
+      const division = await trx
+        .selectFrom('divisions')
+        .select(['id', 'season_id'])
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', divisionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!division) throw errors.notFound('division', divisionId);
+      await this.authorization.require(principal, MatchActions.manageBrackets, {
+        type: 'bracket_node',
+        organizationId,
+      });
+      const existing = await trx
+        .selectFrom('bracket_nodes')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('season_id', '=', division.season_id)
+        .where('division_id', '=', divisionId)
+        .executeTakeFirst();
+      if (existing) {
+        throw errors.resourceConflict('The division already has a bracket.', {
+          code: 'BRACKET_EXISTS',
+          divisionId,
+        });
+      }
+      const plan = planSingleElimination(input.structure.teams);
+      const ids = new Map(plan.map((node) => [`${node.round}:${node.slot}`, newId()]));
+      const source = (planned: PlannedSource): BracketSource =>
+        planned.kind === 'seed'
+          ? planned
+          : { kind: 'winner_of', nodeId: ids.get(`${planned.round}:${planned.slot}`) as string };
+      const rows: Array<Selectable<BracketNodesTable>> = [];
+      for (const node of plan) {
+        const id = ids.get(`${node.round}:${node.slot}`) as string;
+        const name = input.namePrefix ? `${input.namePrefix}: ${node.name}` : node.name;
+        const home = source(node.home);
+        const away = source(node.away);
+        rows.push(
+          await trx
+            .insertInto('bracket_nodes')
+            .values({
+              id,
+              organization_id: organizationId,
+              season_id: division.season_id,
+              division_id: divisionId,
+              name,
+              round: node.round,
+              slot: node.slot,
+              source_rule: json({ home, away }),
+              home_entry_id: null,
+              away_entry_id: null,
+              fixture_id: null,
+              winner_entry_id: null,
+              published_at: null,
+              published_by: null,
+              created_by: json(snapshotActor(principal)),
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow(),
+        );
+        await this.audit.record(trx, {
+          organizationId,
+          actor: principal,
+          action: MatchActions.manageBrackets.id,
+          targetType: 'bracket_node',
+          targetId: id,
+          afterRevision: 1,
+          reason: input.reason ?? null,
+          correlationId,
+          details: {
+            operation: 'generate',
+            seasonId: division.season_id,
+            divisionId,
+            structure: input.structure,
+            round: node.round,
+            slot: node.slot,
+          },
+        });
+        await this.outbox.enqueue(trx, MatchEvents.bracketNodeCreated, {
+          organizationId,
+          aggregateType: 'bracket_node',
+          aggregateId: id,
+          payload: { bracketNodeId: id, seasonId: division.season_id, round: node.round },
+          correlationId,
+        });
+      }
+      return this.views(trx, organizationId, rows);
     });
   }
 
