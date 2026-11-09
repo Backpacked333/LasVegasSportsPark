@@ -631,11 +631,149 @@ describe('SCR-C-38 SupportCaseScreen (GET /v1/me/cases/{id})', () => {
 
   it('"Waiting for you" says what it means', async () => {
     const app = createTestApp({
-      routes: { 'GET /me/cases/{id}': ok(customerCase({ status: 'waiting_customer' })) },
+      routes: {
+        'GET /me/cases/{id}': ok(customerCase({ status: 'waiting_customer' })),
+        'GET /me/cases/{id}/replies': ok([]),
+      },
     });
     render(<SupportCaseScreen caseId={CASE_ID} />, { wrapper: app.wrapper });
     expect(await screen.findByLabelText('Waiting for you')).toBeOnTheScreen();
-    expect(screen.getByText(/needs something from you and will contact you/)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        /needs something from you\. Reply on the request, or the team will contact you/,
+      ),
+    ).toBeOnTheScreen();
+  });
+
+  describe('SUP-06 reply to the team (POST /v1/me/cases/{id}/replies)', () => {
+    const REPLY = {
+      id: '0192f1a0-0000-7000-8000-00000000cc01',
+      body: 'Sam can do 11 instead.',
+      sentAt: '2026-10-24T12:00:00.000Z',
+    };
+
+    function renderCase(
+      status: string,
+      overrides: Record<string, FakeHandler> = {},
+      options: { reachable?: boolean; dropSend?: boolean } = {},
+    ) {
+      let replied = false;
+      const app = createTestApp({
+        reachable: options.reachable,
+        routes: {
+          'GET /me/cases/{id}': () =>
+            fakeResponse(200, customerCase({ status: replied ? 'open' : status })),
+          'GET /me/cases/{id}/replies': () => fakeResponse(200, replied ? [REPLY] : []),
+          'POST /me/cases/{id}/replies': () => {
+            replied = true;
+            return fakeResponse(201, customerCase({ status: 'open' }));
+          },
+          ...overrides,
+        },
+      });
+      if (options.dropSend) dropAnswers(app, 'POST', /\/me\/cases\/[^/]+\/replies$/);
+      render(<SupportCaseScreen caseId={CASE_ID} />, { wrapper: app.wrapper });
+      return app;
+    }
+    const replies = (app: ReturnType<typeof createTestApp>) =>
+      app.fake.requests.filter((r) => r.method === 'POST' && r.route === '/me/cases/{id}/replies');
+
+    it('SCR-C-38: a reply to a request waiting for the person is sent once, announced, and listed', async () => {
+      const app = renderCase('waiting_customer');
+      const section = await screen.findByTestId('support-replies');
+      expect(within(section).getByText('You have not replied on this request.')).toBeOnTheScreen();
+      fireEvent.changeText(
+        within(section).getByLabelText('Reply to the team'),
+        '  Sam can do 11 instead.  ',
+      );
+      fireEvent.press(within(section).getByRole('button', { name: 'Send reply' }));
+      expect(await screen.findByLabelText('Reply sent')).toBeOnTheScreen();
+      expect(screen.getByTestId('support-reply-sent')).toHaveTextContent(
+        /The facility team has your request\./,
+      );
+      expect(replies(app)).toHaveLength(1);
+      expect(replies(app)[0]?.body).toEqual({ body: 'Sam can do 11 instead.' });
+      expect(replies(app)[0]?.params).toEqual({ id: CASE_ID });
+      expect(replies(app)[0]?.headers['idempotency-key']).toBeTruthy();
+      // The list and the status re-read: the reply is listed and the request is with the team.
+      expect(await screen.findByText('Sam can do 11 instead.')).toBeOnTheScreen();
+      expect(await screen.findByLabelText('Open')).toBeOnTheScreen();
+      expect(within(section).getByLabelText('Reply to the team')).toHaveProp('value', '');
+    });
+
+    it('an empty reply is refused next to the field and nothing is sent', async () => {
+      const app = renderCase('waiting_customer');
+      const section = await screen.findByTestId('support-replies');
+      fireEvent.changeText(within(section).getByLabelText('Reply to the team'), '   ');
+      fireEvent.press(within(section).getByRole('button', { name: 'Send reply' }));
+      expect(await screen.findByText(/Write your reply\./)).toBeOnTheScreen();
+      expect(replies(app)).toHaveLength(0);
+    });
+
+    it('§4.9: "Check again" after no answer resends the same reply under the same key', async () => {
+      const app = renderCase('waiting_customer', {}, { dropSend: true });
+      const section = await screen.findByTestId('support-replies');
+      fireEvent.changeText(within(section).getByLabelText('Reply to the team'), 'Sam can do 11.');
+      fireEvent.press(within(section).getByRole('button', { name: 'Send reply' }));
+      expect(
+        await screen.findByLabelText('No answer yet: this may already have been recorded'),
+      ).toBeOnTheScreen();
+      fireEvent.changeText(within(section).getByLabelText('Reply to the team'), 'Edited text');
+      fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+      expect(await screen.findByLabelText('Reply sent')).toBeOnTheScreen();
+      expect(replies(app).map((r) => r.body)).toEqual([
+        { body: 'Sam can do 11.' },
+        { body: 'Sam can do 11.' },
+      ]);
+      expect(new Set(replies(app).map((r) => r.headers['idempotency-key'])).size).toBe(1);
+      // The edited draft was not sent, so it stays.
+      expect(within(section).getByLabelText('Reply to the team')).toHaveProp(
+        'value',
+        'Edited text',
+      );
+    });
+
+    it('a request resolved meanwhile is refused with "Reload"; the draft stays', async () => {
+      const app = renderCase('open', {
+        'POST /me/cases/{id}/replies': fail(409, 'INVALID_TRANSITION'),
+      });
+      const section = await screen.findByTestId('support-replies');
+      fireEvent.changeText(within(section).getByLabelText('Reply to the team'), 'Any news?');
+      fireEvent.press(within(section).getByRole('button', { name: 'Send reply' }));
+      const reload = await screen.findByRole('button', { name: 'Reload' });
+      const reads = () => app.fake.requests.filter((r) => r.route === '/me/cases/{id}').length;
+      const before = reads();
+      fireEvent.press(reload);
+      await waitFor(() => expect(reads()).toBeGreaterThan(before));
+      expect(within(section).getByLabelText('Reply to the team')).toHaveProp('value', 'Any news?');
+    });
+
+    it('a resolved request offers no reply form; offline keeps the draft and disables sending', async () => {
+      renderCase('resolved');
+      expect(
+        await screen.findByText(/This request is resolved and takes no more replies/),
+      ).toBeOnTheScreen();
+      expect(screen.queryByLabelText('Reply to the team')).toBeNull();
+
+      screen.unmount();
+      const app = renderCase('waiting_customer');
+      const section = await screen.findByTestId('support-replies');
+      fireEvent.changeText(within(section).getByLabelText('Reply to the team'), 'Kept offline');
+      act(() => app.sources.setReachable(false));
+      expect(await within(section).findByText(/Sending needs a connection/)).toBeOnTheScreen();
+      expect(within(section).getByRole('button', { name: 'Send reply' })).toBeDisabled();
+      expect(within(section).getByLabelText('Reply to the team')).toHaveProp(
+        'value',
+        'Kept offline',
+      );
+      expect(replies(app)).toHaveLength(0);
+    });
+
+    it('a failed read of the replies says so with "Try again", and the request still shows', async () => {
+      renderCase('open', { 'GET /me/cases/{id}/replies': fail(503, 'INTEGRATION_UNAVAILABLE') });
+      expect(await screen.findByTestId('support-replies-failed')).toBeOnTheScreen();
+      expect(screen.getByTestId('support-case-status')).toBeOnTheScreen();
+    });
   });
 
   it('§4.10: someone else\'s request is "not available"; a malformed link sends no request', async () => {

@@ -50,7 +50,7 @@ export function caseStatusMeaning(status: CaseStatus): string {
     case 'open':
       return 'The facility team has your request.';
     case 'waiting_customer':
-      return 'The facility team needs something from you and will contact you; you can also contact the facility below.';
+      return 'The facility team needs something from you. Reply on the request, or the team will contact you.';
     case 'waiting_internal':
       return 'The facility team is working on it.';
     case 'resolved':

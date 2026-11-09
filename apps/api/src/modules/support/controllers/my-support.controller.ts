@@ -1,9 +1,12 @@
 import { Controller, Get, Post } from '@nestjs/common';
 import {
+  CustomerCaseReplyBody,
   CustomerSupportRequestBody,
   ListMyCasesQuery,
   z,
   type CustomerCase,
+  type CustomerCaseReply,
+  type CustomerCaseReplyInput,
   type CustomerSupportRequestInput,
   type Page,
   type Principal,
@@ -24,8 +27,9 @@ type IdParams = z.infer<typeof IdParams>;
 
 /**
  * A customer's own support requests (SUP-01: SPK-SUPPORT-002, SPK-CAP-001 "contact the operating
- * team", SCR-C-22, SCR-C-38). The customer opens a request and reads its status; notes, owner,
- * queue and every internal detail stay staff records (§4.14). Anyone else's request is not found.
+ * team", SCR-C-22, SCR-C-38). The customer opens a request, reads its status and answers it
+ * while it is not resolved (SUP-06); notes, owner, queue and every internal detail stay staff
+ * records (§4.14). Anyone else's request is not found.
  */
 @Controller('me')
 export class MySupportController {
@@ -56,5 +60,25 @@ export class MySupportController {
     @ZodParams(IdParams) params: IdParams,
   ): Promise<CustomerCase> {
     return this.cases.myCase(principal, params.id);
+  }
+
+  @Post('cases/:id/replies')
+  @Idempotent()
+  @NoRecordAuthority('Not a §5.3 record category (authority matrix §4.1 scope notes).')
+  reply(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: IdParams,
+    @ZodBody(CustomerCaseReplyBody) body: CustomerCaseReplyInput,
+    @CorrelationId() correlationId: string,
+  ): Promise<CustomerCase> {
+    return this.cases.replyToMyCase(principal, params.id, body, correlationId);
+  }
+
+  @Get('cases/:id/replies')
+  replies(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: IdParams,
+  ): Promise<CustomerCaseReply[]> {
+    return this.cases.myCaseReplies(principal, params.id);
   }
 }

@@ -51,6 +51,16 @@ export const CaseNoteAdded = defineEvent(
   z.object({ caseId: z.uuid(), caseEventId: z.uuid() }),
 );
 
+/**
+ * SUP-06 (SPK-SUPPORT-002, SCR-C-38): the customer replied on their own request. `resumed` says
+ * the reply returned a request that was waiting on the customer to the team's queue. The reply
+ * text stays in the case history, never in the event (§4.14).
+ */
+export const CaseCustomerReplied = defineEvent(
+  'support.case_customer_replied',
+  z.object({ caseId: z.uuid(), caseEventId: z.uuid(), resumed: z.boolean() }),
+);
+
 /** SPK-SUPPORT-003: a case now points at the outcome of an authorized command. */
 export const CaseActionRecorded = defineEvent(
   'support.case_action_recorded',

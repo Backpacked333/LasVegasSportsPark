@@ -94,7 +94,14 @@ export interface CaseActionsTable {
   updated_at: GeneratedTimestamp;
 }
 
-export type CaseEventKind = 'note' | 'status' | 'assignment' | 'update' | 'action_link';
+export type CaseEventKind =
+  | 'note'
+  | 'status'
+  | 'assignment'
+  | 'update'
+  | 'action_link'
+  /** SUP-06 (migration 1104): the customer's own reply on their request. */
+  | 'customer_reply';
 export interface CaseEventsTable {
   id: string;
   organization_id: string;

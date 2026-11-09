@@ -146,8 +146,8 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
 - `GET /v1/me/family-calendar` `overlaps` covers sessions and bookings only; fixtures of the same
   people are compared by the client.
 - `YouthFeedback` assessments carry no author (the inventory row lists one), so none is shown.
-- `CustomerCase` carries neither who nor what a request is about, and there is no customer command
-  to answer a request that is "Waiting for you"; the screen says the team will make contact.
+- `CustomerCase` carries neither who nor what a request is about. A request "Waiting for you" is
+  answered on the request screen (`POST /v1/me/cases/{id}/replies`, SUP-06, added 2026-11-09).
 - `POST /v1/fixtures/{id}/availability` and the inbox read/acknowledge accept a change without
   `expectedRevision` (the check runs only when one is sent); this app always sends it.
 - `POST /v1/me/inbox/{id}/read` answers STALE_REVISION for a notice already read elsewhere,

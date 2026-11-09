@@ -59,7 +59,7 @@ export const CaseResolutionKindSchema = z
   ])
   .openapi('CaseResolutionKind');
 export const CaseEventKindSchema = z
-  .enum(['note', 'status', 'assignment', 'update', 'action_link'])
+  .enum(['note', 'status', 'assignment', 'update', 'action_link', 'customer_reply'])
   .openapi('CaseEventKind');
 export const CaseActionStatusSchema = z
   .enum(['requested', 'succeeded', 'failed', 'unknown'])
@@ -316,6 +316,22 @@ export type CustomerCase = z.infer<typeof CustomerCaseSchema>;
 
 export const ListMyCasesQuery = PageRequestSchema.extend({ status: CaseStatusSchema.optional() });
 export type ListMyCasesQuery = z.infer<typeof ListMyCasesQuery>;
+
+/**
+ * SUP-06 (SPK-SUPPORT-002, SCR-C-38): the customer answers their own request while it is not
+ * resolved. A request waiting on the customer returns to the team's queue (`open`). The reply is
+ * recorded in the case history for staff; the customer reads back only their own replies.
+ */
+export const CustomerCaseReplyBody = withCommandMeta({ body: z.string().trim().min(1).max(5000) })
+  .strict()
+  .openapi('CustomerCaseReplyRequest');
+export type CustomerCaseReplyInput = z.infer<typeof CustomerCaseReplyBody>;
+
+/** One of the customer's own replies on their request (never staff notes or history). */
+export const CustomerCaseReplySchema = z
+  .object({ id: z.uuid(), body: z.string(), sentAt: Instant })
+  .openapi('CustomerCaseReply');
+export type CustomerCaseReply = z.infer<typeof CustomerCaseReplySchema>;
 
 /**
  * Links a command the operator already ran (with their own principal) to the case. The evidence
@@ -806,6 +822,20 @@ query(
   pageSchema(CustomerCaseSchema),
 );
 query('/me/cases/{id}', 'The status of one of your support requests', null, CustomerCaseSchema);
+command(
+  'post',
+  '/me/cases/{id}/replies',
+  'Reply to one of your support requests while it is not resolved; a request waiting for you returns to the team (SPK-SUPPORT-002, SCR-C-38)',
+  CustomerCaseReplyBody,
+  CustomerCaseSchema,
+  201,
+);
+query(
+  '/me/cases/{id}/replies',
+  'Your own replies on one of your support requests, oldest first',
+  null,
+  z.array(CustomerCaseReplySchema),
+);
 query('/cases/{id}', 'Read a support case with its history and actions', null, CaseDetailSchema);
 command(
   'patch',

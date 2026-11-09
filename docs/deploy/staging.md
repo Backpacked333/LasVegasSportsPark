@@ -31,7 +31,8 @@ pnpm db:migrate              # applies pending files under the migration lock
 Apply migrations **before** deploying an API build that contains them: `GET /v1/ready` answers
 503 while the schema does not match the build (pending, changed or missing files). As of
 2026-11-09 the staging database holds migrations 0001 to 1480; this branch adds
-`0019_core_rate_limit_buckets.sql`, which must be applied before the new API build serves.
+`0019_core_rate_limit_buckets.sql` and `1104_support_customer_replies.sql`, which must be applied
+before the new API build serves.
 
 The synthetic seed is already loaded. To load it into a fresh staging database (never one with
 real data):

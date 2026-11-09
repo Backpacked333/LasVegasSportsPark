@@ -219,6 +219,8 @@ function CaseHistory({ item }: { item: CaseDetail }) {
             <div className="row-text">
               <span className="row-title">
                 {e.kind}
+                {/* SUP-06: the customer's own reply; they read back their replies, never notes. */}
+                {e.kind === 'customer_reply' ? ': from the customer (visible to them)' : ''}
                 {e.fromStatus || e.toStatus
                   ? `: ${e.fromStatus ?? '—'} to ${e.toStatus ?? '—'}`
                   : ''}
