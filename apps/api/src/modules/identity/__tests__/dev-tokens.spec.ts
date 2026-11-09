@@ -101,7 +101,7 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       await t.close();
     });
 
-    it("§4.14: the route exists only on the developer's machine or private network, never for a host reached by name", async () => {
+    it("§4.14: the route exists only on the developer's machine or private network, never for a host reached by name or through a proxy", async () => {
       const people = await createOrganizationPeople(t);
       const accountId = people.adult.accountId;
       // supertest connects over loopback with Host 127.0.0.1:<port>.
@@ -118,6 +118,24 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
         .send({ accountId });
       expect(named.status).toBe(404);
       expect(named.body.code).toBe('NOT_FOUND');
+      // A request a proxy forwarded is never the developer's machine: a proxy in front of a
+      // deployment must not pass a caller-supplied loopback or private Host (§4.14).
+      for (const [name, value] of [
+        ['X-Forwarded-For', '203.0.113.7'],
+        ['X-Forwarded-Host', '10.0.0.5'],
+        ['Forwarded', 'for=203.0.113.7'],
+        ['X-Real-IP', '203.0.113.7'],
+      ] as const) {
+        // Over loopback with a loopback Host, which alone would be the developer's machine.
+        const proxied = await t.http
+          .post('/v1/dev/tokens')
+          .set('Host', 'localhost:3000')
+          .set(name, value)
+          .send({ accountId });
+        expect([name, proxied.status]).toEqual([name, 404]);
+      }
+      // Without forwarding headers, the loopback request above still works.
+      expect((await t.http.post('/v1/dev/tokens').send({ accountId })).status).toBe(201);
     });
   });
 });

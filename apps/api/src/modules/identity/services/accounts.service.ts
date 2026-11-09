@@ -250,7 +250,7 @@ export class AccountsService {
       ttlSeconds?: number;
       passcode?: string;
     },
-    origin: { host?: string | null; remoteAddress?: string | null } = {},
+    origin: { host?: string | null; remoteAddress?: string | null; forwarded?: boolean } = {},
   ): Promise<{ token: string; accountId: string; expiresAt: string }> {
     if (
       this.config.AUTH_MODE !== 'local' ||
@@ -269,7 +269,9 @@ export class AccountsService {
       // §4.14: without a passcode the route exists only on a developer's own machine or local
       // network: a request over loopback addressed to localhost or an emulator's alias for it,
       // or one from a private address to the machine's private IP (a phone on the same Wi-Fi).
-      // A host reached by a domain name (a staging or cloud host) needs DEV_TOKENS_PASSCODE.
+      // A host reached by a domain name (a staging or cloud host) needs DEV_TOKENS_PASSCODE, and
+      // so does any request a proxy forwarded (a private-address proxy in front of a deployment
+      // would otherwise pass a caller-supplied private Host).
       throw errors.notFound('route');
     }
     const account = await this.db
@@ -318,7 +320,9 @@ const EMULATOR_HOST_ALIASES = new Set(['10.0.2.2', '10.0.3.2']);
 function isDeveloperNetworkRequest(origin: {
   host?: string | null;
   remoteAddress?: string | null;
+  forwarded?: boolean;
 }): boolean {
+  if (origin.forwarded) return false;
   const host = origin.host ?? null;
   if (isLoopback(origin.remoteAddress)) {
     return isLoopback(host) || (!!host && EMULATOR_HOST_ALIASES.has(host));

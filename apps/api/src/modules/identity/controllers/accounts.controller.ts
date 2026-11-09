@@ -90,9 +90,25 @@ export class AccountsController {
     @ZodBody(DevTokenBody) body: z.infer<typeof DevTokenBody>,
     @Req() request: Request,
   ): Promise<{ token: string; accountId: string; expiresAt: string }> {
+    const headers = request.headers;
     return this.accounts.mintDevToken(body, {
-      host: request.hostname,
+      // The Host header itself, never `request.hostname`: with TRUST_PROXY that would come from a
+      // caller-supplied X-Forwarded-Host.
+      host: hostOf(headers.host),
       remoteAddress: request.socket?.remoteAddress ?? null,
+      // A request a proxy forwarded is never the developer's own machine or network (§4.14).
+      forwarded: FORWARDING_HEADERS.some((name) => headers[name] !== undefined),
     });
   }
+}
+
+/** Headers a reverse proxy or load balancer adds to what it forwards. */
+const FORWARDING_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip'];
+
+/** The host of a Host header without its port (`10.0.2.2:3000` → `10.0.2.2`, `[::1]:3000` → `::1`). */
+function hostOf(header: string | undefined): string | null {
+  if (!header) return null;
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(header);
+  if (bracketed) return bracketed[1] ?? null;
+  return header.replace(/:\d+$/, '');
 }
