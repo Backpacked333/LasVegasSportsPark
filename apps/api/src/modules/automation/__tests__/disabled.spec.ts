@@ -3,7 +3,12 @@ import path from 'node:path';
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../../kernel';
-import { TEST_CONFIG_ENV, createTestApp, type TestApp } from '../../../testing';
+import {
+  PRODUCTION_CONFIG_ENV,
+  TEST_CONFIG_ENV,
+  createTestApp,
+  type TestApp,
+} from '../../../testing';
 import { DOMAIN_MODULES } from '../../index';
 import { SupportModule } from '../../support';
 import { AutomationModule } from '../automation.module';
@@ -154,12 +159,7 @@ describe('SPK-AUTO-005: the assistant is optional', () => {
     });
 
     it('§5.2: the fake provider is refused in production; enabling the assistant there without a selected provider stops startup', async () => {
-      const production = loadConfig({
-        ...TEST_CONFIG_ENV,
-        NODE_ENV: 'production',
-        AUTH_MODE: 'oidc',
-        DATABASE_URL: 'postgres://unused',
-      });
+      const production = loadConfig(PRODUCTION_CONFIG_ENV);
       expect(() =>
         assistantProviderFor(production, { ...DEFAULT_AUTOMATION_SETTINGS, enabled: true }),
       ).toThrow(/no assistant provider has been selected/);

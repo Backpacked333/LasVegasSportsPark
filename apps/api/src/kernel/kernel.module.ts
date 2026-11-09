@@ -13,6 +13,7 @@ import { AuditWriter } from './audit/audit.writer';
 import { AuthGuard } from './auth/auth.guard';
 import type { IdentityProviderPort, VerifiedIdentity } from './auth/identity-provider.port';
 import { LocalJwtIdentityProvider } from './auth/local-jwt.identity-provider';
+import { OidcJwksIdentityProvider } from './auth/oidc-jwks.identity-provider';
 import type { PrincipalResolverPort } from './auth/principal-resolver.port';
 import {
   denyAllRelationshipAuthority,
@@ -127,6 +128,17 @@ export class KernelModule implements OnModuleInit {
         scenarios: [],
         reconciliationOwner: null,
       });
+    } else {
+      // §5.2, DEC-018: the managed identity adapter; refused unless the decision is recorded.
+      this.integrations.register({
+        id: 'kernel.identity_provider',
+        gate: 'identity',
+        port: 'IDENTITY_PROVIDER',
+        adapter: { name: 'oidc-jwks', kind: 'provider' },
+        productionAllowed: true,
+        scenarios: [],
+        reconciliationOwner: null,
+      });
     }
   }
 
@@ -142,10 +154,9 @@ export class KernelModule implements OnModuleInit {
         useFactory: (): IdentityProviderPort => {
           if (options.identityProvider) return options.identityProvider;
           if (config.AUTH_MODE === 'local') return new LocalJwtIdentityProvider(config);
-          throw new Error(
-            'AUTH_MODE=oidc: a managed identity provider has not been selected (specification §5.2). ' +
-              'Record the decision in docs/package-a/decision-register.md and implement the adapter behind IdentityProviderPort.',
-          );
+          // §5.2, DEC-018: the integration register admits this adapter only when the identity
+          // gate's decision is named in PROVIDER_DECISIONS (KernelModule.onModuleInit).
+          return new OidcJwksIdentityProvider(config);
         },
       },
       {

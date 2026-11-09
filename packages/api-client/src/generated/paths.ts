@@ -58739,7 +58739,7 @@ export type components = {
             gate: components["schemas"]["ProviderGate"];
             register: components["schemas"]["IntegrationRegister"];
             /** @enum {string} */
-            status: "pending_decision";
+            status: "pending_decision" | "decision_recorded";
         };
         IntegrationRegister: {
             accountOwner: string | null;

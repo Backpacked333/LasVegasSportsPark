@@ -24202,7 +24202,8 @@
           "status": {
             "type": "string",
             "enum": [
-              "pending_decision"
+              "pending_decision",
+              "decision_recorded"
             ]
           },
           "register": {

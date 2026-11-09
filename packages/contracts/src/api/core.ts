@@ -493,7 +493,8 @@ export const IntegrationGateSchema = z
   .object({
     gate: ProviderGateSchema,
     decisionRef: z.string(),
-    status: z.enum(['pending_decision']),
+    /** `decision_recorded` once the deployment names the gate's decision in PROVIDER_DECISIONS. */
+    status: z.enum(['pending_decision', 'decision_recorded']),
     register: IntegrationRegisterSchema,
     /** §5.1 evidence: documented, tested, accepted, live; null while pending. */
     evidenceLevel: z.enum(['documented', 'tested', 'accepted', 'live']).nullable(),

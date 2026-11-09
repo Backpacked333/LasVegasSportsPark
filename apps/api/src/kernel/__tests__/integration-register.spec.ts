@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { staffPrincipal } from '../../testing/principals';
-import { createTestApp, type TestApp } from '../../testing/test-app';
+import { createTestApp, OIDC_CONFIG_ENV, type TestApp } from '../../testing/test-app';
 import {
   INTEGRATION_REGISTRY,
   PROVIDER_GATES,
@@ -108,5 +108,61 @@ describe('integration register (K-09, §5.1, §5.2)', () => {
       registry.register({ ...base, id: 'kerneltest.no_scenarios', scenarios: [] }),
     ).toThrow(/scenarios/);
     expect(() => registry.register({ ...base, id: 'Not An Id' })).toThrow(/<module>.<port>/);
+  });
+
+  describe('with a provider decision recorded (§5.2, DEC-018)', () => {
+    it("§5.2: a provider adapter registers only under its gate's decision named in PROVIDER_DECISIONS", async () => {
+      const decided = await createTestApp({ env: OIDC_CONFIG_ENV });
+      try {
+        const admin = await decided.authHeader(
+          staffPrincipal(decided.organizationId, ['system_administrator']),
+        );
+        const res = await decided.http.get('/v1/admin/integrations').set(admin);
+        expect(res.status).toBe(200);
+        const identity = res.body.gates.find((g: { gate: string }) => g.gate === 'identity');
+        expect(identity.status).toBe('decision_recorded');
+        expect(identity.decisionRef).toBe('DEC-018');
+        expect(identity.adapters).toEqual([
+          {
+            id: 'kernel.identity_provider',
+            gate: 'identity',
+            port: 'IDENTITY_PROVIDER',
+            adapter: { name: 'oidc-jwks', kind: 'provider' },
+            productionAllowed: true,
+            scenarios: [],
+            reconciliationOwner: null,
+          },
+        ]);
+        // Other gates stay pending; a provider for one of them is still refused.
+        const payments = res.body.gates.find((g: { gate: string }) => g.gate === 'payments');
+        expect(payments.status).toBe('pending_decision');
+        expect(() =>
+          decided.app.get<IntegrationRegistryPort>(INTEGRATION_REGISTRY).register({
+            id: 'kerneltest.vendor_payments',
+            gate: 'payments',
+            port: 'P',
+            adapter: { name: 'vendor', kind: 'provider' },
+            productionAllowed: true,
+            scenarios: [],
+            reconciliationOwner: null,
+          }),
+        ).toThrow(/record DEC-019 and name it in PROVIDER_DECISIONS/);
+      } finally {
+        await decided.close();
+      }
+    });
+
+    it('§5.2: without the decision the managed identity adapter stops startup', async () => {
+      const { PROVIDER_DECISIONS: _d, ...undecided } = OIDC_CONFIG_ENV;
+      await expect(createTestApp({ env: undecided })).rejects.toThrow(
+        /no provider is selected for gate identity/,
+      );
+    });
+
+    it('§5.2: a decision named under the wrong gate stops startup', async () => {
+      await expect(
+        createTestApp({ env: { ...OIDC_CONFIG_ENV, PROVIDER_DECISIONS: 'identity=DEC-019' } }),
+      ).rejects.toThrow(/that gate's decision record is DEC-018/);
+    });
   });
 });

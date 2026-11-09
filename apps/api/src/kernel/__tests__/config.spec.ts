@@ -62,4 +62,43 @@ describe('configuration security boundaries', () => {
       ).toThrow(/published example value/);
     }
   });
+
+  it("§5.2, DEC-018: AUTH_MODE=oidc needs the key set URL and the provider's own issuer", () => {
+    const base = { NODE_ENV: 'development', AUTH_MODE: 'oidc' };
+    expect(() => loadConfig(base)).toThrow(/AUTH_JWKS_URL is required/);
+    expect(() =>
+      loadConfig({ ...base, AUTH_JWKS_URL: 'https://idp.example.test/jwks.json' }),
+    ).toThrow(/AUTH_ISSUER must name the managed identity provider/);
+    const cfg = loadConfig({
+      ...base,
+      AUTH_JWKS_URL: 'https://idp.example.test/jwks.json',
+      AUTH_ISSUER: 'https://idp.example.test',
+    });
+    expect(cfg.AUTH_ALLOWED_ALGS).toEqual(['RS256', 'ES256']);
+    expect(cfg.AUTH_CLOCK_SKEW_SECONDS).toBe(30);
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgres://x',
+        AUTH_JWKS_URL: 'http://idp.example.test/jwks.json',
+        AUTH_ISSUER: 'https://idp.example.test',
+      }),
+    ).toThrow(/AUTH_JWKS_URL must be an https URL in production/);
+  });
+
+  it('§5.2: PROVIDER_DECISIONS names one decision record per gate', () => {
+    const env = { NODE_ENV: 'test', AUTH_LOCAL_SECRET: 'x'.repeat(40) };
+    expect(loadConfig(env).PROVIDER_DECISIONS).toEqual({});
+    expect(
+      loadConfig({ ...env, PROVIDER_DECISIONS: 'identity=DEC-018, payments=DEC-019' })
+        .PROVIDER_DECISIONS,
+    ).toEqual({ identity: 'DEC-018', payments: 'DEC-019' });
+    expect(() => loadConfig({ ...env, PROVIDER_DECISIONS: 'billing=DEC-019' })).toThrow(
+      /PROVIDER_DECISIONS entry "billing=DEC-019"/,
+    );
+    expect(() => loadConfig({ ...env, PROVIDER_DECISIONS: 'payments=yes' })).toThrow(
+      /PROVIDER_DECISIONS/,
+    );
+  });
 });

@@ -1,6 +1,6 @@
 import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestApp, type TestApp } from '../../../testing/test-app';
+import { createTestApp, OIDC_CONFIG_ENV, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import { createAccountFixture, createOrganizationPeople } from '../testing/identity-fixtures';
 
@@ -45,7 +45,7 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       t = await createTestApp({
         imports: [IdentityModule],
         principalResolver: 'module',
-        env: { AUTH_MODE: 'oidc' },
+        env: OIDC_CONFIG_ENV,
       });
     });
     afterAll(async () => {

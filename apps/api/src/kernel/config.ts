@@ -1,6 +1,6 @@
 import os from 'node:os';
 import type { FactoryProvider } from '@nestjs/common';
-import { CLIENT_APPS, CLIENT_PLATFORMS, z } from '@sportspark/contracts';
+import { CLIENT_APPS, CLIENT_PLATFORMS, ProviderGateSchema, z } from '@sportspark/contracts';
 import { APP_CONFIG } from './tokens';
 
 /**
@@ -8,6 +8,52 @@ import { APP_CONFIG } from './tokens';
  * configured with it would accept tokens minted by anyone (§4.14 protected secret storage).
  */
 export const PUBLISHED_EXAMPLE_SECRET = 'change-me-to-at-least-32-random-characters';
+
+/**
+ * Signature algorithms a managed identity provider may use (§4.14). Symmetric algorithms are not
+ * offered for `AUTH_MODE=oidc`: a key fetched from a public JWKS endpoint must be asymmetric.
+ */
+export const OIDC_ALGORITHMS = [
+  'RS256',
+  'RS384',
+  'RS512',
+  'PS256',
+  'PS384',
+  'PS512',
+  'ES256',
+  'ES384',
+  'ES512',
+  'EdDSA',
+] as const;
+export type OidcAlgorithm = (typeof OIDC_ALGORITHMS)[number];
+
+/**
+ * The adapter each provider-selection gate runs (§5.2), one environment variable per port:
+ * `fake` is the deterministic test adapter (development and tests only, refused in production);
+ * `none` means no provider is selected and the port refuses every call with a recorded failure,
+ * so production can boot while a gate's decision (named here) is pending and the work that needs
+ * the provider stays visibly unavailable. A real adapter's name joins the list when its decision
+ * is recorded and the adapter exists.
+ */
+export const PROVIDER_SELECTORS = {
+  PAYMENT_PROVIDER: { gate: 'payments', decisionRef: 'DEC-019', choices: ['fake', 'none'] },
+  ACCOUNTING_PROVIDER: { gate: 'accounting', decisionRef: 'DEC-022', choices: ['fake', 'none'] },
+  ACCESS_DEVICE_PROVIDER: { gate: 'hardware', decisionRef: 'DEC-023', choices: ['fake', 'none'] },
+  MESSAGING_PUSH_PROVIDER: { gate: 'messaging', decisionRef: 'DEC-020', choices: ['fake', 'none'] },
+  MESSAGING_EMAIL_PROVIDER: {
+    gate: 'messaging',
+    decisionRef: 'DEC-020',
+    choices: ['fake', 'none'],
+  },
+  MESSAGING_SMS_PROVIDER: { gate: 'messaging', decisionRef: 'DEC-020', choices: ['fake', 'none'] },
+} as const;
+export type ProviderSelector = keyof typeof PROVIDER_SELECTORS;
+export type ProviderChoice = (typeof PROVIDER_SELECTORS)[ProviderSelector]['choices'][number];
+
+const providerChoice = z.enum(['fake', 'none']).optional();
+
+/** The issuer the local development identity provider writes into its tokens. */
+export const LOCAL_ISSUER = 'sportspark-local';
 
 /**
  * Typed runtime configuration. Secrets arrive through the environment (never committed).
@@ -33,7 +79,7 @@ export const ConfigSchema = z
       .transform((v) => v === 'true'),
     AUTH_MODE: z.enum(['local', 'oidc']).default('local'),
     AUTH_LOCAL_SECRET: z.string().min(32).optional(),
-    AUTH_ISSUER: z.string().default('sportspark-local'),
+    AUTH_ISSUER: z.string().default(LOCAL_ISSUER),
     /**
      * A protected staging host (AUTH_MODE=local outside production, reachable from the internet):
      * when set, `POST /v1/dev/tokens` mints a token only for a request carrying this passcode, so
@@ -41,6 +87,35 @@ export const ConfigSchema = z
      */
     DEV_TOKENS_PASSCODE: z.string().min(16).optional(),
     AUTH_AUDIENCE: z.string().default('sportspark-api'),
+    /**
+     * `AUTH_MODE=oidc` (§5.2, DEC-018): the managed identity provider's JSON Web Key Set, from which
+     * bearer tokens are verified (https in production). `AUTH_ISSUER` and `AUTH_AUDIENCE` must then
+     * name the provider's issuer and the audience it puts in access tokens.
+     */
+    AUTH_JWKS_URL: z.url().optional(),
+    /** Accepted token signature algorithms for `AUTH_MODE=oidc` (comma-separated, asymmetric only). */
+    AUTH_ALLOWED_ALGS: z
+      .string()
+      .default('RS256,ES256')
+      .transform((value, ctx) => parseAlgorithms(value, ctx)),
+    /** Tolerated clock difference when checking token times (technical value). */
+    AUTH_CLOCK_SKEW_SECONDS: z.coerce.number().int().min(0).max(300).default(30),
+    /**
+     * The provider-selection decisions this deployment runs under (§5.2), as `<gate>=DEC-###`
+     * entries, for example `identity=DEC-018`. A real provider adapter registers only when its
+     * gate's decision record is named here (the integration register refuses it otherwise); the
+     * decision itself lives in docs/package-a/decision-register.md with its named owner.
+     */
+    PROVIDER_DECISIONS: z
+      .string()
+      .default('')
+      .transform((value, ctx) => parseProviderDecisions(value, ctx)),
+    PAYMENT_PROVIDER: providerChoice,
+    ACCOUNTING_PROVIDER: providerChoice,
+    ACCESS_DEVICE_PROVIDER: providerChoice,
+    MESSAGING_PUSH_PROVIDER: providerChoice,
+    MESSAGING_EMAIL_PROVIDER: providerChoice,
+    MESSAGING_SMS_PROVIDER: providerChoice,
     AUTH_TOKEN_TTL_SECONDS: z.coerce
       .number()
       .int()
@@ -191,6 +266,50 @@ export const ConfigSchema = z
           message:
             'AUTH_LOCAL_SECRET is the published example value; generate a private one (for example: openssl rand -hex 32)',
         });
+      }
+    }
+    if (cfg.AUTH_MODE === 'oidc') {
+      if (!cfg.AUTH_JWKS_URL) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_JWKS_URL'],
+          message:
+            "AUTH_JWKS_URL is required when AUTH_MODE=oidc (the managed identity provider's JSON Web Key Set)",
+        });
+      } else if (cfg.NODE_ENV === 'production' && !cfg.AUTH_JWKS_URL.startsWith('https://')) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_JWKS_URL'],
+          message: 'AUTH_JWKS_URL must be an https URL in production',
+        });
+      }
+      if (cfg.AUTH_ISSUER === LOCAL_ISSUER) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_ISSUER'],
+          message:
+            "AUTH_ISSUER must name the managed identity provider's issuer when AUTH_MODE=oidc (it is still the local default)",
+        });
+      }
+    }
+    if (cfg.NODE_ENV === 'production') {
+      for (const [key, selector] of Object.entries(PROVIDER_SELECTORS) as Array<
+        [ProviderSelector, (typeof PROVIDER_SELECTORS)[ProviderSelector]]
+      >) {
+        const choice = cfg[key];
+        if (choice === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `${key} must be set explicitly in production: "none" until the ${selector.gate} provider is selected (${selector.decisionRef}) and its adapter exists`,
+          });
+        } else if (choice === 'fake') {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `${key}=fake is a deterministic test adapter and cannot run in production (specification §5.2, ${selector.decisionRef})`,
+          });
+        }
       }
     }
     if (cfg.NODE_ENV === 'production') {
@@ -383,6 +502,64 @@ function parseOrigins(
     }
   }
   return origins;
+}
+
+function parseAlgorithms(value: string, ctx: z.RefinementCtx): readonly OidcAlgorithm[] {
+  const algorithms = value
+    .split(',')
+    .map((a) => a.trim())
+    .filter(Boolean);
+  if (algorithms.length === 0) {
+    ctx.addIssue({ code: 'custom', message: 'AUTH_ALLOWED_ALGS must name at least one algorithm' });
+  }
+  for (const algorithm of algorithms) {
+    if (!(OIDC_ALGORITHMS as readonly string[]).includes(algorithm)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `AUTH_ALLOWED_ALGS entry "${algorithm}" is not an accepted asymmetric algorithm (${OIDC_ALGORITHMS.join(', ')})`,
+      });
+    }
+  }
+  return algorithms as OidcAlgorithm[];
+}
+
+const DECISION_REF = /^DEC-\d{3}$/;
+
+/** `identity=DEC-018,payments=DEC-019` → gate → decision record. */
+function parseProviderDecisions(
+  value: string,
+  ctx: z.RefinementCtx,
+): Readonly<Partial<Record<z.infer<typeof ProviderGateSchema>, string>>> {
+  const out: Partial<Record<z.infer<typeof ProviderGateSchema>, string>> = {};
+  for (const entry of value
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean)) {
+    const [gate, decisionRef] = entry.split('=').map((p) => p.trim());
+    const parsedGate = ProviderGateSchema.safeParse(gate);
+    if (!parsedGate.success || !decisionRef || !DECISION_REF.test(decisionRef)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `PROVIDER_DECISIONS entry "${entry}" must be <gate>=DEC-### with gate one of ${ProviderGateSchema.options.join(', ')}`,
+      });
+      continue;
+    }
+    out[parsedGate.data] = decisionRef;
+  }
+  return out;
+}
+
+/**
+ * The adapter a provider-selection gate runs (§5.2): the configured choice, else the fake outside
+ * production (production refuses an unset selector at boot, so it never falls through to here).
+ */
+export function providerSelection(config: AppConfig, key: ProviderSelector): ProviderChoice {
+  const choice = config[key];
+  if (choice) return choice;
+  if (config.NODE_ENV === 'production') {
+    throw new Error(`${key} must be set explicitly in production`);
+  }
+  return 'fake';
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {

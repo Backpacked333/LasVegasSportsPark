@@ -74,8 +74,11 @@ export interface PaymentProviderPort {
    */
   createRefund(request: CreateRefundRequest): Promise<ProviderRefundResult>;
   retrieveRefund(idempotencyKey: string): Promise<ProviderRefundResult | null>;
-  /** Authenticates a webhook body (§4.11 "Webhook handlers must authenticate provider events"). */
-  verifyWebhook(body: unknown, signature: string | undefined): boolean;
+  /**
+   * Authenticates a webhook body (§4.11 "Webhook handlers must authenticate provider events").
+   * `rawBody` holds the exact bytes received, which a real provider's signature covers.
+   */
+  verifyWebhook(body: unknown, signature: string | undefined, rawBody?: Buffer): boolean;
 }
 
 /** The provider did not answer with an outcome (timeout or transport failure). */

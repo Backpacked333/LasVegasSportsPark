@@ -18,6 +18,7 @@ import {
   Inbox,
   moduleSettings,
   runWithTransaction,
+  providerSelection,
   type AppConfig,
   type IntegrationRegistryPort,
 } from '../../kernel';
@@ -76,6 +77,10 @@ import {
   FakeAccountingProvider,
 } from './providers/fake-accounting.provider';
 import { FAKE_PAYMENTS_PROVIDER, FakePaymentProvider } from './providers/fake-payment.provider';
+import {
+  unselectedAccountingProvider,
+  unselectedPaymentProvider,
+} from './providers/unselected.providers';
 import {
   AccountingExportService,
   RECONCILE_ACCOUNTING_JOB,
@@ -153,29 +158,21 @@ const providers: Provider[] = [
   // IF-37 (declared by stage 3; FIN-07 uses it): the accounting connection is not selected
   // (DEC-022); only the deterministic fake exists, refused in production like the payment fake.
   FakeAccountingProvider,
+  // ACCOUNTING_PROVIDER / PAYMENT_PROVIDER (§5.2): `fake` outside production only (the
+  // configuration refuses it in production); `none` while the gate's decision is pending.
   {
     provide: ACCOUNTING_EXPORT_PORT,
     inject: [APP_CONFIG, FakeAccountingProvider],
-    useFactory: (config: AppConfig, fake: FakeAccountingProvider): AccountingExportPort => {
-      if (config.NODE_ENV === 'production') {
-        throw new Error(
-          'No accounting connection is selected (specification §5.2, DEC-022): implement the adapter behind AccountingExportPort before production.',
-        );
-      }
-      return fake;
-    },
+    useFactory: (config: AppConfig, fake: FakeAccountingProvider): AccountingExportPort =>
+      providerSelection(config, 'ACCOUNTING_PROVIDER') === 'fake'
+        ? fake
+        : unselectedAccountingProvider,
   },
   {
     provide: PAYMENT_PROVIDER_PORT,
     inject: [APP_CONFIG, FakePaymentProvider],
-    useFactory: (config: AppConfig, fake: FakePaymentProvider): PaymentProviderPort => {
-      if (config.NODE_ENV === 'production') {
-        throw new Error(
-          'No payment processor is selected (specification §5.2, DEC-019): implement the adapter behind PaymentProviderPort before production.',
-        );
-      }
-      return fake;
-    },
+    useFactory: (config: AppConfig, fake: FakePaymentProvider): PaymentProviderPort =>
+      providerSelection(config, 'PAYMENT_PROVIDER') === 'fake' ? fake : unselectedPaymentProvider,
   },
   LedgerService,
   FinancePolicyResolver,
@@ -299,29 +296,35 @@ export class FinanceModule implements OnModuleInit, OnModuleDestroy {
     private readonly periodicJobs: PeriodicJobRegistry,
     @Inject(INTEGRATION_REGISTRY) private readonly integrations: IntegrationRegistryPort,
     private readonly mergeFollowUp: PersonMergeMoneyFollowUp,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   onModuleInit(): void {
     // §5.1, §5.2 (FIN-02, FIN-07; K-09): the adapters finance runs, all deterministic fakes refused
     // in production; their outcomes are reconciled by the finance operator.
-    this.integrations.register({
-      id: 'finance.payment_provider',
-      gate: 'payments',
-      port: 'PAYMENT_PROVIDER_PORT',
-      adapter: { name: FAKE_PAYMENTS_PROVIDER, kind: 'fake' },
-      productionAllowed: false,
-      scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
-      reconciliationOwner: 'finance_operator',
-    });
-    this.integrations.register({
-      id: 'finance.accounting_export',
-      gate: 'accounting',
-      port: 'ACCOUNTING_EXPORT_PORT',
-      adapter: { name: FAKE_ACCOUNTING_PROVIDER, kind: 'fake' },
-      productionAllowed: false,
-      scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
-      reconciliationOwner: 'finance_operator',
-    });
+    // With `<SELECTOR>=none` no adapter runs for the gate, so none is registered.
+    if (providerSelection(this.config, 'PAYMENT_PROVIDER') === 'fake') {
+      this.integrations.register({
+        id: 'finance.payment_provider',
+        gate: 'payments',
+        port: 'PAYMENT_PROVIDER_PORT',
+        adapter: { name: FAKE_PAYMENTS_PROVIDER, kind: 'fake' },
+        productionAllowed: false,
+        scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
+        reconciliationOwner: 'finance_operator',
+      });
+    }
+    if (providerSelection(this.config, 'ACCOUNTING_PROVIDER') === 'fake') {
+      this.integrations.register({
+        id: 'finance.accounting_export',
+        gate: 'accounting',
+        port: 'ACCOUNTING_EXPORT_PORT',
+        adapter: { name: FAKE_ACCOUNTING_PROVIDER, kind: 'fake' },
+        productionAllowed: false,
+        scenarios: ['success', 'failure', 'timeout_unknown', 'duplicate'],
+        reconciliationOwner: 'finance_operator',
+      });
+    }
     // FIN-07 (§4.12, IF-24): an unknown or stale submitted batch is asked about, never stranded.
     this.periodicJobs.register({
       name: RECONCILE_ACCOUNTING_JOB,

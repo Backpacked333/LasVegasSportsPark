@@ -176,10 +176,11 @@ function GateRow({ gate }: { gate: IntegrationGate }) {
         {gate.status === 'pending_decision' ? (
           <StatusBadge tone="pending" label="Waiting on a decision" />
         ) : (
-          <StatusBadge tone="info" label={gate.status} />
+          <StatusBadge tone="info" label="Decision recorded" />
         )}
         <span className="caption">
-          Provider not selected: {gate.decisionRef} (owner: {decisionOwner(gate.decisionRef)}).
+          {gate.status === 'pending_decision' ? 'Provider not selected' : 'Provider decision'}:{' '}
+          {gate.decisionRef} (owner: {decisionOwner(gate.decisionRef)}).
         </span>
         <span className="caption">
           Evidence ({EVIDENCE_LEVELS.join(' → ')}):{' '}

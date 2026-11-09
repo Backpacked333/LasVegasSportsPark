@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ConfigSchema, type AppConfig } from './config';
 import { bodyDepthMiddleware } from './http/body-depth.middleware';
 import { correlationMiddleware } from './http/correlation.middleware';
+import { captureWebhookRawBody } from './http/raw-body';
 import { responseHeadersMiddleware } from './http/response-headers.middleware';
 
 export const API_PREFIX = 'v1';
@@ -39,6 +40,8 @@ const DEFAULT_BODY_MAX_DEPTH = ConfigSchema.shape.HTTP_BODY_MAX_DEPTH.parse(unde
  *   or interrupted body answers 400 VALIDATION_FAILED through the error filter (R3-SECURITY-03),
  *   never a 5xx a client would retry; so does a body nested deeper than `HTTP_BODY_MAX_DEPTH`
  *   (`body_too_deep`), checked right after the parsers, before any route.
+ * - Provider webhook routes keep the exact bytes of their body (`RawBody`) so a real provider's
+ *   signature over those bytes can be verified (§4.11).
  */
 export function configureApp(app: INestApplication, config?: AppConfig): INestApplication {
   const origins = config?.CORS_ALLOWED_ORIGINS;
@@ -58,8 +61,16 @@ export function configureApp(app: INestApplication, config?: AppConfig): INestAp
   app.use(responseHeadersMiddleware);
   const limit = config?.HTTP_BODY_LIMIT_BYTES ?? DEFAULT_BODY_LIMIT_BYTES;
   const expressApp = app as NestExpressApplication;
-  expressApp.useBodyParser('json', { limit });
-  expressApp.useBodyParser('urlencoded', { limit, extended: true });
+  // Webhook routes keep their exact body bytes for provider signature checks (§4.11). The
+  // framework's types leave out body-parser's `verify` hook (it reserves it for its global
+  // `rawBody` option, which would keep every request's bytes); without that option it passes
+  // the hook through unchanged, which raw-body.spec.ts asserts.
+  expressApp.useBodyParser('json', { limit, verify: captureWebhookRawBody } as { limit: number });
+  expressApp.useBodyParser('urlencoded', {
+    limit,
+    extended: true,
+    verify: captureWebhookRawBody,
+  } as { limit: number; extended: boolean });
   // Registered after the parsers, so it sees the parsed body; a refusal reaches the error filter.
   app.use(bodyDepthMiddleware(config?.HTTP_BODY_MAX_DEPTH ?? DEFAULT_BODY_MAX_DEPTH));
   app.setGlobalPrefix(API_PREFIX);

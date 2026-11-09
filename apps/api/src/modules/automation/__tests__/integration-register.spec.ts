@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { INTEGRATION_REGISTRY, loadConfig, type IntegrationRegistryPort } from '../../../kernel';
-import { TEST_CONFIG_ENV, createTestApp, type TestApp } from '../../../testing';
+import { PRODUCTION_CONFIG_ENV, createTestApp, type TestApp } from '../../../testing';
 import { AutomationModule } from '../automation.module';
 import { DEFAULT_AUTOMATION_SETTINGS } from '../automation.settings';
 import { assistantProviderFor } from '../providers/assistant-provider.factory';
@@ -55,12 +55,7 @@ describe('assistant adapter in the integration register (AUT-01, §5.1, §5.2)',
       ).toEqual([ASSISTANT_ADAPTER]);
       // Production refuses the fake: enabling the assistant there stops startup (DEC-013 pending),
       // and with the assistant off the port is the no-provider stand-in, which is not registered.
-      const production = loadConfig({
-        ...TEST_CONFIG_ENV,
-        NODE_ENV: 'production',
-        AUTH_MODE: 'oidc',
-        DATABASE_URL: 'postgres://unused',
-      });
+      const production = loadConfig(PRODUCTION_CONFIG_ENV);
       expect(() =>
         assistantProviderFor(production, { ...DEFAULT_AUTOMATION_SETTINGS, enabled: true }),
       ).toThrow(/DEC-013/);
