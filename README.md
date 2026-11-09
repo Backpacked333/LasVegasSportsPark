@@ -98,17 +98,23 @@ inbox and the provider worker in one process.
 
 The in-process PGlite database cannot be shared by two processes. Without `PGLITE_DATA_DIR` each
 process has its own in-memory database, so a worker started next to a PGlite API works on a
-different, empty database. With `PGLITE_DATA_DIR`, never start a second process (the worker, a
-`seed:dev` run, another API) on that directory while one is running: PGlite takes no lock, the
-second process opens the directory without an error, and writes it committed are lost when the
-processes close. **Verified 2026-11-01 (correction)** with `@electric-sql/pglite` 0.5.11: a second
-process opened a directory the first held open, read the first process's row, and its own
-committed row was gone after both closed; the 2026-10-31 text said a data directory could be open
-in one process at a time. A lock in `createPgliteDatabase` (`packages/db/src/client.ts`) that
-refuses a second process is **Proposed**. In the quick start and in the development-seed flow
-below nothing that needs the worker runs: no notice is delivered, holds, claims and packages do not
-expire, and a payment whose outcome arrives later stays pending. To exercise follow-ups, run the API
-and the worker against one PostgreSQL database:
+different, empty database. With `PGLITE_DATA_DIR`, a second process (the worker, a `seed:dev` run,
+another API) that tries to open a directory one process holds is refused at startup naming the
+holder (**Verified**: `createPgliteDatabase` takes a lock file, `packages/db/src/client.spec.ts`;
+a lock left by a process that no longer runs is taken over). PGlite itself takes no lock: verified
+2026-11-01 with `@electric-sql/pglite` 0.5.11, a second process opened a held directory and its
+committed rows were lost when both closed, which is why the lock exists.
+
+To exercise follow-ups on one machine with PGlite, run the API and the worker's loops in one
+process (**Verified**: `apps/api/src/dev-all.ts`, loops in `kernel/workers/inline-worker.ts`,
+`kernel/__tests__/inline-worker.spec.ts`):
+
+```bash
+export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
+pnpm dev:all -- --seed      # migrates, creates the development seed, serves :3000 with the worker loops
+```
+
+To run them as separate processes, as production does, use one PostgreSQL database:
 
 ```bash
 export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) \
@@ -116,9 +122,6 @@ export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) \
 pnpm --filter @sportspark/api dev            # builds dist/, migrates (development) and serves :3000
 pnpm --filter @sportspark/api start:worker   # second shell, same environment
 ```
-
-A development entrypoint that runs the dispatcher, inbox and workers inside the API process on
-PGlite is **Proposed**.
 
 ### Local sign-in (development seed)
 
