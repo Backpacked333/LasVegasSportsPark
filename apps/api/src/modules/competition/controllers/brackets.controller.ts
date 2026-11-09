@@ -1,13 +1,21 @@
 import { Controller, Get, HttpCode, Post } from '@nestjs/common';
 import {
   CreateBracketNodeBody,
+  GenerateBracketBody,
   ListBracketNodesQuery,
   PublishBracketNodeBody,
   z,
   type BracketNode,
   type Principal,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CorrelationId } from '../competition.shared';
 import { BracketsService } from '../services/brackets.service';
 
@@ -27,6 +35,18 @@ export class BracketsController {
     @CorrelationId() correlationId: string | null,
   ): Promise<BracketNode> {
     return this.brackets.create(principal, params.id, body, correlationId);
+  }
+
+  @Post('divisions/:id/bracket-nodes/generate')
+  @Idempotent()
+  @RecordAuthority('season')
+  generate(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodBody(GenerateBracketBody) body: z.infer<typeof GenerateBracketBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<BracketNode[]> {
+    return this.brackets.generate(principal, params.id, body, correlationId);
   }
 
   @Get('seasons/:id/bracket-nodes')

@@ -37,6 +37,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { RESULT_REVIEW_CATEGORY } from './ResultsReviewScreen';
 import { SeedNode } from './SeedFromStandings';
+import { GenerateBracket } from './GenerateBracket';
 
 type Standings = NonNullable<Schema<'Standings'>>;
 type BracketNode = Schema<'BracketNode'>;
@@ -338,6 +339,12 @@ function Bracket({
   return (
     <section className="panel" aria-labelledby="bracket-title">
       <h3 id="bracket-title">Bracket</h3>
+      {divisionId && nodes.data && nodes.data.length === 0 ? (
+        <GenerateBracket
+          divisionId={divisionId}
+          divisionName={divisions.find((d) => d.value === divisionId)?.label ?? 'division'}
+        />
+      ) : null}
       {reviews.error ? (
         <p className="caption">
           Review tasks could not be checked ({reviews.error.code}), so whether a node is under
