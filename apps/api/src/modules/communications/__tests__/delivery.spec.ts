@@ -445,7 +445,7 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
     expect((await attemptsByChannel(n.id))['email']?.status).toBe('provider_accepted');
   });
 
-  it('SPK-UX-003 inbox: in-app notices newest first; read and acknowledge are real states; another person’s notice is not found', async () => {
+  it('SPK-UX-003 inbox: in-app notices newest first; read and acknowledge are real states; a repeat from an older revision answers the current item (§4.9); another person’s notice is not found', async () => {
     const first = await composeAndDispatch(t.app, system, notice({ title: 'First notice' }));
     t.clock.advance(60_000);
     const second = await composeAndDispatch(t.app, system, notice({ title: 'Second notice' }));
@@ -517,12 +517,28 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
       .send({});
     expect(denied.status).toBe(404);
     expect((await t.http.get('/v1/me/inbox').set(strangerAuth)).body.items).toEqual([]);
-    const stale = await t.http
+    // §4.9: reading or acknowledging again from a device that saw an older revision overwrites
+    // nothing, so it answers the current item instead of STALE_REVISION.
+    const readAgain = await t.http
       .post(`/v1/me/inbox/${otherAttempt}/read`)
       .set(parent)
       .set('Idempotency-Key', key())
       .send({ expectedRevision: 1 });
-    expect(stale.status).toBe(409);
-    expect(stale.body.code).toBe('STALE_REVISION');
+    expect(readAgain.status).toBe(200);
+    expect(readAgain.body).toMatchObject({ status: 'acknowledged', revision: 2 });
+    const ackAgainStale = await t.http
+      .post(`/v1/me/inbox/${otherAttempt}/acknowledge`)
+      .set(parent)
+      .set('Idempotency-Key', key())
+      .send({ expectedRevision: 1 });
+    expect(ackAgainStale.status).toBe(200);
+    expect(ackAgainStale.body).toMatchObject({ status: 'acknowledged', revision: 2 });
+    expect(
+      await t.db
+        .selectFrom('notification_acknowledgments')
+        .select('id')
+        .where('delivery_attempt_id', '=', otherAttempt)
+        .execute(),
+    ).toHaveLength(1);
   });
 });

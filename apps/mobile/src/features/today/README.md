@@ -150,8 +150,9 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   answered on the request screen (`POST /v1/me/cases/{id}/replies`, SUP-06, added 2026-11-09).
 - `POST /v1/fixtures/{id}/availability` and the inbox read/acknowledge accept a change without
   `expectedRevision` (the check runs only when one is sent); this app always sends it.
-- `POST /v1/me/inbox/{id}/read` answers STALE_REVISION for a notice already read elsewhere,
-  although reading twice is otherwise not an error; the app re-reads the list.
+- `POST /v1/me/inbox/{id}/read` once answered STALE_REVISION for a notice already read elsewhere;
+  since 2026-11-09 a repeat read or acknowledgment answers the current item (the app still
+  re-reads the list on STALE_REVISION).
 - `POST /v1/fixtures/{id}/availability` accepts a child's `personId` with `register` while DEC-090
   is pending; the app does not offer it.
 - `Enrollment.pendingReason: payment` covers both a held basket and one already checking out (a
