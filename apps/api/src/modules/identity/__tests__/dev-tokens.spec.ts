@@ -57,6 +57,10 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       const res = await t.http.post('/v1/dev/tokens').send({ accountId: people.adult.accountId });
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('NOT_FOUND');
+      // §4.14: indistinguishable from an absent route even for a body that would not validate.
+      const malformed = await t.http.post('/v1/dev/tokens').send({ accountId: 'x' });
+      expect(malformed.status).toBe(404);
+      expect(malformed.body.code).toBe('NOT_FOUND');
     });
   });
   describe('on a protected staging host (DEV_TOKENS_PASSCODE set)', () => {

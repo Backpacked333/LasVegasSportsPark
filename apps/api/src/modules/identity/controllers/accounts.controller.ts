@@ -1,4 +1,13 @@
-import { Controller, HttpCode, Post, Req } from '@nestjs/common';
+import {
+  type CanActivate,
+  Controller,
+  HttpCode,
+  Inject,
+  Injectable,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import {
   CreateAccountBody,
@@ -7,8 +16,11 @@ import {
   z,
   type Account,
   type Principal,
+  errors,
 } from '@sportspark/contracts';
 import {
+  APP_CONFIG,
+  type AppConfig,
   CurrentPrincipal,
   Idempotent,
   Public,
@@ -20,6 +32,22 @@ import { CorrelationId } from '../identity.shared';
 import { AccountsService } from '../services/accounts.service';
 
 const IdParams = z.object({ id: z.uuid() });
+
+/**
+ * §5.2, §4.14: outside development with the local identity provider, `POST /v1/dev/tokens` is
+ * indistinguishable from an absent route, before its body is validated.
+ */
+@Injectable()
+class DevTokensAvailable implements CanActivate {
+  constructor(@Inject(APP_CONFIG) private readonly config: AppConfig) {}
+
+  canActivate(): boolean {
+    if (this.config.AUTH_MODE !== 'local' || this.config.NODE_ENV === 'production') {
+      throw errors.notFound('route');
+    }
+    return true;
+  }
+}
 
 @Controller()
 export class AccountsController {
@@ -56,6 +84,7 @@ export class AccountsController {
    */
   @Public()
   @RateLimited('dev_tokens')
+  @UseGuards(DevTokensAvailable)
   @Post('dev/tokens')
   mintDevToken(
     @ZodBody(DevTokenBody) body: z.infer<typeof DevTokenBody>,

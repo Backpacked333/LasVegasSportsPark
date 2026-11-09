@@ -1,0 +1,66 @@
+# A production-shaped stack on one machine (spec §4.1, §4.12): PostgreSQL, a one-shot migration,
+# the API and a separate durable worker, from the same image. For rehearsals and local use.
+#
+#   docker compose up --build
+#   curl localhost:3000/v1/ready
+#
+# As written it runs NODE_ENV=development with the local identity provider and the fake
+# providers, so it starts without any account. For a production rehearsal set NODE_ENV=production,
+# AUTH_MODE=oidc with AUTH_JWKS_URL, AUTH_ISSUER, AUTH_AUDIENCE and PROVIDER_DECISIONS, and every
+# provider selector (docs/deploy/production.md); production refuses the fakes and local identity.
+name: sportspark
+
+x-app-env: &app-env
+  NODE_ENV: development
+  DATABASE_URL: postgres://sportspark:sportspark@db:5432/sportspark
+  DB_AUTO_MIGRATE: 'false'
+  AUTH_MODE: local
+  # Development only; generate your own (openssl rand -hex 32).
+  AUTH_LOCAL_SECRET: ${AUTH_LOCAL_SECRET:?set AUTH_LOCAL_SECRET (openssl rand -hex 32)}
+  LOG_FORMAT: json
+  CORS_ALLOWED_ORIGINS: http://localhost:5173
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: sportspark
+      POSTGRES_PASSWORD: sportspark
+      POSTGRES_DB: sportspark
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sportspark -d sportspark']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  migrate:
+    build: .
+    image: sportspark-api:local
+    command: ['node', '/app/packages/db/dist/cli/migrate.js']
+    environment:
+      DATABASE_URL: postgres://sportspark:sportspark@db:5432/sportspark
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    image: sportspark-api:local
+    environment: *app-env
+    ports:
+      - '3000:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    image: sportspark-api:local
+    command: ['node', 'dist/worker.js']
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db-data:
