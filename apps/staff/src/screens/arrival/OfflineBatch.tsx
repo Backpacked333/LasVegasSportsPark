@@ -8,19 +8,28 @@
  * batch another device sent by its reference (validated as an id before any request); anyone the
  * API does not let read it sees "not available", never whether it exists (§4.10). Times are in
  * the batch facility's zone (SPK-SCHED-008).
+ *
+ * ENT-06 (`GET /v1/offline-sync?facilityId=`): desk readers of the operating facility also see
+ * every device's batches received there, newest first, optionally only those with something for
+ * review (a conflict, a rejected item or a stale roster), each opening its stored outcome. The
+ * section is shown only where `entry.read_offline_batch` is held at that facility.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
+import { usePermissions } from '../../api/permissions';
+import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
-import { useFacilityZone } from '../../features/operations/context';
-import { TextField } from '../../features/operations/fields';
+import { useFacilityZone, useOperatingFacility } from '../../features/operations/context';
+import { CheckboxField, TextField } from '../../features/operations/fields';
 import { formatInstant, shortRef } from '../../features/operations/format';
 import type { SyncedBatch } from '../../features/operations/offline/queue';
 import { Button } from '../../ui/Button';
+import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 
 type OfflineSyncBatch = Schema<'OfflineSyncBatch'>;
+type OfflineSyncBatchSummary = Schema<'OfflineSyncBatchSummary'>;
 type OutcomeValue = Schema<'OfflineItemOutcome'>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -84,6 +93,112 @@ function SyncedBatchRow({
           {b.duplicates > 0 ? `, ${b.duplicates} already recorded` : ''}
           {b.stale > 0 ? `, ${b.stale} against an old roster` : ''}
         </span>
+      </div>
+      <Button
+        variant="secondary"
+        aria-expanded={open}
+        aria-label={`${open ? 'Hide' : 'Show'} outcomes of ${name}`}
+        onClick={onToggle}
+      >
+        {open ? 'Hide outcomes' : 'Show outcomes'}
+      </Button>
+      {open ? <OfflineBatchView batchId={b.id} /> : null}
+    </li>
+  );
+}
+
+/** ENT-06: every device's batches received at the operating facility (desk readers). */
+export function FacilityBatches() {
+  const facility = useOperatingFacility();
+  const permissions = usePermissions();
+  const [reviewOnly, setReviewOnly] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  const facilityId = facility.facilityId;
+  const allowed =
+    facilityId !== null && permissions.isPermitted('entry.read_offline_batch', facilityId) === true;
+  const pages = useApiPages({
+    path: '/offline-sync',
+    request: {
+      query: {
+        facilityId: facilityId ?? '',
+        limit: 25,
+        ...(reviewOnly ? { needsReview: 'true' as const } : {}),
+      },
+    },
+    enabled: allowed,
+  });
+  if (!allowed) return null;
+  return (
+    <section className="ops-section" aria-labelledby="facility-batches-title">
+      <h3 id="facility-batches-title">Batches received at this facility</h3>
+      <p className="caption">Every device&apos;s synchronised batches, newest first.</p>
+      <CheckboxField
+        label="Only batches with something for review"
+        checked={reviewOnly}
+        onChange={(checked) => {
+          setReviewOnly(checked);
+          setOpen(null);
+        }}
+        hint="A conflict, a rejected item or a roster older than the maximum age."
+      />
+      <QueryBoundary
+        query={pages}
+        label="batches"
+        isEmpty={(items) => items.length === 0}
+        empty={
+          reviewOnly
+            ? {
+                title: 'Nothing for review',
+                description: 'No batch here has a conflict, a rejected item or a stale roster.',
+              }
+            : {
+                title: 'No batches yet',
+                description: 'No device has synchronised a batch at this facility.',
+              }
+        }
+      >
+        {(items) => (
+          <ul className="list" aria-label="Batches received at this facility">
+            {items.map((b) => (
+              <FacilityBatchRow
+                key={b.id}
+                batch={b}
+                open={open === b.id}
+                onToggle={() => setOpen(open === b.id ? null : b.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </QueryBoundary>
+      <LoadMore pages={pages} label="batches" />
+    </section>
+  );
+}
+
+function FacilityBatchRow({
+  batch: b,
+  open,
+  onToggle,
+}: {
+  batch: OfflineSyncBatchSummary;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const zone = useFacilityZone(b.facilityId);
+  const review = b.counts.acceptedWithConflict + b.counts.rejected;
+  const name = `Batch ${shortRef(b.id)} from ${b.deviceId}, received ${formatInstant(b.receivedAt, zone)}`;
+  return (
+    <li aria-label={name}>
+      <div className="row-text">
+        <span className="row-title">{name}</span>
+        <span className="caption">
+          {b.counts.items} item{b.counts.items === 1 ? '' : 's'}: {b.counts.accepted} synchronised,{' '}
+          {review} for review
+          {b.counts.duplicate > 0 ? `, ${b.counts.duplicate} already recorded` : ''}
+          {b.stale ? ', roster older than the maximum age' : ''} · sent by{' '}
+          {b.submittedBy.actorLabel}
+        </span>
+        {b.needsReview ? <StatusBadge tone="warning" label="For review" /> : null}
       </div>
       <Button
         variant="secondary"

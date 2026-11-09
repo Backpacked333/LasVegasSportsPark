@@ -1,13 +1,19 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
+  decodeCursor,
+  encodeCursor,
   errors,
   newId,
   systemPrincipal,
+  z,
+  type ListOfflineSyncBatchesQuery,
   type OfflineItem,
   type OfflineItemResult,
   type OfflineSyncBatch,
+  type OfflineSyncBatchSummary,
   type OfflineSyncBody,
+  type Page,
   type Principal,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, pgConstraintName, type Db } from '@sportspark/db';
@@ -31,7 +37,16 @@ import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity'
 import { EntryActions } from '../entry.actions';
 import { EntryEvents } from '../entry.events';
 import { ENTRY_POLICY, policyForFacility, type EntryPolicy } from '../entry.policy';
-import { addMinutes, organizationOf, toBatch, type BatchRow, type VisitRow } from '../entry.shared';
+import {
+  addMinutes,
+  organizationOf,
+  toBatch,
+  toBatchSummary,
+  type BatchRow,
+  type VisitRow,
+} from '../entry.shared';
+
+const BatchCursor = z.object({ receivedAt: z.iso.datetime(), id: z.uuid() });
 import {
   activityKey,
   ActivityResolver,
@@ -423,6 +438,55 @@ export class OfflineSyncService {
       }
       throw error;
     }
+  }
+
+  /**
+   * GET /v1/offline-sync (ENT-06, §4.15, SPK-AT-018, SCR-S-31): every device's synchronized
+   * batches at a facility, newest received first, for desk readers of that facility
+   * (`entry.read_offline_batch` with the facility as target). A submitter without that role reads
+   * their own batches by id only. `needsReview` keeps batches with a conflict, a rejected item or
+   * a stale roster. Rows omit item outcomes; the batch read has them.
+   */
+  async list(
+    principal: Principal,
+    query: ListOfflineSyncBatchesQuery,
+  ): Promise<Page<OfflineSyncBatchSummary>> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, EntryActions.readOfflineBatch, {
+      type: 'facility',
+      id: query.facilityId,
+      organizationId,
+      facilityId: query.facilityId,
+    });
+    const cursor = decodeCursor(query.cursor, BatchCursor);
+    let q = this.uow
+      .reader()
+      .selectFrom('offline_sync_batches')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('facility_id', '=', query.facilityId)
+      .orderBy('received_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
+    if (query.deviceId) q = q.where('device_id', '=', query.deviceId);
+    if (query.needsReview !== undefined) {
+      const review = sql<boolean>`(conflict_count > 0 or rejected_count > 0 or stale)`;
+      q = q.where(query.needsReview ? review : sql<boolean>`not ${review}`);
+    }
+    if (cursor) {
+      q = q.where(
+        sql<boolean>`(received_at, id) < (${new Date(cursor.receivedAt)}::timestamptz, ${cursor.id}::uuid)`,
+      );
+    }
+    const rows = await q.execute();
+    const page = rows.slice(0, query.limit);
+    const last = rows.length > query.limit ? page[page.length - 1] : undefined;
+    return {
+      items: page.map(toBatchSummary),
+      nextCursor: last
+        ? encodeCursor({ receivedAt: new Date(last.received_at).toISOString(), id: last.id })
+        : null,
+    };
   }
 
   /**

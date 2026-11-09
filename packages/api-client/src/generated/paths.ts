@@ -32004,7 +32004,66 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List the synchronized offline batches of a facility, newest first (desk readers; §4.15) */
+        get: {
+            parameters: {
+                query: {
+                    cursor?: string;
+                    deviceId?: string;
+                    facilityId: string;
+                    limit?: number;
+                    needsReview?: "true" | "false";
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["OfflineSyncBatchSummary"][];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
         put?: never;
         /** Synchronize queued offline observations once; conflicts preserved for review (§4.15) */
         post: {
@@ -60346,6 +60405,36 @@ export type components = {
             };
             snapshotAgeSeconds: number;
             stale: boolean;
+        };
+        OfflineSyncBatchSummary: {
+            /** Format: uuid */
+            clientBatchId: string;
+            counts: {
+                accepted: number;
+                acceptedWithConflict: number;
+                duplicate: number;
+                items: number;
+                rejected: number;
+                stale: number;
+            };
+            deviceId: string;
+            exceptionIds: string[];
+            /** Format: uuid */
+            facilityId: string;
+            /** Format: uuid */
+            id: string;
+            maxRosterAgeMinutes: number;
+            needsReview: boolean;
+            /** Format: date-time */
+            receivedAt: string;
+            snapshot: {
+                reference: string;
+                /** Format: date-time */
+                takenAt: string;
+            };
+            snapshotAgeSeconds: number;
+            stale: boolean;
+            submittedBy: components["schemas"]["ActorSnapshot"];
         };
         OfflineSyncRequest: {
             /** Format: uuid */

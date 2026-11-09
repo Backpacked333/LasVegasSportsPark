@@ -11,6 +11,7 @@ import {
   type OccupancySnapshot,
   type OfflineItemResult,
   type OfflineSyncBatch,
+  type OfflineSyncBatchSummary,
   type Pass,
   type Principal,
   type ReleaseRecord,
@@ -493,6 +494,26 @@ export function toOccupancySnapshot(row: SnapshotRow): OccupancySnapshot {
     discrepancy: row.discrepancy,
     reconciliationNote: row.reconciliation_note,
     takenBy: actorOf(row.taken_by),
+  };
+}
+
+/** ENT-06: a batch without its item outcomes, for the facility list (SCR-S-31). */
+export function toBatchSummary(row: BatchRow): OfflineSyncBatchSummary {
+  const full = toBatch(row, false);
+  return {
+    id: full.id,
+    facilityId: full.facilityId,
+    deviceId: full.deviceId,
+    clientBatchId: full.clientBatchId,
+    snapshot: full.snapshot,
+    receivedAt: full.receivedAt,
+    snapshotAgeSeconds: full.snapshotAgeSeconds,
+    maxRosterAgeMinutes: full.maxRosterAgeMinutes,
+    stale: full.stale,
+    counts: full.counts,
+    exceptionIds: full.exceptionIds,
+    needsReview: row.conflict_count > 0 || row.rejected_count > 0 || row.stale,
+    submittedBy: row.submitted_by as unknown as ActorSnapshot,
   };
 }
 

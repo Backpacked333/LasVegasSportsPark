@@ -31900,6 +31900,114 @@
           "replayed"
         ]
       },
+      "OfflineSyncBatchSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "facilityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "clientBatchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string"
+              },
+              "takenAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "reference",
+              "takenAt"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snapshotAgeSeconds": {
+            "type": "integer"
+          },
+          "maxRosterAgeMinutes": {
+            "type": "integer"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "integer"
+              },
+              "accepted": {
+                "type": "integer"
+              },
+              "acceptedWithConflict": {
+                "type": "integer"
+              },
+              "duplicate": {
+                "type": "integer"
+              },
+              "rejected": {
+                "type": "integer"
+              },
+              "stale": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "items",
+              "accepted",
+              "acceptedWithConflict",
+              "duplicate",
+              "rejected",
+              "stale"
+            ]
+          },
+          "exceptionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "needsReview": {
+            "type": "boolean"
+          },
+          "submittedBy": {
+            "$ref": "#/components/schemas/ActorSnapshot"
+          }
+        },
+        "required": [
+          "id",
+          "facilityId",
+          "deviceId",
+          "clientBatchId",
+          "snapshot",
+          "receivedAt",
+          "snapshotAgeSeconds",
+          "maxRosterAgeMinutes",
+          "stale",
+          "counts",
+          "exceptionIds",
+          "needsReview",
+          "submittedBy"
+        ]
+      },
       "OccupancySnapshot": {
         "type": "object",
         "properties": {
@@ -87017,6 +87125,128 @@
           },
           "409": {
             "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List the synchronized offline batches of a facility, newest first (desk readers; §4.15)",
+        "tags": [
+          "Entry"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "deviceId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "needsReview",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OfflineSyncBatchSummary"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
             "content": {
               "application/json": {
                 "schema": {

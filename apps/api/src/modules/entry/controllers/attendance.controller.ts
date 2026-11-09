@@ -5,6 +5,7 @@ import {
   CollectorCheckBody,
   CorrectAttendanceObservationBody,
   errors,
+  ListOfflineSyncBatchesQuery,
   OccupancyQuery,
   OfflineSyncBody,
   RecordAttendanceObservationBody,
@@ -16,6 +17,8 @@ import {
   type Occupancy,
   type OccupancySnapshot,
   type OfflineSyncBatch,
+  type OfflineSyncBatchSummary,
+  type Page,
   type Principal,
   type RecordedObservation,
   type RecordedRelease,
@@ -137,6 +140,15 @@ export class OfflineSyncController {
     @CorrelationId() correlationId: string,
   ): Promise<OfflineSyncBatch> {
     return this.sync.sync(principal, body, correlationId);
+  }
+
+  /** ENT-06: every device's batches at a facility, newest first (desk readers). */
+  @Get()
+  list(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(ListOfflineSyncBatchesQuery) query: ListOfflineSyncBatchesQuery,
+  ): Promise<Page<OfflineSyncBatchSummary>> {
+    return this.sync.list(principal, query);
   }
 
   /** ENT-01: a stored batch and its per-item outcomes (submitter or desk readers). */
