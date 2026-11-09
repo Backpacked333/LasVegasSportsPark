@@ -112,8 +112,13 @@ describe('OpenAPI parity with the served routes (K-02, §4.8, §4.9)', () => {
     }
     // Every consequential command (a write that is not a read-only POST or a webhook) is idempotent.
     const writes = [...served].filter((k) => /^(POST|PUT|PATCH|DELETE) /.test(k));
+    // Two writes happen before a principal exists, so no idempotency key can be scoped to one:
+    // the development token mint, and account registration, which is its own retry guard
+    // (`(issuer, subject)` is unique; identity `self-registration.spec.ts` proves a repeat and a
+    // race answer the same account).
+    const BEFORE_A_PRINCIPAL = ['POST /dev/tokens', 'POST /accounts/register'];
     const notIdempotent = writes.filter(
-      (k) => !idempotent.has(k) && !HEADER_FREE.includes(k) && k !== 'POST /dev/tokens',
+      (k) => !idempotent.has(k) && !HEADER_FREE.includes(k) && !BEFORE_A_PRINCIPAL.includes(k),
     );
     expect(notIdempotent.sort()).toEqual([]);
   });

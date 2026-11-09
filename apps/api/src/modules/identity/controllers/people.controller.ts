@@ -1,6 +1,7 @@
 import { Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
 import {
   AddContactPointBody,
+  CreateOwnPersonBody,
   CreatePersonBody,
   IssueClaimBody,
   MakePrimaryContactPointBody,
@@ -21,14 +22,17 @@ import {
   type PersonSearchResult,
   type Principal,
   type UpdatePersonResponse,
+  errors,
 } from '@sportspark/contracts';
 import {
   CurrentPrincipal,
+  CurrentVerifiedIdentity,
   Idempotent,
   RecordAuthority,
   ZodBody,
   ZodParams,
   ZodQuery,
+  type VerifiedIdentity,
 } from '../../../kernel';
 import { CorrelationId } from '../identity.shared';
 import { AuthorityReadsService } from '../services/authority-reads.service';
@@ -87,6 +91,19 @@ export class PeopleController {
       staffMemberships,
       authorities,
     };
+  }
+
+  /** POST /v1/me/person: the signed-in account's own adult record (SPK-IAM-001, SCR-C-01). */
+  @Post('me/person')
+  @Idempotent()
+  createOwnPerson(
+    @CurrentPrincipal() principal: Principal,
+    @CurrentVerifiedIdentity() identity: VerifiedIdentity | null,
+    @ZodBody(CreateOwnPersonBody) body: z.infer<typeof CreateOwnPersonBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<PersonDetail> {
+    if (!identity) throw errors.authenticationRequired();
+    return this.people.createOwnPerson(principal, identity, body, correlationId);
   }
 
   @Post('people')

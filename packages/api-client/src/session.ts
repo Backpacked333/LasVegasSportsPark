@@ -12,6 +12,11 @@ export interface Session {
   expiresAt: string | null;
   /** The login account the token belongs to (an id, never a name). */
   accountId: string | null;
+  /**
+   * The identity provider's refresh token, when managed sign-in issued one (`oidc.ts`). As secret
+   * as the bearer token: kept only in the session store, never logged, never put in a URL.
+   */
+  refreshToken?: string | null;
 }
 
 export interface SessionStore {
@@ -50,6 +55,9 @@ export function parseStoredSession(raw: string | null): Session | null {
       token: value.token,
       expiresAt: typeof value.expiresAt === 'string' ? value.expiresAt : null,
       accountId: typeof value.accountId === 'string' ? value.accountId : null,
+      ...(typeof value.refreshToken === 'string' && value.refreshToken.length > 0
+        ? { refreshToken: value.refreshToken }
+        : {}),
     };
   } catch {
     return null;

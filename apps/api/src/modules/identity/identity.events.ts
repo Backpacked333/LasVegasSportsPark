@@ -13,9 +13,14 @@ export const IdentityEvents = {
     'identity.person_updated',
     z.object({ personId: z.uuid(), revision: z.number().int() }),
   ),
+  accountRegistered: defineEvent('identity.account_registered', z.object({ accountId: z.uuid() })),
   accountLinked: defineEvent(
     'identity.account_linked',
-    z.object({ accountId: z.uuid(), personId: z.uuid(), via: z.enum(['staff', 'claim', 'merge']) }),
+    z.object({
+      accountId: z.uuid(),
+      personId: z.uuid(),
+      via: z.enum(['staff', 'claim', 'merge', 'self_registration']),
+    }),
   ),
   accountRelinked: defineEvent(
     'identity.account_relinked',

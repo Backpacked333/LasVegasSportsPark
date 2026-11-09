@@ -25,6 +25,7 @@ import { PeopleScreen } from './screens/people/PeopleScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
 import { RelationshipsScreen } from './screens/people/RelationshipsScreen';
 import { ScheduleArea } from './screens/schedule/ScheduleArea';
+import { SignInCallbackScreen } from './screens/sign-in/SignInCallbackScreen';
 import { SignInScreen } from './screens/sign-in/SignInScreen';
 import { OpenCaseScreen } from './screens/support/OpenCaseScreen';
 import { SupportCaseScreen } from './screens/support/SupportCaseScreen';
@@ -37,6 +38,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/sign-in" element={<SignInScreen />} />
+      <Route path="/sign-in/callback" element={<SignInCallbackScreen />} />
       <Route
         element={
           <RequireSession>
