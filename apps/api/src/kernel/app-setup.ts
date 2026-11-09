@@ -65,11 +65,17 @@ export function configureApp(
       maxAge: config.CORS_MAX_AGE_SECONDS,
     });
   }
-  const express = app.getHttpAdapter().getInstance() as { disable(setting: string): unknown };
+  const express = app.getHttpAdapter().getInstance() as {
+    disable(setting: string): unknown;
+    set(setting: string, value: unknown): unknown;
+  };
   express.disable('x-powered-by');
+  // Behind a load balancer or proxy (§4.14): which forwarded headers to believe for the client
+  // address (rate limits) and the scheme (Strict-Transport-Security).
+  if (config?.TRUST_PROXY !== undefined) express.set('trust proxy', config.TRUST_PROXY);
   app.use(correlationMiddleware);
   if (config?.HTTP_ACCESS_LOG ?? true) app.use(requestLogMiddleware());
-  app.use(responseHeadersMiddleware);
+  app.use(responseHeadersMiddleware({ hstsMaxAgeSeconds: config?.HSTS_MAX_AGE_SECONDS }));
   const limit = config?.HTTP_BODY_LIMIT_BYTES ?? DEFAULT_BODY_LIMIT_BYTES;
   const expressApp = app as NestExpressApplication;
   // Webhook routes keep their exact body bytes for provider signature checks (§4.11). The

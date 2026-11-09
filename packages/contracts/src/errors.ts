@@ -184,6 +184,15 @@ export const errors = {
     }),
   refundPending: (details?: unknown) =>
     new DomainError('REFUND_PENDING', 'A refund is pending on these funds.', { details }),
+  /** §4.14 rate-limited recovery: too many attempts from one address; retry after the window. */
+  rateLimited: (retryAfterSeconds: number) =>
+    new DomainError(
+      'RATE_LIMITED',
+      `Too many attempts. Try again in ${retryAfterSeconds} seconds.`,
+      {
+        details: { retryAfterSeconds },
+      },
+    ),
   integrationUnavailable: (integration: string, cause?: unknown) =>
     new DomainError('INTEGRATION_UNAVAILABLE', `${integration} is currently unavailable.`, {
       cause,

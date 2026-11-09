@@ -167,6 +167,37 @@ export const ConfigSchema = z
      * value in `X-Metrics-Token` (§5.11). Unset: the route does not exist.
      */
     METRICS_TOKEN: z.string().min(24).optional(),
+    /**
+     * Rate-limit counters (§4.14 rate-limited recovery): `postgres` shares one count between every
+     * API instance (the production default), `memory` counts per process (the default elsewhere).
+     */
+    RATE_LIMIT_STORE: z.enum(['memory', 'postgres']).optional(),
+    /** Overrides of the named limits, `<name>=<limit>/<seconds>`, e.g. `dev_tokens=5/60`. */
+    RATE_LIMITS: z
+      .string()
+      .default('')
+      .transform((value, ctx) => parseRateLimits(value, ctx)),
+    /**
+     * Express `trust proxy` (§4.14): `true` (any proxy), `false`, a hop count, or addresses and
+     * subnets (`loopback`, `10.0.0.0/8`). Set it behind a load balancer so rate limits key on the
+     * client and `Strict-Transport-Security` sees https. Unset: forwarded headers are ignored.
+     */
+    TRUST_PROXY: z
+      .string()
+      .optional()
+      .transform((value) =>
+        value === undefined || value === ''
+          ? undefined
+          : value === 'true'
+            ? true
+            : value === 'false'
+              ? false
+              : /^\d+$/.test(value)
+                ? Number(value)
+                : value,
+      ),
+    /** `Strict-Transport-Security` max-age on https answers (0 turns it off; technical value). */
+    HSTS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).default(31_536_000),
     /** One access line per answered request (method, path without ids or query, status, time). */
     HTTP_ACCESS_LOG: z
       .enum(['true', 'false'])
@@ -557,6 +588,45 @@ function parseOrigins(
     }
   }
   return origins;
+}
+
+/** The routes' named rate limits (`DEFAULT_RATE_LIMITS` in http/rate-limit.ts). */
+export const RATE_LIMIT_NAMES = [
+  'dev_tokens',
+  'claims',
+  'invitations',
+  'account_recovery',
+] as const;
+type RateLimitOverrides = Readonly<
+  Partial<Record<(typeof RATE_LIMIT_NAMES)[number], { limit: number; windowSeconds: number }>>
+>;
+
+function parseRateLimits(value: string, ctx: z.RefinementCtx): RateLimitOverrides {
+  const out: Partial<
+    Record<(typeof RATE_LIMIT_NAMES)[number], { limit: number; windowSeconds: number }>
+  > = {};
+  for (const entry of value
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean)) {
+    const match = /^([a-z_]+)=(\d+)\/(\d+)$/.exec(entry);
+    const name = match?.[1] as (typeof RATE_LIMIT_NAMES)[number] | undefined;
+    if (
+      !match ||
+      !name ||
+      !RATE_LIMIT_NAMES.includes(name) ||
+      Number(match[2]) < 1 ||
+      Number(match[3]) < 1
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `RATE_LIMITS entry "${entry}" must be <name>=<limit>/<seconds> with name one of ${RATE_LIMIT_NAMES.join(', ')}`,
+      });
+      continue;
+    }
+    out[name] = { limit: Number(match[2]), windowSeconds: Number(match[3]) };
+  }
+  return out;
 }
 
 function parseAlgorithms(value: string, ctx: z.RefinementCtx): readonly OidcAlgorithm[] {

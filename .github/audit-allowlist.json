@@ -1,0 +1,21 @@
+{
+  "$comment": "High or critical advisories accepted for a limited time (spec \u00a74.14 dependency scanning; scripts/audit-gate.mjs). Each entry names who reviews it and by when; an expired entry blocks CI again.",
+  "advisories": [
+    {
+      "id": "GHSA-mrhx-c7xc-m3w5",
+      "package": "zod",
+      "path": "apps__mobile>expo>@expo/cli>zod",
+      "reason": "Used by the Expo command-line tool on developer machines and in CI builds, not shipped in the app bundle or run by the API. Fixed by the Expo SDK upgrade that moves @expo/cli to zod >= 4.6.6.",
+      "owner": "Technical lead (DEC-017 names the person)",
+      "reviewBy": "2027-01-31"
+    },
+    {
+      "id": "GHSA-qr28-fpjm-wq7f",
+      "package": "decode-uri-component",
+      "path": "apps__mobile>expo-router>query-string>decode-uri-component",
+      "reason": "Shipped in the customer app through expo-router's query-string 7.1.3, which requires decode-uri-component ^0.2.2; the fix is in the 0.5 line, a breaking range for query-string. It decodes the app's own route parameters, and verified links are limited to SPORTSPARK_VERIFIED_LINK_HOSTS (DEC-061). Fixed by the expo-router upgrade.",
+      "owner": "Technical lead (DEC-017 names the person)",
+      "reviewBy": "2027-01-31"
+    }
+  ]
+}

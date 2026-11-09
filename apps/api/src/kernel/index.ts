@@ -21,6 +21,7 @@ export * from './authorization/facility-scope';
 export * from './http/request-context';
 export * from './http/correlation.middleware';
 export * from './http/raw-body';
+export * from './http/rate-limit';
 export * from './logging/json-logger';
 export * from './logging/log-context';
 export * from './http/domain-exception.filter';

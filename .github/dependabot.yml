@@ -1,0 +1,24 @@
+# Dependency update proposals (spec §4.14 dependency scanning). Updates arrive as pull requests that
+# run the full CI; nothing merges without review. Minor and patch updates are grouped per ecosystem.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Expo, React Native and React move together with the Expo SDK; upgrade them deliberately.
+      - dependency-name: expo*
+        update-types: [version-update:semver-major]
+      - dependency-name: react-native*
+        update-types: [version-update:semver-major]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

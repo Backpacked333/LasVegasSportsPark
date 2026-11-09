@@ -51,6 +51,7 @@ import { MetricsSnapshotService } from './metrics/metrics-snapshot.service';
 import { DomainExceptionFilter } from './http/domain-exception.filter';
 import { IdempotencySweeper } from './http/idempotency-sweeper';
 import { IdempotencyInterceptor } from './http/idempotency.interceptor';
+import { RateLimitGuard, rateLimiterProvider } from './http/rate-limit';
 import { Inbox } from './inbox/inbox';
 import { INTEGRATION_REGISTRY, IntegrationRegistry } from './integrations/integration-registry';
 import { PeriodicJobRegistry, PeriodicJobRunner } from './jobs/periodic-jobs';
@@ -231,8 +232,11 @@ export class KernelModule implements OnModuleInit {
       BackgroundWorkers,
       RecoveryChecks,
       RecoveryMode,
-      // Global guards run in this order: authentication, client compatibility (SPK-AT-027, after
+      rateLimiterProvider,
+      // Global guards run in this order: rate limits (§4.14, before authentication so a stranger
+      // cannot guess at speed), authentication, client compatibility (SPK-AT-027, after
       // authentication so an unauthenticated old client still gets 401), recovery (SPK-AT-028).
+      { provide: APP_GUARD, useClass: RateLimitGuard },
       { provide: APP_GUARD, useClass: AuthGuard },
       { provide: APP_GUARD, useClass: ClientCompatibilityGuard },
       { provide: APP_GUARD, useClass: RecoveryGuard },

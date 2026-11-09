@@ -87,4 +87,33 @@ describe('POST /v1/dev/tokens (local identity provider only, §5.2)', () => {
       expect(right.body).toMatchObject({ accountId });
     });
   });
+
+  describe('without a passcode (§4.14)', () => {
+    let t: TestApp;
+    beforeAll(async () => {
+      t = await createTestApp({ imports: [IdentityModule], principalResolver: 'module' });
+    });
+    afterAll(async () => {
+      await t.close();
+    });
+
+    it("§4.14: the route exists only on the developer's machine or private network, never for a host reached by name", async () => {
+      const people = await createOrganizationPeople(t);
+      const accountId = people.adult.accountId;
+      // supertest connects over loopback with Host 127.0.0.1:<port>.
+      expect((await t.http.post('/v1/dev/tokens').send({ accountId })).status).toBe(201);
+      // The Android emulator reaches the developer's machine as 10.0.2.2, over loopback.
+      expect(
+        (await t.http.post('/v1/dev/tokens').set('Host', '10.0.2.2:3000').send({ accountId }))
+          .status,
+      ).toBe(201);
+      // A host reached by a domain name (a staging host behind a proxy on the same machine).
+      const named = await t.http
+        .post('/v1/dev/tokens')
+        .set('Host', 'staging.example.org')
+        .send({ accountId });
+      expect(named.status).toBe(404);
+      expect(named.body.code).toBe('NOT_FOUND');
+    });
+  });
 });

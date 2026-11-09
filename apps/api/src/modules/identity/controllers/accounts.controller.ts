@@ -1,4 +1,5 @@
-import { Controller, HttpCode, Post } from '@nestjs/common';
+import { Controller, HttpCode, Post, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   CreateAccountBody,
   DevTokenBody,
@@ -7,7 +8,14 @@ import {
   type Account,
   type Principal,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, Public, ZodBody, ZodParams } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  Public,
+  RateLimited,
+  ZodBody,
+  ZodParams,
+} from '../../../kernel';
 import { CorrelationId } from '../identity.shared';
 import { AccountsService } from '../services/accounts.service';
 
@@ -30,6 +38,7 @@ export class AccountsController {
   @Post('accounts/:id/relink')
   @HttpCode(200)
   @Idempotent()
+  @RateLimited('account_recovery')
   relink(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
@@ -42,13 +51,19 @@ export class AccountsController {
   /**
    * Development-only: mints a bearer token for an existing account so the API can be exercised
    * manually. Public because it exists to obtain the first token; the service answers NOT_FOUND
-   * unless AUTH_MODE=local outside production.
+   * unless AUTH_MODE=local outside production, and off a developer's own machine unless
+   * DEV_TOKENS_PASSCODE is set (§4.14). Rate limited per client address.
    */
   @Public()
+  @RateLimited('dev_tokens')
   @Post('dev/tokens')
   mintDevToken(
     @ZodBody(DevTokenBody) body: z.infer<typeof DevTokenBody>,
+    @Req() request: Request,
   ): Promise<{ token: string; accountId: string; expiresAt: string }> {
-    return this.accounts.mintDevToken(body);
+    return this.accounts.mintDevToken(body, {
+      host: request.hostname,
+      remoteAddress: request.socket?.remoteAddress ?? null,
+    });
   }
 }

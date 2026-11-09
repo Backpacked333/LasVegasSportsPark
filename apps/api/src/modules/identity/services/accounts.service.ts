@@ -243,12 +243,15 @@ export class AccountsService {
    * provider is configured outside production; otherwise the route reports NOT_FOUND so the
    * endpoint is indistinguishable from absent (§5.2 security boundary).
    */
-  async mintDevToken(input: {
-    accountId: string;
-    sessionId?: string;
-    ttlSeconds?: number;
-    passcode?: string;
-  }): Promise<{ token: string; accountId: string; expiresAt: string }> {
+  async mintDevToken(
+    input: {
+      accountId: string;
+      sessionId?: string;
+      ttlSeconds?: number;
+      passcode?: string;
+    },
+    origin: { host?: string | null; remoteAddress?: string | null } = {},
+  ): Promise<{ token: string; accountId: string; expiresAt: string }> {
     if (
       this.config.AUTH_MODE !== 'local' ||
       this.config.NODE_ENV === 'production' ||
@@ -258,8 +261,16 @@ export class AccountsService {
     }
     // A protected staging host: the passcode is required and compared in constant time.
     const required = this.config.DEV_TOKENS_PASSCODE;
-    if (required !== undefined && !passcodeMatches(required, input.passcode)) {
-      throw errors.authenticationRequired('The staging passcode is missing or wrong.');
+    if (required !== undefined) {
+      if (!passcodeMatches(required, input.passcode)) {
+        throw errors.authenticationRequired('The staging passcode is missing or wrong.');
+      }
+    } else if (!isDeveloperNetworkRequest(origin)) {
+      // §4.14: without a passcode the route exists only on a developer's own machine or local
+      // network: a request over loopback addressed to localhost or an emulator's alias for it,
+      // or one from a private address to the machine's private IP (a phone on the same Wi-Fi).
+      // A host reached by a domain name (a staging or cloud host) needs DEV_TOKENS_PASSCODE.
+      throw errors.notFound('route');
     }
     const account = await this.db
       .selectFrom('accounts')
@@ -298,4 +309,39 @@ function passcodeMatches(required: string, given: string | undefined): boolean {
   const a = createHash('sha256').update(required).digest();
   const b = createHash('sha256').update(given).digest();
   return timingSafeEqual(a, b);
+}
+
+/** Emulator aliases for the developer's machine (Android emulator, Genymotion). */
+const EMULATOR_HOST_ALIASES = new Set(['10.0.2.2', '10.0.3.2']);
+
+/** See `mintDevToken`: the developer's machine or a device on the same private network. */
+function isDeveloperNetworkRequest(origin: {
+  host?: string | null;
+  remoteAddress?: string | null;
+}): boolean {
+  const host = origin.host ?? null;
+  if (isLoopback(origin.remoteAddress)) {
+    return isLoopback(host) || (!!host && EMULATOR_HOST_ALIASES.has(host));
+  }
+  return isPrivateIPv4(host) && isPrivateIPv4(origin.remoteAddress);
+}
+
+/** An RFC 1918 IPv4 literal (also IPv4-mapped), never a host name. */
+function isPrivateIPv4(value: string | null | undefined): boolean {
+  const match = /^(?:::ffff:)?(\d+)\.(\d+)\.\d+\.\d+$/i.exec(value ?? '');
+  if (!match) return false;
+  const [a, b] = [Number(match[1]), Number(match[2])];
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+/** A loopback host name or address (`localhost`, 127.0.0.0/8, ::1, IPv4-mapped loopback). */
+function isLoopback(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const host = value.replace(/^\[|\]$/g, '').toLowerCase();
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    /^127\.\d+\.\d+\.\d+$/.test(host) ||
+    /^::ffff:127\.\d+\.\d+\.\d+$/.test(host)
+  );
 }
