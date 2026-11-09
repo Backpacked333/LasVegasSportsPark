@@ -76,6 +76,19 @@ Never set in production: `AUTH_LOCAL_SECRET`, `DEV_TOKENS_PASSCODE`, `PGLITE_DAT
   `READY_QUEUE_LAG_SECONDS`, a periodic job with consecutive failures, and open exceptions in the
   finance and reliability categories. Owners per signal are **Pending decision** DEC-015.
 
+## 4a. Workload validation (§5.10)
+
+`apps/api/load/workload.manifest.json` holds the §5.10 envelope (25,000 people, 250 customer and
+20 staff sessions, 50 contenders for a final place) with arrival rates, workflow mix, duration,
+contention, infrastructure and dependency failures. `pnpm --filter @sportspark/api load` creates
+the scaled synthetic people through the API and runs the read mix against a running API, then
+writes a report with p50, p95 and p99 per workflow against the §5.9 targets, the commit and the
+environment (**Verified** harness: `apps/api/src/dev/load/load.spec.ts`; a one-percent rehearsal
+against `dev:all` on 2026-11-09 ran without errors). The final-place race is asserted by the
+concurrency journeys under PostgreSQL (SPK-AT-005, CI job `test-postgres`). Capacity numbers come
+only from a run against the production-shaped environment; the targets themselves are **Pending
+decision** DEC-035 to DEC-044.
+
 ## 5. Backups and recovery (§5.8)
 
 - Primary: the managed database's point-in-time recovery (DEC-021; RPO and RTO targets DEC-042,

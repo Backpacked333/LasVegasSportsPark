@@ -13,6 +13,7 @@
     "test": "vitest run",
     "openapi": "tsx scripts/emit-openapi.ts",
     "permission-matrix": "tsx scripts/emit-permission-matrix.ts",
+    "load": "tsx scripts/load.ts",
     "seed:dev": "NODE_OPTIONS=--max-old-space-size=4096 tsc -b && tsx scripts/seed-dev.ts"
   },
   "dependencies": {
