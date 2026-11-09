@@ -129,10 +129,52 @@ function compareMigrations(
 }
 
 /**
+ * Turns row level security on for every table of the current schema that does not have it (§4.14
+ * least privilege). No policy is created, so a table answers only its owner, which is the role the
+ * API, the worker and this runner connect as; any other role that reaches the database (a hosted
+ * data interface's public roles, a reporting login) reads and writes nothing until a policy says
+ * otherwise. The runner does this rather than each migration file, so a table added by a later
+ * migration cannot be left open by omission. The owner is not subject to the policies of its own
+ * tables, so the application's queries are unchanged.
+ */
+const ENABLE_ROW_LEVEL_SECURITY = `
+  do $$
+  declare target regclass;
+  begin
+    for target in
+      select c.oid::regclass
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = current_schema() and c.relkind in ('r', 'p') and not c.relrowsecurity
+    loop
+      execute format('alter table %s enable row level security', target);
+    end loop;
+  end
+  $$
+`;
+
+/**
+ * The tables of the current schema without row level security, by name (§4.14). Empty after
+ * `migrateToLatest`; a name here means a table was created outside the runner.
+ */
+export async function tablesWithoutRowLevelSecurity<DB>(db: Kysely<DB>): Promise<string[]> {
+  const result = await sql<{ name: string }>`
+    select c.relname as name
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = current_schema() and c.relkind in ('r', 'p') and not c.relrowsecurity
+    order by c.relname
+  `.execute(db);
+  return result.rows.map((row) => row.name);
+}
+
+/**
  * Applies pending migrations in order, each inside its own transaction, and refuses to run if an
  * already-applied migration's content changed (versioned migrations are immutable once applied).
  * The whole run holds `MIGRATION_LOCK_KEY` on one connection, so concurrent runners serialize.
- * `dryRun` reports what would be applied and applies nothing.
+ * Every table ends with row level security on (`ENABLE_ROW_LEVEL_SECURITY`): the tables a file
+ * creates inside that file's transaction, and any table left without it by an earlier build in
+ * one statement at the end. `dryRun` reports what would be applied and applies nothing.
  */
 export async function migrateToLatest<DB>(
   db: Kysely<DB>,
@@ -169,6 +211,7 @@ export async function migrateToLatest<DB>(
         log(`applying ${file.fileName}`);
         await conn.transaction().execute(async (trx) => {
           await sql.raw(file.sql).execute(trx);
+          await sql.raw(ENABLE_ROW_LEVEL_SECURITY).execute(trx);
           await sql`
             insert into schema_migrations (version, name, checksum)
             values (${file.version}, ${file.name}, ${file.checksum})
@@ -176,6 +219,7 @@ export async function migrateToLatest<DB>(
         });
         result.applied.push(file);
       }
+      if (!options.dryRun) await sql.raw(ENABLE_ROW_LEVEL_SECURITY).execute(conn);
       return result;
     } finally {
       await sql`select pg_advisory_unlock(${MIGRATION_LOCK_KEY}, hashtext(current_schema()))`.execute(

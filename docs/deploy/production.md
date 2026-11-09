@@ -109,8 +109,14 @@ decision** DEC-035 to DEC-044.
 - Rate limits on token minting, claim and invitation acceptance and account relink.
 - CI: dependency advisories (`scripts/audit-gate.mjs`), Dependabot, secret scanning (gitleaks).
   Turn on GitHub secret scanning with push protection in the repository settings.
-- Database advisors (Supabase, 2026-11-09): row level security is on for every table with no
-  policies, deliberately (only the API's role connects; the Data API roles have no grants).
+- Row level security is on for every table with no policy, so only the tables' owner (the role the
+  API, the worker and the migration runner connect as) reads or writes; any other role is refused
+  by the database. **Verified**: the migration runner turns it on for the tables each file creates
+  and for any table an earlier build left without it, and `pnpm db:migrate --status` exits 1 while
+  a table lacks it (`packages/db/src/migrate.ts`, `packages/db/src/migrate.spec.ts`). The
+  application role must therefore own the tables; a separate least-privilege application role
+  needs explicit policies first (**Proposed**, not built).
+- Database advisors (Supabase, 2026-11-09): the Data API roles have no grants.
   Accepted warnings: 120 trigger functions without a fixed `search_path`, and `btree_gist` in the
   `public` schema; both need a role that can create objects in the schema to exploit, and only the
   API's own role connects. 428 foreign keys without a covering index are reported for review

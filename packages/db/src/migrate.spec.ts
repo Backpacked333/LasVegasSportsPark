@@ -4,7 +4,12 @@ import path from 'node:path';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPgDatabase, createPgliteDatabase } from './client';
-import { loadMigrationFiles, migrateToLatest, migrationStatus } from './migrate';
+import {
+  loadMigrationFiles,
+  migrateToLatest,
+  migrationStatus,
+  tablesWithoutRowLevelSecurity,
+} from './migrate';
 
 describe('migration runner', () => {
   let ctx: Awaited<ReturnType<typeof createPgliteDatabase>>;
@@ -40,6 +45,64 @@ describe('migration runner', () => {
       'schema_migrations',
     ]) {
       expect(names).toContain(expected);
+    }
+  });
+
+  it('§4.14 least privilege: every table of the migrated schema has row level security and no policy', async () => {
+    await migrateToLatest(ctx.db);
+    expect(await tablesWithoutRowLevelSecurity(ctx.db)).toEqual([]);
+    const policies = await sql<{ count: number }>`
+      select count(*)::int as count from pg_policies where schemaname = current_schema()
+    `.execute(ctx.db);
+    expect(policies.rows[0]?.count).toBe(0);
+  });
+
+  it('§4.14 least privilege: the database refuses a role that does not own the tables, even when it holds grants', async () => {
+    const fresh = await createPgliteDatabase();
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'spk-mig-'));
+    await writeFile(
+      path.join(dir, '0001_a.sql'),
+      "create table rls_probe (id int primary key, note text); insert into rls_probe values (1, 'kept');",
+    );
+    try {
+      await migrateToLatest(fresh.db, { dir });
+      await sql.raw('create role rls_outsider').execute(fresh.db);
+      await sql.raw('grant select, insert on rls_probe to rls_outsider').execute(fresh.db);
+      const seen = await fresh.db.connection().execute(async (conn) => {
+        await sql.raw('set role rls_outsider').execute(conn);
+        try {
+          const rows = await sql<{ id: number }>`select id from rls_probe`.execute(conn);
+          await expect(
+            sql`insert into rls_probe (id, note) values (2, 'refused')`.execute(conn),
+          ).rejects.toThrow(/row-level security/);
+          return rows.rows.length;
+        } finally {
+          await sql.raw('reset role').execute(conn);
+        }
+      });
+      expect(seen).toBe(0);
+      const owner = await sql<{ id: number }>`select id from rls_probe`.execute(fresh.db);
+      expect(owner.rows).toEqual([{ id: 1 }]);
+    } finally {
+      await fresh.close();
+    }
+  });
+
+  it('§4.14 least privilege: a table created outside the runner is reported, and the next run closes it', async () => {
+    const fresh = await createPgliteDatabase();
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'spk-mig-'));
+    await writeFile(path.join(dir, '0001_a.sql'), 'create table rls_a (id int);');
+    try {
+      await migrateToLatest(fresh.db, { dir });
+      await sql.raw('create table rls_by_hand (id int)').execute(fresh.db);
+      expect(await tablesWithoutRowLevelSecurity(fresh.db)).toEqual(['rls_by_hand']);
+      const dryRun = await migrateToLatest(fresh.db, { dir, dryRun: true });
+      expect(dryRun.applied).toEqual([]);
+      expect(await tablesWithoutRowLevelSecurity(fresh.db)).toEqual(['rls_by_hand']);
+      await migrateToLatest(fresh.db, { dir });
+      expect(await tablesWithoutRowLevelSecurity(fresh.db)).toEqual([]);
+    } finally {
+      await fresh.close();
     }
   });
 

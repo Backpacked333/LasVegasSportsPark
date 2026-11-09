@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { createPgDatabase, type PgDatabaseOptions } from '../client';
-import { migrateToLatest, migrationStatus } from '../migrate';
+import { migrateToLatest, migrationStatus, tablesWithoutRowLevelSecurity } from '../migrate';
 
 /**
  * Applies the repository's migrations to DATABASE_URL (§4.1 versioned migrations).
  *
  *   pnpm db:migrate              apply pending migrations (holds the migration lock)
- *   pnpm db:migrate --status     report applied, pending, changed and missing; exit 1 unless current
+ *   pnpm db:migrate --status     report applied, pending, changed and missing, and the tables
+ *                                without row level security (§4.14); exit 1 unless the schema is
+ *                                current and every table has it
  *   pnpm db:migrate --dry-run    list what would be applied; apply nothing
  *
  * DATABASE_SSL (disable | require | verify-full) and DATABASE_SSL_CA_PATH configure transport
@@ -34,6 +36,7 @@ async function main(): Promise<void> {
   try {
     if (args.has('--status')) {
       const status = await migrationStatus(db);
+      const withoutRowLevelSecurity = await tablesWithoutRowLevelSecurity(db);
       console.warn(
         JSON.stringify(
           {
@@ -42,12 +45,13 @@ async function main(): Promise<void> {
             mismatched: status.mismatched,
             missingOnDisk: status.missingOnDisk,
             current: status.current,
+            withoutRowLevelSecurity,
           },
           null,
           2,
         ),
       );
-      process.exitCode = status.current ? 0 : 1;
+      process.exitCode = status.current && withoutRowLevelSecurity.length === 0 ? 0 : 1;
       return;
     }
     const dryRun = args.has('--dry-run');
