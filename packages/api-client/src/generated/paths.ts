@@ -58115,7 +58115,7 @@ export type components = {
             timezone: string;
         };
         /** @enum {string} */
-        EnrollmentPendingReason: "approval" | "payment" | "forms" | "placement";
+        EnrollmentPendingReason: "approval" | "payment" | "payment_processing" | "forms" | "placement";
         /** @enum {string} */
         EnrollmentStatus: "pending" | "confirmed" | "canceled" | "transferred" | "completed";
         EntitlementDefinition: {

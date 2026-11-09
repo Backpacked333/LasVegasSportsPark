@@ -190,6 +190,7 @@ export function checkoutInFlight(checkout: Checkout): boolean {
 export const PENDING_REASON_LABELS: Record<Schema<'EnrollmentPendingReason'>, string> = {
   approval: 'Registration pending: awaiting approval',
   payment: 'Registration pending: payment not finished',
+  payment_processing: 'Registration pending: payment processing',
   forms: 'Registration pending: a required form is not signed',
   placement: 'Registration pending: awaiting placement',
 };

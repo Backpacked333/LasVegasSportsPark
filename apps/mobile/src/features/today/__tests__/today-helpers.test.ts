@@ -216,7 +216,7 @@ describe('SPK-UX-004 status vocabulary (journeys.md section 3)', () => {
 
   it('SPK-PAY-007: a payment reason never reads "outstanding" while the checkout is unread, being read or unreadable', () => {
     const payment = { status: 'pending' as const, pendingReason: 'payment' as const };
-    // The API's `payment` also covers a basket already checking out (a payment running).
+    // A held basket whose checkout started since the enrollment was read.
     expect(enrollmentStatus(payment, { checkout: 'processing' }).label).toBe('Payment processing');
     expect(enrollmentStatus(payment, { checkout: 'checking' })).toEqual({
       tone: 'pending',
@@ -228,6 +228,10 @@ describe('SPK-UX-004 status vocabulary (journeys.md section 3)', () => {
     });
     // A caller that did not read the basket says nothing about payment.
     expect(enrollmentStatus(payment).label).toBe('Registration pending');
+    // ENR-16: the API names a running checkout itself, whatever this caller read.
+    const processing = { status: 'pending' as const, pendingReason: 'payment_processing' as const };
+    expect(enrollmentStatus(processing)).toEqual({ tone: 'pending', label: 'Payment processing' });
+    expect(enrollmentStatus(processing, { checkout: null }).label).toBe('Payment processing');
     // Other reasons do not depend on the checkout read.
     expect(
       enrollmentStatus({ status: 'pending', pendingReason: 'forms' }, { checkout: 'checking' })

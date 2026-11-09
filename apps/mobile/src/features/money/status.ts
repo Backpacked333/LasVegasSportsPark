@@ -92,7 +92,11 @@ export function enrollmentStatus(enrollment: Enrollment, context: EnrollmentCont
       if (context.recoveryRequired) {
         return { tone: 'warning', label: 'Payment received. We are completing your registration.' };
       }
-      if (context.recoveryUnknown && enrollment.pendingReason === 'payment') {
+      if (
+        context.recoveryUnknown &&
+        (enrollment.pendingReason === 'payment' ||
+          enrollment.pendingReason === 'payment_processing')
+      ) {
         return { tone: 'pending', label: PAYMENT_STATUS_UNKNOWN };
       }
       return { tone: 'pending', label: pendingLabel(enrollment.pendingReason) };

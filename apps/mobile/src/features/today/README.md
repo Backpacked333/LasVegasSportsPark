@@ -156,9 +156,9 @@ the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and th
   re-reads the list on STALE_REVISION).
 - `POST /v1/fixtures/{id}/availability` accepts a child's `personId` with `register` while DEC-090
   is pending; the app does not offer it.
-- `Enrollment.pendingReason: payment` covers both a held basket and one already checking out (a
-  payment running); the app reads the basket and order to tell them apart and never says "payment
-  outstanding" before it has.
+- `Enrollment.pendingReason` names a running checkout `payment_processing` apart from `payment`
+  (a held basket, ENR-16, 2026-11-09); for `payment` the app still reads the basket and order and
+  never says "payment outstanding" before it has, since a checkout may have started meanwhile.
 - An `availability_request` notice does not say whether it has been answered; Home treats it as
   answered once everyone it is for has an answer in the fixture's `responses`.
 - `activity_reminder` notices stay in the inbox only: the activity they remind of is already the

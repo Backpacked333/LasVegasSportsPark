@@ -26056,6 +26056,7 @@
         "enum": [
           "approval",
           "payment",
+          "payment_processing",
           "forms",
           "placement"
         ]

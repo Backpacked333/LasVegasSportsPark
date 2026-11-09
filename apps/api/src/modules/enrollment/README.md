@@ -518,6 +518,13 @@ PostgreSQL) unless marked **proposed** or **pending**.
   `makeup`, `session`) and null for a session of an enrollment, so the customer app labels a
   pickup session without reading its offering (SCR-C-19, 2026-11-09).
 
+### Payment in flight (ENR-16)
+
+- **Verified** (`registration-commands.spec.ts`, "SPK-UX-001: … reads payment_processing while it
+  runs (ENR-16)"): `Enrollment.pendingReason` is `payment_processing` while the enrollment's basket
+  is checking out, and `payment` only for a held basket not yet paid, so no client invites a second
+  payment while one is running (§4.11, SPK-PAY-007).
+
 ### Package G behind capability switches (ENR-10 to ENR-14)
 
 Each capability is off by default per organization and changed only by an administrator with
