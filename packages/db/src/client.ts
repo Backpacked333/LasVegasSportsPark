@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite, types as pgliteTypes } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
@@ -94,36 +94,90 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/** The directory whose exclusive creation serializes stale-lock takeovers (`mkdir` is atomic). */
+export const PGLITE_TAKEOVER_DIR = '.sportspark-pglite.takeover';
+/** A takeover directory older than this was left by a process that stopped mid-takeover. */
+const TAKEOVER_STALE_MS = 10_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function readHolder(file: string): number | null {
+  try {
+    const holder = Number(readFileSync(file, 'utf8').trim());
+    return Number.isInteger(holder) && holder > 0 ? holder : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/** Creates the lock file only if none exists (`wx`); false when another one is there. */
+function createLock(file: string): boolean {
+  try {
+    const fd = openSync(file, 'wx');
+    writeSync(fd, String(process.pid));
+    closeSync(fd);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
+  }
+}
+
 /**
  * Claims a PGlite data directory for this process. PGlite takes no lock of its own: a second
  * process opens a directory another holds without an error, and the writes it commits are lost
- * when both close (README, verified with @electric-sql/pglite 0.5.11). A lock left by a process
- * that no longer runs is taken over. Returns the release function.
+ * when both close (README, verified with @electric-sql/pglite 0.5.11).
+ *
+ * A lock left by a process that no longer runs is taken over, but only by one process at a time:
+ * the takeover happens while holding the takeover directory (created exclusively), and the lock
+ * is re-read under it, so two processes that both saw the same stale lock cannot each remove the
+ * other's new one. A takeover directory older than TAKEOVER_STALE_MS is cleared. The release
+ * removes the lock only while it still names this process. Returns the release function.
  */
-function lockPgliteDirectory(dataDir: string): () => void {
+export function lockPgliteDirectory(
+  dataDir: string,
+  options: { attempts?: number; waitMs?: number } = {},
+): () => void {
   mkdirSync(dataDir, { recursive: true });
   const file = path.join(dataDir, PGLITE_LOCK_FILE);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const takeover = path.join(dataDir, PGLITE_TAKEOVER_DIR);
+  const attempts = options.attempts ?? 40;
+  const waitMs = options.waitMs ?? 50;
+  const release = () => {
+    if (readHolder(file) === process.pid) rmSync(file, { force: true });
+  };
+  const refuse = (holder: number): never => {
+    throw new Error(
+      `PGlite data directory ${dataDir} is open in process ${holder}; stop it first, or use DATABASE_URL to share one database between processes`,
+    );
+  };
+  const live = (holder: number | null) =>
+    holder !== null && holder !== process.pid && processAlive(holder);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (createLock(file)) return release;
+    const holder = readHolder(file);
+    if (live(holder)) refuse(holder as number);
+    // The lock is stale (or vanished meanwhile): take it over while holding the takeover dir.
     try {
-      const fd = openSync(file, 'wx');
-      writeSync(fd, String(process.pid));
-      closeSync(fd);
-      return () => rmSync(file, { force: true });
+      mkdirSync(takeover);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const holder = Number(readFileSync(file, 'utf8').trim());
-      if (
-        Number.isInteger(holder) &&
-        holder > 0 &&
-        holder !== process.pid &&
-        processAlive(holder)
-      ) {
-        throw new Error(
-          `PGlite data directory ${dataDir} is open in process ${holder}; stop it first, or use DATABASE_URL to share one database between processes`,
-          { cause: error },
-        );
-      }
+      const age = Date.now() - statSync(takeover).mtimeMs;
+      if (age > TAKEOVER_STALE_MS) rmSync(takeover, { recursive: true, force: true });
+      else sleepSync(waitMs);
+      continue;
+    }
+    try {
+      // Re-read under the takeover: another process may have taken it over just before.
+      const current = readHolder(file);
+      if (live(current)) refuse(current as number);
       rmSync(file, { force: true });
+      if (createLock(file)) return release;
+    } finally {
+      rmSync(takeover, { recursive: true, force: true });
     }
   }
   throw new Error(`could not lock PGlite data directory ${dataDir}`);
