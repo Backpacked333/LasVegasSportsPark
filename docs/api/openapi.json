@@ -45548,6 +45548,13 @@
           "status": {
             "$ref": "#/components/schemas/CaseStatus"
           },
+          "subjectPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -45569,6 +45576,7 @@
           "category",
           "title",
           "status",
+          "subjectPersonId",
           "createdAt",
           "updatedAt",
           "resolvedAt"

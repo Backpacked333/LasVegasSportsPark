@@ -604,12 +604,15 @@ describe('SCR-C-38 SupportScreen: contact and changes', () => {
 });
 
 describe('SCR-C-38 SupportCaseScreen (GET /v1/me/cases/{id})', () => {
-  it("shows the request's status in words with when it was sent, updated and resolved", async () => {
+  it("shows the request's status in words with when it was sent, updated and resolved, and who it is for (SUP-07)", async () => {
     const app = createTestApp({
       routes: {
+        'GET /me': ok(me(GUARDIAN_OF_CHILD)),
+        'GET /person-names': names({ [CHILD]: 'Sam' }),
         'GET /me/cases/{id}': ok(
           customerCase({
             status: 'resolved',
+            subjectPersonId: CHILD,
             updatedAt: '2026-10-24T11:30:00.000Z',
             resolvedAt: '2026-10-24T11:30:00.000Z',
           }),
@@ -624,9 +627,35 @@ describe('SCR-C-38 SupportCaseScreen (GET /v1/me/cases/{id})', () => {
     expect(screen.getByRole('header', { name: 'Practice time for Sam' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Resolved: Sat, Oct 24, 4:30 AM PDT')).toBeOnTheScreen();
     expect(screen.getByLabelText('About: A schedule or activity')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('For: Sam')).toBeOnTheScreen();
     expect(
       screen.getByText(/Notes and internal details stay with the facility team/),
     ).toBeOnTheScreen();
+  });
+
+  it('SUP-07: a request about the person themselves reads "For: You"; none is shown without a subject', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me(GUARDIAN_OF_CHILD)),
+        'GET /me/cases/{id}/replies': ok([]),
+        'GET /me/cases/{id}': ok(customerCase({ subjectPersonId: SELF })),
+      },
+    });
+    render(<SupportCaseScreen caseId={CASE_ID} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('For: You')).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.route === '/person-names')).toBe(false);
+
+    screen.unmount();
+    const none = createTestApp({
+      routes: {
+        'GET /me': ok(me(GUARDIAN_OF_CHILD)),
+        'GET /me/cases/{id}/replies': ok([]),
+        'GET /me/cases/{id}': ok(customerCase({ subjectPersonId: null })),
+      },
+    });
+    render(<SupportCaseScreen caseId={CASE_ID} />, { wrapper: none.wrapper });
+    expect(await screen.findByTestId('support-case-status')).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^For: /)).toBeNull();
   });
 
   it('"Waiting for you" says what it means', async () => {

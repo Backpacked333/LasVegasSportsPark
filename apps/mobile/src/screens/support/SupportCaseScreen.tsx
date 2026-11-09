@@ -1,7 +1,8 @@
 /**
  * SCR-C-38 one support request (SPK-SUPPORT-002, SUP-01): `GET /v1/me/cases/{id}` shows the
- * request's category, title, status in words, when it was sent, last updated and resolved. The
- * API shows a customer nothing else (no notes, owner, queue or history, §4.14). Someone else's
+ * request's category, title, who it is about ("For", SUP-07: "You" or a given name from
+ * `GET /v1/person-names`), status in words, when it was sent, last updated and resolved. The API
+ * shows a customer nothing else (no notes, owner, queue or history, §4.14). Someone else's
  * request, or an id that names nothing, is NOT_FOUND and shown as "not available" with no hint
  * that it exists (§4.10). The record re-reads on return to the app, so a status staff changed
  * meanwhile shows with its age (stale version, §4.15).
@@ -19,7 +20,7 @@ import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { Body, Caption, Field, Section, TextField } from '../../features/money/ui';
-import { useSignedIn } from '../../features/today/queries';
+import { nameOf, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { displayZone, formatWhen } from '../../features/today/time';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
@@ -184,6 +185,9 @@ function CaseContent({ caseId }: { caseId: string }) {
     enabled: useSignedIn(),
     refetchOnWindowFocus: 'always',
   });
+  const me = useMe();
+  const subject = read.data?.subjectPersonId ?? null;
+  const names = usePersonNames(subject ? [subject] : [], me.data);
   return (
     <QueryBoundary query={read} label="your request" empty={{ title: '', description: '' }}>
       {(c) => (
@@ -192,6 +196,9 @@ function CaseContent({ caseId }: { caseId: string }) {
             <StatusBadge {...caseStatus(c.status)} testID="support-case-status" />
             <Body>{caseStatusMeaning(c.status)}</Body>
             <Field label="About" value={CATEGORY_LABELS[c.category]} />
+            {c.subjectPersonId ? (
+              <Field label="For" value={nameOf(names, c.subjectPersonId)} />
+            ) : null}
             <Field label="Sent" value={formatWhen(c.createdAt, zone.zone)} />
             <Field label="Last updated" value={formatWhen(c.updatedAt, zone.zone)} />
             {c.resolvedAt ? (

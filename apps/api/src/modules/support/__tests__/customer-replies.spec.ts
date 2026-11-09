@@ -70,7 +70,16 @@ describe('customer replies on their own support requests (SUP-06)', () => {
     expect(res.body).toMatchObject({ id: caseId, status: 'open' });
     // The customer view stays status only.
     expect(Object.keys(res.body).sort()).toEqual(
-      ['category', 'createdAt', 'id', 'resolvedAt', 'status', 'title', 'updatedAt'].sort(),
+      [
+        'category',
+        'createdAt',
+        'id',
+        'resolvedAt',
+        'status',
+        'subjectPersonId',
+        'title',
+        'updatedAt',
+      ].sort(),
     );
     // §4.9: the same key replays the same reply; no second history row.
     const replay = await reply(customer, caseId, 'The second charge was on 3 January.', idem);

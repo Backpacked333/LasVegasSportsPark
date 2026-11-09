@@ -57379,6 +57379,8 @@ export type components = {
             /** Format: date-time */
             resolvedAt: string | null;
             status: components["schemas"]["CaseStatus"];
+            /** Format: uuid */
+            subjectPersonId: string | null;
             title: string;
             /** Format: date-time */
             updatedAt: string;

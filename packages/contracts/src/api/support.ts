@@ -307,6 +307,11 @@ export const CustomerCaseSchema = z
     category: CaseCategorySchema,
     title: z.string(),
     status: CaseStatusSchema,
+    /**
+     * SUP-07 (SCR-C-38): who the request is about, as the customer chose when opening it (the
+     * subject never changes afterwards). Names come from `GET /person-names` under its own rules.
+     */
+    subjectPersonId: z.uuid().nullable(),
     createdAt: Instant,
     updatedAt: Instant,
     resolvedAt: Instant.nullable(),

@@ -1399,6 +1399,7 @@ export function toCustomerCase(row: CaseRow): CustomerCase {
     category: row.category,
     title: row.title,
     status: row.status,
+    subjectPersonId: row.subject_person_id,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     resolvedAt: isoOrNull(row.resolved_at),

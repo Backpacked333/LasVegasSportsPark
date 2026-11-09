@@ -777,6 +777,7 @@ export function customerCase(
     category: 'team',
     title: 'Field 2 lights',
     status: 'open',
+    subjectPersonId: null,
     createdAt: '2026-10-24T12:00:00.000Z',
     updatedAt: '2026-10-24T12:00:00.000Z',
     resolvedAt: null,
