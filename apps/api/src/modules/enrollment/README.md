@@ -540,6 +540,18 @@ PostgreSQL) unless marked **proposed** or **pending**.
   `GET /me/memberships` lists. Anyone else, a non-membership enrollment and an unknown id are
   NOT_FOUND. The staff member page shows the term and usage (SCR-S-53).
 
+### Youth progression lists (ENR-19)
+
+- **Verified** (`youth-progression.spec.ts`, "ENR-19: staff list a program's templates and a
+  participant's recommendations; others learn nothing"): `GET /programs/{id}/assessment-templates`
+  (every version, `status` filter; program managers and coaches, `enrollment.read_assessments`)
+  and `GET /participants/{personId}/progression-recommendations` (newest first, `offeringId`
+  filter) by the same access as the participant's assessments, now one shared rule
+  (`participantAccess`): a program manager sees those from offerings at their facilities, a coach
+  those from offerings they coach (others' shared or withdrawn ones and their own drafts); anyone
+  else is NOT_FOUND. Reads are never gated by `youth_progression`. The staff youth groups screen
+  lists a chosen child's recommendations (SCR-S-19).
+
 ### Package G behind capability switches (ENR-10 to ENR-14)
 
 Each capability is off by default per organization and changed only by an administrator with

@@ -942,4 +942,48 @@ describe('youth progression (ENR-14, SPK-YOUTH-005, SPK-YOUTH-006)', () => {
     });
     expect(customer.status).toBe(403);
   });
+
+  it('ENR-19: staff list a program’s templates and a participant’s recommendations; others learn nothing', async () => {
+    // Templates: every version of the program's, for program managers and coaches.
+    const templates = await t.http
+      .get(`/v1/programs/${programId}/assessment-templates`)
+      .set(coach.header);
+    expect(templates.status, JSON.stringify(templates.body)).toBe(200);
+    expect(templates.body.map((x: { id: string }) => x.id)).toContain(templateId);
+    expect(templates.body.every((x: { programId: string }) => x.programId === programId)).toBe(
+      true,
+    );
+    const approvedOnly = await t.http
+      .get(`/v1/programs/${programId}/assessment-templates?status=approved`)
+      .set(author.header);
+    expect(approvedOnly.body.every((x: { status: string }) => x.status === 'approved')).toBe(true);
+    expect(
+      (await t.http.get(`/v1/programs/${programId}/assessment-templates`).set(guardian.header))
+        .status,
+    ).toBe(403);
+
+    // Recommendations: a coach's draft is theirs; once shared, a program manager sees it too.
+    const next = await offering(t, { kind: 'term', programId, basePriceMinor: 0 });
+    const draft = await post(t, '/v1/progression-recommendations', coach.header, {
+      participantPersonId: kid,
+      fromOfferingId: setup.offeringId,
+      recommendedOfferingId: next.offeringId,
+      suitability: 'Listed for ENR-19.',
+    });
+    expect(draft.status, JSON.stringify(draft.body)).toBe(201);
+    const list = (actor: Actor, query = '') =>
+      t.http.get(`/v1/participants/${kid}/progression-recommendations${query}`).set(actor.header);
+    const asCoach = await list(coach);
+    expect(asCoach.status, JSON.stringify(asCoach.body)).toBe(200);
+    expect(asCoach.body.items.map((r: { id: string }) => r.id)).toContain(draft.body.id);
+    const asManager = await list(reviewer);
+    expect(asManager.status).toBe(200);
+    expect(asManager.body.items.map((r: { id: string }) => r.id)).toContain(draft.body.id);
+    const byOffering = await list(reviewer, `?offeringId=${next.offeringId}`);
+    expect(byOffering.body.items).toEqual([]);
+    // Another coach and the guardian learn nothing (§4.10).
+    const otherCoach = await staff(t, ['coach']);
+    expect((await list(otherCoach)).status).toBe(404);
+    expect((await list(guardian)).status).toBe(404);
+  });
 });

@@ -9,7 +9,9 @@ import {
   type CreateProgressionRecommendationInput,
   type DomainEvent,
   type Page,
+  type ListAssessmentTemplatesQuery,
   type ParticipantAssessmentsQuery,
+  type ParticipantRecommendationsQuery,
   type Principal,
   type ProgressionRecommendation,
   type ReviewAssessmentInput,
@@ -1156,55 +1158,14 @@ export class YouthProgressionService {
     query: ParticipantAssessmentsQuery,
   ): Promise<Page<Assessment>> {
     const organizationId = organizationOf(principal);
-    // A staff view: program managers and coaches only; everyone else learns nothing (§4.10).
-    if (
-      principal.kind !== 'staff' ||
-      !EnrollmentActions.readAssessments.staffRoles.some((role) =>
-        principal.staffRoles.includes(role),
-      )
-    ) {
-      throw errors.protectedNotFound('participant');
-    }
-    // The offerings the participant takes or took part in; assessments exist only for those
-    // (authoring requires a confirmed or completed enrollment), so no assessment row is consulted.
-    let participated = this.db
-      .selectFrom('enrollments')
-      .select('offering_id')
-      .distinct()
-      .where('organization_id', '=', organizationId)
-      .where('participant_person_id', '=', personId)
-      .where('confirmed_at', 'is not', null);
-    if (query.offeringId) participated = participated.where('offering_id', '=', query.offeringId);
-    const offerings = (await participated.orderBy('offering_id').execute()).map(
-      (r) => r.offering_id,
+    const access = await this.participantAccess(
+      principal,
+      organizationId,
+      personId,
+      query.offeringId,
     );
-    const managed: string[] = [];
-    const coached: string[] = [];
-    for (const offeringId of offerings) {
-      const facilityId = await this.scope.facilityOf(organizationId, offeringId);
-      if (await this.isProgramManagerAt(principal, organizationId, facilityId)) {
-        managed.push(offeringId);
-      } else if (
-        principal.personId &&
-        (await this.coverage.isAcceptedOnOffering(
-          organizationId,
-          offeringId,
-          principal.personId,
-          'coach',
-        ))
-      ) {
-        coached.push(offeringId);
-      }
-    }
-    if (managed.length === 0 && coached.length === 0) {
-      // §4.10: a program manager gets the same empty page whether the person has no assessments,
-      // has them only at another facility, or does not exist; a coach with no offering of this
-      // participant gets NOT_FOUND in every one of those cases.
-      if (principal.staffRoles.includes('program_manager')) {
-        return { items: [], nextCursor: null };
-      }
-      throw errors.protectedNotFound('participant');
-    }
+    if (access === 'empty') return { items: [], nextCursor: null };
+    const { managed, coached } = access;
     const cursor = decodeCreatedCursor(query.cursor);
     let q = this.db
       .selectFrom('assessments')
@@ -1234,6 +1195,151 @@ export class YouthProgressionService {
     if (cursor) q = q.where(beforeCursor('assessments', cursor));
     const page = keysetPage(await q.execute(), query.limit);
     return { items: page.rows.map((r) => this.toAssessment(r)), nextCursor: page.nextCursor };
+  }
+
+  /**
+   * GET /v1/participants/{personId}/progression-recommendations (ENR-19, SPK-YOUTH-006, SCR-S-19,
+   * SCR-W-07): the participant's recommendations, newest first, by the same access as their
+   * assessments: a program manager sees those from offerings at their facilities; a coach those
+   * from offerings they coach, others' shared or withdrawn ones and their own drafts. Anyone else
+   * gets NOT_FOUND (§4.10).
+   */
+  async participantRecommendations(
+    principal: Principal,
+    personId: string,
+    query: ParticipantRecommendationsQuery,
+  ): Promise<Page<ProgressionRecommendation>> {
+    const organizationId = organizationOf(principal);
+    const access = await this.participantAccess(
+      principal,
+      organizationId,
+      personId,
+      query.offeringId,
+    );
+    if (access === 'empty') return { items: [], nextCursor: null };
+    const { managed, coached } = access;
+    const cursor = decodeCreatedCursor(query.cursor);
+    let q = this.db
+      .selectFrom('progression_recommendations')
+      .selectAll()
+      .select(cursorAt('progression_recommendations').as('cursor_at'))
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', personId)
+      .where((eb) => {
+        const branches = [];
+        if (managed.length > 0) branches.push(eb('from_offering_id', 'in', managed));
+        if (coached.length > 0) {
+          branches.push(
+            eb.and([
+              eb('from_offering_id', 'in', coached),
+              eb.or([
+                eb('author_person_id', '=', principal.personId as string),
+                eb('status', 'in', ['shared', 'withdrawn']),
+              ]),
+            ]),
+          );
+        }
+        return eb.or(branches);
+      })
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(query.limit + 1);
+    if (cursor) q = q.where(beforeCursor('progression_recommendations', cursor));
+    const page = keysetPage(await q.execute(), query.limit);
+    return {
+      items: page.rows.map((r) => this.toRecommendation(r)),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  /**
+   * GET /v1/programs/{id}/assessment-templates (ENR-19, SPK-YOUTH-005, SCR-S-19, SCR-W-07): every
+   * version of a program's templates, newest version first, for program managers and coaches
+   * (enrollment.read_assessments). Templates are configuration: no participant data. Reads are
+   * never gated by the youth_progression switch. An unknown program reads as an empty list.
+   */
+  async programTemplates(
+    principal: Principal,
+    programId: string,
+    query: ListAssessmentTemplatesQuery,
+  ): Promise<AssessmentTemplate[]> {
+    const organizationId = organizationOf(principal);
+    await this.authorization.require(principal, EnrollmentActions.readAssessments, {
+      type: 'assessment_template',
+      organizationId,
+    });
+    let q = this.db
+      .selectFrom('assessment_templates')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('program_id', '=', programId)
+      .orderBy('name')
+      .orderBy('version', 'desc')
+      .orderBy('id');
+    if (query.status) q = q.where('status', '=', query.status);
+    return (await q.execute()).map((r) => this.toTemplate(r));
+  }
+
+  /**
+   * Which of the participant's offerings the caller may read youth records of (shared by the
+   * assessment and recommendation lists): 'empty' for a program manager with none (the same
+   * answer whether the person has records, has them elsewhere or does not exist); NOT_FOUND for a
+   * coach with none, and for anyone who is neither (§4.10).
+   */
+  private async participantAccess(
+    principal: Principal,
+    organizationId: string,
+    personId: string,
+    offeringId: string | undefined,
+  ): Promise<{ managed: string[]; coached: string[] } | 'empty'> {
+    // A staff view: program managers and coaches only; everyone else learns nothing (§4.10).
+    if (
+      principal.kind !== 'staff' ||
+      !EnrollmentActions.readAssessments.staffRoles.some((role) =>
+        principal.staffRoles.includes(role),
+      )
+    ) {
+      throw errors.protectedNotFound('participant');
+    }
+    // The offerings the participant takes or took part in; assessments exist only for those
+    // (authoring requires a confirmed or completed enrollment), so no assessment row is consulted.
+    let participated = this.db
+      .selectFrom('enrollments')
+      .select('offering_id')
+      .distinct()
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', '=', personId)
+      .where('confirmed_at', 'is not', null);
+    if (offeringId) participated = participated.where('offering_id', '=', offeringId);
+    const offerings = (await participated.orderBy('offering_id').execute()).map(
+      (r) => r.offering_id,
+    );
+    const managed: string[] = [];
+    const coached: string[] = [];
+    for (const offeringId of offerings) {
+      const facilityId = await this.scope.facilityOf(organizationId, offeringId);
+      if (await this.isProgramManagerAt(principal, organizationId, facilityId)) {
+        managed.push(offeringId);
+      } else if (
+        principal.personId &&
+        (await this.coverage.isAcceptedOnOffering(
+          organizationId,
+          offeringId,
+          principal.personId,
+          'coach',
+        ))
+      ) {
+        coached.push(offeringId);
+      }
+    }
+    if (managed.length === 0 && coached.length === 0) {
+      // §4.10: a program manager gets the same empty page whether the person has no assessments,
+      // has them only at another facility, or does not exist; a coach with no offering of this
+      // participant gets NOT_FOUND in every one of those cases.
+      if (principal.staffRoles.includes('program_manager')) return 'empty';
+      throw errors.protectedNotFound('participant');
+    }
+    return { managed, coached };
   }
 
   // -------------------------------------------------------------------------------------------
