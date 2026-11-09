@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { PaymentWebhookInput } from '@sportspark/contracts';
+import { MODULE_SETTINGS } from '../../../kernel';
+import type { FinanceSettingsValue } from '../finance.settings';
 import {
   PaymentOutcomeUnknownError,
   type CreatePaymentRequest,
@@ -13,7 +15,12 @@ import {
 } from '../finance.ports';
 
 export const FAKE_PAYMENTS_PROVIDER = 'fake-payments';
-/** Test-only shared secret for webhook signatures; a real provider's secret arrives via the environment. */
+/**
+ * Published test constant for webhook signatures, the default on developer machines and in tests.
+ * A host reachable from the internet overrides it with `FINANCE_FAKE_WEBHOOK_SECRET` (§4.14, §5.2):
+ * the provider signs and verifies with the configured secret, so a webhook signed with this
+ * constant is refused there. A real provider's secret arrives via the environment the same way.
+ */
 export const FAKE_PAYMENTS_WEBHOOK_SECRET = 'fake-payments-webhook-secret';
 export const FAKE_PAYMENTS_SIGNATURE_HEADER = 'x-payments-signature';
 
@@ -101,6 +108,12 @@ export class FakePaymentProvider implements PaymentProviderPort {
   /** Every cancelPayment call (idempotency keys), including repeats. */
   readonly cancelCalls: string[] = [];
   private eventCounter = 0;
+  /** The webhook signing secret in force: configured per host, else the published constant. */
+  private readonly webhookSecret: string;
+
+  constructor(@Optional() @Inject(MODULE_SETTINGS('finance')) settings?: FinanceSettingsValue) {
+    this.webhookSecret = settings?.FAKE_WEBHOOK_SECRET ?? FAKE_PAYMENTS_WEBHOOK_SECRET;
+  }
 
   reset(): void {
     this.charges.clear();
@@ -251,7 +264,12 @@ export class FakePaymentProvider implements PaymentProviderPort {
   }
 
   verifyWebhook(body: unknown, signature: string | undefined): boolean {
-    return FakePaymentProvider.verify(body, signature);
+    return FakePaymentProvider.verify(body, signature, this.webhookSecret);
+  }
+
+  /** Signs a webhook body with the secret in force (what this host's provider would post). */
+  sign(body: unknown): string {
+    return FakePaymentProvider.sign(body, this.webhookSecret);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -312,7 +330,7 @@ export class FakePaymentProvider implements PaymentProviderPort {
           : {}),
       },
     };
-    return { body, signature: FakePaymentProvider.sign(body) };
+    return { body, signature: this.sign(body) };
   }
 
   refundWebhook(
@@ -346,18 +364,21 @@ export class FakePaymentProvider implements PaymentProviderPort {
           : {}),
       },
     };
-    return { body, signature: FakePaymentProvider.sign(body) };
+    return { body, signature: this.sign(body) };
   }
 
-  static sign(body: unknown): string {
-    return createHmac('sha256', FAKE_PAYMENTS_WEBHOOK_SECRET)
-      .update(stableStringify(body))
-      .digest('hex');
+  /** Signs with the published constant unless a secret is given (tests and scenario drivers). */
+  static sign(body: unknown, secret: string = FAKE_PAYMENTS_WEBHOOK_SECRET): string {
+    return createHmac('sha256', secret).update(stableStringify(body)).digest('hex');
   }
 
-  static verify(body: unknown, signature: string | undefined): boolean {
+  static verify(
+    body: unknown,
+    signature: string | undefined,
+    secret: string = FAKE_PAYMENTS_WEBHOOK_SECRET,
+  ): boolean {
     if (!signature) return false;
-    const expected = Buffer.from(FakePaymentProvider.sign(body), 'utf8');
+    const expected = Buffer.from(FakePaymentProvider.sign(body, secret), 'utf8');
     const given = Buffer.from(signature, 'utf8');
     return expected.length === given.length && timingSafeEqual(expected, given);
   }

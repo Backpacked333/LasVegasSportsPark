@@ -130,6 +130,9 @@ jobs:
           for i in $(seq 1 30); do curl -sf localhost:3000/v1/ready && break; sleep 2; done
           curl -sf localhost:3000/v1/ready | tee ready.json
           grep -q '"status":"ready"' ready.json
+          # The image reports the commit it was built from (spec §5.8 rollback evidence, §6.8 item 11).
+          grep -q "\"version\":\"${{ github.sha }}\"" ready.json
+          curl -sf localhost:3000/v1/health | grep -q "\"version\":\"${{ github.sha }}\""
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:3000/v1/dev/tokens -H 'Content-Type: application/json' -d '{}')" = 404
           docker stop --time 20 api
           docker logs api | tail -3

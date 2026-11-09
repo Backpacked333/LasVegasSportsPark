@@ -128,22 +128,22 @@ carry `revision` and `touch_updated_at`.
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/finance.ts`)
 
-| Method   | Path                                                                                        | Who (action)                                                                                                  |
-| -------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| POST/GET | `/registration-quotes`, `/registration-quotes/{id}`                                         | the payer holding `pay` over every participant (adult self) or desk staff (`finance.create_quote`)            |
-| POST/GET | `/registration-checkouts`, `/registration-checkouts/{id}`                                   | same (`finance.checkout`); cash tenders only by desk/finance staff (`finance.record_tender`)                  |
-| POST     | `/registration-checkouts/{id}/payments`, `/abort`                                           | the payer or desk staff                                                                                       |
-| POST     | `/registration-checkouts/{id}/recover`, `/compensate`                                       | finance operator, general manager, system administrator (`finance.recover_checkout`)                          |
-| GET      | `/orders/{id}`, `/payments/{id}`, `/refunds/{id}`, `/installment-plans/{id}`                | the payer or finance readers (`finance.read_checkout`)                                                        |
-| POST     | `/payments/{id}/refunds`, `/payments/{id}/reconcile`, `/refunds/{id}/reconcile`             | finance roles (`finance.refund`, `finance.reconcile_payment`)                                                 |
-| POST/GET | `/obligations`, `/obligations/{id}`                                                         | create: finance operator, league manager, GM; read: debtor (`view`), team captain, responsible payer, readers |
-| POST     | `/obligations/{id}/payments`                                                                | debtor with `pay` (individual), the responsible payer (single payer), the captain (contributions)             |
-| POST/GET | `/obligations/{id}/contribution-requests`, `/contribution-requests/{id}`, `/{id}/pay`       | request: captain or finance staff; read: the requested player, captain, staff; pay: the requested player      |
-| POST/GET | `/credits`, `/credits/{id}`, `/credits/{id}/redeem`, `/credits/{id}/approve`                | issue/approve: finance roles; redeem: the owner (and entitled to pay the obligation) or desk staff            |
-| POST     | `/installments/{id}/collect`, `/installments/{id}/extend`                                   | finance roles (`finance.manage_installments`)                                                                 |
-| POST     | `/cash-tenders`                                                                             | front desk, finance operator, GM, sysadmin within their facility scope (`finance.record_tender`)              |
-| POST/GET | `/settlement-reconciliations`, `/finance/reconciliation-report`, `/finance/ledger-balances` | finance roles (`finance.reconcile`)                                                                           |
-| POST     | `/webhooks/payments/{provider}`                                                             | public; signature verified; recorded in the kernel inbox                                                      |
+| Method   | Path                                                                                        | Who (action)                                                                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| POST/GET | `/registration-quotes`, `/registration-quotes/{id}`                                         | the payer holding `pay` over every participant (adult self) or desk staff (`finance.create_quote`)                                               |
+| POST/GET | `/registration-checkouts`, `/registration-checkouts/{id}`                                   | same (`finance.checkout`); cash tenders only by desk/finance staff (`finance.record_tender`)                                                     |
+| POST     | `/registration-checkouts/{id}/payments`, `/abort`                                           | the payer or desk staff                                                                                                                          |
+| POST     | `/registration-checkouts/{id}/recover`, `/compensate`                                       | finance operator, general manager, system administrator (`finance.recover_checkout`)                                                             |
+| GET      | `/orders/{id}`, `/payments/{id}`, `/refunds/{id}`, `/installment-plans/{id}`                | the payer or finance readers (`finance.read_checkout`)                                                                                           |
+| POST     | `/payments/{id}/refunds`, `/payments/{id}/reconcile`, `/refunds/{id}/reconcile`             | finance roles (`finance.refund`, `finance.reconcile_payment`)                                                                                    |
+| POST/GET | `/obligations`, `/obligations/{id}`                                                         | create: finance operator, league manager, GM; read: debtor (`view`), team captain, responsible payer, readers                                    |
+| POST     | `/obligations/{id}/payments`                                                                | debtor with `pay` (individual), the responsible payer (single payer), the captain (contributions)                                                |
+| POST/GET | `/obligations/{id}/contribution-requests`, `/contribution-requests/{id}`, `/{id}/pay`       | request: captain or finance staff; read: the requested player, captain, staff; pay: the requested player                                         |
+| POST/GET | `/credits`, `/credits/{id}`, `/credits/{id}/redeem`, `/credits/{id}/approve`                | issue/approve: finance roles; redeem: the owner (and entitled to pay the obligation) or desk staff                                               |
+| POST     | `/installments/{id}/collect`, `/installments/{id}/extend`                                   | finance roles (`finance.manage_installments`)                                                                                                    |
+| POST     | `/cash-tenders`                                                                             | front desk, finance operator, GM, sysadmin within their facility scope (`finance.record_tender`)                                                 |
+| POST/GET | `/settlement-reconciliations`, `/finance/reconciliation-report`, `/finance/ledger-balances` | finance roles (`finance.reconcile`)                                                                                                              |
+| POST     | `/webhooks/payments/{provider}`                                                             | public; signature verified with the host's `FINANCE_FAKE_WEBHOOK_SECRET`, else the published test constant (§4.14); recorded in the kernel inbox |
 
 Every consequential POST is `@Idempotent()` and zod-validated; quote and checkout bodies are
 strict and carry no amounts. Customer-private records (quotes, checkouts, orders, payments,
@@ -176,7 +176,9 @@ obligation they pay whatever staff roles they also hold (R4-AUTHZ-TARGETS-05).
   `FakePaymentProvider` exists (deterministic by payment-method token: succeed, require action,
   decline, asynchronous processing, timeout after capture, timeout after decline, timeout after
   opening a challenge, unreachable;
-  scriptable payments, cancels and refunds; signed webhooks for duplicates and reordering). An
+  scriptable payments, cancels and refunds; signed webhooks for duplicates and reordering). It
+  signs and verifies webhooks with `FINANCE_FAKE_WEBHOOK_SECRET` when set (a staging host), else
+  the published constant (`finance.settings.ts`; `__tests__/webhook-secret.spec.ts`). An
   adapter must bound `createRefund` below the reconciliation threshold. The port refuses
   to start in production (DEC-019 pending).
 - Registers `FINANCE_POLICY_IMPL` for enrollment (`FinancePolicyAdapter`): cancellation

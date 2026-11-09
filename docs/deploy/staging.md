@@ -30,9 +30,11 @@ pnpm db:migrate              # applies pending files under the migration lock
 
 Apply migrations **before** deploying an API build that contains them: `GET /v1/ready` answers
 503 while the schema does not match the build (pending, changed or missing files). As of
-2026-11-09 the staging database holds migrations 0001 to 1480; this branch adds
-`0019_core_rate_limit_buckets.sql` and `1104_support_customer_replies.sql`, which must be applied
-before the new API build serves.
+2026-11-09 the staging database holds migrations 0001 to 1480; the PR #4 branch added
+`0019_core_rate_limit_buckets.sql` and `1104_support_customer_replies.sql`, and the following
+change adds `0020_core_database_restores.sql` (the restore ledger, `docs/runbooks/recovery.md`
+section 5.3); each must be applied before the API build that carries it serves, and row level
+security turned on for the new table as for every other (section 1).
 
 The synthetic seed is already loaded. To load it into a fresh staging database (never one with
 real data):
@@ -49,21 +51,25 @@ psql "$DATABASE_URL" -f docs/deploy/staging-seed.sql
    rewrite of every path to the function.
 3. Environment variables (Production environment of the project; secrets marked \*):
 
-| Variable                 | Value                                                                                                                               |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`               | `development`                                                                                                                       |
-| `AUTH_MODE`              | `local`                                                                                                                             |
-| `AUTH_LOCAL_SECRET` \*   | 64 random hex characters (`openssl rand -hex 32`)                                                                                   |
-| `DEV_TOKENS_PASSCODE` \* | a passphrase of at least 16 characters, shared only with staging users (required: without it the route answers 404 on a named host) |
-| `DATABASE_URL` \*        | Supabase **Session pooler** connection string                                                                                       |
-| `DATABASE_SSL`           | `require`                                                                                                                           |
-| `DB_AUTO_MIGRATE`        | `false` (migrations are applied ahead of deploys, section 2)                                                                        |
-| `CORS_ALLOWED_ORIGINS`   | the staff project's https origin                                                                                                    |
-| `STAGING_INLINE_WORKER`  | `true`                                                                                                                              |
-| `TRUST_PROXY`            | `true` (Vercel terminates TLS; rate limits key on the client address)                                                               |
-| `LOG_FORMAT`             | `json`                                                                                                                              |
-| `RATE_LIMIT_STORE`       | `postgres` (instances share one count)                                                                                              |
-| `METRICS_TOKEN` \*       | optional: at least 24 characters, enables `GET /v1/metrics` for a scraper                                                           |
+| Variable                                | Value                                                                                                                                                                                                                                                 |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                              | `development`                                                                                                                                                                                                                                         |
+| `AUTH_MODE`                             | `local`                                                                                                                                                                                                                                               |
+| `AUTH_LOCAL_SECRET` \*                  | 64 random hex characters (`openssl rand -hex 32`)                                                                                                                                                                                                     |
+| `DEV_TOKENS_PASSCODE` \*                | a passphrase of at least 16 characters, shared only with staging users (required: without it the route answers 404 on a named host)                                                                                                                   |
+| `DATABASE_URL` \*                       | Supabase **Session pooler** connection string                                                                                                                                                                                                         |
+| `DATABASE_SSL`                          | `require`                                                                                                                                                                                                                                             |
+| `DB_AUTO_MIGRATE`                       | `false` (migrations are applied ahead of deploys, section 2)                                                                                                                                                                                          |
+| `CORS_ALLOWED_ORIGINS`                  | the staff project's https origin                                                                                                                                                                                                                      |
+| `STAGING_INLINE_WORKER`                 | `true`                                                                                                                                                                                                                                                |
+| `TRUST_PROXY`                           | `true` (Vercel terminates TLS; rate limits key on the client address)                                                                                                                                                                                 |
+| `LOG_FORMAT`                            | `json`                                                                                                                                                                                                                                                |
+| `RATE_LIMIT_STORE`                      | `postgres` (instances share one count)                                                                                                                                                                                                                |
+| `METRICS_TOKEN` \*                      | optional: at least 24 characters, enables `GET /v1/metrics` for a scraper                                                                                                                                                                             |
+| `APP_VERSION`                           | not set: `GET /v1/health` reports the deployed commit from Vercel's system variable `VERCEL_GIT_COMMIT_SHA` (Project → Settings → Environment Variables → "Automatically expose System Environment Variables" must be on)                             |
+| `FINANCE_FAKE_WEBHOOK_SECRET` \*        | at least 32 random characters (`openssl rand -hex 32`); required on a named host: without it the fake payment provider accepts webhooks signed with its published test constant, so anyone who has read the source can post a payment outcome (§4.14) |
+| `COMMUNICATIONS_FAKE_WEBHOOK_SECRET` \* | same, for the fake messaging providers' delivery receipts                                                                                                                                                                                             |
+| `ENTRY_FAKE_WEBHOOK_SECRET` \*          | same, for the fake access-control provider's device events (facility arrivals)                                                                                                                                                                        |
 
 4. Deploy. Note the API's https origin.
 
@@ -96,7 +102,7 @@ Demo accounts (synthetic, from `docs/deploy/staging-seed.sql`):
 
 ```bash
 API=https://<api host>
-curl -s "$API/v1/health"                  # {"status":"ok",...,"database":"ok"}
+curl -s "$API/v1/health"                  # {"status":"ok","version":"<deployed commit>","database":"ok"}
 curl -s "$API/v1/ready"                   # 200 with "migrations":{"current":true,...}
 curl -sI "$API/v1/health" | grep -i content-security-policy
 curl -s -X POST "$API/v1/dev/tokens" -H 'Content-Type: application/json' \
@@ -105,12 +111,15 @@ curl -s -X POST "$API/v1/dev/tokens" -H 'Content-Type: application/json' \
 
 Then sign in to the staff dashboard as dev-admin, open Today, and open Administration →
 Integrations (every provider gate shows "Waiting on a decision"). Record the deployment in the
-release evidence ledger: commit, the two Vercel deployment URLs, the `GET /v1/ready` answer and the
-date.
+release evidence ledger: commit, the two Vercel deployment URLs, the `GET /v1/ready` answer (its
+`version` must equal the commit; `0.1.0` means the system variable is not exposed) and the date.
 
 ## 7. Limits
 
 - Workers run only while an API instance is warm: notices and projections catch up on the next
   request after an idle period. Production runs the worker as its own process.
 - The seed's demo day is fixed to the day it was generated; add activities on the Schedule screen.
-- Payments, messaging and access hardware use the fake providers (`NODE_ENV=development`).
+- Payments, messaging and access hardware use the fake providers (`NODE_ENV=development`), which
+  sign and verify webhooks with the `*_FAKE_WEBHOOK_SECRET` values of section 3; without them the
+  published test constants apply and anyone who has read the source can post a payment outcome, a
+  delivery receipt or a facility arrival (§4.14).

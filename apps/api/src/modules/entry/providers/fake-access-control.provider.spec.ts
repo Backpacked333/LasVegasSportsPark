@@ -36,4 +36,31 @@ describe('fake access-control provider (§5.2 provider-selection gate, DEC-023)'
     expect(FakeAccessControlProvider.verify(body, undefined)).toBe(false);
     expect(FakeAccessControlProvider.verify(body, 'short')).toBe(false);
   });
+
+  it('§4.14 / §5.2: a configured webhook secret replaces the published constant for device events', () => {
+    const secret = 'e'.repeat(40);
+    const device = new FakeAccessControlProvider({
+      DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS: 3,
+      DEVICE_COMMAND_RETRY_BASE_SECONDS: 30,
+      DEVICE_COMMAND_RETRY_MAX_SECONDS: 300,
+      FAKE_WEBHOOK_SECRET: secret,
+    });
+    const { body, signature } = device.granted(base);
+    expect(FakeAccessControlProvider.verify(body, signature, secret)).toBe(true);
+    expect(FakeAccessControlProvider.verify(body, signature)).toBe(false);
+    expect(
+      FakeAccessControlProvider.verify(body, FakeAccessControlProvider.sign(body), secret),
+    ).toBe(false);
+    const heartbeat = device.heartbeat({
+      organizationId: base.organizationId,
+      deviceRef: 'gate',
+      at: base.occurredAt,
+    });
+    expect(FakeAccessControlProvider.verify(heartbeat.body, heartbeat.signature, secret)).toBe(
+      true,
+    );
+    // Unset, the constant stays the default.
+    const plain = new FakeAccessControlProvider().denied(base);
+    expect(FakeAccessControlProvider.verify(plain.body, plain.signature)).toBe(true);
+  });
 });

@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type {
   AccessControlEventBody,
   DeviceCommandReceiptEventBody,
@@ -11,6 +11,8 @@ import type {
   AccessDeviceCommandResult,
   AccessDevicePort,
 } from '../entry.ports';
+import { MODULE_SETTINGS } from '../../../kernel';
+import type { EntrySettingsValue } from '../entry.settings';
 
 /**
  * Deterministic fake access-control provider (specification §5.2: hardware vendors are not
@@ -27,7 +29,12 @@ import type {
  * (a receipt settles a command once; posting it again is the duplicate scenario).
  */
 export const FAKE_ACCESS_CONTROL_PROVIDER = 'fake-access-control';
-/** Test-only shared secret; a real provider's secret would arrive through the environment. */
+/**
+ * Published test constant for event signatures, the default on developer machines and in tests.
+ * A host reachable from the internet overrides it with `ENTRY_FAKE_WEBHOOK_SECRET` (§4.14, §5.2):
+ * the provider signs and the webhook route verifies with the configured secret, so an event signed
+ * with this constant is refused there. A real provider's secret would arrive the same way.
+ */
 export const FAKE_ACCESS_CONTROL_WEBHOOK_SECRET = 'fake-access-control-webhook-secret';
 export const FAKE_ACCESS_CONTROL_SIGNATURE_HEADER = 'x-access-control-signature';
 
@@ -57,6 +64,12 @@ export class FakeAccessControlProvider implements AccessDevicePort {
   private readonly deviceScript = new Map<string, Exclude<FakeDeviceCommandOutcome, 'deliver'>>();
   /** Every sendCommand call, including repeats (tests assert on it). */
   readonly commandCalls: AccessDeviceCommand[] = [];
+  /** The event signing secret in force: configured per host, else the published constant. */
+  private readonly webhookSecret: string;
+
+  constructor(@Optional() @Inject(MODULE_SETTINGS('entry')) settings?: EntrySettingsValue) {
+    this.webhookSecret = settings?.FAKE_WEBHOOK_SECRET ?? FAKE_ACCESS_CONTROL_WEBHOOK_SECRET;
+  }
 
   /** The next new commands, in order, behave like this (IF-38). */
   scriptCommands(...outcomes: FakeDeviceCommandOutcome[]): void {
@@ -117,7 +130,7 @@ export class FakeAccessControlProvider implements AccessDevicePort {
       type: 'device.heartbeat',
       data: { organizationId: input.organizationId, deviceRef: input.deviceRef, at: input.at },
     };
-    return { body, signature: FakeAccessControlProvider.sign(body) };
+    return { body, signature: this.sign(body) };
   }
 
   /** IF-38 `device.command_receipt`: the device's own answer about a command it received. */
@@ -137,7 +150,7 @@ export class FakeAccessControlProvider implements AccessDevicePort {
         outcome: input.outcome,
       },
     };
-    return { body, signature: FakeAccessControlProvider.sign(body) };
+    return { body, signature: this.sign(body) };
   }
 
   private event(
@@ -159,7 +172,7 @@ export class FakeAccessControlProvider implements AccessDevicePort {
         ...(input.visitorCategory ? { visitorCategory: input.visitorCategory } : {}),
       },
     };
-    return { body, signature: FakeAccessControlProvider.sign(body) };
+    return { body, signature: this.sign(body) };
   }
 
   private static resultOf(outcome: FakeDeviceCommandOutcome): AccessDeviceCommandResult {
@@ -170,15 +183,23 @@ export class FakeAccessControlProvider implements AccessDevicePort {
         : { outcome: 'unknown', error: 'fake device: no answer within the timeout' };
   }
 
-  static sign(body: unknown): string {
-    return createHmac('sha256', FAKE_ACCESS_CONTROL_WEBHOOK_SECRET)
-      .update(stableStringify(body))
-      .digest('hex');
+  /** Signs an event body with the secret in force (what this host's devices would post). */
+  sign(body: unknown): string {
+    return FakeAccessControlProvider.sign(body, this.webhookSecret);
   }
 
-  static verify(body: unknown, signature: string | undefined): boolean {
+  /** Signs with the published constant unless a secret is given (tests and scenario drivers). */
+  static sign(body: unknown, secret: string = FAKE_ACCESS_CONTROL_WEBHOOK_SECRET): string {
+    return createHmac('sha256', secret).update(stableStringify(body)).digest('hex');
+  }
+
+  static verify(
+    body: unknown,
+    signature: string | undefined,
+    secret: string = FAKE_ACCESS_CONTROL_WEBHOOK_SECRET,
+  ): boolean {
     if (!signature) return false;
-    const expected = Buffer.from(FakeAccessControlProvider.sign(body), 'utf8');
+    const expected = Buffer.from(FakeAccessControlProvider.sign(body, secret), 'utf8');
     const given = Buffer.from(signature, 'utf8');
     return expected.length === given.length && timingSafeEqual(expected, given);
   }

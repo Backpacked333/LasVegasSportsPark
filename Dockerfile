@@ -6,6 +6,9 @@
 #   migrate node /app/packages/db/dist/cli/migrate.js [--status | --dry-run]
 # Hosting is pending DEC-021; the image is host-agnostic and configured only by environment
 # variables (apps/api/src/kernel/config.ts, docs/deploy/production.md).
+# The build it reports (§5.8 rollback evidence, §6.8 item 11): pass --build-arg SOURCE_COMMIT=<sha>
+# (the CI and deploy workflows do) and GET /v1/health and GET /v1/ready answer that commit as
+# `version` (apps/api/src/kernel/config.ts `buildVersion`); APP_VERSION names a release instead.
 
 ARG NODE_VERSION=22.22.0
 
@@ -37,12 +40,12 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter "@sportspark/api..."
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
-ARG APP_VERSION=0.1.0
+ARG APP_VERSION=
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.title="sportspark-api" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${SOURCE_COMMIT}"
-ENV NODE_ENV=production APP_VERSION=${APP_VERSION} PORT=3000
+ENV NODE_ENV=production APP_VERSION=${APP_VERSION} SOURCE_COMMIT=${SOURCE_COMMIT} PORT=3000
 WORKDIR /app
 COPY --from=prod-deps --chown=node:node /app /app
 COPY --from=build --chown=node:node /app/packages/contracts/dist packages/contracts/dist

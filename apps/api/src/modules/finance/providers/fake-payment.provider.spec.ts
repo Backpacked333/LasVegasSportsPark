@@ -117,4 +117,27 @@ describe('FakePaymentProvider (§5.2 deterministic provider scenarios)', () => {
     expect(await provider.cancelPayment('c3')).toMatchObject({ status: 'succeeded' });
     expect(provider.cancelCalls).toEqual(['c1', 'c1', 'c2', 'never-sent', 'c3', 'c3']);
   });
+
+  it('§4.14 / §5.2: a configured webhook secret replaces the published constant: a webhook signed with the constant is refused, one signed by the provider verifies', async () => {
+    const secret = 's'.repeat(40);
+    const provider = new FakePaymentProvider({
+      ACCOUNTING_SUBMIT_STALE_SECONDS: 300,
+      FAKE_WEBHOOK_SECRET: secret,
+    });
+    await provider.createPayment({
+      idempotencyKey: 'w1',
+      amountMinor: 2_500,
+      currency: 'USD',
+      paymentMethodRef: FakePaymentTokens.succeed,
+      metadata: meta('w1'),
+    });
+    const { body, signature } = provider.paymentWebhook('w1');
+    expect(provider.verifyWebhook(body, signature)).toBe(true);
+    expect(provider.verifyWebhook(body, FakePaymentProvider.sign(body))).toBe(false);
+    expect(FakePaymentProvider.verify(body, signature)).toBe(false);
+    expect(FakePaymentProvider.verify(body, signature, secret)).toBe(true);
+    // Unset, the constant stays the default so developer machines and tests keep working.
+    const plain = new FakePaymentProvider();
+    expect(plain.verifyWebhook(body, FakePaymentProvider.sign(body))).toBe(true);
+  });
 });

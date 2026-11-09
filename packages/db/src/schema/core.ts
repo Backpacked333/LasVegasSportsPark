@@ -276,6 +276,24 @@ export interface RateLimitBucketsTable {
   count: number;
 }
 
+/**
+ * Every restore of this database from a backup (migration 0020, §5.8, SPK-AT-028; recovery
+ * runbook §5.3), written by `db:restore` once the restore matched its manifest. Platform-wide
+ * like `schema_migrations` (no organization); append-only (forbid_mutation).
+ */
+export interface DatabaseRestoresTable {
+  id: string;
+  backup_id: string;
+  backup_taken_at: Timestamp;
+  migrations_digest: string;
+  restored_at: Timestamp;
+  restored_by: string;
+  app_version: string | null;
+  schema_current: boolean;
+  verification: GeneratedJson<Record<string, unknown>>;
+  created_at: GeneratedTimestamp;
+}
+
 export interface CoreTables {
   organizations: OrganizationsTable;
   facilities: FacilitiesTable;
@@ -289,6 +307,7 @@ export interface CoreTables {
   operational_exceptions: OperationalExceptionsTable;
   periodic_job_leases: PeriodicJobLeasesTable;
   rate_limit_buckets: RateLimitBucketsTable;
+  database_restores: DatabaseRestoresTable;
   organization_capabilities: OrganizationCapabilitiesTable;
   organization_capability_changes: OrganizationCapabilityChangesTable;
   schema_migrations: SchemaMigrationsTable;
