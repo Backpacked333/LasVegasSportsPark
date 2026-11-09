@@ -17520,6 +17520,9 @@ export type paths = {
         get: {
             parameters: {
                 query?: {
+                    affectedId?: string;
+                    affectedType?: string;
+                    categories?: string[];
                     cursor?: string;
                     facilityId?: string;
                     limit?: number;

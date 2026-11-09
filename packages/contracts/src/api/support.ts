@@ -525,11 +525,35 @@ export const OperationalExceptionSchema = z
   .openapi('OperationalException');
 export type OperationalException = z.infer<typeof OperationalExceptionSchema>;
 
+/** `?categories=a,b` or repeated `categories`. */
+const commaList = (value: unknown) =>
+  typeof value === 'string'
+    ? value
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0)
+    : value;
+const ExceptionCategory = z
+  .string()
+  .regex(
+    /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/,
+    'an exception category such as entry.device_offline',
+  )
+  .max(100);
+
 export const ListExceptionsQuery = PageRequestSchema.extend({
   queue: Slug.optional(),
   status: ExceptionStatusSchema.optional(),
   facilityId: z.uuid().optional(),
   severity: ExceptionSeveritySchema.optional(),
+  /** SUP-08: only these categories (1 to 20). */
+  categories: z.preprocess(commaList, z.array(ExceptionCategory).min(1).max(20)).optional(),
+  /** SUP-08: only exceptions about this record (type and id together). */
+  affectedType: Slug.optional(),
+  affectedId: z.string().trim().min(1).max(200).optional(),
+}).refine((v) => (v.affectedType === undefined) === (v.affectedId === undefined), {
+  message: 'affectedType and affectedId go together',
+  path: ['affectedId'],
 });
 export type ListExceptionsQuery = z.infer<typeof ListExceptionsQuery>;
 

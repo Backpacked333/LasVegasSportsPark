@@ -20,7 +20,10 @@ export interface FakeRequest {
   /** The matched route template, e.g. `/assignments/{id}/accept`. */
   route: string | null;
   params: Record<string, string>;
+  /** Each query parameter's last value (`?a=1&a=2` gives `a: '2'`). */
   query: Record<string, string>;
+  /** Every value of each query parameter, in order (`?a=1&a=2` gives `a: ['1', '2']`). */
+  queryAll?: Record<string, string[]>;
   headers: Record<string, string>;
   body: unknown;
 }
@@ -116,7 +119,10 @@ export function createFakeFetch(
         v,
       ]),
     );
-    const query = Object.fromEntries(new URLSearchParams(rawQuery));
+    const search = new URLSearchParams(rawQuery);
+    const query = Object.fromEntries(search);
+    const queryAll: Record<string, string[]> = {};
+    for (const key of new Set(search.keys())) queryAll[key] = search.getAll(key);
     const body = typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
 
     for (const [key, handler] of table) {
@@ -128,12 +134,21 @@ export function createFakeFetch(
       const params = Object.fromEntries(
         names.map((n, i) => [n, decodeURIComponent(match[i + 1] as string)]),
       );
-      const request: FakeRequest = { method, path, route: template, params, query, headers, body };
+      const request: FakeRequest = {
+        method,
+        path,
+        route: template,
+        params,
+        query,
+        queryAll,
+        headers,
+        body,
+      };
       requests.push(request);
       if (typeof handler === 'function') return handler(request);
       return fakeResponse(handler.status, handler.body, handler.headers);
     }
-    requests.push({ method, path, route: null, params: {}, query, headers, body });
+    requests.push({ method, path, route: null, params: {}, query, queryAll, headers, body });
     return fakeResponse(404, apiErrorBody('NOT_FOUND', { nextAction: 'verify_reference' }));
   };
 

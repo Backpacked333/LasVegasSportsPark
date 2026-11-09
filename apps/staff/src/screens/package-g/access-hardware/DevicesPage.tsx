@@ -197,9 +197,10 @@ function HardwareExceptions({ facilityId }: { facilityId: string }) {
   // No queue filter: the owner queue is the API's (the facility operations queue of an unknown
   // access outcome is not the facilities operator's), and rows of queues the viewer may not see
   // are left out by the API. No status filter: open and acknowledged ones are still unresolved.
+  // SUP-08: the API returns the hardware categories only, so every loaded page holds them.
   const exceptions = useApiPages({
     path: '/exceptions',
-    request: { query: { facilityId, limit: 50 } },
+    request: { query: { facilityId, categories: [...HARDWARE_CATEGORIES], limit: 50 } },
   });
   if (exceptions.data === undefined) {
     // Not offered to a viewer who may not read exceptions; a failure is shown with its code.
@@ -214,15 +215,13 @@ function HardwareExceptions({ facilityId }: { facilityId: string }) {
     }
     return null;
   }
+  // The API filters by category (SUP-08); the check stays as a guard against a mixed answer.
   const hardware = exceptions.data.filter((e) => HARDWARE_CATEGORIES.has(e.category));
   return (
     <section aria-labelledby="access-exceptions-title" className="rf-panel">
       <h4 id="access-exceptions-title">Hardware exceptions waiting for their owner</h4>
       {hardware.length === 0 ? (
-        <p className="caption">
-          No unresolved hardware exception
-          {exceptions.hasNextPage ? ' on the loaded pages' : ''}.
-        </p>
+        <p className="caption">No unresolved hardware exception.</p>
       ) : (
         <ul className="list" aria-label="Unresolved hardware exceptions">
           {hardware.map((e) => (

@@ -156,9 +156,9 @@ and the access hardware policy (POL-043).
 - No list of the sales of a register session, nor of a register's past sessions: a sale is reached
   from the page that started it or by its reference, and closing reports only the count of open
   sales (`apps/api/src/modules/finance/controllers/pos.controller.ts`).
-- `GET /v1/exceptions` cannot filter by category or affected record, so the hardware exceptions are
-  the facility's unresolved exceptions filtered on the page; one may sit on a later page (the page
-  says "on the loaded pages"). An inbox dead letter (`reliability.inbox_dead_letter`) has no
+- Resolved 2026-11-09 (SUP-08): `GET /v1/exceptions?categories=` (and `affectedType` with
+  `affectedId`) narrows the list, so the hardware exceptions are read by category. An inbox dead
+  letter (`reliability.inbox_dead_letter`) has no
   facility, so a facility's list never shows a dead access event's exception.
 - `GET /v1/provider-events` filters `eventType` by exact value and has no facility or device
   filter: the event ingestion list is organization-wide and filtered to hardware event types on the

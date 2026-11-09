@@ -277,22 +277,28 @@ describe('SCR-S-56 AccessHardwareScreen', () => {
     expect(call?.query).not.toHaveProperty('status');
   });
 
-  it('with no hardware exception on the loaded pages, says so instead of implying none exist', async () => {
+  it('SUP-08: asks the API for the hardware categories only; another category is never shown', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: routes({
-        'GET /exceptions': page(
-          [hardwareException({ category: 'finance.payment_outcome_unknown' })],
-          'cursor-2',
-        ),
+        'GET /exceptions': page([
+          hardwareException({ category: 'finance.payment_outcome_unknown' }),
+        ]),
       }),
     });
     render(app.at(BASE));
     await chooseFacility(user);
-    expect(
-      await screen.findByText('No unresolved hardware exception on the loaded pages.'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Load more/ })).toBeInTheDocument();
+    expect(await screen.findByText('No unresolved hardware exception.')).toBeInTheDocument();
+    const read = app.fake.requests.find((r) => r.route === '/exceptions');
+    expect([...(read?.queryAll?.['categories'] ?? [])].sort()).toEqual(
+      [
+        'entry.access_outcome_unknown',
+        'entry.device_command_undelivered',
+        'entry.device_offline',
+        'entry.unregistered_access_device',
+      ].sort(),
+    );
+    expect(read?.query).toMatchObject({ facilityId: FACILITY_A });
   });
 
   it('event ingestion: lists the access events the inbox received; failed and dead ones were not ingested', async () => {

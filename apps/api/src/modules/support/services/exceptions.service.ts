@@ -105,6 +105,10 @@ export class ExceptionsService {
         statuses,
         ownerQueue: query.queue,
         facilityId: query.facilityId,
+        // SUP-08: category and affected-record filters narrow the kernel's list.
+        categories: query.categories,
+        affectedType: query.affectedType,
+        affectedId: query.affectedId,
         cursor,
         limit: SCAN_BATCH,
       });
