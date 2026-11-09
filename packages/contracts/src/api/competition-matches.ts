@@ -1733,6 +1733,12 @@ command(
   CreatePoolBody,
   PoolSchema,
 );
+query(
+  '/divisions/{id}/pools',
+  "A division's tournament pools, by name (CMP-15; readable while the capability is off)",
+  null,
+  z.array(PoolSchema),
+);
 query('/pools/{id}', 'Read a tournament pool', null, PoolSchema);
 command(
   'post',

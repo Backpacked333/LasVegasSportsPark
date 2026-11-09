@@ -34,6 +34,7 @@ const poolRoutes = {
   'GET /divisions/{id}': ok(division()),
   'GET /team-entries': ok(entries),
   'GET /seasons/{id}/bracket-nodes': ok([]),
+  'GET /divisions/{id}/pools': ok([pool()]),
 };
 
 describe('SCR-S-13 DivisionPoolsScreen (CMP-15, DEC-016, DEC-078)', () => {
@@ -53,7 +54,9 @@ describe('SCR-S-13 DivisionPoolsScreen (CMP-15, DEC-016, DEC-078)', () => {
     await user.type(within(form).getByLabelText(/^Pool name/), 'Pool A');
     await user.click(within(form).getByRole('button', { name: 'Create the pool' }));
     expect(await screen.findByRole('heading', { name: 'Pool: Pool A' })).toBeInTheDocument();
-    const sent = app.fake.requests.find((r) => r.route === '/divisions/{id}/pools');
+    const sent = app.fake.requests.find(
+      (r) => r.method === 'POST' && r.route === '/divisions/{id}/pools',
+    );
     expect(sent?.body).toEqual({ name: 'Pool A' });
     expect(sent?.headers['idempotency-key']).toBeTruthy();
   });
@@ -349,5 +352,13 @@ describe('SCR-S-13 seeding a bracket node from standings (CMP-10, CMP-15)', () =
         { divisionId: ID.division, rank: 2, slot: 'away' },
       ],
     });
+  });
+
+  it("CMP-15: lists the division's pools by name, each opening its page, also while the switch is off", async () => {
+    const app = createTestApp({ routes: poolRoutes });
+    render(app.at(`/leagues/divisions/${ID.division}/pools`));
+    const list = await screen.findByRole('list', { name: 'Pools of this division' });
+    const link = within(list).getByRole('link', { name: pool().name });
+    expect(link).toHaveAttribute('href', `/leagues/pools/${pool().id}`);
   });
 });

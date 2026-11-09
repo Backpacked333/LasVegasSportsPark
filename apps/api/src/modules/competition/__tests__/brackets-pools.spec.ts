@@ -497,6 +497,11 @@ describe('bracket seeding, shootouts and tournament pools (CMP-10, CMP-15; SPK-C
     expect(removed.body.entries.map((e: { teamEntryId: string }) => e.teamEntryId)).toEqual([
       p.teamEntryId,
     ]);
+    // CMP-15: the division lists its pools by name, also while the switch is off.
+    const listed = await get(`/divisions/${divisionId}/pools`, leagueManager);
+    expect(listed.status).toBe(200);
+    expect(listed.body.map((x: { name: string }) => x.name)).toEqual(['Pool A', 'Pool B']);
+    expect((await get(`/divisions/${divisionId}/pools`, p.captain)).status).toBe(200);
     const read = await get(`/pools/${pool.body.id}`, leagueManager);
     expect(read.status).toBe(200);
     expect(read.body.revision).toBe(4);

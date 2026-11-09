@@ -227,6 +227,39 @@ export class PoolsService {
     });
   }
 
+  /**
+   * `GET /v1/divisions/{id}/pools` (CMP-15): a division's pools, by name, with the season's read
+   * action and never gated, like a single pool's read (pools that exist stay readable while the
+   * tournaments capability is off).
+   */
+  async listForDivision(principal: Principal, divisionId: string): Promise<Pool[]> {
+    const organizationId = organizationOf(principal);
+    const db = executorFor(this.db);
+    const division = await db
+      .selectFrom('divisions')
+      .select(['id', 'season_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', divisionId)
+      .executeTakeFirst();
+    if (!division) throw errors.notFound('division', divisionId);
+    await this.authorization.require(
+      principal,
+      MatchActions.readBrackets,
+      readTarget(principal, 'season', division.season_id, organizationId),
+    );
+    const pools = await db
+      .selectFrom('pools')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('division_id', '=', divisionId)
+      .orderBy('name')
+      .orderBy('id')
+      .execute();
+    const views: Pool[] = [];
+    for (const pool of pools) views.push(await this.view(db, organizationId, pool.id));
+    return views;
+  }
+
   /** `GET /v1/pools/{id}`: read with the season's read action, never gated. */
   async get(principal: Principal, poolId: string): Promise<Pool> {
     const organizationId = organizationOf(principal);

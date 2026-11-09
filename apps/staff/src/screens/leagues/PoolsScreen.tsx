@@ -10,8 +10,8 @@
  * entry can always be removed (with a reason) and a final pool table can still seed a bracket:
  * none of these are gated. Pool changes carry the pool's `expectedRevision`.
  *
- * The API cannot list the pools of a division, so a pool is opened from its own page (after it
- * is created) or by its reference (Proposed handling of an API gap).
+ * The division's pools are listed by name (`GET /v1/divisions/{id}/pools`, readable while the
+ * capability is off); a pool can still be opened by its reference.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -146,6 +146,10 @@ export function DivisionPoolsScreen() {
                 <CreatePool divisionId={data.id} />
               </section>
             ) : null}
+            <section className="panel" aria-labelledby="division-pools-list-title">
+              <h3 id="division-pools-list-title">Pools of this division</h3>
+              <DivisionPoolList divisionId={data.id} />
+            </section>
             <section className="panel" aria-labelledby="open-pool-title">
               <h3 id="open-pool-title">Open a pool</h3>
               <OpenPool />
@@ -154,6 +158,36 @@ export function DivisionPoolsScreen() {
         )}
       </QueryBoundary>
     </section>
+  );
+}
+
+/** The division's pools by name, each a link to its page (CMP-15). */
+function DivisionPoolList({ divisionId }: { divisionId: string }) {
+  const pools = useApiQuery({
+    path: '/divisions/{id}/pools',
+    request: { path: { id: divisionId } },
+  });
+  return (
+    <QueryBoundary
+      query={pools}
+      label="pools"
+      isEmpty={(data) => data.length === 0}
+      empty={{ title: 'No pools', description: 'Pools of this division appear here once created.' }}
+    >
+      {(data) => (
+        <ul className="list" aria-label="Pools of this division">
+          {data.map((pool) => (
+            <li key={pool.id}>
+              <Link to={`/leagues/pools/${pool.id}`}>{pool.name}</Link>
+              <span className="caption">
+                {' '}
+                {pool.entries.length} {pool.entries.length === 1 ? 'entry' : 'entries'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </QueryBoundary>
   );
 }
 
