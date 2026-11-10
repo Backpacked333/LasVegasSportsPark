@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { seedDemo } from './dev/seed-demo';
 import { seedDevelopment } from './dev/seed-dev';
 import { configureApp } from './kernel/app-setup';
 import { loadConfig } from './kernel/config';
@@ -18,6 +19,9 @@ import { startInlineWorker } from './kernel/workers/inline-worker';
  *   pnpm dev:all                       API on :3000 with the inline worker
  *   pnpm dev:all -- --seed             also creates the development seed first (seed:dev)
  *   pnpm dev:all -- --seed --seed-summary <file>   and writes its account ids to <file>
+ *   pnpm dev:all -- --seed --timezone <IANA zone>  the seeded facility's time zone (default UTC)
+ *   pnpm dev:all -- --seed --demo      also creates the demo dataset (seed:dev -- --demo): a
+ *                                      synthetic operating picture, not operator policy (§1.4)
  *
  * Production runs `dist/main.js` and `dist/worker.js` as separate processes (§4.1).
  */
@@ -34,12 +38,24 @@ async function main(): Promise<void> {
   });
   configureApp(app, config, { shutdownHooks: false });
   await app.init();
+  const valueOf = (flag: string): string | undefined => {
+    const at = process.argv.indexOf(flag);
+    return at > 0 ? process.argv[at + 1] : undefined;
+  };
+  if (process.argv.includes('--demo') && !process.argv.includes('--seed')) {
+    throw new Error('--demo adds to the development seed: use --seed --demo');
+  }
   if (process.argv.includes('--seed')) {
-    const summary = await seedDevelopment(app, {});
+    const summary = await seedDevelopment(app, { timezone: valueOf('--timezone') });
     logger.log(`development seed ready: ${JSON.stringify(summary)}`);
+    if (process.argv.includes('--demo')) {
+      // Before the port opens and the worker loops start: the seed drives the API over a
+      // loopback port of its own and drains the follow-ups itself.
+      const demo = await seedDemo(app, summary);
+      logger.log(`${demo.message} ${JSON.stringify({ ...demo, message: undefined })}`);
+    }
     // --seed-summary <file>: the seed's account ids for scripts (the browser smoke tests).
-    const at = process.argv.indexOf('--seed-summary');
-    const file = at > 0 ? process.argv[at + 1] : undefined;
+    const file = valueOf('--seed-summary');
     if (file) writeFileSync(file, `${JSON.stringify(summary, null, 2)}\n`);
   }
   await app.listen(config.PORT);

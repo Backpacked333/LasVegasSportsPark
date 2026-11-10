@@ -16,7 +16,8 @@ pnpm install
 # API in development mode (local identity provider, PGlite kept in PGLITE_DATA_DIR). NODE_ENV has
 # no default: the API refuses to start without it.
 export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
-# Synthetic accounts to sign in with (K-14; root README "Local sign-in"); idempotent:
+# Synthetic accounts to sign in with (K-14; root README "Local sign-in"); idempotent. Add
+# `-- --demo` for synthetic records to show (a team, two enrolled children, payments):
 pnpm --filter @sportspark/api seed:dev
 pnpm --filter @sportspark/api dev
 # The app (Expo dev server; open in a simulator, an emulator or a development build):

@@ -17,7 +17,7 @@ pnpm install
 # API in development mode (local identity provider, PGlite kept in PGLITE_DATA_DIR). NODE_ENV has
 # no default: the API refuses to start without it.
 export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
-pnpm --filter @sportspark/api seed:dev   # synthetic accounts to sign in with (root README "Local sign-in")
+pnpm --filter @sportspark/api seed:dev   # synthetic accounts to sign in with (root README "Local sign-in"); add `-- --demo` for synthetic records to show
 pnpm --filter @sportspark/api dev        # API on :3000
 pnpm --filter @sportspark/staff dev      # http://localhost:5173
 ```
