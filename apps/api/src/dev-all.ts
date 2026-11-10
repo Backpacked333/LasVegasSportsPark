@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { seedDemo } from './dev/seed-demo';
+import { seedDemo, type DemoSummary } from './dev/seed-demo';
 import { seedDevelopment } from './dev/seed-dev';
 import { configureApp } from './kernel/app-setup';
 import { loadConfig } from './kernel/config';
@@ -48,15 +48,19 @@ async function main(): Promise<void> {
   if (process.argv.includes('--seed')) {
     const summary = await seedDevelopment(app, { timezone: valueOf('--timezone') });
     logger.log(`development seed ready: ${JSON.stringify(summary)}`);
+    let demo: DemoSummary | null = null;
     if (process.argv.includes('--demo')) {
       // Before the port opens and the worker loops start: the seed drives the API over a
       // loopback port of its own and drains the follow-ups itself.
-      const demo = await seedDemo(app, summary);
+      demo = await seedDemo(app, summary);
       logger.log(`${demo.message} ${JSON.stringify({ ...demo, message: undefined })}`);
     }
-    // --seed-summary <file>: the seed's account ids for scripts (the browser smoke tests).
+    // --seed-summary <file>: the seed's account ids for scripts (the browser smoke tests), and
+    // with --demo the demo accounts and record ids, so whoever presents it can sign in as them.
     const file = valueOf('--seed-summary');
-    if (file) writeFileSync(file, `${JSON.stringify(summary, null, 2)}\n`);
+    if (file) {
+      writeFileSync(file, `${JSON.stringify(demo ? { ...summary, demo } : summary, null, 2)}\n`);
+    }
   }
   await app.listen(config.PORT);
   const worker = startInlineWorker(app, config);
