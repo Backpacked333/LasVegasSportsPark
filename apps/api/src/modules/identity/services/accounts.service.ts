@@ -19,12 +19,14 @@ import {
   IDENTITY_PROVIDER,
   LocalJwtIdentityProvider,
   Outbox,
+  RECORD_AUTHORITY_PORT,
   UnitOfWork,
   assertExpectedRevision,
   ensureUpdated,
   type AppConfig,
   type Clock,
   type IdentityProviderPort,
+  type RecordAuthorityPort,
   type VerifiedIdentity,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
@@ -45,6 +47,7 @@ export class AccountsService {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     @Inject(IDENTITY_PROVIDER) private readonly identityProvider: IdentityProviderPort,
+    @Inject(RECORD_AUTHORITY_PORT) private readonly recordAuthority: RecordAuthorityPort,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
@@ -194,6 +197,10 @@ export class AccountsService {
         }
         return toAccount(row);
       }
+      // §5.6, §4.7 invariant 11: while the legacy system is the writer of accounts, none is
+      // created here (the refusal rolls the insert back). The route guard cannot do this for a
+      // caller that has no principal yet, so the command asserts the port itself (K-11).
+      await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'account', undefined, trx);
       await this.audit.record(trx, {
         organizationId,
         actor: buildPrincipal({ id, organizationId, personId: null }, [], identity.sessionId),

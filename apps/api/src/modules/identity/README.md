@@ -426,6 +426,10 @@ Test: `staff-reads.spec.ts` ("… a lookup by person id (ID-10)"), 2026-11-09.
   mark verified is recorded unverified.
 - `POST /accounts/register` is not `@Idempotent()`: an idempotency key is scoped to a principal,
   and none exists yet. `(issuer, subject)` is unique, so a repeat or a race answers one account.
+- Record authority (§5.6, §4.7 invariant 11): both routes are classified (`@RecordAuthority`,
+  `account` and `person`). A first registration has no principal for the route guard to act on,
+  so `registerAccount` asserts `RECORD_AUTHORITY_PORT` itself: while the legacy system is the
+  writer of accounts, none is created here.
 - **Proposed**, pending DEC-004 (Operator/privacy owner): anyone the identity provider verifies
   may register, and an adult may create their own record. Matching a provider-verified contact to
   a desk-made record automatically is not done; the person claims that record with a code.

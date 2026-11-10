@@ -27,6 +27,7 @@ import {
   Idempotent,
   Public,
   RateLimited,
+  RecordAuthority,
   ZodBody,
   ZodParams,
   type VerifiedIdentity,
@@ -75,6 +76,9 @@ export class AccountsController {
   @RateLimited('account_registration')
   @Post('accounts/register')
   @HttpCode(200)
+  // §5.6: creates an account record. The route guard acts only on a resolved principal, and a
+  // first registration has none, so the service asserts the same authority itself.
+  @RecordAuthority('account', 'organization')
   register(
     @CurrentVerifiedIdentity() identity: VerifiedIdentity | null,
     @ZodBody(RegisterAccountBody) body: z.infer<typeof RegisterAccountBody>,

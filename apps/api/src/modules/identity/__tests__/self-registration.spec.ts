@@ -1,6 +1,7 @@
-import { newId } from '@sportspark/contracts';
+import { errors, newId } from '@sportspark/contracts';
 import { seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { RECORD_AUTHORITY_IMPL } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
 import {
@@ -415,6 +416,52 @@ describe('self-registration (SPK-IAM-001, SPK-IAM-002, SPK-IAM-007, SPK-UX-001)'
       .send({ kind: 'child', givenName: 'Kit', familyName: 'Guardian', dateOfBirth: '2017-05-05' });
     expect(child.status).toBe(201);
     expect(child.body.kind).toBe('child');
+  });
+
+  it('§5.6, §4.7 invariant 11: while the legacy system is the writer of accounts, a first registration is refused and no account is created', async () => {
+    const legacy = await createTestApp({
+      imports: [IdentityModule],
+      principalResolver: 'module',
+      clockStart: '2026-10-23T12:00:00Z',
+      providers: [
+        {
+          provide: RECORD_AUTHORITY_IMPL,
+          useValue: {
+            assertNoLegacyAuthority: async (_organizationId: string, category: string) => {
+              if (category === 'account') {
+                throw errors.accessDenied('The legacy system is the writer of this record.', {
+                  code: 'LEGACY_AUTHORITY',
+                  recordCategory: category,
+                });
+              }
+            },
+          },
+        },
+      ],
+    });
+    try {
+      const organization = await legacy.db
+        .selectFrom('organizations')
+        .select('slug')
+        .where('id', '=', legacy.organizationId)
+        .executeTakeFirstOrThrow();
+      const subject = `sub-${newId()}`;
+      const token = await legacy.identityProvider.mint({ subject });
+      const refused = await legacy.http
+        .post('/v1/accounts/register')
+        .set({ Authorization: `Bearer ${token}` })
+        .send({ organizationSlug: organization.slug });
+      expect(refused.status).toBe(403);
+      expect(refused.body.details).toMatchObject({ code: 'LEGACY_AUTHORITY' });
+      const accounts = await legacy.db
+        .selectFrom('accounts')
+        .select('id')
+        .where('subject', '=', subject)
+        .execute();
+      expect(accounts).toEqual([]);
+    } finally {
+      await legacy.close();
+    }
   });
 
   it('§4.14: registration is rate limited per client address', async () => {

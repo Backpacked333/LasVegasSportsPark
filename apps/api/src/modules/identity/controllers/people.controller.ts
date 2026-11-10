@@ -96,6 +96,7 @@ export class PeopleController {
   /** POST /v1/me/person: the signed-in account's own adult record (SPK-IAM-001, SCR-C-01). */
   @Post('me/person')
   @Idempotent()
+  @RecordAuthority('person', 'organization')
   createOwnPerson(
     @CurrentPrincipal() principal: Principal,
     @CurrentVerifiedIdentity() identity: VerifiedIdentity | null,
