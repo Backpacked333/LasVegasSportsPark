@@ -951,13 +951,9 @@ export function SupportCaseScreen() {
   const { caseId = '' } = useParams();
   return (
     <section aria-labelledby="case-title" className="ia-screen">
-      <PageHeader
-        eyebrow="Business · Administration · Support"
-        title="Support case"
-        titleId="case-title"
-      />
+      <PageHeader eyebrow="Support" title="Support case" titleId="case-title" />
       <p>
-        <Link to="/admin/cases">Back to support cases</Link>
+        <Link to="/support/cases">Back to support cases</Link>
       </p>
       {isUuid(caseId) ? <CaseQuery id={caseId} /> : <StateView variant="unavailable" />}
     </section>

@@ -6,7 +6,7 @@
  * 900 px the sidebar collapses behind a menu button so the workspace works on a phone beside a
  * field. A skip link and visible focus serve keyboard users (SPK-UX-009).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { useApiQuery } from '../api/useApiQuery';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
@@ -33,6 +33,9 @@ const ROLE_LABELS: Record<string, string> = {
   coach: 'Coach',
   official: 'Official',
 };
+
+const DRAWER_FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function initialsOf(name: string): string {
   const parts = name.split(/\s+/).filter(Boolean);
@@ -88,10 +91,83 @@ function LiveIndicator() {
 export function Shell() {
   const { updateRequired } = useApp();
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const wasMenuOpen = useRef(false);
+  const focusSidebarAfterResize = useRef(false);
   const location = useLocation();
 
   // A route change closes the phone menu.
   useEffect(() => setMenuOpen(false), [location.pathname]);
+
+  // SPK-UX-009: keep focus in the modal drawer and return it to Menu when dismissed.
+  useEffect(() => {
+    if (menuOpen) {
+      wasMenuOpen.current = true;
+      drawerRef.current?.querySelector<HTMLElement>(DRAWER_FOCUSABLE_SELECTOR)?.focus();
+    } else if (wasMenuOpen.current) {
+      wasMenuOpen.current = false;
+      if (focusSidebarAfterResize.current) {
+        focusSidebarAfterResize.current = false;
+        drawerRef.current?.querySelector<HTMLElement>('.brand')?.focus();
+      } else {
+        menuButtonRef.current?.focus();
+      }
+    }
+  }, [menuOpen]);
+
+  // Keep the modal state aligned with the sidebar's 900 px CSS breakpoint.
+  useEffect(() => {
+    if (!menuOpen || typeof window.matchMedia !== 'function') return;
+    const narrowViewport = window.matchMedia('(max-width: 900px)');
+    const closeOnDesktop = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        focusSidebarAfterResize.current = true;
+        setMenuOpen(false);
+      }
+    };
+
+    if (!narrowViewport.matches) {
+      focusSidebarAfterResize.current = true;
+      setMenuOpen(false);
+      return;
+    }
+
+    narrowViewport.addEventListener('change', closeOnDesktop);
+    return () => narrowViewport.removeEventListener('change', closeOnDesktop);
+  }, [menuOpen]);
+
+  const handleDrawerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setMenuOpen(false);
+      return;
+    }
+    if (event.key !== 'Tab') return;
+
+    const drawer = drawerRef.current;
+    if (!drawer) return;
+    const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(DRAWER_FOCUSABLE_SELECTOR));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      drawer.focus();
+      return;
+    }
+
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+    if (activeIndex === -1) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && activeIndex === 0) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   if (updateRequired) return <UpdateRequiredNotice error={updateRequired} />;
 
@@ -101,11 +177,25 @@ export function Shell() {
     // viewer is (§4.15, SPK-AT-018).
     <OfflineQueueProvider>
       <div className="shell">
-        <a className="skip-link" href="#main">
+        <a className="skip-link" href="#main" inert={menuOpen}>
           Skip to main content
         </a>
-        <aside className="shell-side" data-open={menuOpen}>
+        <aside
+          ref={drawerRef}
+          className="shell-side"
+          data-open={menuOpen}
+          role={menuOpen ? 'dialog' : undefined}
+          aria-modal={menuOpen || undefined}
+          aria-label={menuOpen ? 'Staff navigation' : undefined}
+          tabIndex={menuOpen ? -1 : undefined}
+          onKeyDown={menuOpen ? handleDrawerKeyDown : undefined}
+        >
           <div className="shell-side-inner">
+            {menuOpen ? (
+              <Button variant="secondary" className="button-sm" onClick={() => setMenuOpen(false)}>
+                Close menu
+              </Button>
+            ) : null}
             <NavLink to="/today" className="brand" onClick={close} aria-label="Sportspark home">
               <span className="brand-mark" aria-hidden="true">
                 <Icon name="sports_soccer" size={22} filled />
@@ -137,14 +227,17 @@ export function Shell() {
             </div>
           </div>
         </aside>
-        <div className="shell-body">
+        <div className="shell-body" inert={menuOpen}>
           <header className="shell-header">
             <Button
               variant="secondary"
               className="menu-button"
               aria-expanded={menuOpen}
               aria-controls="main-nav"
-              onClick={() => setMenuOpen((open) => !open)}
+              onClick={(event) => {
+                menuButtonRef.current = event.currentTarget;
+                setMenuOpen((open) => !open);
+              }}
             >
               <Icon name="menu" size={18} />
               Menu

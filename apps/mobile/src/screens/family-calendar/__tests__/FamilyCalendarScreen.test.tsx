@@ -180,7 +180,9 @@ describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility 
       }),
     ).toBeOnTheScreen();
     expect(
-      screen.getByRole('button', { name: /^Sam: Junior Skills, 10:00 AM to 11:00 AM PDT\. ▲/ }),
+      await screen.findByRole('button', {
+        name: /^Sam: Junior Skills, 10:00 AM to 11:00 AM PDT\. ▲/,
+      }),
     ).toBeOnTheScreen(); // The label comes from the calendar item itself: no offering is read for it.
     expect(app.fake.requests.some((r) => r.route === '/offerings/{id}')).toBe(false);
   });

@@ -28,7 +28,13 @@ export interface StaffArea {
   /** The area's screen group registers its own routes in App.tsx (no placeholder). */
   ownRoutes?: boolean;
   /** Built screens of an area that still shows its placeholder, linked from the area page. */
-  links?: readonly { path: string; title: string; screenIds: string }[];
+  links?: readonly {
+    path: string;
+    title: string;
+    screenIds: string;
+    /** SPK-UX-005: the API permission required before the client offers this link. */
+    actionId?: string;
+  }[];
   /** With `links`: the screens of the area not built yet, and why (shown as the placeholder). */
   pending?: { screenIds: string; purpose: string };
 }
@@ -190,7 +196,12 @@ export const STAFF_AREAS: readonly StaffArea[] = [
         title: 'Migration imports and reconciliation',
         screenIds: 'SCR-S-48',
       },
-      { path: '/admin/cases', title: 'Support cases', screenIds: 'SCR-S-49' },
+      {
+        path: '/support/cases',
+        title: 'Support cases',
+        screenIds: 'SCR-S-49',
+        actionId: 'support.read_case',
+      },
       {
         path: '/admin/access-hardware',
         title: 'Access hardware (conditional)',

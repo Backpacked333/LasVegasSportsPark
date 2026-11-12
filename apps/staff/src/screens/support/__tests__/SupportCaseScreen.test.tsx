@@ -227,10 +227,13 @@ describe('SCR-S-49 SupportCasesScreen', () => {
     expect(await screen.findByText('Not available')).toBeInTheDocument();
   });
 
-  it('is reachable from the Administration area', async () => {
+  it('is reachable from the Administration area when support.read_case is permitted', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
-      routes: { 'GET /cases': { status: 200, body: { items: [], nextCursor: null } } },
+      routes: {
+        'GET /me/permissions': mePermissions({ actions: ['support.read_case'] }),
+        'GET /cases': { status: 200, body: { items: [], nextCursor: null } },
+      },
     });
     render(app.at('/admin'));
     await user.click(await screen.findByRole('link', { name: 'Support cases' }));

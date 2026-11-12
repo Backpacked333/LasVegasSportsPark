@@ -115,7 +115,11 @@ export function AreaNav({ onNavigate }: { onNavigate: () => void }) {
   }
 
   const areas = STAFF_AREAS.filter((area) => permissions.isAreaVisible(area.id) === true);
-  if (areas.length === 0) {
+  // SPK-UX-005: keep the permitted queue reachable when Administration is not visible.
+  const showSupportCases =
+    permissions.isPermitted('support.read_case') === true &&
+    permissions.isAreaVisible('admin') !== true;
+  if (areas.length === 0 && !showSupportCases) {
     return (
       <NavState
         testId="nav-none"
@@ -126,34 +130,59 @@ export function AreaNav({ onNavigate }: { onNavigate: () => void }) {
   // One "Areas" list holding a labelled sub-list per sidebar group (Operate, Compete, Grow,
   // Business); an empty group is left out.
   return (
-    <ul aria-label="Areas" className="nav-groups">
-      {STAFF_AREA_GROUPS.map((group) => {
-        const inGroup = areas.filter((area) => area.group === group);
-        if (inGroup.length === 0) return null;
-        const labelId = `nav-group-${group}`;
-        return (
-          <li key={group} className="nav-group">
-            <span className="nav-group-label" id={labelId}>
-              {group}
+    <>
+      {areas.length > 0 ? (
+        <ul aria-label="Areas" className="nav-groups">
+          {STAFF_AREA_GROUPS.map((group) => {
+            const inGroup = areas.filter((area) => area.group === group);
+            if (inGroup.length === 0) return null;
+            const labelId = `nav-group-${group}`;
+            return (
+              <li key={group} className="nav-group">
+                <span className="nav-group-label" id={labelId}>
+                  {group}
+                </span>
+                <ul aria-labelledby={labelId}>
+                  {inGroup.map((area) => (
+                    <li key={area.id} className="nav-item">
+                      <NavLink to={area.path} onClick={onNavigate}>
+                        {({ isActive }) => (
+                          <>
+                            <Icon name={area.icon} filled={isActive} />
+                            <span>{area.title}</span>
+                          </>
+                        )}
+                      </NavLink>
+                      <AttentionPill title={area.title} count={countOf.get(area.id)} />
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {showSupportCases ? (
+        <ul aria-label="Support navigation" className="nav-groups">
+          <li className="nav-group">
+            <span className="nav-group-label" id="nav-group-support">
+              Support
             </span>
-            <ul aria-labelledby={labelId}>
-              {inGroup.map((area) => (
-                <li key={area.id} className="nav-item">
-                  <NavLink to={area.path} onClick={onNavigate}>
-                    {({ isActive }) => (
-                      <>
-                        <Icon name={area.icon} filled={isActive} />
-                        <span>{area.title}</span>
-                      </>
-                    )}
-                  </NavLink>
-                  <AttentionPill title={area.title} count={countOf.get(area.id)} />
-                </li>
-              ))}
+            <ul aria-labelledby="nav-group-support">
+              <li className="nav-item">
+                <NavLink to="/support/cases" onClick={onNavigate}>
+                  {({ isActive }) => (
+                    <>
+                      <Icon name="support_agent" filled={isActive} />
+                      <span>Support cases</span>
+                    </>
+                  )}
+                </NavLink>
+              </li>
             </ul>
           </li>
-        );
-      })}
-    </ul>
+        </ul>
+      ) : null}
+    </>
   );
 }

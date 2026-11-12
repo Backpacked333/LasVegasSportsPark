@@ -7,7 +7,7 @@ import { apiErrorBody, fakePermissions, fakeResponse } from '@sportspark/api-cli
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { STAFF_AREAS } from '../navigation/areas';
 import {
   FACILITY_A,
@@ -93,7 +93,7 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
     expect(screen.getByRole('list', { name: 'Conditional capabilities' })).toBeInTheDocument();
   });
 
-  it('offers a skip link and a menu button that exposes its state for narrow screens', async () => {
+  it('opens the narrow navigation as a modal and restores focus after Escape (SPK-UX-009)', async () => {
     const user = userEvent.setup();
     const app = createTestApp();
     render(app.at('/today'));
@@ -103,8 +103,140 @@ describe('staff shell (SCR-S-01, SPK-UX-005)', () => {
     );
     const menu = screen.getByRole('button', { name: 'Menu' });
     expect(menu).toHaveAttribute('aria-expanded', 'false');
-    await user.click(menu);
+    menu.focus();
+    await user.keyboard('{Enter}');
     expect(menu).toHaveAttribute('aria-expanded', 'true');
+    const drawer = await screen.findByRole('dialog', { name: 'Staff navigation' });
+    const close = within(drawer).getByRole('button', { name: 'Close menu' });
+    const shellBody = document.querySelector('.shell-body') as HTMLElement;
+    const skipLink = document.querySelector('.skip-link') as HTMLAnchorElement;
+    await waitFor(() => expect(close).toHaveFocus());
+    expect(shellBody).toHaveAttribute('inert');
+    expect(skipLink).toHaveAttribute('inert');
+
+    await user.keyboard('{Escape}');
+    expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await waitFor(() => expect(menu).toHaveFocus());
+    expect(screen.queryByRole('dialog', { name: 'Staff navigation' })).toBeNull();
+    expect(shellBody).not.toHaveAttribute('inert');
+    expect(skipLink).not.toHaveAttribute('inert');
+  });
+
+  it('contains Tab and Shift+Tab inside the drawer (SPK-UX-009)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp();
+    render(app.at('/today'));
+    await screen.findByRole('link', { name: 'Skip to main content' });
+    await user.click(screen.getByRole('button', { name: 'Menu' }));
+    const drawer = await screen.findByRole('dialog', { name: 'Staff navigation' });
+    const close = within(drawer).getByRole('button', { name: 'Close menu' });
+    const signOut = within(drawer).getByRole('button', { name: 'Sign out' });
+
+    await waitFor(() => expect(close).toHaveFocus());
+    signOut.focus();
+    await user.keyboard('{Tab}');
+    expect(close).toHaveFocus();
+    await user.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(signOut).toHaveFocus();
+    await user.keyboard('{Escape}');
+  });
+
+  it('closes from the drawer button and restores the Menu trigger (SPK-UX-009)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp();
+    render(app.at('/today'));
+    await screen.findByRole('link', { name: 'Skip to main content' });
+    const menu = screen.getByRole('button', { name: 'Menu' });
+    await user.click(menu);
+    const drawer = await screen.findByRole('dialog', { name: 'Staff navigation' });
+    await user.click(within(drawer).getByRole('button', { name: 'Close menu' }));
+
+    expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await waitFor(() => expect(menu).toHaveFocus());
+    expect(screen.queryByRole('dialog', { name: 'Staff navigation' })).toBeNull();
+  });
+
+  it('closes on desktop resize and focuses the visible sidebar (SPK-UX-009)', async () => {
+    const query = '(max-width: 900px)';
+    let changeListener: ((event: MediaQueryListEvent) => void) | undefined;
+    const mediaQueryList = {
+      matches: true,
+      addEventListener: (_type: 'change', listener: (event: MediaQueryListEvent) => void) => {
+        changeListener = listener;
+      },
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList;
+    const matchMedia = vi.fn((mediaQuery: string) => {
+      expect(mediaQuery).toBe(query);
+      return mediaQueryList;
+    });
+    vi.stubGlobal('matchMedia', matchMedia);
+
+    try {
+      const user = userEvent.setup();
+      const app = createTestApp();
+      render(app.at('/today'));
+      await screen.findByRole('link', { name: 'Skip to main content' });
+      await user.click(screen.getByRole('button', { name: 'Menu' }));
+      const drawer = await screen.findByRole('dialog', { name: 'Staff navigation' });
+      await waitFor(() =>
+        expect(within(drawer).getByRole('button', { name: 'Close menu' })).toHaveFocus(),
+      );
+      expect(document.querySelector('.shell-body')).toHaveAttribute('inert');
+      expect(changeListener).toBeDefined();
+
+      act(() => changeListener?.({ matches: false } as MediaQueryListEvent));
+
+      expect(screen.queryByRole('dialog', { name: 'Staff navigation' })).toBeNull();
+      expect(document.querySelector('.shell-body')).not.toHaveAttribute('inert');
+      expect(screen.getByRole('button', { name: 'Menu' })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      );
+      const brand = screen.getByRole('link', { name: 'Sportspark home' });
+      await waitFor(() => expect(brand).toHaveFocus());
+      expect(brand).toBeVisible();
+      expect(brand.closest('.shell-side')).toHaveAttribute('data-open', 'false');
+      expect(matchMedia).toHaveBeenCalledWith(query);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('closes after click-navigation and restores the Menu trigger (SPK-UX-009)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp();
+    render(app.at('/today'));
+    await screen.findByRole('link', { name: 'Skip to main content' });
+    const menu = screen.getByRole('button', { name: 'Menu' });
+    await user.click(menu);
+    const drawer = await screen.findByRole('dialog', { name: 'Staff navigation' });
+    await user.click(await within(drawer).findByRole('link', { name: 'Finance' }));
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Finance' })).toBeInTheDocument();
+    expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await waitFor(() => expect(menu).toHaveFocus());
+    expect(screen.queryByRole('dialog', { name: 'Staff navigation' })).toBeNull();
+    expect(document.querySelector('.shell-body')).not.toHaveAttribute('inert');
+  });
+
+  it('keeps desktop sidebar navigation non-modal and interactive (SPK-UX-009)', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp();
+    render(app.at('/today'));
+    await screen.findByRole('link', { name: 'Skip to main content' });
+    const sidebar = document.querySelector('.shell-side') as HTMLElement;
+    const shellBody = document.querySelector('.shell-body') as HTMLElement;
+    expect(sidebar).toHaveAttribute('data-open', 'false');
+    expect(sidebar).not.toHaveAttribute('role', 'dialog');
+    expect(shellBody).not.toHaveAttribute('inert');
+
+    const finance = await screen.findByRole('link', { name: 'Finance' });
+    finance.focus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('heading', { level: 2, name: 'Finance' })).toBeInTheDocument();
+    expect(sidebar).not.toHaveAttribute('role', 'dialog');
+    expect(shellBody).not.toHaveAttribute('inert');
   });
 
   it('shows unknown paths as not available', async () => {
@@ -136,6 +268,63 @@ describe('navigation from GET /v1/me/permissions (SPK-UX-005, K-05)', () => {
     ]);
     expect(nav.getByRole('list', { name: 'Areas' })).toBeInTheDocument();
     expect(app.fake.requests.filter((r) => r.route === '/me/permissions')).toHaveLength(1);
+  });
+
+  const CASE_STAFF_NAV_CASES = [
+    { role: 'front_desk', areas: ['today'], viaAdmin: false },
+    { role: 'support_operator', areas: ['today'], viaAdmin: false },
+    { role: 'general_manager', areas: ['today', 'admin'], viaAdmin: true },
+  ] as const;
+
+  it.each(CASE_STAFF_NAV_CASES)(
+    'SPK-UX-005: $role can discover support cases through normal navigation',
+    async ({ role, areas, viaAdmin }) => {
+      const user = userEvent.setup();
+      const app = createTestApp({
+        routes: {
+          'GET /me/permissions': mePermissions({
+            staffRoles: [role],
+            actions: ['support.read_case'],
+            areas: [...areas],
+          }),
+          'GET /cases': { status: 200, body: { items: [], nextCursor: null } },
+        },
+      });
+      render(app.at('/today'));
+      const nav = await mainLinks();
+      let supportLink;
+      if (viaAdmin) {
+        await user.click(await nav.findByRole('link', { name: 'Administration' }));
+        const adminScreens = await screen.findByRole('navigation', {
+          name: 'Administration screens',
+        });
+        supportLink = within(adminScreens).getByRole('link', { name: 'Support cases' });
+      } else {
+        supportLink = await nav.findByRole('link', { name: 'Support cases' });
+      }
+      expect(supportLink).toHaveAttribute('href', '/support/cases');
+      await user.click(supportLink);
+      expect(await screen.findByRole('heading', { name: 'Support cases' })).toBeInTheDocument();
+    },
+  );
+
+  it('SPK-UX-005: a system administrator without support.read_case sees no support queue link', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me/permissions': mePermissions({
+          staffRoles: ['system_administrator'],
+          actions: ['support.manage_queues'],
+          areas: ['today', 'admin'],
+        }),
+      },
+    });
+    render(app.at('/admin'));
+    const nav = await mainLinks();
+    expect(nav.queryByRole('link', { name: 'Support cases' })).toBeNull();
+    const adminScreens = await screen.findByRole('navigation', {
+      name: 'Administration screens',
+    });
+    expect(within(adminScreens).queryByRole('link', { name: 'Support cases' })).toBeNull();
   });
 
   it('SPK-UX-005: attention counts show as pills beside the areas; link names stay the area titles', async () => {
