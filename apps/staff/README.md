@@ -120,7 +120,8 @@ recorded decision; **Not verified** names what this environment could not check.
   this browser by screen path only (never a record id). Verified:
   `src/layout/__tests__/quick-navigation.test.tsx`, `src/navigation/__tests__/destinations.test.ts`.
 - **Shell conveniences.** The sidebar collapses to an icon rail on wide screens (remembered) and
-  is a drawer over a scrim below 900 px (Escape, the scrim or a route change closes it); a thin
+  is a drawer over a scrim below 900 px (Escape, the scrim or a route change closes it); the
+  facility chosen in the switcher is remembered across reloads and forgotten on sign-out; a thin
   line at the top of the window while any read is in flight; each page starts at its top; the
   browser tab is titled with the screen shown; loading states draw quiet placeholder lines; error,
   offline and pending states each have their own look as well as their words and glyph; a busy

@@ -79,6 +79,10 @@ export function createQueryClient(): QueryClient {
   });
 }
 
+/** Where the chosen facility is kept (`PreferenceStore`); the value is the facility's id. */
+export const FACILITY_KEY = 'sportspark.facility';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function AppProviders({
   services,
   queryClient,
@@ -100,7 +104,19 @@ export function AppProviders({
   });
   const [updateRequired, setUpdateRequired] = useState<UpdateRequiredError | null>(null);
   const [online, setOnline] = useState(() => services.connectivity.current());
-  const [facilityId, setFacilityId] = useState<string | null>(null);
+  // The facility the viewer works in is remembered in this browser across reloads (a display
+  // preference; signing in or out clears it, and the switcher drops one outside the API's scope).
+  const [facilityId, setFacilityState] = useState<string | null>(() => {
+    const stored = preferences.get(FACILITY_KEY);
+    return stored !== null && UUID.test(stored) ? stored : null;
+  });
+  const setFacilityId = useCallback(
+    (id: string | null) => {
+      preferences.set(FACILITY_KEY, id);
+      setFacilityState(id);
+    },
+    [preferences],
+  );
 
   useEffect(() => {
     let active = true;
@@ -164,7 +180,7 @@ export function AppProviders({
       setFacilityId(null);
       setSession({ status: 'signed_in', session: next, expired: false });
     },
-    [services.sessionStore, client],
+    [services.sessionStore, client, setFacilityId],
   );
 
   const signOut = useCallback(async () => {
@@ -172,7 +188,7 @@ export function AppProviders({
     client.clear();
     setFacilityId(null);
     setSession({ status: 'signed_out', session: null, expired: false });
-  }, [services.sessionStore, client]);
+  }, [services.sessionStore, client, setFacilityId]);
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -187,7 +203,18 @@ export function AppProviders({
       setFacilityId,
       preferences,
     }),
-    [services, api, session, signIn, signOut, updateRequired, online, facilityId, preferences],
+    [
+      services,
+      api,
+      session,
+      signIn,
+      signOut,
+      updateRequired,
+      online,
+      facilityId,
+      setFacilityId,
+      preferences,
+    ],
   );
 
   return (

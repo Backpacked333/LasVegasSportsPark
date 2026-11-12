@@ -6,7 +6,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createTestApp, mePermissions } from '../../testing/test-app';
+import { FACILITY_B, createTestApp, mePermissions } from '../../testing/test-app';
 import { THEME_STORAGE_KEY } from '../../theme/ThemeProvider';
 
 afterEach(() => {
@@ -226,6 +226,37 @@ describe('shell conveniences (SCR-S-01)', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
     expect(screen.getByTestId('live-indicator')).toHaveTextContent('Live · ');
+  });
+
+  it('remembers the facility the viewer works in across reloads, and forgets it on sign-out', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp();
+    const first = render(app.at('/today'));
+    const select = await screen.findByRole('combobox', { name: 'Facility' });
+    await screen.findByRole('option', { name: 'North Park 2' });
+    await user.selectOptions(select, FACILITY_B);
+    expect(app.services.preferences?.get('sportspark.facility')).toBe(FACILITY_B);
+    first.unmount();
+
+    // A reload: the same browser preferences, a new page.
+    render(app.at('/today'));
+    const again = (await screen.findByRole('combobox', { name: 'Facility' })) as HTMLSelectElement;
+    await screen.findByRole('option', { name: 'North Park 2' });
+    expect(again.value).toBe(FACILITY_B);
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(app.services.preferences?.get('sportspark.facility')).toBeNull());
+  });
+
+  it('a stored facility outside the scope the API answers is dropped', async () => {
+    const app = createTestApp({
+      preferences: { 'sportspark.facility': '0192f1a0-0000-7000-8000-00000000fa99' },
+    });
+    render(app.at('/today'));
+    const select = (await screen.findByRole('combobox', { name: 'Facility' })) as HTMLSelectElement;
+    await screen.findByRole('option', { name: 'North Park 2' });
+    await waitFor(() => expect(select.value).toBe(''));
+    expect(app.services.preferences?.get('sportspark.facility')).toBeNull();
   });
 
   it('Escape closes the phone menu', async () => {
