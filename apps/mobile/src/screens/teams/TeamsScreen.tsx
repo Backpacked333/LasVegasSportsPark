@@ -38,7 +38,7 @@ import {
 } from '../../features/teams/queries';
 import { teamRoutes } from '../../features/teams/routes';
 import { invitationStatus, teamEntryStatus } from '../../features/teams/status';
-import { Body, ButtonRow, CommandFailure, Section, Title } from '../../features/teams/ui';
+import { Body, ButtonRow, CommandFailure, Section } from '../../features/teams/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion } from '../../ui/announce';
@@ -342,7 +342,7 @@ function TeamsHome() {
   const router = useRouter();
   return (
     <View>
-      <Title>Teams</Title>
+      {/* The tab's own header names the screen ("Teams"): no second title here. */}
       <MyTeams />
       <TeamInvitations />
       <Section title="Create or renew">

@@ -142,7 +142,8 @@ function SearchBox({ applied, onApply }: { applied: string; onApply: (q: string)
         testID="discover-q"
       />
       <ButtonRow>
-        <Button label="Search" variant="secondary" onPress={search} />
+        {/* The one action of this card: solid, so it reads as the next step. */}
+        <Button label="Search" onPress={search} />
         {applied ? (
           <Button
             label="Clear search"
