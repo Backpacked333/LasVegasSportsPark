@@ -1,7 +1,13 @@
 /**
  * Design tokens of the park visual system (SPK-UX-010: clear hierarchy, strong readability in busy
- * facilities, restrained animation), shared with the staff dashboard: night pitch, pitch green and
- * floodlight on desert sand, Archivo for everything, condensed uppercase for titles and scores.
+ * facilities, restrained animation), shared with the staff dashboard, in two themes with the same
+ * token names: classic (night pitch, pitch green and floodlight on desert sand) and Legends mode
+ * (dark with one gold accent). Archivo for everything, condensed uppercase for titles and scores.
+ *
+ * Colours are read through the theme in use, never statically: `useTheme()` in a component and
+ * `makeStyles` for its stylesheet (below), so the whole app follows the Legends mode switch
+ * (`ThemeProvider`, `LegendsModeToggle`). Text on a filled surface uses that surface's own token
+ * (`primaryText` on `primary`, `onNight` on `night` and `pitch`, `onFloodlight` on `floodlight`).
  *
  * Colour supports a status but never carries it alone (SPK-UX-009): every tone also has a distinct
  * glyph and a text label (see StatusBadge). Text sizes are base sizes; the OS text-size setting
