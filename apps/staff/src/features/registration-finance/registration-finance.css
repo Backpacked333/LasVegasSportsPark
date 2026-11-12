@@ -3,6 +3,14 @@
  * views). Class names are prefixed `rf-` so they never collide with other screen groups. Status is
  * carried by StatusBadge text and glyph, never by these colours (SPK-UX-009).
  */
+/* Below a page title the tabs keep their distance; inside a spaced column the gap does it. */
+h2 + .rf-section-nav,
+.page-head + .rf-section-nav {
+  margin-top: 14px;
+}
+.grow > .rf-section-nav {
+  margin-top: 0;
+}
 .rf-section-nav ul {
   list-style: none;
   margin: 0 0 var(--space-4);

@@ -170,12 +170,16 @@ hidden from screen readers), and the shared pieces `Card`/`SectionCard`, `Hero`,
   of both themes reach 4.5:1 by calculation (status tones on their tint and on a card included);
   no source file outside `src/ui/theme.ts` holds a colour literal; text fields show focus and
   follow the theme (`src/ui/__tests__/input.test.tsx`).
-- **Not verified**: how either theme looks. There is no web renderer in this app
-  (react-native-web is not a dependency), so no screenshot was taken; contrast was checked by
-  calculation, not on devices. Not checked on a device either: the status bar and keyboard
-  following the theme, continuous corners, the Android ripple, and the stored choice across a
-  reinstall or a restore from backup. Native acceptance (§6.2) applies as for everything else
-  here.
+- **Looked at in a browser, not on a device**: both themes were rendered once at phone size
+  through a temporary web build (react-native-web and an in-memory stand-in for the secure store,
+  neither committed: this app has no web target) against the development API, signed out and
+  signed in: the five tabs, the pass, family, enrollments, payments, credits, forms, preferences,
+  support, invitations and the inbox. In Legends mode no screen kept a light surface or
+  unreadable text. A browser render is not native acceptance (§6.2).
+- **Not verified** (needs devices): the status bar and keyboard following the theme, continuous
+  corners, the Android ripple, the platform switch's own colours, and the stored choice across a
+  reinstall or a restore from backup. Contrast was checked by calculation, not measured on a
+  device.
 - The design's scannable pass symbol (**Pending decision** DEC-023), choosing whose pass to show
   and "Add to Wallet" are not built; "Maybe" RSVP stays **Pending decision** DEC-064, and arrival
   notes and directions on the next-up card **Pending decision** POL-046.

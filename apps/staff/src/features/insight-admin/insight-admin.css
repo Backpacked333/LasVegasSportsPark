@@ -585,7 +585,7 @@
 }
 .ia-heatmap-grid td[data-level='3'] {
   background: color-mix(in srgb, var(--pitch) 62%, var(--sand-2));
-  color: var(--on-primary);
+  color: var(--on-primary-soft);
 }
 .ia-heatmap-grid td[data-level='4'] {
   background: var(--pitch);

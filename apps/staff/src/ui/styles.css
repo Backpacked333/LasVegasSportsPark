@@ -43,6 +43,8 @@
   --pitch: #0b6b3a;
   --pitch-hover: #08532c;
   --on-primary: #ffffff;
+  /* Text on the primary colour mixed towards the surface (a heatmap's middle levels). */
+  --on-primary-soft: #101814;
   --floodlight: #c6f36b;
   --floodlight-hover: #d4f78c;
   --accent-wash: #eef7dc;
@@ -54,7 +56,7 @@
   --ink: #101814;
   --ink-2: #3a4641;
   --muted: #5a6660;
-  --faint: #7c8782;
+  --faint: #66706b;
   --line: #e3e1d9;
   --line-soft: #eeece6;
   --line-strong: #d6d3c8;
@@ -196,6 +198,7 @@
   --pitch: #e9b949;
   --pitch-hover: #f4cd6c;
   --on-primary: #1a1304;
+  --on-primary-soft: #1a1304;
   --floodlight: #f2c94c;
   --floodlight-hover: #f8da7e;
   --accent-wash: #2a2210;
@@ -304,6 +307,10 @@ textarea {
   background: color-mix(in srgb, var(--floodlight) 55%, transparent);
   color: var(--ink);
 }
+:root[data-theme='legends'] ::selection {
+  background: var(--floodlight);
+  color: var(--on-primary);
+}
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
@@ -390,6 +397,28 @@ kbd {
   font-size: 36px;
   letter-spacing: -0.005em;
   line-height: 0.95;
+}
+/* Legends mode: page titles are lit from above, ivory running to gold. Where the gradient cannot
+   be clipped to the letters (forced colours, an old engine) the plain ivory of the theme stays. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  :root[data-theme='legends'] .shell-main h2:not(.state h2) {
+    background: linear-gradient(180deg, #fffaf0 18%, #f3d684 62%, #d9a52c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    width: fit-content;
+    max-width: 100%;
+    /* Room for descenders, which the clip would otherwise cut at a line height under 1. */
+    padding-bottom: 0.08em;
+  }
+}
+@media (forced-colors: active) {
+  :root[data-theme='legends'] .shell-main h2:not(.state h2) {
+    background: none;
+    color: CanvasText;
+    -webkit-text-fill-color: currentColor;
+  }
 }
 .shell-main h3 {
   font-size: 20px;
@@ -893,6 +922,15 @@ code {
 .list .state[data-variant] {
   border: 0;
   background: transparent;
+}
+
+/* What a read shows (its age, then its content): blocks keep a breath between them instead of
+   touching. Inline content and paragraphs are unaffected (`.shell-main p` keeps them tight). */
+.query-content > * + * {
+  margin-top: 12px;
+}
+.query-content > .query-content {
+  margin-top: 2px;
 }
 
 /* Banners: connectivity and notices. */
