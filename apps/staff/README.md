@@ -75,6 +75,57 @@ pnpm --filter @sportspark/staff dev      # http://localhost:5173
 | Hosting and the production origin (CORS or a same-origin proxy).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | **Pending decision** DEC-021                                                                                             |                                                                                                                                                                                                                                                                |
 | Schedule (SCR-S-03 to SCR-S-07) and Facilities (SCR-S-41, SCR-S-42) screens; SCR-S-51 and SCR-S-52 are nested in the Schedule area; details in `src/screens/schedule/README.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | **Verified** in jsdom                                                                                                    | `src/screens/*/__tests__`                                                                                                                                                                                                                                      |
 
+## Visual system, Legends mode and quick navigation (SPK-UX-005, SPK-UX-008 to SPK-UX-010)
+
+Status words follow §6.7: **Verified** means implemented and covered by the evidence named;
+**Proposed** means built here as a design proposal that the product owner has not accepted in a
+recorded decision; **Not verified** names what this environment could not check.
+
+- **Two themes from one set of tokens** (`src/ui/styles.css`). Classic (default): desert sand,
+  pitch green, the floodlight accent. Legends (`[data-theme='legends']`): night black, warm ivory
+  text, one gold accent; status tones are lightened for dark surfaces and warning is orange so it
+  is never read as the accent. Every rule takes a token: a colour literal in a feature stylesheet
+  does not follow the theme (the few left are documented where they stand: card colours in the
+  score sheet, the knob of a switch). Verified: both themes rendered for every area in a browser
+  at 1440 px and 390 px. Proposed: the Legends palette itself.
+- **The "Legends mode" switch** (`src/theme/`): in the header, on the sign-in page and in quick
+  navigation. `role="switch"` with its state, keyboard operable; the choice is a display
+  preference kept in this browser (`providers/preferences`, never sent to the API) and applied
+  before first paint by `public/theme-init.js` (a file, because the Content-Security-Policy allows
+  scripts from `'self'` only). Verified: `src/theme/__tests__/legends-mode.test.tsx`.
+- **Layers.** Content (cards, lists, tables, forms) is flat and opaque, for reading. Chrome
+  floats above it as liquid glass (`src/ui/glass/`): the sidebar over the night pitch artwork, the
+  header groups over the page scrolling beneath them, the quick navigation dialog, the sign-in
+  card, the workspace's phone tab bar. Rules every glass body follows:
+  1. the backdrop bends inside a band along its edge (an SVG displacement filter through
+     `backdrop-filter`; only Chromium renders it, every other engine gets the blur, fill and rim
+     of the stylesheet with no bend);
+  2. a thin rim, brighter towards the top left, with a faint edge line outside it;
+  3. there is something behind it to bend (artwork, or content that scrolls under it);
+  4. its content is flat, sharp and at full contrast, and never another glass body;
+  5. capsules and continuous corners; where content passes under a bar it fades (scroll edge).
+     `prefers-reduced-transparency` and `prefers-contrast: more` replace the optics with a solid
+     fill; `prefers-reduced-motion` removes the transitions.
+     Verified in headless Chromium at both themes: every body carries its filter, lines curve inside
+     the bezel with the blur turned down, and every label on glass measures at least 4.5:1 (glyphs
+     3:1) against the pixels behind it with the fills at their default, halved and doubled, at the
+     scroll positions where the darkest content passes under the header.
+     Not verified: Safari and Firefox on real devices (the fallback was checked by removing the
+     filter in Chromium), and staff acceptance on the facility's workstations (§6.3).
+- **Quick navigation** (`src/layout/CommandPalette.tsx`, `src/navigation/destinations.ts`): the
+  header's "Jump to", Ctrl+K or Command+K anywhere, or "/" outside a field. It offers every screen
+  that opens without first choosing a record, the facility choices, Legends mode, the sidebar and
+  sign-out; the screens offered follow `GET /v1/me/permissions` exactly as the sidebar does, and
+  the screen opened still renders what the API answers. Recently opened screens are remembered in
+  this browser by screen path only (never a record id). Verified:
+  `src/layout/__tests__/quick-navigation.test.tsx`, `src/navigation/__tests__/destinations.test.ts`.
+- **Shell conveniences.** The sidebar collapses to an icon rail on wide screens (remembered) and
+  is a drawer over a scrim below 900 px (Escape, the scrim or a route change closes it); a thin
+  line at the top of the window while any read is in flight; each page starts at its top; the
+  browser tab is titled with the screen shown; loading states draw quiet placeholder lines; error,
+  offline and pending states each have their own look as well as their words and glyph; a busy
+  button shows a spinner. Verified by the same tests and `src/__tests__/shell.test.tsx`.
+
 ## Today, People and families, support cases (SCR-S-01, SCR-S-02, SCR-S-20 to SCR-S-23, SCR-S-49, SCR-S-50)
 
 Routes: `/today`, `/today/exceptions/:exceptionId`, `/people`, `/people/:personId`,

@@ -109,7 +109,7 @@
 .slot-picker > .choice {
   min-height: 36px;
   padding: 0 10px;
-  border: 1px solid #cbe5d4;
+  border: 1px solid var(--tone-success-line);
   border-radius: 7px;
   background: var(--tone-success-bg);
   color: var(--pitch);
@@ -120,7 +120,7 @@
 .slot-picker > .choice:has(input:checked) {
   background: var(--pitch);
   border-color: var(--pitch);
-  color: #fff;
+  color: var(--on-primary);
 }
 .slot-picker > .choice:has(input:focus-visible) {
   outline: 2px solid var(--color-focus);
@@ -177,14 +177,14 @@
   text-align: center;
 }
 button.week-cell {
-  border: 1px solid var(--tone-success-line, #cbe5d4);
+  border: 1px solid var(--tone-success-line);
   background: var(--tone-success-bg);
   color: var(--pitch);
   cursor: pointer;
 }
 button.week-cell[aria-pressed='true'] {
   background: var(--pitch);
-  color: #fff;
+  color: var(--on-primary);
 }
 span.week-cell {
   border: 1px solid var(--line);

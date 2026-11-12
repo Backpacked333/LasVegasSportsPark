@@ -68,12 +68,12 @@
   padding: 0;
 }
 .board > li {
-  border-top: 1px solid #163428;
+  border-top: 1px solid var(--night-line);
 }
 .board > li[data-restricted='true'] {
   background: repeating-linear-gradient(
     135deg,
-    rgba(245, 196, 107, 0.07) 0 8px,
+    color-mix(in srgb, var(--night-warn) 7%, transparent) 0 8px,
     transparent 8px 16px
   );
 }
@@ -113,7 +113,7 @@
   font-weight: 600;
 }
 .board-restriction {
-  color: #f5c46b !important;
+  color: var(--night-warn) !important;
   font-weight: 600;
 }
 .board-progress {
@@ -141,7 +141,7 @@
 }
 .board-next {
   font-size: 12.5px;
-  color: #b9cbc1;
+  color: var(--night-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -157,12 +157,12 @@
   justify-content: flex-end;
 }
 .board-status .badge.tone-success {
-  background: #1f3d30;
-  color: #b9e4c9;
+  background: var(--night-line);
+  color: var(--night-ok);
 }
 .board-status .badge.tone-warning {
-  background: #4a3510;
-  color: #f5c46b;
+  background: var(--night-warn-bg);
+  color: var(--night-warn);
 }
 @media (max-width: 760px) {
   .board-head {
@@ -243,10 +243,10 @@
 }
 .issue[data-edge='danger'] {
   --edge: var(--tone-danger);
-  background: #fffafa;
+  background: var(--danger-wash);
 }
 .issue[data-edge='warning'] {
-  --edge: #d99a1e;
+  --edge: var(--warning-edge);
 }
 .issue[data-edge='info'] {
   --edge: var(--tone-info);
@@ -280,7 +280,7 @@
   --edge: var(--tone-danger);
 }
 .exception-summary[data-edge='warning'] {
-  --edge: #d99a1e;
+  --edge: var(--warning-edge);
 }
 .exception-summary[data-edge='info'] {
   --edge: var(--tone-info);
@@ -292,12 +292,12 @@
 
 /* SCR-S-50 assistant: lavender "suggestions only" surface, clearly apart from operational data. */
 .assistant {
-  background: #f4f0fc;
+  background: var(--pending-wash);
   border-color: var(--tone-pending-line);
 }
 .assistant .panel {
   background: var(--card);
-  border-color: #e7e0f7;
+  border-color: var(--tone-pending-line);
 }
 .assistant h3 {
   color: var(--tone-pending);

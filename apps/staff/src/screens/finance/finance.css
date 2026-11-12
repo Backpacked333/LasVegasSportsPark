@@ -45,10 +45,10 @@
 }
 .fin-row[data-edge='danger'] {
   --edge: var(--tone-danger);
-  background: #fffafa;
+  background: var(--danger-wash);
 }
 .fin-row[data-edge='warning'] {
-  --edge: #d99a1e;
+  --edge: var(--warning-edge);
 }
 .fin-row-main {
   display: flex;
@@ -199,7 +199,7 @@
 }
 .fin-recon-line {
   font-size: 12.5px;
-  color: #b9cbc1;
+  color: var(--night-soft);
 }
 .fin-recon-facts {
   display: grid;
@@ -227,7 +227,7 @@
   filter: brightness(0.95);
 }
 .fin-recon .state {
-  color: #e8f0eb;
+  color: var(--night-ink);
   border: 0;
   padding: 0;
   background: transparent;

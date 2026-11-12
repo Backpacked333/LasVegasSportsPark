@@ -32,7 +32,7 @@
   --sport: var(--kind-program);
 }
 [data-sport='futsal'] {
-  --sport: #0e7c74;
+  --sport: var(--kind-futsal);
 }
 [data-sport='other'] {
   --sport: var(--kind-dropin);

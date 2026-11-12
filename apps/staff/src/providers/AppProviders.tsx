@@ -22,6 +22,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { ThemeProvider } from '../theme/ThemeProvider';
+import { memoryPreferences, type PreferenceStore } from './preferences';
 import type { StaffServices } from './services';
 
 export type SessionStatus = 'loading' | 'signed_out' | 'signed_in';
@@ -44,6 +46,8 @@ export interface AppContextValue {
   /** The facility the viewer is working in, or null for every facility in their scope. */
   facilityId: string | null;
   setFacilityId(id: string | null): void;
+  /** Display preferences of this browser (theme, sidebar, recent screens). */
+  preferences: PreferenceStore;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -85,6 +89,10 @@ export function AppProviders({
   children: ReactNode;
 }) {
   const client = useMemo(() => queryClient ?? createQueryClient(), [queryClient]);
+  const preferences = useMemo(
+    () => services.preferences ?? memoryPreferences(),
+    [services.preferences],
+  );
   const [session, setSession] = useState<SessionState>({
     status: 'loading',
     session: null,
@@ -177,13 +185,16 @@ export function AppProviders({
       online,
       facilityId,
       setFacilityId,
+      preferences,
     }),
-    [services, api, session, signIn, signOut, updateRequired, online, facilityId],
+    [services, api, session, signIn, signOut, updateRequired, online, facilityId, preferences],
   );
 
   return (
     <QueryClientProvider client={client}>
-      <AppContext.Provider value={value}>{children}</AppContext.Provider>
+      <AppContext.Provider value={value}>
+        <ThemeProvider store={preferences}>{children}</ThemeProvider>
+      </AppContext.Provider>
     </QueryClientProvider>
   );
 }

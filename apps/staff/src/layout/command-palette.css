@@ -1,0 +1,199 @@
+/*
+ * Quick navigation dialog: a frosted glass panel over the dimmed page. Inside it everything is
+ * flat: the search field is a trough, the options are rows, the active one a chip fill.
+ */
+.palette-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: min(14vh, 120px) 16px 16px;
+}
+/* The world recedes behind the dialog. By day it is washed towards the page colour, not darkened:
+   the dialog's glass is light with dark text, and stays legible over a dark card or the sidebar. */
+.palette-layer {
+  --palette-scrim: rgba(243, 242, 236, 0.72);
+}
+:root[data-theme='legends'] .palette-layer {
+  --palette-scrim: rgba(0, 0, 0, 0.6);
+}
+.palette-dim {
+  position: absolute;
+  inset: 0;
+  background: var(--palette-scrim);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  animation: scrim-in 0.16s ease;
+}
+.palette-dialog {
+  position: relative;
+  width: min(640px, 100%);
+  animation: palette-in 0.22s cubic-bezier(0.3, 1.3, 0.5, 1);
+}
+@keyframes palette-in {
+  from {
+    transform: scale(0.95) translateY(-6px);
+  }
+}
+.palette {
+  --glass-shadow: 0 24px 70px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.12);
+  /* Text-heavy: a fuller frost than a bar's. */
+  --glass-fill-frost: rgba(255, 255, 255, 0.4);
+}
+:root[data-theme='legends'] .palette {
+  --glass-fill-frost: rgba(18, 16, 12, 0.56);
+}
+.palette-content {
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 620px);
+  padding: 10px;
+  gap: 6px;
+}
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 12px 0 14px;
+  border-radius: 16px;
+  background: var(--glass-trough);
+  color: var(--glass-ink-2);
+  flex: none;
+}
+.palette-search:focus-within {
+  box-shadow: 0 0 0 2px var(--color-focus);
+}
+.palette-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--glass-ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+}
+.palette-search input::placeholder {
+  color: var(--glass-ink-2);
+  opacity: 0.85;
+}
+.palette-search kbd,
+.palette-foot kbd {
+  background: var(--glass-chip);
+  border-color: transparent;
+  border-bottom-width: 1px;
+  color: var(--glass-ink-2);
+}
+.palette-list {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  scrollbar-width: thin;
+}
+.palette-group-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--glass-ink-2);
+  padding: 8px 12px 4px;
+}
+.palette-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 6px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  color: var(--glass-ink);
+}
+.palette-option[data-active='true'] {
+  background: var(--glass-chip);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pitch) 34%, transparent);
+}
+.palette-option-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--glass-child);
+  color: var(--pitch);
+}
+.palette-option[data-active='true'] .palette-option-icon {
+  background: var(--pitch);
+  color: var(--on-primary);
+}
+.palette-option-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+  flex: 1;
+}
+.palette-option-title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-option-context {
+  font-size: 12px;
+  color: var(--glass-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-option-hint {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--glass-ink-2);
+  flex: none;
+}
+.palette-option[data-active='true'] .palette-option-hint {
+  display: inline-flex;
+}
+.palette-empty,
+.palette-note {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--glass-ink-2);
+  font-size: 13.5px;
+}
+.palette-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 8px 12px 4px;
+  border-top: 1px solid var(--glass-separator);
+  color: var(--glass-ink-2);
+  font-size: 12px;
+  flex: none;
+}
+.palette-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+@media (max-width: 640px) {
+  .palette-layer {
+    padding-top: 12px;
+  }
+  .palette-foot {
+    display: none;
+  }
+}

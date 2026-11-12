@@ -19,15 +19,15 @@
   font-size: 14px;
   padding: 8px 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--card);
+  border-radius: var(--radius-control);
+  background: var(--field);
   color: var(--color-text);
 }
 .field [aria-invalid='true'] {
   border-color: var(--tone-danger);
   border-style: dashed;
   border-width: 2px;
-  background: #fffafa;
+  background: var(--danger-wash);
 }
 .field-required {
   color: var(--color-muted);

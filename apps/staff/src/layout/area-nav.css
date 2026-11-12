@@ -13,8 +13,8 @@
   height: 18px;
   padding: 0 6px;
   border-radius: 999px;
-  background: var(--night-2);
-  color: var(--night-text);
+  background: var(--glass-chip);
+  color: #fff;
   font-size: 11px;
   font-weight: 700;
   line-height: 18px;
@@ -22,8 +22,8 @@
   pointer-events: none;
 }
 .nav-item a[aria-current='page'] + .nav-count {
-  background: var(--night);
-  color: var(--floodlight);
+  background: var(--floodlight);
+  color: var(--night);
 }
 .nav-item .nav-count-text {
   position: absolute;

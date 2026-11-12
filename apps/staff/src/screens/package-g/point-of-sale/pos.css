@@ -58,7 +58,7 @@
   display: flex;
   gap: 2px;
   padding: 3px;
-  background: #e9e7e0;
+  background: var(--track);
   border-radius: 9px;
 }
 .pos-kinds button {
@@ -77,7 +77,7 @@
   background: var(--card);
   color: var(--ink);
   font-weight: 700;
-  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.1);
+  box-shadow: var(--shadow-chip);
 }
 .pos-tiles {
   list-style: none;
@@ -152,7 +152,7 @@
   height: 22px;
   border-radius: 999px;
   background: var(--pitch);
-  color: #fff;
+  color: var(--on-primary);
   font-size: 11.5px;
   font-weight: 800;
   display: grid;
@@ -360,7 +360,7 @@
 .pos-ticket-actions .fieldset > .choice:has(input:checked) {
   background: var(--pitch);
   border-color: var(--pitch);
-  color: #fff;
+  color: var(--on-primary);
 }
 .pos-ticket-actions .fieldset > .choice:has(input:checked)::before {
   content: '✓';

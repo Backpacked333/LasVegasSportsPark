@@ -18,9 +18,21 @@ export function facilityLabel(id: string, names: ReadonlyMap<string, string>): s
   return names.get(id) ?? `Facility ${id.slice(0, 8)}`;
 }
 
-export function FacilitySwitcher() {
-  const { session, facilityId, setFacilityId } = useApp();
-  const selectId = useId();
+export interface FacilityChoices {
+  /** The viewer is a staff principal (the switcher is theirs only). */
+  isStaff: boolean;
+  /** Facility ids the viewer may work in, in directory order. */
+  options: readonly string[];
+  /** The scope from `GET /v1/me`; empty means the whole organization. */
+  scoped: readonly string[];
+  names: ReadonlyMap<string, string>;
+  /** `GET /v1/me` and the directory have both answered. */
+  scopeKnown: boolean;
+}
+
+/** The facilities the viewer may choose, shared by the switcher and quick navigation. */
+export function useFacilityChoices(): FacilityChoices {
+  const { session } = useApp();
   const signedIn = session.status === 'signed_in';
   const me = useApiQuery({ path: '/me', enabled: signedIn });
   const isStaff = me.data?.principal.kind === 'staff';
@@ -44,6 +56,13 @@ export function FacilitySwitcher() {
   );
   // Only once the scope is known: a choice is never dropped while the directory is still loading.
   const scopeKnown = me.data !== undefined && hasAnswered(directory);
+  return { isStaff, options, scoped, names, scopeKnown };
+}
+
+export function FacilitySwitcher() {
+  const { facilityId, setFacilityId } = useApp();
+  const selectId = useId();
+  const { isStaff, options, scoped, names, scopeKnown } = useFacilityChoices();
 
   useEffect(() => {
     if (facilityId !== null && scopeKnown && !options.includes(facilityId)) setFacilityId(null);
