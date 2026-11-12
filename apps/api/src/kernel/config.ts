@@ -621,6 +621,7 @@ export const RATE_LIMIT_NAMES = [
   'claims',
   'invitations',
   'account_recovery',
+  'account_registration',
 ] as const;
 type RateLimitOverrides = Readonly<
   Partial<Record<(typeof RATE_LIMIT_NAMES)[number], { limit: number; windowSeconds: number }>>

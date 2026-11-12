@@ -6,6 +6,7 @@ import {
   type Account,
   type CreateAccountInput,
   type Principal,
+  type RegisterAccountInput,
   type RelinkAccountInput,
 } from '@sportspark/contracts';
 import { isUniqueViolation, pgConstraintName, type Db } from '@sportspark/db';
@@ -18,17 +19,21 @@ import {
   IDENTITY_PROVIDER,
   LocalJwtIdentityProvider,
   Outbox,
+  RECORD_AUTHORITY_PORT,
   UnitOfWork,
   assertExpectedRevision,
   ensureUpdated,
   type AppConfig,
   type Clock,
   type IdentityProviderPort,
+  type RecordAuthorityPort,
+  type VerifiedIdentity,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
 import { IdentityEvents } from '../identity.events';
 import { requireStaffLoginAuthority, toAccount } from '../identity.shared';
+import { buildPrincipal } from './principal-resolver.service';
 
 /**
  * Login accounts (SPK-IAM-002, SPK-AT-025). An account is the link between a provider identity
@@ -42,6 +47,7 @@ export class AccountsService {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     @Inject(IDENTITY_PROVIDER) private readonly identityProvider: IdentityProviderPort,
+    @Inject(RECORD_AUTHORITY_PORT) private readonly recordAuthority: RecordAuthorityPort,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
@@ -133,6 +139,85 @@ export class AccountsService {
         .selectAll()
         .where('id', '=', id)
         .executeTakeFirstOrThrow();
+      return toAccount(row);
+    });
+  }
+
+  /**
+   * POST /v1/accounts/register (SPK-IAM-001, SPK-IAM-002, SPK-UX-001 "Fresh installation"): the
+   * verified identity of the bearer token gets a login account in the named organization. The
+   * account is linked to no person and holds no grant, so it reads no private record: its holder
+   * then claims the record staff created (`POST /claims/accept`) or creates their own adult record
+   * (`POST /me/person`).
+   *
+   * The command is its own retry guard, since no principal exists to scope an idempotency key to:
+   * `(issuer, subject)` is unique, and a repeat (or two requests racing) answers the same account.
+   * An identity whose account is disabled, or belongs to another organization, is answered as the
+   * guard answers it: no active account matches. Who may register is a guardian-verification
+   * policy (§6.6, DEC-004); the default is Proposed: anyone the identity provider verified.
+   */
+  async registerAccount(
+    identity: VerifiedIdentity,
+    input: RegisterAccountInput,
+    correlationId: string | null,
+  ): Promise<Account> {
+    const organization = await this.db
+      .selectFrom('organizations')
+      .select(['id', 'status'])
+      .where('slug', '=', input.organizationSlug)
+      .executeTakeFirst();
+    if (!organization || organization.status !== 'active') throw errors.notFound('organization');
+    const organizationId = organization.id;
+    return runInTransaction(this.uow, async ({ trx }) => {
+      const id = newId();
+      const inserted = await trx
+        .insertInto('accounts')
+        .values({
+          id,
+          organization_id: organizationId,
+          issuer: identity.issuer,
+          subject: identity.subject,
+          person_id: null,
+          last_login_at: null,
+          disabled_at: null,
+          disabled_reason: null,
+        })
+        .onConflict((oc) => oc.columns(['issuer', 'subject']).doNothing())
+        .returning('id')
+        .executeTakeFirst();
+      const row = await trx
+        .selectFrom('accounts')
+        .selectAll()
+        .where('issuer', '=', identity.issuer)
+        .where('subject', '=', identity.subject)
+        .executeTakeFirstOrThrow();
+      if (!inserted) {
+        if (row.organization_id !== organizationId || row.status !== 'active') {
+          throw errors.authenticationRequired('No active account matches this token.');
+        }
+        return toAccount(row);
+      }
+      // §5.6, §4.7 invariant 11: while the legacy system is the writer of accounts, none is
+      // created here (the refusal rolls the insert back). The route guard cannot do this for a
+      // caller that has no principal yet, so the command asserts the port itself (K-11).
+      await this.recordAuthority.assertNoLegacyAuthority(organizationId, 'account', undefined, trx);
+      await this.audit.record(trx, {
+        organizationId,
+        actor: buildPrincipal({ id, organizationId, personId: null }, [], identity.sessionId),
+        action: IdentityActions.registerAccount.id,
+        targetType: 'account',
+        targetId: id,
+        afterRevision: 1,
+        correlationId,
+        details: { operation: 'register', issuer: identity.issuer, subject: identity.subject },
+      });
+      await this.outbox.enqueue(trx, IdentityEvents.accountRegistered, {
+        organizationId,
+        aggregateType: 'account',
+        aggregateId: id,
+        payload: { accountId: id },
+        correlationId,
+      });
       return toAccount(row);
     });
   }

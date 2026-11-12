@@ -38,6 +38,7 @@ export class AuthGuard implements CanActivate {
     }
 
     const identity = await this.identityProvider.verify(token);
+    request.verifiedIdentity = identity;
     const principal = await this.resolver.resolve(identity);
     if (!principal) {
       if (isPublic) {

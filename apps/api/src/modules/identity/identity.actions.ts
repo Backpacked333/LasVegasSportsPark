@@ -79,6 +79,19 @@ export const IdentityActions = defineActions({
     allowSelf: true,
     requirements: ['SPK-IAM-001'],
   },
+  registerAccount: {
+    id: 'identity.register_account',
+    description:
+      'A person the identity provider verified registers their own login account (no person, no access)',
+    staffRoles: [],
+    requirements: ['SPK-IAM-001', 'SPK-IAM-002'],
+  },
+  createOwnPerson: {
+    id: 'identity.create_own_person',
+    description: 'The holder of an account with no person creates their own adult record',
+    staffRoles: [],
+    requirements: ['SPK-IAM-001', 'SPK-IAM-002', 'SPK-IAM-007'],
+  },
   readPerson: {
     id: 'identity.read_person',
     description: 'Read a person (self, guardians holding view, staff)',

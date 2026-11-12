@@ -1,7 +1,9 @@
 /**
- * Staff sign-in (§4.13, §4.14 MFA for privileged staff). The managed identity provider is DEC-018
- * (Technical lead/account owners), so production builds show the pending state; development builds
- * offer the development sign-in, which production bundles do not contain.
+ * Staff sign-in (§4.13, §4.14 MFA for privileged staff). A build that names an identity provider
+ * (`VITE_AUTH_ISSUER`, `VITE_AUTH_CLIENT_ID`) offers managed sign-in (`ManagedSignInPanel`). Which
+ * provider that is remains DEC-018 (Technical lead/account owners), so a build that names none
+ * shows the pending state. Development builds also offer the development sign-in, which
+ * production bundles do not contain.
  *
  * Layout (SPK-UX-010 soccer-specific identity): a night-pitch panel with the park's field markings
  * beside the sign-in card. The pitch is decorative (`aria-hidden`); below 900 px it shrinks to a
@@ -10,8 +12,10 @@
 import { Suspense } from 'react';
 import { useLocation } from 'react-router';
 import { DevSignIn } from '../../dev';
+import { useApp } from '../../providers/AppProviders';
 import { Icon, type IconName } from '../../ui/Icon';
 import { StateView } from '../../ui/StateView';
+import { ManagedSignInPanel } from './ManagedSignInPanel';
 import './sign-in.css';
 
 const SPORTS: readonly { icon: IconName; label: string }[] = [
@@ -59,6 +63,7 @@ function PitchMarkings() {
 export function SignInScreen() {
   const location = useLocation();
   const expired = (location.state as { expired?: boolean } | null)?.expired === true;
+  const managedSignIn = useApp().services.managedSignIn ?? null;
   return (
     <div className="signin">
       <aside className="signin-pitch" aria-hidden="true">
@@ -110,11 +115,12 @@ export function SignInScreen() {
               Your session ended. Sign in again.
             </p>
           ) : null}
+          {managedSignIn ? <ManagedSignInPanel managedSignIn={managedSignIn} /> : null}
           {DevSignIn ? (
             <Suspense fallback={<StateView variant="loading" label="sign-in" />}>
               <DevSignIn />
             </Suspense>
-          ) : (
+          ) : managedSignIn ? null : (
             <StateView
               variant="pending-decision"
               subject="Staff sign-in"

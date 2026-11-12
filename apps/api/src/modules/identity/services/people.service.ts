@@ -8,6 +8,7 @@ import {
   type AddContactPointInput,
   type ContactPoint,
   type ContactPointRemoved,
+  type CreateOwnPersonInput,
   type CreatePersonInput,
   type ImportProvenance,
   type MakePrimaryContactPointInput,
@@ -39,6 +40,7 @@ import {
   executorFor,
   type Clock,
   type Trx,
+  type VerifiedIdentity,
 } from '../../../kernel';
 import { IdentityActions } from '../identity.actions';
 import { runInTransaction } from '../identity.transaction-context';
@@ -84,6 +86,37 @@ function contactTerm(term: string): { kind: 'email' | 'phone'; value: string } |
 /** Duplicate detection score for an exact name + date-of-birth match (SPK-IAM-007). */
 const DUPLICATE_SCORE_NAME_DOB = 80;
 const DUPLICATE_SCORE_VERIFIED_CONTACT = 70;
+
+/**
+ * The contact points an identity provider's token proves (OpenID Connect standard claims), each
+ * primary for its kind. `verified` is true only when the provider says so; the claims are never
+ * read from a request body.
+ */
+export function verifiedContactClaims(identity: VerifiedIdentity): AddContactPointInput[] {
+  const contacts: AddContactPointInput[] = [];
+  const { email, email_verified, phone_number, phone_number_verified } = identity.claims;
+  if (typeof email === 'string' && email.trim().length >= 3 && email.length <= 320) {
+    contacts.push({
+      kind: 'email',
+      value: email,
+      isPrimary: true,
+      verified: email_verified === true,
+    });
+  }
+  if (
+    typeof phone_number === 'string' &&
+    phone_number.trim().length >= 3 &&
+    phone_number.length <= 320
+  ) {
+    contacts.push({
+      kind: 'phone',
+      value: phone_number,
+      isPrimary: true,
+      verified: phone_number_verified === true,
+    });
+  }
+  return contacts;
+}
 
 /**
  * Persons and contact points (SPK-IAM-001/002/007). A person is never an account, a household or
@@ -233,6 +266,146 @@ export class PeopleService implements PersonDirectoryPort {
         aggregateType: 'person',
         aggregateId: id,
         payload: { personId: id, kind: input.kind, source },
+        correlationId,
+      });
+      await this.detectDuplicates(trx, principal, organizationId, id, correlationId);
+      return this.detail(trx, organizationId, id);
+    });
+  }
+
+  /**
+   * POST /v1/me/person (SPK-IAM-001, SPK-IAM-002, SPK-IAM-007; SCR-C-01): the holder of an
+   * account that is linked to no person creates their own adult record, and the account is linked
+   * to it in the same transaction. Nothing else is granted: the new person holds no relationship
+   * and no grant over anyone, and joins no household.
+   *
+   * Authority is the account itself (it has no person for `allowSelf` to compare), so the rule is
+   * structural: a signed-in account, active, with no person. The date of birth must be an adult's
+   * (`ADULT_AGE_YEARS`; a child never holds an account's authority).
+   *
+   * Contact points come only from the identity provider's verified token, never from the body:
+   * the OpenID Connect claims `email` with `email_verified`, and `phone_number` with
+   * `phone_number_verified`. A claim the provider did not mark verified is recorded unverified.
+   * When a verified claim already identifies another person (staff verified the same address on a
+   * record made at the desk), nothing is created: the answer is RESOURCE_CONFLICT with
+   * `nextAction` to claim that record, so no second participant exists (SPK-IAM-002). Matching the
+   * provider's verified contact to that record automatically is a guardian-verification policy
+   * (§6.6, DEC-004) and is not done. Other likenesses (same name and date of birth, a shared
+   * verified contact that is not a primary one) become duplicate candidates for staff review.
+   */
+  async createOwnPerson(
+    principal: Principal,
+    identity: VerifiedIdentity,
+    input: CreateOwnPersonInput,
+    correlationId: string | null,
+  ): Promise<PersonDetail> {
+    const organizationId = principal.organizationId;
+    const accountId = principal.accountId;
+    if (!organizationId || !accountId) throw errors.authenticationRequired();
+    const now = this.clock.now();
+    assertKindMatchesDateOfBirth('adult', input.dateOfBirth, now);
+    const contacts = verifiedContactClaims(identity);
+    const id = newId();
+    return runInTransaction(this.uow, async ({ trx }) => {
+      // §4.9: locked, so two requests for one account create one person.
+      const account = await trx
+        .selectFrom('accounts')
+        .select(['id', 'person_id', 'revision'])
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', accountId)
+        .where('status', '=', 'active')
+        .forUpdate()
+        .executeTakeFirst();
+      if (!account) throw errors.authenticationRequired('No active account matches this token.');
+      if (account.person_id) {
+        throw errors.resourceConflict('This account is already linked to a person.', {
+          personId: account.person_id,
+        });
+      }
+      await trx
+        .insertInto('persons')
+        .values({
+          id,
+          organization_id: organizationId,
+          kind: 'adult',
+          given_name: input.givenName,
+          family_name: input.familyName,
+          date_of_birth: input.dateOfBirth,
+          source: 'self_service',
+          created_by: json(snapshotActor(principal)),
+          created_by_person_id: null,
+          merged_into_person_id: null,
+        })
+        .execute();
+      for (const contact of contacts) {
+        if (contact.verified) {
+          // The database's unique index on verified primary contacts is the guarantee (a racing
+          // request fails there); this read gives the person the way forward.
+          const holder = await trx
+            .selectFrom('contact_points')
+            .select('id')
+            .where('organization_id', '=', organizationId)
+            .where('kind', '=', contact.kind)
+            .where('value', '=', normalizeContactValue(contact.kind, contact.value))
+            .where('verified_at', 'is not', null)
+            .where('is_primary', '=', true)
+            .executeTakeFirst();
+          if (holder) {
+            throw errors.resourceConflict(
+              `A record with this verified ${contact.kind === 'email' ? 'email address' : 'phone number'} already exists. Enter the claim code from the front desk to link your account to it.`,
+              { kind: contact.kind, resolution: 'claim_existing_record' },
+            );
+          }
+        }
+        await this.insertContactPoint(trx, organizationId, id, contact);
+      }
+      const linked = await trx
+        .updateTable('accounts')
+        .set({ person_id: id, revision: account.revision + 1 })
+        .where('id', '=', account.id)
+        .where('revision', '=', account.revision)
+        .executeTakeFirst();
+      ensureUpdated(linked.numUpdatedRows, () =>
+        errors.staleRevision(account.revision, account.revision + 1),
+      );
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: IdentityActions.createOwnPerson.id,
+        targetType: 'person',
+        targetId: id,
+        afterRevision: 1,
+        correlationId,
+        details: {
+          kind: 'adult',
+          source: 'self_service',
+          accountId: account.id,
+          contactKinds: contacts.map((c) => ({ kind: c.kind, verified: c.verified })),
+        },
+      });
+      await this.audit.record(trx, {
+        organizationId,
+        actor: principal,
+        action: IdentityActions.manageAccount.id,
+        targetType: 'account',
+        targetId: account.id,
+        beforeRevision: account.revision,
+        afterRevision: account.revision + 1,
+        correlationId,
+        details: { operation: 'link', personId: id, via: 'self_registration' },
+      });
+      await this.outbox.enqueue(trx, IdentityEvents.personCreated, {
+        organizationId,
+        aggregateType: 'person',
+        aggregateId: id,
+        payload: { personId: id, kind: 'adult', source: 'self_service' },
+        correlationId,
+      });
+      await this.outbox.enqueue(trx, IdentityEvents.accountLinked, {
+        organizationId,
+        aggregateType: 'account',
+        aggregateId: account.id,
+        payload: { accountId: account.id, personId: id, via: 'self_registration' },
         correlationId,
       });
       await this.detectDuplicates(trx, principal, organizationId, id, correlationId);

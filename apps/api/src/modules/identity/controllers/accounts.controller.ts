@@ -12,6 +12,7 @@ import type { Request } from 'express';
 import {
   CreateAccountBody,
   DevTokenBody,
+  RegisterAccountBody,
   RelinkAccountBody,
   z,
   type Account,
@@ -22,11 +23,14 @@ import {
   APP_CONFIG,
   type AppConfig,
   CurrentPrincipal,
+  CurrentVerifiedIdentity,
   Idempotent,
   Public,
   RateLimited,
+  RecordAuthority,
   ZodBody,
   ZodParams,
+  type VerifiedIdentity,
 } from '../../../kernel';
 import { CorrelationId } from '../identity.shared';
 import { AccountsService } from '../services/accounts.service';
@@ -61,6 +65,27 @@ export class AccountsController {
     @CorrelationId() correlationId: string | null,
   ): Promise<Account> {
     return this.accounts.createAccount(principal, body, correlationId);
+  }
+
+  /**
+   * Public because the caller has no account yet; the bearer token the identity provider signed is
+   * required and is the only proof (SPK-IAM-002). Not `@Idempotent()`: an idempotency key is
+   * scoped to a principal, and `(issuer, subject)` is unique, so a repeat answers the same account.
+   */
+  @Public()
+  @RateLimited('account_registration')
+  @Post('accounts/register')
+  @HttpCode(200)
+  // §5.6: creates an account record. The route guard acts only on a resolved principal, and a
+  // first registration has none, so the service asserts the same authority itself.
+  @RecordAuthority('account', 'organization')
+  register(
+    @CurrentVerifiedIdentity() identity: VerifiedIdentity | null,
+    @ZodBody(RegisterAccountBody) body: z.infer<typeof RegisterAccountBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<Account> {
+    if (!identity) throw errors.authenticationRequired();
+    return this.accounts.registerAccount(identity, body, correlationId);
   }
 
   @Post('accounts/:id/relink')

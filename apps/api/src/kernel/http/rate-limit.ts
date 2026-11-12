@@ -105,6 +105,12 @@ export const DEFAULT_RATE_LIMITS = {
   invitations: { limit: 30, windowSeconds: 600 },
   /** Account relink, the staff-assisted recovery path (§4.14 rate-limited recovery). */
   account_recovery: { limit: 10, windowSeconds: 600 },
+  /**
+   * Self-registration of a login account (SPK-IAM-002, §4.14). Each request already carries a
+   * token the identity provider signed; the limit is per address and leaves room for several
+   * families registering from one facility network (Proposed value).
+   */
+  account_registration: { limit: 60, windowSeconds: 600 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitName = keyof typeof DEFAULT_RATE_LIMITS;
 

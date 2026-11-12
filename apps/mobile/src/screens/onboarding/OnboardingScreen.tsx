@@ -5,11 +5,11 @@
  * Steps, each read from the API so an interrupted onboarding resumes where it stopped (the
  * "recovery required" state of the inventory) without anything kept on the device:
  *
- * 1. Sign in. Managed sign-in is DEC-018 (pending); development builds use the development
- *    sign-in behind the same entry.
+ * 1. Sign in. A build that names an identity provider offers managed sign-in (which provider is
+ *    DEC-018, pending); development builds use the development sign-in behind the same entry.
  * 2. Participant record: `GET /v1/me` `person`. Not linked yet: claim the record the front desk
- *    created (`POST /v1/claims/{token}/accept`). Creating one's own adult record is not offered by
- *    the API (customers may create only child records), so the desk does it.
+ *    created (`POST /v1/claims/{token}/accept`), or, with no claim code, create one's own adult
+ *    record (`POST /v1/me/person`, OwnRecordForm).
  * 3. Email or phone: added, made primary or removed here (ContactPointStep); verified by the
  *    identity provider (DEC-018, pending).
  * 4. Notification and camera permission explanations: their wording is DEC-061 (pending); the
@@ -36,6 +36,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { useMe } from '../account/components/account-data';
 import { ClaimForm } from '../account/components/ClaimForm';
+import { OwnRecordForm } from '../account/components/OwnRecordForm';
 import { Paragraph, SectionHeader } from '../account/components/forms';
 import { StepList } from '../account/components/StepList';
 import { contactState, ContactPointStep, type ContactState } from './ContactPointStep';
@@ -138,10 +139,8 @@ function UnlinkedOnboarding({ claimToken }: { claimToken: string | null }) {
         initialToken={claimToken}
         intro="Enter the claim code the front desk gave you. Your account is linked to the record they created, so no second participant is made."
       />
-      <Paragraph muted>
-        No claim code? The front desk can create your participant record and link it to this
-        account. Creating it yourself in the app is not available yet.
-      </Paragraph>
+      <SectionHeader title="No claim code? Create your record" />
+      <OwnRecordForm />
     </View>
   );
 }

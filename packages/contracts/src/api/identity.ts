@@ -182,6 +182,28 @@ export const CreateAccountBody = withCommandMeta({
 }).openapi('CreateAccountRequest');
 export type CreateAccountInput = z.infer<typeof CreateAccountBody>;
 
+/**
+ * SPK-IAM-002, SPK-UX-001 "Fresh installation": the first request of a person the identity
+ * provider has verified and who has no login account yet. The bearer token is the proof; the body
+ * only names the organization (by slug, as anonymous discovery does), because no principal exists
+ * to take it from (§4.8).
+ */
+export const RegisterAccountBody = z
+  .object({ organizationSlug: z.string().trim().min(1).max(200) })
+  .openapi('RegisterAccountRequest');
+export type RegisterAccountInput = z.infer<typeof RegisterAccountBody>;
+
+/**
+ * SPK-IAM-001: the adult record of the person who signed in, created by that person. The date of
+ * birth is required because an adult record is the only kind a person may create for themselves
+ * (a child never holds the account's authority). Contact points are not accepted here: they come
+ * from the identity provider's verified claims.
+ */
+export const CreateOwnPersonBody = z
+  .object({ givenName: PersonName, familyName: PersonName, dateOfBirth: DateOnly })
+  .openapi('CreateOwnPersonRequest');
+export type CreateOwnPersonInput = z.infer<typeof CreateOwnPersonBody>;
+
 export const RelinkAccountBody = withCommandMeta({
   issuer: z.string().trim().min(1).max(500),
   subject: z.string().trim().min(1).max(500),
@@ -1147,6 +1169,25 @@ register({
   requirements: 'SPK-IAM-001, SPK-IAM-002',
   body: CreateAccountBody,
   response: AccountSchema,
+  idempotent: true,
+});
+register({
+  method: 'post',
+  path: '/accounts/register',
+  summary:
+    'Register a login account for the verified identity of the bearer token (no person, no access)',
+  requirements: 'SPK-IAM-001, SPK-IAM-002, SPK-UX-001',
+  body: RegisterAccountBody,
+  response: AccountSchema,
+  status: 200,
+});
+register({
+  method: 'post',
+  path: '/me/person',
+  summary: 'Create the adult record of the signed-in person and link the account to it',
+  requirements: 'SPK-IAM-001, SPK-IAM-002, SPK-IAM-007',
+  body: CreateOwnPersonBody,
+  response: PersonDetailSchema,
   idempotent: true,
 });
 register({

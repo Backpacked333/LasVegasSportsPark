@@ -25,6 +25,7 @@ import type { StaffConfig } from '../config/config';
 import { createManualConnectivity } from '../connectivity/sources';
 import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
 import type { StaffServices } from '../providers/services';
+import type { ManagedSignIn } from '../session/managed-sign-in';
 
 export const TEST_NOW = new Date('2026-10-24T12:00:00.000Z');
 export const TEST_SESSION: Session = {
@@ -113,6 +114,8 @@ export interface TestAppOptions {
   online?: boolean;
   config?: Partial<StaffConfig>;
   now?: () => Date;
+  /** A managed sign-in double; absent as in a build that names no identity provider. */
+  managedSignIn?: ManagedSignIn;
 }
 
 export function createTestApp(options: TestAppOptions = {}) {
@@ -140,6 +143,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     fetch: fake.fetch,
     generateKey: sequentialKeys(),
     now: options.now ?? (() => TEST_NOW),
+    ...(options.managedSignIn ? { managedSignIn: options.managedSignIn } : {}),
   };
   const queryClient = new QueryClient({
     defaultOptions: {

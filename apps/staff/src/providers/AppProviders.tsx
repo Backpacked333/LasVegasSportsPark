@@ -164,7 +164,10 @@ export function AppProviders({
     client.clear();
     setFacilityId(null);
     setSession({ status: 'signed_out', session: null, expired: false });
-  }, [services.sessionStore, client]);
+    // §4.14: on a shared desk device the identity provider's own session ends too, so the next
+    // person is asked to sign in rather than being let in as the last one.
+    await services.managedSignIn?.signOut();
+  }, [services.sessionStore, services.managedSignIn, client]);
 
   const value = useMemo<AppContextValue>(
     () => ({

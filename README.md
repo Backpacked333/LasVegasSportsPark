@@ -124,6 +124,9 @@ export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DAT
 pnpm dev:all -- --seed      # migrates, creates the development seed, serves :3000 with the worker loops
 ```
 
+`--seed` takes `--timezone <IANA zone>` for the seeded facility (default UTC) and `--demo` for the
+demo dataset described under "Local sign-in" below.
+
 To run them as separate processes, as production does, use one PostgreSQL database:
 
 ```bash
@@ -156,6 +159,64 @@ UTC) and six local accounts: `dev-admin` (system administrator), `dev-desk` (fro
 `PGLITE_DATA_DIR`, run the seed before the API starts, never while it runs, and never start a
 worker on the same directory (previous section); use `DATABASE_URL` for the seed, the API and the
 worker when follow-ups matter.
+
+#### Demo dataset (`--demo`)
+
+The seed alone leaves every screen empty. `--demo` adds a demo dataset on top of it, so the staff
+dashboard and the customer app have records to show (**Verified**:
+`apps/api/src/dev/seed-demo.ts` with its stages in `apps/api/src/dev/demo/`, asserted by
+`apps/api/src/dev/__tests__/seed-demo.spec.ts`; run by hand against PGlite with `seed:dev` and
+`dev:all` on 2026-11-09 and 2026-11-10). **Every name, price, rule, capacity, policy wording and time in it is an
+invented example, not operator policy (specification §1.4)**; the names say so ("Demo United",
+"Alex Example (demo captain)", "Demo Junior Skills (synthetic)"), and so does the seed's output.
+
+```bash
+pnpm --filter @sportspark/api seed:dev -- --timezone America/Los_Angeles --demo   # the seed, then the demo dataset
+pnpm dev:all -- --seed --demo --timezone America/Los_Angeles                      # or: seed, demo dataset and :3000 with the worker loops
+```
+
+The same rules as the seed apply: it refuses unless `NODE_ENV` is `development` or `test` and
+`AUTH_MODE=local`, and it enables no capability. It is created through the API's own commands: the
+seed boots the assembled application and sends the HTTP requests a client would send, signed in as
+the seeded accounts, so each module writes its own tables and every command is authorized, audited
+and followed up as usual (§4.2, §4.9); it then runs the outbox and the delivery worker until they
+are idle, so enrollments are confirmed and notices delivered before it returns (§4.12). The only
+record the seed writes itself is a kernel operation of kind `dev.seed_demo`.
+
+What it contains, anchored to the day it runs in the facility's time zone (SPK-SCHED-008):
+
+- Facility: two pitches with two halves each, an indoor boarded court and a room; opening hours;
+  one maintenance restriction on a half, three days ahead.
+- League: one competition with its own rule-set version, a season in progress, one division, six
+  teams with captains and five-player rosters, and 30 fixtures on the indoor court: four weekly
+  rounds played with official results (so standings are populated), three games today, five
+  rounds to come. `dev-parent` is captain of Demo United.
+- Youth: one program with a published term, 20 sessions (one today, more this week), ten seats
+  all taken by the children of four families, and one child on the waitlist. `dev-parent` is
+  guardian of two enrolled children.
+- Money: prices from catalog price rules on the term and on the league's player registration;
+  five checkouts completed through `FakePaymentProvider` (four families, and one adult who joined
+  Demo United through the league's registration); six team fees, five paid and the fee of
+  `dev-parent`'s team outstanding.
+- Operations: seven arrivals and five check-ins to today's session; two open support cases (one
+  opened by `dev-parent` from the app); one staff notice delivered to the families' inboxes;
+  coaches and officials for the next session and games (two accepted, two offered, one game
+  without an official).
+- Accounts: the six seeded accounts keep their roles. None of them may approve a cancellation
+  policy (finance) or a maintenance restriction (facilities), so the demo adds `demo-finance` and
+  `demo-facilities`, and with them `demo-program` (the program manager responsible for the
+  offerings), `demo-manager`, `demo-support`, `demo-coach-2`, `demo-official-2` and
+  `demo-official-3`, plus ten customer accounts (five team captains, four parents, one player);
+  the seed prints their account ids for `POST /v1/dev/tokens`. On the seeded people it records a
+  synthetic email address each and a date of birth for `dev-parent` and the seeded child
+  (eligibility is evaluated from it).
+
+A second run on the same database changes nothing and says which day the dataset is anchored on:
+"today's" games, session and arrivals keep that date, so for a dataset anchored on today start
+from an empty development database. A run that stopped part-way is not resumed: the next run
+refuses and names the failed operation. Not in the dataset: fixtures from the fixture generator
+(the schedule is created fixture by fixture so that it reaches from past weeks to today),
+attendance marks, refunds, and anything behind a Package G capability switch.
 
 ## Working in this repository
 
