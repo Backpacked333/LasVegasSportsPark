@@ -113,6 +113,9 @@ export class HealthController {
     if (outboxAge > lag) reasons.push(`outbox backlog: oldest due event waited ${outboxAge}s`);
     const inboxAge = inbox?.oldestDueSeconds ?? 0;
     if (inboxAge > lag) reasons.push(`inbox backlog: oldest due event waited ${inboxAge}s`);
+    // A worker that has not succeeded yet (null) is not stale: the first periodic job may not have
+    // run on a fresh deployment. Dead letters are counted, never a reason: each is an owned
+    // operational exception (§4.12), alerted on through the metrics, not by taking the API out.
     const workerAge = worker?.secondsSinceSuccess ?? 0;
     if (workerAge > this.config.READY_WORKER_STALE_SECONDS) {
       reasons.push(`no periodic job succeeded for ${workerAge}s`);

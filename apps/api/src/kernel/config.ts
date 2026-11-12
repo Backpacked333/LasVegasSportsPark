@@ -70,7 +70,13 @@ export const ConfigSchema = z
         'NODE_ENV must be set explicitly to development, test or production (the local identity provider, /v1/dev/tokens and automatic migration are refused only when it is production)',
     }),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-    APP_VERSION: z.string().default('0.1.0'),
+    /**
+     * The build this process runs (§5.8 rollback evidence, §6.8 item 11): `GET /v1/health` and
+     * `GET /v1/ready` report it, the JSON logger and the waiting-for-handler messages name it.
+     * Unset or empty, `loadConfig` derives it from `SOURCE_COMMIT` (set by the image build) or
+     * `VERCEL_GIT_COMMIT_SHA` (the staging host); `0.1.0` only for a developer build.
+     */
+    APP_VERSION: z.string().trim().min(1).default('0.1.0'),
     DATABASE_URL: z.string().min(1).optional(),
     PGLITE_DATA_DIR: z.string().min(1).optional(),
     /** Connections the API or worker process keeps open at most (technical value). */
@@ -732,8 +738,27 @@ function databaseTransportProtected(url: string): boolean {
   return host === 'localhost' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
 }
 
+/**
+ * The build identifier a process reports as `APP_VERSION` (§5.8 rollback evidence, §6.8 item 11):
+ * an explicit `APP_VERSION` wins (a named release), else the commit the image was built from
+ * (`SOURCE_COMMIT`, set by the Dockerfile from the CI and deploy workflows), else the commit the
+ * staging host deployed (`VERCEL_GIT_COMMIT_SHA`). Empty values and the image's `unknown`
+ * placeholder count as unset; `undefined` lets the developer-build default (`0.1.0`) apply.
+ */
+export function buildVersion(env: NodeJS.ProcessEnv): string | undefined {
+  const present = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    return trimmed && trimmed !== 'unknown' ? trimmed : undefined;
+  };
+  return (
+    present(env['APP_VERSION']) ??
+    present(env['SOURCE_COMMIT']) ??
+    present(env['VERCEL_GIT_COMMIT_SHA'])
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const parsed = ConfigSchema.safeParse(env);
+  const parsed = ConfigSchema.safeParse({ ...env, APP_VERSION: buildVersion(env) });
   const modules = parseModuleSettings(env);
   const lines = [
     ...(parsed.success

@@ -1,10 +1,11 @@
 import { newId } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { APP_CONFIG, DATABASE, Inbox, type AppConfig } from '../../../kernel';
+import { APP_CONFIG, DATABASE, Inbox, MODULE_SETTINGS, type AppConfig } from '../../../kernel';
 import type { TestApp } from '../../../testing';
 import { createPersonFixture, createRelationshipFixture } from '../../identity';
 import { AccessControlWebhooksController } from '../controllers/attendance.controller';
+import type { EntrySettingsValue } from '../entry.settings';
 import {
   FAKE_ACCESS_CONTROL_PROVIDER,
   FAKE_ACCESS_CONTROL_SIGNATURE_HEADER,
@@ -377,6 +378,7 @@ describe('hardware access events (SPK-COND-004)', () => {
       t.app.get(Inbox),
       t.app.get<Db>(DATABASE),
       { ...t.app.get<AppConfig>(APP_CONFIG), NODE_ENV: 'production' },
+      t.app.get<EntrySettingsValue>(MODULE_SETTINGS('entry')),
     );
     await expect(
       production.receive(FAKE_ACCESS_CONTROL_PROVIDER, event.body, event.signature),

@@ -1,7 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { newId } from '@sportspark/contracts';
 import { sql, type Kysely } from 'kysely';
+import { json } from './helpers';
 import { migrationStatus, type MigrationFile, type MigrationStatus } from './migrate';
 import type { Database } from './schema';
+
+/**
+ * The restore ledger (migration 0020): the one table a restore legitimately appends to, so its
+ * row count is left out of the comparison with the backup manifest (a verification run after
+ * `recordRestore` must still match).
+ */
+export const RESTORE_LEDGER_TABLE = 'database_restores';
 
 /**
  * What a backup contained, recorded beside it (§5.8 recovery, SPK-AT-028): the applied migrations
@@ -92,7 +101,7 @@ export async function verifyRestore(
       backup: manifest.rowCounts[table] ?? null,
       restored: restored.rowCounts[table] ?? null,
     }))
-    .filter((d) => d.backup !== d.restored);
+    .filter((d) => d.table !== RESTORE_LEDGER_TABLE && d.backup !== d.restored);
   const migrationsMatch = restored.migrations.digest === manifest.migrations.digest;
   const faithful = migrationsMatch && rowCountDifferences.length === 0;
   return {
@@ -103,4 +112,84 @@ export async function verifyRestore(
     schemaStatus,
     rowCountDifferences,
   };
+}
+
+export interface RestoreRecordInput {
+  manifest: BackupManifest;
+  verification: RestoreVerification;
+  /** Who ran the restore (`db:restore --operator`): the runbook's actor (recovery runbook §5.3). */
+  operator: string;
+  /** The build that restored (`APP_VERSION` or `SOURCE_COMMIT` of the image); null when unknown. */
+  appVersion?: string | null;
+  /** The restore instant; defaults to the database clock. */
+  restoredAt?: Date;
+}
+
+export interface RestoreRecord {
+  id: string;
+  restoredAt: Date;
+}
+
+/** The restored schema predates migration 0020, so the restore ledger does not exist in it. */
+export class RestoreRecordUnavailableError extends Error {
+  constructor() {
+    super(
+      `the restored database has no ${RESTORE_LEDGER_TABLE} table (its backup predates migration 0020_core_database_restores): record the restore instant and backup id in the decision log (recovery runbook §5.3)`,
+    );
+    this.name = 'RestoreRecordUnavailableError';
+  }
+}
+
+/**
+ * Records a verified restore in the restored database itself (§5.8, SPK-AT-028; recovery runbook
+ * §5.3): the backup it came from, when it was taken, when and by whom it was restored, the build
+ * that restored it, whether the schema is current for this build, and the verification. Only a
+ * restore that matches its backup (`faithful`) is recorded; one that does not is not a restore of
+ * that backup and must not be started on. The row is append-only (`forbid_mutation`).
+ */
+export async function recordRestore(
+  db: Kysely<Database>,
+  input: RestoreRecordInput,
+): Promise<RestoreRecord> {
+  const { manifest, verification } = input;
+  if (!verification.faithful) {
+    throw new Error(
+      `restore of ${manifest.backupId} does not match its backup (migrations ${verification.migrationsMatch ? 'equal' : 'differ'}, ${verification.rowCountDifferences.length} table(s) differ): not recorded`,
+    );
+  }
+  const operator = input.operator.trim();
+  if (operator.length === 0) throw new Error('the restore operator must be named (--operator)');
+  const { rows: ledger } = await sql<{ present: string | null }>`
+    select to_regclass(${RESTORE_LEDGER_TABLE}) as present
+  `.execute(db);
+  if (!ledger[0]?.present) throw new RestoreRecordUnavailableError();
+  const restoredAt =
+    input.restoredAt ??
+    new Date(
+      (await sql<{ now: Date | string }>`select now() as now`.execute(db)).rows[0]?.now ??
+        Date.now(),
+    );
+  const id = newId();
+  await db
+    .insertInto('database_restores')
+    .values({
+      id,
+      backup_id: manifest.backupId,
+      backup_taken_at: manifest.takenAt,
+      migrations_digest: manifest.migrations.digest,
+      restored_at: restoredAt,
+      restored_by: operator,
+      app_version: input.appVersion ?? null,
+      schema_current: verification.ok,
+      verification: json({
+        faithful: verification.faithful,
+        migrationsMatch: verification.migrationsMatch,
+        rowCountDifferences: verification.rowCountDifferences,
+        schemaStatus: verification.schemaStatus,
+        tableCount: Object.keys(manifest.rowCounts).length,
+        backupMigrations: manifest.migrations,
+      }),
+    })
+    .execute();
+  return { id, restoredAt };
 }

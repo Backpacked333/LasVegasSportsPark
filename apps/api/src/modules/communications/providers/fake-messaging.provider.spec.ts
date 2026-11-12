@@ -101,4 +101,24 @@ describe('fake messaging providers (§5.2 provider-selection gate, SPK-COMMS-004
     expect(FakeMessagingProvider.verify(body, undefined)).toBe(false);
     expect(FakeMessagingProvider.verify(body, 'short')).toBe(false);
   });
+
+  it('§4.14 / §5.2: a configured webhook secret replaces the published constant for receipts', async () => {
+    const secret = 'm'.repeat(40);
+    const push = new FakePushProvider({ FAKE_WEBHOOK_SECRET: secret });
+    const req = request({ channel: 'push', addresses: ['device-1'] });
+    await push.send(req);
+    const { body, signature } = push.receipt(req, 'delivered');
+    expect(FakeMessagingProvider.verify(body, signature, secret)).toBe(true);
+    expect(FakeMessagingProvider.verify(body, signature)).toBe(false);
+    expect(FakeMessagingProvider.verify(body, FakeMessagingProvider.sign(body), secret)).toBe(
+      false,
+    );
+    // Unset, the constant stays the default.
+    const email = new FakeEmailProvider();
+    const { body: plain, signature: plainSignature } = email.receipt(
+      request({ channel: 'email' }),
+      'delivered',
+    );
+    expect(FakeMessagingProvider.verify(plain, plainSignature)).toBe(true);
+  });
 });

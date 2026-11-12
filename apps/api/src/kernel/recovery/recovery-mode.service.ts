@@ -23,6 +23,21 @@ import { APP_CONFIG, CLOCK, DATABASE } from '../tokens';
 /** The operational exception that records a recovery after a restore (§5.8, SPK-AT-028). */
 export const RECOVERY_EXCEPTION_CATEGORY = 'reliability.recovery_mode';
 
+/**
+ * The `database_restores` row that `db:restore` wrote for the restore being recovered from
+ * (migration 0020; recovery runbook §5.3), as carried into the recovery exception and audit
+ * record; `'missing'` when the reference names no recorded restore (a ticket id, or a backup taken
+ * before the ledger existed).
+ */
+export interface RestoreRecordDetails {
+  id: string;
+  backupTakenAt: string;
+  restoredAt: string;
+  restoredBy: string;
+  appVersion: string | null;
+  schemaCurrent: boolean;
+}
+
 export const RecoveryActions = defineActions({
   resume: {
     id: 'operations.resume_after_recovery',
@@ -70,7 +85,9 @@ export class RecoveryChecks {
  *
  * - Entered at boot when `RECOVERY_RESTORE_REFERENCE` is set: every organization gets one critical
  *   `reliability.recovery_mode` exception (general manager queue) for that restore. A restore
- *   already resumed is never re-entered by a restart with the same reference.
+ *   already resumed is never re-entered by a restart with the same reference. The reference is
+ *   looked up in `database_restores` (what `db:restore` recorded: instant, operator, build; runbook
+ *   §5.3) and the record, or `'missing'`, goes into the exception's and the audit record's details.
  * - While it is open, routes marked `@RefusedDuringRecovery()` (finance's money commands) answer
  *   503 INTEGRATION_UNAVAILABLE `details.reason = recovery_mode`; reads, provider webhooks and the
  *   reconciliation commands stay available, and the finance worker starts no new charge.
@@ -106,16 +123,59 @@ export class RecoveryMode implements OnApplicationBootstrap {
 
   /** Enters recovery for every organization (the boot path). Returns how many newly entered. */
   async enterAll(restoreReference: string): Promise<number> {
+    const record = await this.restoreRecord(restoreReference);
     const organizations = await this.db.selectFrom('organizations').select('id').execute();
     let entered = 0;
     for (const { id } of organizations) {
-      if (await this.uow.run(({ trx }) => this.enter(trx, id, restoreReference))) entered += 1;
+      if (await this.uow.run(({ trx }) => this.enter(trx, id, restoreReference, record))) {
+        entered += 1;
+      }
     }
     return entered;
   }
 
+  /**
+   * What `db:restore` recorded for this reference (the latest `database_restores` row naming it
+   * as its backup id), or null. A missing record does not stop recovery: the reference may be a
+   * ticket id, or the backup may predate migration 0020; the decision log is then the record.
+   */
+  async restoreRecord(restoreReference: string): Promise<RestoreRecordDetails | null> {
+    const row = await this.db
+      .selectFrom('database_restores')
+      .select([
+        'id',
+        'backup_taken_at',
+        'restored_at',
+        'restored_by',
+        'app_version',
+        'schema_current',
+      ])
+      .where('backup_id', '=', restoreReference)
+      .orderBy('restored_at', 'desc')
+      .executeTakeFirst();
+    if (!row) {
+      this.logger.warn(
+        `no database_restores row names restore "${restoreReference}": recovery is entered from the configured reference alone; record the restore instant and backup id in the decision log (recovery runbook §5.3)`,
+      );
+      return null;
+    }
+    return {
+      id: row.id,
+      backupTakenAt: new Date(row.backup_taken_at).toISOString(),
+      restoredAt: new Date(row.restored_at).toISOString(),
+      restoredBy: row.restored_by,
+      appVersion: row.app_version,
+      schemaCurrent: row.schema_current,
+    };
+  }
+
   /** Opens the recovery record for one organization unless this restore was already entered. */
-  async enter(trx: Trx, organizationId: string, restoreReference: string): Promise<boolean> {
+  async enter(
+    trx: Trx,
+    organizationId: string,
+    restoreReference: string,
+    record: RestoreRecordDetails | null = null,
+  ): Promise<boolean> {
     const dedupeKey = `recovery:${restoreReference}`;
     const seen = await trx
       .selectFrom('operational_exceptions')
@@ -132,7 +192,11 @@ export class RecoveryMode implements OnApplicationBootstrap {
       title: `Recovery after restore ${restoreReference}: financial commands paused until provider facts are reconciled`,
       ownerQueue: 'general_manager',
       dedupeKey,
-      details: { restoreReference, enteredAt: enteredAt.toISOString() },
+      details: {
+        restoreReference,
+        enteredAt: enteredAt.toISOString(),
+        restoreRecord: record ?? 'missing',
+      },
     });
     await this.audit.record(trx, {
       organizationId,
@@ -140,8 +204,10 @@ export class RecoveryMode implements OnApplicationBootstrap {
       action: 'operations.recovery_entered',
       targetType: 'operational_exception',
       targetId: raised.id,
-      reason: `Database restored (${restoreReference})`,
-      details: { restoreReference },
+      reason: record
+        ? `Database restored (${restoreReference}) at ${record.restoredAt} by ${record.restoredBy}`
+        : `Database restored (${restoreReference})`,
+      details: { restoreReference, restoreRecord: record ?? 'missing' },
     });
     return !raised.deduplicated;
   }

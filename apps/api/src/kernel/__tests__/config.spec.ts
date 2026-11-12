@@ -149,3 +149,22 @@ describe('configuration security boundaries', () => {
     );
   });
 });
+
+describe('build identity (§5.8 rollback evidence, §6.8 item 11)', () => {
+  const env = { NODE_ENV: 'test', AUTH_LOCAL_SECRET: 'x'.repeat(40) };
+
+  it('§5.8 / §6.8 item 11: APP_VERSION names the build: an explicit value wins, then SOURCE_COMMIT, then VERCEL_GIT_COMMIT_SHA, else 0.1.0 for a developer build', () => {
+    const sha = 'a'.repeat(40);
+    const other = 'b'.repeat(40);
+    expect(
+      loadConfig({ ...env, APP_VERSION: '1.0.0+abc1234', SOURCE_COMMIT: sha }).APP_VERSION,
+    ).toBe('1.0.0+abc1234');
+    expect(loadConfig({ ...env, APP_VERSION: '', SOURCE_COMMIT: sha }).APP_VERSION).toBe(sha);
+    // The image's placeholder for a build made without a commit counts as unset.
+    expect(
+      loadConfig({ ...env, SOURCE_COMMIT: 'unknown', VERCEL_GIT_COMMIT_SHA: other }).APP_VERSION,
+    ).toBe(other);
+    expect(loadConfig({ ...env, SOURCE_COMMIT: '  ' }).APP_VERSION).toBe('0.1.0');
+    expect(loadConfig(env).APP_VERSION).toBe('0.1.0');
+  });
+});

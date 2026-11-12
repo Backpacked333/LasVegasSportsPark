@@ -31,6 +31,7 @@ import {
   DATABASE,
   Idempotent,
   Inbox,
+  MODULE_SETTINGS,
   NoRecordAuthority,
   Public,
   ZodBody,
@@ -43,8 +44,10 @@ import { withPassReferenceHashed } from '../entry.shared';
 import {
   FAKE_ACCESS_CONTROL_PROVIDER,
   FAKE_ACCESS_CONTROL_SIGNATURE_HEADER,
+  FAKE_ACCESS_CONTROL_WEBHOOK_SECRET,
   FakeAccessControlProvider,
 } from '../providers/fake-access-control.provider';
+import type { EntrySettingsValue } from '../entry.settings';
 import { AttendanceService } from '../services/attendance.service';
 import { OccupancyService } from '../services/occupancy.service';
 import { OfflineSyncService } from '../services/offline-sync.service';
@@ -204,6 +207,7 @@ export class AccessControlWebhooksController {
     private readonly inbox: Inbox,
     @Inject(DATABASE) private readonly db: Db,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    @Inject(MODULE_SETTINGS('entry')) private readonly settings: EntrySettingsValue,
   ) {}
 
   @Public()
@@ -217,7 +221,10 @@ export class AccessControlWebhooksController {
     if (provider !== FAKE_ACCESS_CONTROL_PROVIDER || this.config.NODE_ENV === 'production') {
       throw errors.notFound('access control provider', provider);
     }
-    if (!FakeAccessControlProvider.verify(raw, signature)) {
+    // A host reachable from the internet signs with ENTRY_FAKE_WEBHOOK_SECRET (§4.14); the
+    // published constant is only the developer default.
+    const secret = this.settings.FAKE_WEBHOOK_SECRET ?? FAKE_ACCESS_CONTROL_WEBHOOK_SECRET;
+    if (!FakeAccessControlProvider.verify(raw, signature, secret)) {
       throw errors.authenticationRequired('The webhook signature is invalid.');
     }
     // An access event, a device heartbeat or a command receipt (ENT-05, IF-38).

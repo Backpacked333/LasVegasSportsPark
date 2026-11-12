@@ -17,8 +17,14 @@ import { defineModuleSettings, technicalSetting, type ModuleSettingsOf } from '.
  *   run. The retry after attempt n (n ≥ 2) waits base·2^(n−2) seconds, never more than the maximum
  *   (technical defaults 30 and 300), so after its second attempt an unreachable device costs one
  *   send per command per backoff instead of one every pass.
+ * - FAKE_WEBHOOK_SECRET (§4.14, §5.2): the HMAC secret the fake access-control provider signs and
+ *   verifies device events with on a development or staging host. Unset, the published test
+ *   constant (`FAKE_ACCESS_CONTROL_WEBHOOK_SECRET`) is used, which anyone who has read the source
+ *   can sign with: set it (at least 32 characters) on any host reachable from the internet.
+ *   Ignored in production, which never runs the fake.
  */
 export const EntrySettings = defineModuleSettings('entry', {
+  FAKE_WEBHOOK_SECRET: z.string().min(32).max(200).optional(),
   DEVICE_COMMAND_ESCALATE_AFTER_ATTEMPTS: technicalSetting(
     z.coerce.number().int().min(1).max(100),
     3,

@@ -23,9 +23,15 @@ import { when, where } from './schedule-notices';
  * Communications settings (K-15, IF-43). `ACTIVITY_REMINDER_LEAD_MINUTES`
  * (`COMMUNICATIONS_ACTIVITY_REMINDER_LEAD_MINUTES`) is the communication policy's reminder lead
  * time: a policy value with no default (DEC-012 pending). Unset, no activity reminder is composed.
+ * `FAKE_WEBHOOK_SECRET` (`COMMUNICATIONS_FAKE_WEBHOOK_SECRET`, §4.14, §5.2) is the HMAC secret the
+ * fake messaging providers sign and verify delivery receipts with on a development or staging
+ * host; unset, the published test constant (`FAKE_MESSAGING_WEBHOOK_SECRET`) is used, which anyone
+ * who has read the source can sign with, so a host reachable from the internet sets its own (at
+ * least 32 characters). Ignored in production, which never runs a fake.
  */
 export const CommunicationsSettings = defineModuleSettings('communications', {
   ACTIVITY_REMINDER_LEAD_MINUTES: policySetting(z.coerce.number().int().min(1).max(20160)),
+  FAKE_WEBHOOK_SECRET: z.string().min(32).max(200).optional(),
 });
 export type CommunicationsSettingsValue = ModuleSettingsOf<typeof CommunicationsSettings>;
 

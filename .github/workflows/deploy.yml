@@ -45,6 +45,8 @@ jobs:
         with:
           context: .
           push: true
+          # SOURCE_COMMIT becomes the `version` GET /v1/health and GET /v1/ready report (spec §5.8
+          # rollback evidence); add APP_VERSION=<name> here to name a release instead.
           build-args: |
             SOURCE_COMMIT=${{ github.sha }}
           tags: |
@@ -99,6 +101,7 @@ jobs:
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Image | \`${{ needs.image.outputs.image }}@${{ needs.image.outputs.digest }}\` |"
             echo "| Environment | ${{ inputs.environment }} |"
+            echo "| Version (GET /v1/health, GET /v1/ready) | \`${{ github.sha }}\` (APP_VERSION derived from SOURCE_COMMIT) |"
             echo "| Migrations | applied; schema current (job migrate) |"
             echo "| Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
             echo ""

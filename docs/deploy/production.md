@@ -24,11 +24,15 @@ static site (`apps/staff`, `pnpm build:staff`) on any static host or CDN.
 ## 2. Build and release
 
 - Image: `Dockerfile` at the repository root (Node 22, non-root, production dependencies only,
-  migrations included because `GET /v1/ready` and the migration CLI read them).
+  migrations included because `GET /v1/ready` and the migration CLI read them). It reports the
+  commit it was built from as `version` on `GET /v1/health` and `GET /v1/ready` (`SOURCE_COMMIT`
+  build argument, set by both workflows; `APP_VERSION` names a release instead), so a rollback is
+  checked against the build identifier in the ledger (§5.8; `docs/runbooks/recovery.md` section 4;
+  the CI job "Container image" asserts it).
 - `.github/workflows/deploy.yml` (manual): builds and pushes `ghcr.io/<owner>/sportspark-api`,
   migrates the chosen environment's database (dry run, apply under the lock, status), then a
-  placeholder deploy step until DEC-021 names the host, then a job summary with the commit, image
-  digest and run URL for the release evidence ledger (§6.8 item 11).
+  placeholder deploy step until DEC-021 names the host, then a job summary with the commit, the version
+  the image reports, image digest and run URL for the release evidence ledger (§6.8 item 11).
 - Order of a release: migrate, then roll the API (readiness gates traffic per instance), then
   roll the worker. A migration must stay compatible with the previous build while it rolls
   (expand, then contract in a later release).
@@ -61,9 +65,12 @@ Recommended:
 | `METRICS_TOKEN` \*                                 | enables `GET /v1/metrics` (Prometheus text) for the monitoring scraper                                                                                                                                      |
 | `API_SHUTDOWN_DELAY_MS`, `API_SHUTDOWN_TIMEOUT_MS` | the timeout under the host's termination grace period; the delay is part of it and must be smaller                                                                                                          |
 | `CLIENT_MIN_VERSIONS`                              | when DEC-061 sets minimum app versions                                                                                                                                                                      |
+| `APP_VERSION`                                      | optional: a release name reported as `version`; unset, the build commit (`SOURCE_COMMIT` of the image)                                                                                                      |
 
 Never set in production: `AUTH_LOCAL_SECRET`, `DEV_TOKENS_PASSCODE`, `PGLITE_DATA_DIR`,
-`STAGING_INLINE_WORKER`. Every option is documented in `apps/api/src/kernel/config.ts`.
+`STAGING_INLINE_WORKER`, and the fake providers' `FINANCE_FAKE_WEBHOOK_SECRET`,
+`COMMUNICATIONS_FAKE_WEBHOOK_SECRET` and `ENTRY_FAKE_WEBHOOK_SECRET` (no fake runs in production, so
+they would be ignored). Every option is documented in `apps/api/src/kernel/config.ts`.
 
 ## 4. Observability (§5.11)
 
@@ -94,12 +101,14 @@ decision** DEC-035 to DEC-044.
 - Primary: the managed database's point-in-time recovery (DEC-021; RPO and RTO targets DEC-042,
   DEC-043).
 - Portable copy and rehearsal: `pnpm db:backup --out <file>` (dump and manifest from one snapshot)
-  and `pnpm db:restore --in <file>` into an empty database (verifies migrations, every table's row
-  count and the schema). Rehearsed locally against PostgreSQL 16 on 2026-11-09; a rehearsal on the
+  and `pnpm db:restore --in <file> --operator <name>` into an empty database (verifies migrations,
+  every table's row count and the schema, then records the restore in `database_restores`: backup,
+  instant, operator, build; migration 0020, `docs/runbooks/recovery.md` section 5.3). Rehearsed locally against PostgreSQL 16 on 2026-11-09; a rehearsal on the
   production provider is part of the cutover gate (`docs/runbooks/recovery.md`).
 - After a restore that follows live transactions, start the processes with
-  `RECOVERY_RESTORE_REFERENCE=<backup id>`: financial commands stay refused until provider facts
-  are reconciled and a general manager resumes operation.
+  `RECOVERY_RESTORE_REFERENCE=<backup id>`: the processes look the restore record up and carry it
+  into the recovery exception and audit record, and financial commands stay refused until provider
+  facts are reconciled and a general manager resumes operation.
 
 ## 6. Security (§4.14)
 

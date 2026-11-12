@@ -1,6 +1,6 @@
 import { newId, systemPrincipal, type Principal } from '@sportspark/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { APP_CONFIG, Inbox, UnitOfWork, type AppConfig } from '../../../kernel';
+import { APP_CONFIG, Inbox, MODULE_SETTINGS, UnitOfWork, type AppConfig } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
   authHeaderForPerson,
@@ -19,6 +19,7 @@ import {
   FAKE_MESSAGING_SIGNATURE_HEADER,
   FakeMessagingProvider,
 } from '../providers/fake-messaging.provider';
+import type { CommunicationsSettingsValue } from '../services/activity-reminders';
 import { DeliveryWorker } from '../services/delivery-worker';
 import {
   attemptsOf,
@@ -412,10 +413,11 @@ describe('delivery states (SPK-COMMS-004, §4.5 actual delivery states, §4.11 p
       { attemptId: a['email']?.id as string, organizationId: org },
       'delivered',
     );
-    const production = new MessagingWebhooksController(t.app.get(Inbox), {
-      ...t.app.get<AppConfig>(APP_CONFIG),
-      NODE_ENV: 'production',
-    });
+    const production = new MessagingWebhooksController(
+      t.app.get(Inbox),
+      { ...t.app.get<AppConfig>(APP_CONFIG), NODE_ENV: 'production' },
+      t.app.get<CommunicationsSettingsValue>(MODULE_SETTINGS('communications')),
+    );
     await expect(production.receive('fake-messaging', body, signature)).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });

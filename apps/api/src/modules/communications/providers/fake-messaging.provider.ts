@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { DeliveryReceiptStatus, MessagingWebhookInput } from '@sportspark/contracts';
+import { MODULE_SETTINGS } from '../../../kernel';
+import type { CommunicationsSettingsValue } from '../services/activity-reminders';
 import type {
   ChannelProviderPort,
   ChannelSendRequest,
@@ -36,7 +38,12 @@ export interface FakeDeviceSend {
 }
 
 export const FAKE_MESSAGING_PROVIDER = 'fake-messaging';
-/** Test-only shared secret for webhook signatures; a real provider's secret arrives via the environment. */
+/**
+ * Published test constant for webhook signatures, the default on developer machines and in tests.
+ * A host reachable from the internet overrides it with `COMMUNICATIONS_FAKE_WEBHOOK_SECRET`
+ * (§4.14, §5.2): the providers sign and the receipt route verifies with the configured secret, so
+ * a receipt signed with this constant is refused there.
+ */
 export const FAKE_MESSAGING_WEBHOOK_SECRET = 'fake-messaging-webhook-secret';
 export const FAKE_MESSAGING_SIGNATURE_HEADER = 'x-messaging-signature';
 
@@ -52,7 +59,11 @@ export class FakeMessagingProvider implements ChannelProviderPort {
   private readonly accepted = new Set<string>();
   private receiptCounter = 0;
 
-  constructor(readonly channel: ExternalChannel) {}
+  constructor(
+    readonly channel: ExternalChannel,
+    /** The webhook signing secret in force: configured per host, else the published constant. */
+    private readonly webhookSecret: string = FAKE_MESSAGING_WEBHOOK_SECRET,
+  ) {}
 
   /** The next calls, in order, produce these outcomes regardless of address. */
   scriptNext(...outcomes: FakeOutcome[]): void {
@@ -143,18 +154,26 @@ export class FakeMessagingProvider implements ChannelProviderPort {
         ...(options.occurredAt ? { occurredAt: options.occurredAt } : {}),
       },
     };
-    return { body, signature: FakeMessagingProvider.sign(body) };
+    return { body, signature: this.sign(body) };
   }
 
-  static sign(body: unknown): string {
-    return createHmac('sha256', FAKE_MESSAGING_WEBHOOK_SECRET)
-      .update(stableStringify(body))
-      .digest('hex');
+  /** Signs a receipt body with the secret in force (what this host's provider would post). */
+  sign(body: unknown): string {
+    return FakeMessagingProvider.sign(body, this.webhookSecret);
   }
 
-  static verify(body: unknown, signature: string | undefined): boolean {
+  /** Signs with the published constant unless a secret is given (tests and scenario drivers). */
+  static sign(body: unknown, secret: string = FAKE_MESSAGING_WEBHOOK_SECRET): string {
+    return createHmac('sha256', secret).update(stableStringify(body)).digest('hex');
+  }
+
+  static verify(
+    body: unknown,
+    signature: string | undefined,
+    secret: string = FAKE_MESSAGING_WEBHOOK_SECRET,
+  ): boolean {
     if (!signature) return false;
-    const expected = Buffer.from(FakeMessagingProvider.sign(body), 'utf8');
+    const expected = Buffer.from(FakeMessagingProvider.sign(body, secret), 'utf8');
     const given = Buffer.from(signature, 'utf8');
     return expected.length === given.length && timingSafeEqual(expected, given);
   }
@@ -179,21 +198,27 @@ export function stableStringify(value: unknown): string {
 
 @Injectable()
 export class FakePushProvider extends FakeMessagingProvider {
-  constructor() {
-    super('push');
+  constructor(
+    @Optional() @Inject(MODULE_SETTINGS('communications')) settings?: CommunicationsSettingsValue,
+  ) {
+    super('push', settings?.FAKE_WEBHOOK_SECRET);
   }
 }
 
 @Injectable()
 export class FakeEmailProvider extends FakeMessagingProvider {
-  constructor() {
-    super('email');
+  constructor(
+    @Optional() @Inject(MODULE_SETTINGS('communications')) settings?: CommunicationsSettingsValue,
+  ) {
+    super('email', settings?.FAKE_WEBHOOK_SECRET);
   }
 }
 
 @Injectable()
 export class FakeSmsProvider extends FakeMessagingProvider {
-  constructor() {
-    super('sms');
+  constructor(
+    @Optional() @Inject(MODULE_SETTINGS('communications')) settings?: CommunicationsSettingsValue,
+  ) {
+    super('sms', settings?.FAKE_WEBHOOK_SECRET);
   }
 }
