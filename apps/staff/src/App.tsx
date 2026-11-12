@@ -63,6 +63,9 @@ export function AppRoutes() {
         <Route path="/people/invitations" element={<InvitationsScreen />} />
         <Route path="/people/:personId" element={<PersonRecordScreen />} />
         <Route path="/people/:personId/relationships" element={<RelationshipsScreen />} />
+        <Route path="/support/cases" element={<SupportCasesScreen />} />
+        <Route path="/support/cases/new" element={<OpenCaseScreen />} />
+        <Route path="/support/cases/:caseId" element={<SupportCaseScreen />} />
         <Route path="/admin/cases" element={<SupportCasesScreen />} />
         <Route path="/admin/cases/new" element={<OpenCaseScreen />} />
         <Route path="/admin/cases/:caseId" element={<SupportCaseScreen />} />

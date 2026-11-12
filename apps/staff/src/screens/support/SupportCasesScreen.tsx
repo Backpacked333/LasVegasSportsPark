@@ -85,7 +85,7 @@ function CasesPage({
               {page.items.map((c) => (
                 <li key={c.id}>
                   <div className="row-text">
-                    <Link to={`/admin/cases/${c.id}`} className="row-title">
+                    <Link to={`/support/cases/${c.id}`} className="row-title">
                       {c.title}
                     </Link>
                     <span className="caption">
@@ -138,16 +138,12 @@ export function SupportCasesScreen() {
   return (
     <section aria-labelledby="cases-title" className="ia-screen">
       <PageHeader
-        eyebrow={
-          <>
-            Business · <Link to="/admin">Administration</Link> · Support
-          </>
-        }
+        eyebrow="Support"
         title="Support cases"
         titleId="cases-title"
         intro="Staff help customers with their own permissions, never with customer credentials. A note is history only: refunds, permission changes and transfers are their own commands."
         actions={
-          <Link className="button button-primary" to="/admin/cases/new">
+          <Link className="button button-primary" to="/support/cases/new">
             <Icon name="add" size={18} />
             Open a case
           </Link>
