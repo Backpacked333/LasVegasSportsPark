@@ -35,7 +35,7 @@ describe('Legends mode (SPK-UX-010)', () => {
     expect(app.services.preferences?.get(THEME_STORAGE_KEY)).toBe('legends');
     expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
       'content',
-      '#0a0907',
+      '#0a0a0b',
     );
   });
 

@@ -81,22 +81,30 @@ Status words follow §6.7: **Verified** means implemented and covered by the evi
 **Proposed** means built here as a design proposal that the product owner has not accepted in a
 recorded decision; **Not verified** names what this environment could not check.
 
-- **Two themes from one set of tokens** (`src/ui/styles.css`). Classic (default): desert sand,
-  pitch green, the floodlight accent. Legends (`[data-theme='legends']`): night black, warm ivory
-  text, one gold accent; status tones are lightened for dark surfaces and warning is orange so it
-  is never read as the accent. Every rule takes a token: a colour literal in a feature stylesheet
-  does not follow the theme (the few left are documented where they stand: card colours in the
-  score sheet, the knob of a switch). Verified: both themes rendered for every area in a browser
-  at 1440 px and 390 px. Proposed: the Legends palette itself.
+- **Two themes from one set of tokens** (`src/ui/styles.css`). Classic (default): a calm warm
+  white, white cards with a soft shadow, pitch green as the one accent. Legends
+  (`[data-theme='legends']`): neutral black, soft white text, gold only where something is active
+  or primary; status tones are lightened for dark surfaces and warning is orange so it is never
+  read as the accent. Every rule takes a token: a colour literal in a feature stylesheet does not
+  follow the theme (the few left are documented where they stand: card colours in the score
+  sheet, the knob of a switch). Verified: both themes rendered for every area in a browser at
+  1440 px and 390 px, and every colour and background pairing of the stylesheets computed in both
+  themes. Proposed: the palettes themselves.
+- **Type and wording.** Archivo at its normal width, sentence case everywhere (nothing is set in
+  capitals), weights from 500 to 700. A status badge shows a lifecycle's state name as plain
+  words ("in service", "recovery required"; `plainWords` in `src/ui/StatusBadge.tsx`), leaving
+  codes in capitals, action ids and file names as written. The inventory screen ids in section
+  tabs stay in each link's name but are not drawn. Verified: `src/ui/__tests__/primitives.test.tsx`
+  and the screens' own tests.
 - **The "Legends mode" switch** (`src/theme/`): in the header, on the sign-in page and in quick
   navigation. `role="switch"` with its state, keyboard operable; the choice is a display
   preference kept in this browser (`providers/preferences`, never sent to the API) and applied
   before first paint by `public/theme-init.js` (a file, because the Content-Security-Policy allows
   scripts from `'self'` only). Verified: `src/theme/__tests__/legends-mode.test.tsx`.
 - **Layers.** Content (cards, lists, tables, forms) is flat and opaque, for reading. Chrome
-  floats above it as liquid glass (`src/ui/glass/`): the sidebar over the night pitch artwork, the
-  header groups over the page scrolling beneath them, the quick navigation dialog, the sign-in
-  card, the workspace's phone tab bar. Rules every glass body follows:
+  floats above it as liquid glass (`src/ui/glass/`): the sidebar, a frosted panel over a soft
+  field of colour; the header groups over the page scrolling beneath them; the quick navigation
+  dialog; the sign-in card over the pitch artwork; the workspace's phone tab bar. Rules every glass body follows:
   1. the backdrop bends inside a band along its edge (an SVG displacement filter through
      `backdrop-filter`; only Chromium renders it, every other engine gets the blur, fill and rim
      of the stylesheet with no bend);

@@ -100,6 +100,8 @@
   --focus-ring: rgba(26, 79, 214, 0.22);
   --link: var(--pitch);
   --link-hover: var(--pitch-hover);
+  /* The label of a selected item on its own accent tint (darker than the accent itself). */
+  --accent-ink: #06512e;
 
   /* Status tones: foreground, tinted background, border; `--on-tone` is text on a solid tone. */
   --tone-success: #0b6b3a;
@@ -239,6 +241,7 @@
   --color-focus: #f0c75a;
   --focus-ring: rgba(242, 201, 76, 0.28);
   --link: #ecc35f;
+  --accent-ink: #f0c75a;
   --link-hover: #f6d67e;
 
   --tone-success: #5fd38d;

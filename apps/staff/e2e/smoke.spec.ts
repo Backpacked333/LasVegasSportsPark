@@ -59,7 +59,7 @@ test('SPK-UX-010: Legends mode applies, survives a reload before first paint, an
 
   await toggle.click();
   await expect(html).toHaveAttribute('data-theme', 'legends');
-  expect(await pageColour()).toBe('rgb(10, 9, 7)');
+  expect(await pageColour()).toBe('rgb(10, 10, 11)');
 
   // The stored choice is applied by /theme-init.js, before the application script runs.
   await page.reload({ waitUntil: 'commit' });

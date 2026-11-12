@@ -24,7 +24,7 @@ export type ThemeName = 'classic' | 'legends';
 export const THEME_STORAGE_KEY = 'sportspark.theme';
 
 /** The browser chrome colour (address bar on phones) of each theme. */
-const THEME_COLOR: Record<ThemeName, string> = { classic: '#f3f2ec', legends: '#0a0907' };
+const THEME_COLOR: Record<ThemeName, string> = { classic: '#f5f5f2', legends: '#0a0a0b' };
 
 export interface ThemeContextValue {
   theme: ThemeName;

@@ -14,7 +14,7 @@
 /* The world recedes behind the dialog. By day it is washed towards the page colour, not darkened:
    the dialog's glass is light with dark text, and stays legible over a dark card or the sidebar. */
 .palette-layer {
-  --palette-scrim: rgba(243, 242, 236, 0.72);
+  --palette-scrim: rgba(245, 245, 242, 0.72);
 }
 :root[data-theme='legends'] .palette-layer {
   --palette-scrim: rgba(0, 0, 0, 0.6);

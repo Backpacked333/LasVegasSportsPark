@@ -167,7 +167,7 @@
 .shell-nav a[aria-current='page'],
 .shell-side-foot .side-link[aria-current='page'] {
   background: color-mix(in srgb, var(--pitch) 13%, transparent);
-  color: var(--link);
+  color: var(--accent-ink);
   font-weight: 650;
 }
 .shell-nav .nav-state {
