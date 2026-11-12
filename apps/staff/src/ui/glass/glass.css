@@ -1,0 +1,163 @@
+/*
+ * Liquid glass bodies (see Glass.tsx). One body = a positioned host with four layers: the optic
+ * (backdrop filter and fill), the glow, the rim, and the content. The host paints nothing itself:
+ * whatever it painted is what the optic would refract.
+ *
+ * Tokens follow the theme (`styles.css` sets the classic values, `[data-theme='legends']` the dark
+ * ones); `.glass-night` is glass over the night pitch artwork, dark in both themes.
+ */
+:root {
+  --glass-fill: rgba(255, 255, 255, 0.15);
+  --glass-fill-lens: rgba(255, 255, 255, 0.06);
+  --glass-fill-frost: rgba(255, 255, 255, 0.28);
+  --glass-rim-key: rgba(255, 255, 255, 0.96);
+  --glass-rim-side: rgba(255, 255, 255, 0.24);
+  --glass-rim-counter: rgba(255, 255, 255, 0.56);
+  --glass-edge: rgba(0, 0, 0, 0.12);
+  --glass-edge-contrast: rgba(0, 0, 0, 0.4);
+  --glass-glow-key: rgba(255, 255, 255, 0.8);
+  --glass-glow-counter: rgba(255, 255, 255, 0.35);
+  --glass-shadow: 0 8px 28px rgba(16, 24, 20, 0.14), 0 1px 3px rgba(16, 24, 20, 0.08);
+  /* Reduced transparency: an opaque fill instead of the optics. */
+  --glass-solid: rgba(250, 250, 246, 0.96);
+  --glass-ink: var(--ink);
+  --glass-ink-2: var(--ink-2);
+  /* Flat fills inside a glass body: a child control, a chip or selected row, an input trough. */
+  --glass-child: rgba(255, 255, 255, 0.34);
+  --glass-chip: rgba(255, 255, 255, 0.52);
+  --glass-trough: rgba(29, 29, 31, 0.07);
+  --glass-separator: rgba(16, 24, 20, 0.12);
+  /* Where content scrolls under a floating bar. */
+  --scroll-edge: rgba(245, 245, 242, 0.86);
+}
+:root[data-theme='legends'],
+.glass-night {
+  --glass-fill: rgba(18, 16, 12, 0.3);
+  --glass-fill-lens: rgba(18, 16, 12, 0.14);
+  --glass-fill-frost: rgba(18, 16, 12, 0.4);
+  --glass-rim-key: rgba(255, 255, 255, 0.68);
+  --glass-rim-side: rgba(255, 255, 255, 0.14);
+  --glass-rim-counter: rgba(255, 255, 255, 0.35);
+  --glass-edge: rgba(0, 0, 0, 0.32);
+  --glass-edge-contrast: rgba(255, 255, 255, 0.5);
+  --glass-glow-key: rgba(255, 255, 255, 0.5);
+  --glass-glow-counter: rgba(255, 255, 255, 0.2);
+  --glass-shadow: 0 10px 32px rgba(0, 0, 0, 0.35);
+  --glass-solid: rgba(24, 22, 17, 0.97);
+  --glass-ink: #ffffff;
+  --glass-ink-2: rgba(255, 255, 255, 0.74);
+  --glass-child: rgba(255, 255, 255, 0.1);
+  --glass-chip: rgba(255, 255, 255, 0.18);
+  --glass-trough: rgba(0, 0, 0, 0.28);
+  --glass-separator: rgba(255, 255, 255, 0.16);
+}
+:root[data-theme='legends'] {
+  /* The rim catches the gold of the house lights. */
+  --glass-rim-key: rgba(255, 236, 190, 0.7);
+  --glass-rim-counter: rgba(255, 226, 160, 0.32);
+  --glass-glow-key: rgba(255, 232, 176, 0.42);
+  --scroll-edge: rgba(10, 10, 11, 0.86);
+}
+.glass-night {
+  --glass-solid: rgba(12, 34, 25, 0.97);
+}
+:root[data-theme='legends'] .glass-night {
+  --glass-solid: rgba(14, 12, 8, 0.97);
+}
+
+/* The edge line is a 1 px ring outside the silhouette, drawn with the shadow so it follows the radius. */
+.glass {
+  --fill: var(--glass-fill);
+  --blur-fallback: 14px;
+  position: relative;
+  isolation: isolate;
+  border-radius: var(--radius);
+  box-shadow:
+    0 0 0 1px var(--glass-edge),
+    var(--glass-shadow);
+  color: var(--glass-ink);
+  background: transparent;
+  border: 0;
+  transition: transform 0.32s cubic-bezier(0.3, 1.45, 0.5, 1);
+}
+.glass--lens {
+  --fill: var(--glass-fill-lens);
+  --blur-fallback: 6px;
+}
+.glass--frost {
+  --fill: var(--glass-fill-frost);
+  --blur-fallback: 24px;
+}
+/* Direct children only: the layers fill the body; the content sits in the flow. */
+.glass > * {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  display: block;
+}
+.glass > .glass__defs {
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+/* --glass-filter is set to url(#id) where the bend renders (Chromium); the blur is the frost
+   fallback elsewhere. --glass-amount scales every fill between the clear and tinted ends. */
+.glass__optic {
+  background: var(--fill);
+  background: rgb(from var(--fill) r g b / calc(alpha * var(--glass-amount, 1)));
+  -webkit-backdrop-filter: var(--glass-filter, blur(var(--blur-fallback, 12px)) saturate(1.5));
+  backdrop-filter: var(--glass-filter, blur(var(--blur-fallback, 12px)) saturate(1.5));
+  pointer-events: none;
+}
+.glass__glow {
+  pointer-events: none;
+  box-shadow:
+    inset 2px 3px 8px -4px var(--glass-glow-key),
+    inset -2px -3px 8px -4px var(--glass-glow-counter);
+}
+/* Offset inset highlights follow the silhouette: brightest facing the key light (top left), a
+   dimmer counter-light bottom right, faint on the flanks. */
+.glass__rim {
+  pointer-events: none;
+  box-shadow:
+    inset 1.5px 1.5px 0 -0.5px var(--glass-rim-key),
+    inset -1.5px -1.5px 0 -0.5px var(--glass-rim-counter),
+    inset 0 0 0 0.5px var(--glass-rim-side);
+}
+.glass > .glass__content {
+  position: relative;
+  inset: auto;
+}
+.glass.is-pressed {
+  transform: scale(1.03);
+}
+/* Panels get continuous corners where the browser draws them; the map then uses the same shape. */
+@supports (corner-shape: squircle) {
+  .glass--squircle,
+  .glass--squircle > * {
+    corner-shape: squircle;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root .glass > .glass__optic {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--glass-solid);
+  }
+}
+@media (prefers-contrast: more) {
+  :root .glass {
+    box-shadow:
+      0 0 0 1px var(--glass-edge-contrast),
+      var(--glass-shadow);
+  }
+  :root .glass > .glass__optic {
+    background: var(--glass-solid);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root .glass,
+  :root .glass * {
+    transition: none !important;
+  }
+}

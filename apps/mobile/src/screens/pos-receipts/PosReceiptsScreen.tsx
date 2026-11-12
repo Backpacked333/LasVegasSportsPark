@@ -20,7 +20,7 @@
  * again"; permission restriction (not available); offline or stale (cached with its age); turned
  * off (notice above the list).
  */
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
 import { formatMoney } from '../../features/money/format';
 import { Body, Caption, Field } from '../../features/money/ui';
@@ -42,7 +42,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, radius, spacing, type } from '../../ui/theme';
+import { makeStyles, radius, spacing, type } from '../../ui/theme';
 
 export const RECEIPTS_STILL_AVAILABLE = 'Receipts of earlier purchases stay available here.';
 export const RECEIPTS_PAGE_SIZE = 20;
@@ -51,6 +51,7 @@ export const RECEIPTS_PAGE_SIZE = 20;
 const receiptKey = (r: PosReceipt) => r.saleId;
 
 function ReceiptCard({ receipt, facility }: { receipt: PosReceipt; facility: FacilityDisplay }) {
+  const styles = useStyles();
   const money = (minor: number) => formatMoney(minor, receipt.currency);
   const zone = facility.zone;
   const notice = receipt.paidAt ? zoneNotice(zone, receipt.paidAt) : null;
@@ -114,6 +115,7 @@ function ReceiptCard({ receipt, facility }: { receipt: PosReceipt; facility: Fac
 }
 
 function ReceiptsList() {
+  const styles = useStyles();
   const receipts = useApiPages({
     path: '/me/pos-receipts',
     request: { query: { limit: RECEIPTS_PAGE_SIZE } },
@@ -150,6 +152,7 @@ function ReceiptsList() {
 }
 
 export function PosReceiptsScreen() {
+  const styles = useStyles();
   return (
     <Screen>
       <View testID="screen-pos-receipts">
@@ -177,7 +180,7 @@ export function PosReceiptsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
   title: { ...type.title, color: colors.text },
   list: { gap: spacing.sm, padding: spacing.lg },
@@ -191,4 +194,4 @@ const styles = StyleSheet.create({
   },
   cardTitle: { ...type.heading, color: colors.text },
   line: { gap: 2 },
-});
+}));

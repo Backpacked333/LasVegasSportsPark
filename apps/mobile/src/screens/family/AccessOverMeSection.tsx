@@ -6,13 +6,13 @@
  * Ending someone else's access from the app is not offered: ending relationships and per-person
  * restrictions are DEC-089 and DEC-004 (Operator/privacy owner), shown as pending.
  */
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { colors, radius, spacing, type } from '../../ui/theme';
+import { makeStyles, radius, spacing, type } from '../../ui/theme';
 import { formatDateTime, permissionLabel } from '../account/components/account-data';
 import { SectionHeader } from '../account/components/forms';
 import { grantKey, grantStatusLabel, isCurrentGrant, sourceText, type GrantView } from './grants';
@@ -72,6 +72,7 @@ export function AccessOverMeSection() {
 }
 
 function ActorCard({ grants }: { grants: GrantView[] }) {
+  const styles = useStyles();
   const name = grants[0]?.actorDisplayName || 'Name not available to you';
   return (
     <View style={styles.card}>
@@ -94,7 +95,7 @@ function ActorCard({ grants }: { grants: GrantView[] }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   card: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.md,
@@ -105,4 +106,4 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   title: { ...type.heading, color: colors.text, paddingHorizontal: spacing.lg },
-});
+}));

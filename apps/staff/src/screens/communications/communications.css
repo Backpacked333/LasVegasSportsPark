@@ -41,10 +41,8 @@
   align-items: center;
   gap: 10px;
   font-size: 15px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .cm-step-n {
   width: 24px;
@@ -132,7 +130,7 @@
 .cm .cm-pills .ops-check:has(input:checked) label::before,
 .cm .cm-segment .ops-check:has(input:checked)::before {
   content: '✓ ';
-  font-weight: 800;
+  font-weight: 700;
 }
 .cm .cm-pills .ops-check:has(input:focus-visible),
 .cm .cm-segment .ops-check:has(input:focus-visible) {
@@ -233,18 +231,15 @@
   gap: 10px;
 }
 .cm-reach-kicker {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--floodlight);
 }
 .cm-reach-value {
   font-size: 30px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   color: #fff;
 }
 .cm-reach-list {
@@ -280,11 +275,10 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 .cm-bubble-app .icon {
   color: var(--pitch);
@@ -409,9 +403,7 @@
 }
 .cm-count-value {
   font-size: 20px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   color: var(--floodlight);
 }
 .cm-count-channels {

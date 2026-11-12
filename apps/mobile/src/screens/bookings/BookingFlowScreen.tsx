@@ -42,7 +42,7 @@
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
@@ -96,7 +96,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { BookingForms } from './BookingForms';
 
@@ -215,6 +215,7 @@ function BookingForm({
   kind: BookingKind;
   terms: BookingTerms;
 }) {
+  const styles = useStyles();
   const now = useNow();
   const { services } = useApp();
   const { reachable } = useConnectivity();
@@ -675,7 +676,7 @@ export function BookingFlowRoute() {
   return <BookingFlowScreen offeringId={routeId(params.offeringId)} />;
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   dayRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   day: { ...type.title, fontSize: 22, lineHeight: 26, color: colors.text, flexShrink: 1 },
-});
+}));

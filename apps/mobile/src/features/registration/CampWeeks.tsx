@@ -23,14 +23,14 @@
  */
 import { apiQueryKey, type ApiError, type Schema } from '@sportspark/api-client';
 import { useQuery } from '@tanstack/react-query';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApi, useConnectivity } from '../../providers/AppProviders';
 import { Card, Eyebrow } from '../../ui/Card';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { colors, fonts, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, spacing, type, useTheme } from '../../ui/theme';
 import { formatMoney } from './format';
 import { promotionText } from './promotions';
 import { offeringDates, registrationWindowStatus } from './status';
@@ -244,6 +244,8 @@ export function CampPriceBar({
   /** Given names of the chosen people, for "2 of 3 weeks · Ada". */
   personNames: readonly string[];
 }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const chosen = weeks.filter((w) => chosenWeekIds.includes(w.id));
@@ -322,13 +324,13 @@ export function CampPriceBar({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   note: { ...type.caption, color: colors.nightText },
   total: {
     ...type.title,
     ...fonts.display,
-    color: colors.primaryText,
+    color: colors.onNight,
     paddingVertical: spacing.xs,
   },
   light: { backgroundColor: colors.background, borderRadius: 12, padding: spacing.sm },
-});
+}));

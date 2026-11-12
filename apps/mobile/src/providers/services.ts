@@ -6,6 +6,8 @@ import type { FetchLike, KeyGenerator, SessionStore } from '@sportspark/api-clie
 import { randomUUID } from 'expo-crypto';
 import { readAppConfig, type AppConfig } from '../config/app-config';
 import { SecureSessionStore } from '../session/secure-session-store';
+import { SecureThemeStore } from '../ui/secure-theme-store';
+import type { ThemePreferenceStore } from '../ui/theme-preference';
 import { consoleCrashReporter, type CrashReporter } from './crash-report';
 import {
   expoNetworkSource,
@@ -26,6 +28,8 @@ export interface AppServices {
   now: () => Date;
   /** Where unexpected failures are reported (console when absent). */
   crashReporter?: CrashReporter;
+  /** Where the Legends mode choice is kept (absent: it lasts until the app closes). */
+  themeStore?: ThemePreferenceStore;
 }
 
 export function createDeviceServices(): AppServices {
@@ -37,5 +41,6 @@ export function createDeviceServices(): AppServices {
     generateKey: randomUUID,
     now: () => new Date(),
     crashReporter: consoleCrashReporter,
+    themeStore: new SecureThemeStore(),
   };
 }

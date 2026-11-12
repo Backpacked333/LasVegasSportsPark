@@ -1,18 +1,24 @@
 /*
- * Staff sign-in: a night-pitch split screen (SPK-UX-010). The pitch panel is decoration; the form
- * card carries every word that matters. Below 900 px the pitch becomes a short band above the card.
+ * Staff sign-in (SPK-UX-010): the night pitch fills the page and is decoration; the form card, a
+ * frosted glass panel over it, carries every word that matters (`.on-night` gives its content the
+ * colours of a night surface). Below 900 px the copy becomes a short band above the card.
  */
 .signin {
+  position: relative;
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(420px, 1fr);
-  background: var(--sand);
+  background: var(--night);
+  isolation: isolate;
 }
 
-/* ---------- The pitch ---------- */
-.signin-pitch {
-  position: relative;
+/* ---------- The pitch: the whole page ---------- */
+.signin-art {
+  position: absolute;
+  inset: 0;
   overflow: hidden;
+  z-index: -1;
   background:
     repeating-linear-gradient(
       180deg,
@@ -20,20 +26,22 @@
       rgba(0, 0, 0, 0.05) 64px 128px
     ),
     radial-gradient(120% 80% at 50% 50%, #12392a 0%, var(--night) 70%);
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 32px 44px 44px;
-  isolation: isolate;
+}
+:root[data-theme='legends'] .signin-art {
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 236, 190, 0.03) 0 64px,
+      rgba(0, 0, 0, 0.25) 64px 128px
+    ),
+    radial-gradient(120% 80% at 50% 50%, #241b08 0%, #050504 70%);
 }
 .signin-pitch-lines {
   position: absolute;
   inset: -4% -8%;
   width: 116%;
   height: 108%;
-  color: rgba(198, 243, 107, 0.16);
-  z-index: -1;
+  color: color-mix(in srgb, var(--floodlight) 26%, transparent);
   transform: perspective(1400px) rotateX(18deg) scale(1.05);
   transform-origin: 50% 70%;
 }
@@ -42,8 +50,11 @@
   width: 520px;
   height: 520px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(198, 243, 107, 0.22) 0%, rgba(198, 243, 107, 0) 65%);
-  z-index: -1;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--floodlight) 24%, transparent) 0%,
+    transparent 65%
+  );
   pointer-events: none;
 }
 .signin-glow-a {
@@ -53,7 +64,28 @@
 .signin-glow-b {
   top: -240px;
   right: -200px;
-  opacity: 0.7;
+  opacity: 0.8;
+}
+.signin-theme {
+  position: absolute;
+  top: 24px;
+  right: 28px;
+  z-index: 2;
+}
+.signin-theme .glass__content {
+  display: flex;
+  align-items: center;
+  height: 46px;
+  padding: 0 6px;
+}
+.signin-pitch {
+  position: relative;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 32px 44px 44px;
+  min-width: 0;
 }
 .signin-pitch-top {
   display: flex;
@@ -75,8 +107,7 @@
   gap: 8px;
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--floodlight);
 }
 .signin-kicker .live-dot {
@@ -86,10 +117,8 @@
   margin: 0;
   font-size: clamp(54px, 7vw, 96px);
   line-height: 0.88;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: -0.005em;
+  font-weight: 700;
+  letter-spacing: 0;
   color: #fff;
 }
 .signin-sub {
@@ -114,8 +143,8 @@
   height: 30px;
   padding: 0 12px;
   border-radius: 999px;
-  border: 1px solid rgba(198, 243, 107, 0.28);
-  background: rgba(12, 34, 25, 0.55);
+  border: 1px solid color-mix(in srgb, var(--floodlight) 28%, transparent);
+  background: color-mix(in srgb, var(--night) 55%, transparent);
   color: var(--night-text);
   font-size: 12.5px;
   font-weight: 600;
@@ -126,19 +155,19 @@
 
 /* ---------- The form side ---------- */
 .signin-main.shell-main {
-  padding: 40px;
+  padding: 88px 40px 40px;
   justify-content: center;
   align-items: center;
   gap: 18px;
+  animation: none;
+}
+.signin-card-glass {
+  width: 100%;
+  max-width: 460px;
+  --glass-shadow: 0 30px 80px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 .signin-card {
-  width: 100%;
-  max-width: 440px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 18px;
   padding: 32px;
-  box-shadow: 0 24px 60px rgba(12, 34, 25, 0.1);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -147,9 +176,7 @@
   margin: 0;
   font-size: 40px;
   line-height: 0.95;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   letter-spacing: 0;
 }
 .signin-intro {
@@ -163,7 +190,7 @@
   border-radius: var(--radius);
   background: var(--tone-warning-bg);
   border: 1px solid var(--tone-warning-line);
-  color: #5c3a00;
+  color: var(--tone-warning);
   font-weight: 600;
 }
 /* The development sign-in renders a state card; inside the sign-in card it reads as a form. */
@@ -177,7 +204,7 @@
 }
 .signin-card .state h2 {
   font-size: 15px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 .signin-card .state > p {
   color: var(--muted);
@@ -203,13 +230,14 @@
   font-size: 15px;
   width: 100%;
 }
-.signin-foot {
+.signin-foot.caption {
   display: flex;
   align-items: center;
   gap: 6px;
   max-width: 440px;
   text-align: center;
   justify-content: center;
+  color: var(--night-soft);
 }
 
 @media (max-width: 900px) {
@@ -229,8 +257,12 @@
     font-size: 48px;
   }
   .signin-main.shell-main {
-    padding: 20px 16px 32px;
+    padding: 8px 16px 32px;
     justify-content: flex-start;
+  }
+  .signin-theme {
+    top: 14px;
+    right: 14px;
   }
   .signin-card {
     padding: 22px 18px;
@@ -238,4 +270,7 @@
   .signin-card h1 {
     font-size: 32px;
   }
+}
+.signin-pitch .brand-kicker {
+  color: var(--night-muted);
 }

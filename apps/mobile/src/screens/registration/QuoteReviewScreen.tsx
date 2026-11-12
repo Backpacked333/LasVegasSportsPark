@@ -48,7 +48,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type Quote = Schema<'Quote'>;
 type QuoteLine = Schema<'QuoteLine'>;
@@ -89,6 +89,7 @@ export function discountCodeError(error: ApiError | null): string | undefined {
 }
 
 function LineDetail({ line, name }: { line: QuoteLine; name: string }) {
+  const styles = useStyles();
   const m = (v: number) => formatMoney(v, line.currency);
   return (
     <View style={styles.line} testID={`quote-line-${line.id}`}>
@@ -382,7 +383,7 @@ export function QuoteReviewRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   line: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
@@ -390,4 +391,4 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-});
+}));

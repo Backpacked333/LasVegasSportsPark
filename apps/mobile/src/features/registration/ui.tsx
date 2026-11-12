@@ -4,10 +4,11 @@
  * (checked, disabled); every value row reads as one element "label, value"; text scales.
  */
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { SectionCard } from '../../ui/Card';
 import { LiveText } from '../../ui/announce';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { useInputChrome } from '../../ui/input';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 /** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
 export function Section({
@@ -27,6 +28,7 @@ export function Section({
 }
 
 export function Title({ children }: { children: string }) {
+  const styles = useStyles();
   return (
     <Text style={styles.title} accessibilityRole="header">
       {children}
@@ -35,6 +37,7 @@ export function Title({ children }: { children: string }) {
 }
 
 export function Body({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
+  const styles = useStyles();
   return <Text style={muted ? styles.caption : styles.body}>{children}</Text>;
 }
 
@@ -50,6 +53,7 @@ export function Detail({
   emphasis?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
   return (
     <View
       style={styles.detail}
@@ -81,6 +85,7 @@ export function ChoiceRow({
   disabled?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
   const mark = mode === 'checkbox' ? (checked ? '☑' : '☐') : checked ? '◉' : '○';
   return (
     <Pressable
@@ -128,19 +133,27 @@ export function TextField({
   multiline?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
+  const input = useInputChrome();
   const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {hint ? <Text style={styles.caption}>{hint}</Text> : null}
       <TextInput
+        {...input.props}
         value={value}
         onChangeText={onChangeText}
         accessibilityLabel={label}
         accessibilityHint={describedBy || undefined}
         autoCorrect={false}
         multiline={multiline}
-        style={[styles.input, multiline && styles.multiline, error ? styles.inputError : null]}
+        style={[
+          styles.input,
+          input.focusStyle,
+          multiline && styles.multiline,
+          error ? styles.inputError : null,
+        ]}
         testID={testID}
       />
       {error ? (
@@ -153,10 +166,11 @@ export function TextField({
 }
 
 export function ButtonRow({ children }: { children: ReactNode }) {
+  const styles = useStyles();
   return <View style={styles.buttons}>{children}</View>;
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   title: { ...type.display, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
@@ -198,4 +212,4 @@ const styles = StyleSheet.create({
   inputError: { borderColor: colors.danger, borderWidth: 2 },
   error: { ...type.caption, color: colors.danger },
   buttons: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-});
+}));

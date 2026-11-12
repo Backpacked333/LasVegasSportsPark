@@ -4,17 +4,19 @@
  * decorative and hidden from screen readers (SPK-UX-009). The selected tab is marked by a
  * floodlight pill behind its icon and by its label colour, and screen readers hear it as selected.
  *
- * Headers are on desert sand with the destination's name as a condensed uppercase title; Home
- * shows no title in the header because its greeting opens the page (SCR-C-03).
+ * Headers are in the page colour with the destination's name as a condensed uppercase title; Home
+ * shows no title in the header because its greeting opens the page (SCR-C-03). Bar, labels and
+ * pill follow the theme in use (classic or Legends mode).
  */
 import { Tabs } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { Icon } from '../ui/Icon';
-import { colors, fonts, radius, type } from '../ui/theme';
+import { fonts, makeStyles, radius, type, useTheme } from '../ui/theme';
 import { DESTINATIONS } from './destinations';
 import { QuickAccess } from './QuickAccess';
 
 export function HeaderTitle({ children }: { children: string }) {
+  const styles = useStyles();
   return (
     <Text style={styles.headerTitle} accessibilityRole="header" numberOfLines={1}>
       {children}
@@ -23,6 +25,8 @@ export function HeaderTitle({ children }: { children: string }) {
 }
 
 export function TabsNavigator() {
+  const { colors } = useTheme();
+  const styles = useStyles();
   return (
     <Tabs
       screenOptions={{
@@ -31,7 +35,7 @@ export function TabsNavigator() {
         headerTitle: ({ children }) => <HeaderTitle>{children}</HeaderTitle>,
         headerStyle: { backgroundColor: colors.page },
         headerShadowVisible: false,
-        tabBarActiveTintColor: colors.night,
+        tabBarActiveTintColor: colors.tabActive,
         tabBarInactiveTintColor: colors.textMuted,
         tabBarShowLabel: true,
         tabBarStyle: styles.tabBar,
@@ -50,7 +54,7 @@ export function TabsNavigator() {
             tabBarButtonTestID: `tab-${d.name}`,
             tabBarIcon: ({ color, focused }) => (
               <View style={[styles.iconPill, focused && styles.iconPillOn]}>
-                <Icon name={d.icon} size={23} color={focused ? colors.night : color} />
+                <Icon name={d.icon} size={23} color={focused ? colors.onFloodlight : color} />
               </View>
             ),
           }}
@@ -60,7 +64,7 @@ export function TabsNavigator() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   headerTitle: { ...type.display, fontSize: 30, lineHeight: 34, color: colors.text },
   tabBar: {
     backgroundColor: colors.background,
@@ -69,11 +73,11 @@ const styles = StyleSheet.create({
   },
   tabLabel: { ...fonts.bold, fontSize: 11 },
   iconPill: {
-    width: 52,
+    width: 56,
     height: 30,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
   iconPillOn: { backgroundColor: colors.floodlight },
-});
+}));

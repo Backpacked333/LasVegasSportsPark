@@ -85,7 +85,11 @@
   gap: 6px;
   padding: 18px 20px;
   background:
-    repeating-linear-gradient(135deg, rgba(11, 107, 58, 0.04) 0 10px, transparent 10px 20px),
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--pitch) 4%, transparent) 0 10px,
+      transparent 10px 20px
+    ),
     var(--card);
 }
 .area .placeholder h3,
@@ -122,13 +126,13 @@
     linear-gradient(
       90deg,
       transparent 49.8%,
-      rgba(198, 243, 107, 0.35) 49.8% 50.2%,
+      color-mix(in srgb, var(--floodlight) 35%, transparent) 49.8% 50.2%,
       transparent 50.2%
     ),
     radial-gradient(
       circle at 50% 50%,
       transparent 52px,
-      rgba(198, 243, 107, 0.35) 53px 55px,
+      color-mix(in srgb, var(--floodlight) 35%, transparent) 53px 55px,
       transparent 56px
     ),
     repeating-linear-gradient(
@@ -146,9 +150,7 @@
 .area-oob-word {
   font-size: 44px;
   line-height: 0.9;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   color: #fff;
 }
 .area-oob-flag {

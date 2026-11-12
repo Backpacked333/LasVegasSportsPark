@@ -52,11 +52,11 @@
   border-top: 1px solid var(--line-soft);
 }
 .approval[data-tone='danger'] {
-  background: #fffafa;
+  background: var(--danger-wash);
   box-shadow: inset 3px 0 0 var(--tone-danger);
 }
 .approval[data-tone='success'] {
-  background: #f7fbf8;
+  background: var(--success-wash);
 }
 .approval > .icon-tile {
   grid-column: 1;
@@ -165,8 +165,7 @@
   display: grid;
   place-items: center;
   font-size: 17px;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   background: var(--tone-neutral-bg);
   color: var(--ink-2);
 }
@@ -175,7 +174,7 @@
   color: var(--tone-pending);
 }
 .entry[data-status='offered'] {
-  background: #fbfaff;
+  background: var(--pending-wash);
   box-shadow: inset 3px 0 0 var(--tone-pending);
 }
 .entry > .row-text {
@@ -232,8 +231,8 @@
   gap: 6px;
   padding: 9px 10px;
   border-radius: 9px;
-  background: #f6f4fc;
-  border: 1px solid #e5def6;
+  background: var(--pending-wash);
+  border: 1px solid var(--tone-pending-line);
 }
 .offer-live-head {
   display: flex;
@@ -249,7 +248,7 @@
 .offer-live-bar {
   height: 5px;
   border-radius: 3px;
-  background: #e5def6;
+  background: var(--tone-pending-line);
   overflow: hidden;
 }
 .offer-live-bar > span {

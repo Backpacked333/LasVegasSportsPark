@@ -40,7 +40,7 @@ import { QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type PolicyVersion = Schema<'PolicyVersion'>;
 
@@ -109,6 +109,7 @@ function FormCard({
   offline: boolean;
   onSigned: () => void;
 }) {
+  const styles = useStyles();
   const { services } = useApp();
   const policy = record?.data;
   const [agreed, setAgreed] = useState(false);
@@ -327,11 +328,11 @@ export function RequiredFormsRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   card: {
     paddingVertical: spacing.md,
     gap: spacing.xs,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
   },
-});
+}));

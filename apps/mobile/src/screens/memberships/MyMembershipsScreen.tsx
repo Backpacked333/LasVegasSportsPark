@@ -31,7 +31,7 @@
  */
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import { moneyRoutes } from '../../features/money/routes';
@@ -57,7 +57,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, radius, spacing, type } from '../../ui/theme';
+import { makeStyles, radius, spacing, type } from '../../ui/theme';
 import { BookWithMembership } from './BookWithMembership';
 import { RenewMembership } from './RenewMembership';
 
@@ -79,6 +79,7 @@ function MembershipCard({
   /** The API reports `memberships` on: renewal and booking are new commitments (DEC-016). */
   canRenew: boolean;
 }) {
+  const styles = useStyles();
   const router = useRouter();
   const now = useNow();
   const [renewing, setRenewing] = useState(false);
@@ -162,6 +163,7 @@ function MembershipCard({
 }
 
 function MembershipsList() {
+  const styles = useStyles();
   const router = useRouter();
   const permissions = usePermissions();
   const canRenew = permissions.isCapabilityEnabled('memberships') === true;
@@ -208,6 +210,7 @@ function MembershipsList() {
 }
 
 export function MyMembershipsScreen() {
+  const styles = useStyles();
   return (
     <Screen>
       <View testID="screen-my-memberships">
@@ -235,7 +238,7 @@ export function MyMembershipsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
   title: { ...type.title, color: colors.text },
   list: { gap: spacing.sm, padding: spacing.lg },
@@ -249,4 +252,4 @@ const styles = StyleSheet.create({
   },
   cardTitle: { ...type.heading, color: colors.text },
   suspension: { gap: 2 },
-});
+}));

@@ -139,7 +139,7 @@ export function AreaNav({ onNavigate }: { onNavigate: () => void }) {
             <ul aria-labelledby={labelId}>
               {inGroup.map((area) => (
                 <li key={area.id} className="nav-item">
-                  <NavLink to={area.path} onClick={onNavigate}>
+                  <NavLink to={area.path} onClick={onNavigate} title={area.title}>
                     {({ isActive }) => (
                       <>
                         <Icon name={area.icon} filled={isActive} />

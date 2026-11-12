@@ -24,13 +24,13 @@
  * action (SPK-UX-009, NA-A01).
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
-import { StyleSheet, Text } from 'react-native';
+import { Text } from 'react-native';
 import { refusedAfterNoAnswer } from '../api/command-outcome';
 import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
-import { colors, spacing, type } from './theme';
+import { makeStyles, spacing, type } from './theme';
 
 export const REFUSED_BEFORE_RUNNING_LABEL = 'Not done';
 export const NOTHING_CHANGED_TEXT =
@@ -58,6 +58,7 @@ export function RefusedBeforeRunning({
   payment?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
   const offline = useConnectivity().reachable === false;
   const recovery = recoveryActionFor(error);
   const retry = recovery.retry && onRetry ? onRetry : undefined;
@@ -113,8 +114,8 @@ export function RefusedBeforeRunning({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

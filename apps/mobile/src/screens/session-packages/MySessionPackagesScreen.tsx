@@ -27,7 +27,7 @@
  * (notice above the list, and no "Book a session"); while the switch itself is unknown (its read
  * loading, failed or offline) that state is shown above the list, which follows its own read.
  */
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import {
@@ -47,7 +47,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, radius, spacing } from '../../ui/theme';
+import { makeStyles, radius, spacing } from '../../ui/theme';
 import { BookWithPackage } from './BookWithPackage';
 
 export const PACKAGES_STILL_AVAILABLE = 'Packages you already hold stay listed here.';
@@ -62,6 +62,7 @@ function PackageCard({
   /** The API reports `session_packages` on (booking is a new commitment, DEC-016, DEC-074). */
   bookingOn: boolean;
 }) {
+  const styles = useStyles();
   const now = useNow();
   const nameOf = useNameOf();
   const canBook = bookingOn && packageRedeemable(pkg, now);
@@ -119,6 +120,7 @@ function PackageCard({
 
 /** The account's session packages, in cursor pages. */
 export function SessionPackagesList() {
+  const styles = useStyles();
   const packages = useApiPages({
     path: '/me/package-entitlements',
     request: { query: { limit: 20 } },
@@ -187,7 +189,7 @@ export function MySessionPackagesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   card: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -197,4 +199,4 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   list: { gap: spacing.sm },
-});
+}));

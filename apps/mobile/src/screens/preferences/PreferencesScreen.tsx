@@ -12,6 +12,8 @@
  *   this build, shown as pending); when the operating system denies push, the screen explains it
  *   and that in-app notices continue.
  * - Private calendar feeds with revocable links (CalendarFeedsSection, SPK-COMMS-008).
+ * - Appearance: the Legends mode switch (`ui/LegendsModeToggle`), a display preference kept on
+ *   this device and not sent to the API; shown first, whatever the API answers below.
  *
  * States: loading; empty: not applicable (the API always returns the full matrix); ready;
  * validation failure: not applicable (a locked notice cannot be switched; the API's
@@ -30,6 +32,7 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { LegendsModeToggle } from '../../ui/LegendsModeToggle';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -68,6 +71,8 @@ const keyOf = (p: Pick<Preference, 'category' | 'channel'>) => `${p.category}:${
 export function PreferencesScreen() {
   return (
     <Screen>
+      <SectionHeader title="Appearance" detail="How the app looks on this device." />
+      <LegendsModeToggle testID="preferences-legends-mode" />
       <RequireSession what="your preferences">
         <PreferencesContent />
       </RequireSession>

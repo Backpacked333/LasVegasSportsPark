@@ -17,11 +17,11 @@
  */
 import type { ApiError } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
-import { StyleSheet, Text } from 'react-native';
+import { Text } from 'react-native';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
-import { colors, spacing, type } from './theme';
+import { makeStyles, spacing, type } from './theme';
 
 export const OUTCOME_LOST_LABEL = 'This may already have been done';
 
@@ -35,6 +35,7 @@ export function OutcomeLost({
   what?: string;
   testID?: string;
 }) {
+  const styles = useStyles();
   const queryClient = useQueryClient();
   // Every API read on screen (the record, the list, a payment's state) is read again.
   const reload = () => void queryClient.invalidateQueries({ queryKey: ['api'] });
@@ -61,8 +62,8 @@ export function OutcomeLost({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

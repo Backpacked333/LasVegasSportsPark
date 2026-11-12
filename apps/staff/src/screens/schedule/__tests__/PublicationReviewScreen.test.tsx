@@ -406,7 +406,7 @@ describe('SCR-S-05 PublicationReviewScreen', () => {
     render(app.at('/schedule/drafts/d1/publish'));
     await user.click(await screen.findByRole('button', { name: 'Publish 1 change' }));
     expect(
-      await screen.findByText('Operation recovery_required: Needs attention'),
+      await screen.findByText('Operation recovery required: Needs attention'),
     ).toBeInTheDocument();
     expect(screen.getByText(/do not publish the same changes again/)).toBeInTheDocument();
   });

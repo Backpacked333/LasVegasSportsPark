@@ -4,7 +4,7 @@
  * the full status phrase from docs/package-a/journeys.md section 3 and is what screen readers read.
  */
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, fonts, radius, toneBackgrounds, type } from './theme';
+import { fonts, radius, type, useTheme } from './theme';
 
 export type StatusTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral' | 'pending';
 
@@ -26,6 +26,7 @@ export interface StatusBadgeProps {
 }
 
 export function StatusBadge({ tone, label, testID }: StatusBadgeProps) {
+  const { colors, toneBackgrounds } = useTheme();
   return (
     <View
       style={[styles.badge, { backgroundColor: toneBackgrounds[tone] }]}

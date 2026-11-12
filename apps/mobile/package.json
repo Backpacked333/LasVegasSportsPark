@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@expo-google-fonts/archivo": "0.4.2",
-    "@expo-google-fonts/archivo-narrow": "0.4.2",
     "@expo-google-fonts/material-symbols": "0.4.49",
     "@expo/log-box": "57.0.4",
     "@expo/metro-runtime": "57.0.16",

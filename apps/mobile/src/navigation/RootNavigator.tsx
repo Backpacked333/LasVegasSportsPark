@@ -3,29 +3,60 @@
  * the facility pass and the inbox as stack screens reachable from anywhere (SPK-UX-002). When the
  * API says this build must be updated, the update screen covers everything (SCR-C-39). The
  * connectivity state is announced to VoiceOver once for the app here, not by each screen's banner
- * (SPK-UX-009, src/connectivity/ConnectivityBanner.tsx).
+ * (SPK-UX-009, src/connectivity/ConnectivityBanner.tsx). Headers and the navigation library's
+ * own colours follow the theme in use (classic or Legends mode).
  */
-import { Stack } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { useMemo } from 'react';
 import { ConnectivityAnnouncer } from '../connectivity/ConnectivityBanner';
-import { colors, fonts } from '../ui/theme';
+import { fonts, useTheme, type Theme } from '../ui/theme';
 import { UpdateGate } from './UpdateGate';
 
-/** Stack headers of the park system: sand bar, ink back button, condensed uppercase title. */
-const STACK_HEADER = {
-  headerBackTitle: 'Back',
-  headerStyle: { backgroundColor: colors.page },
-  headerShadowVisible: false,
-  headerTintColor: colors.text,
-  headerTitleStyle: { ...fonts.display, fontSize: 22, color: colors.text },
-  contentStyle: { backgroundColor: colors.page },
-} as const;
+/**
+ * Stack headers of the park system in the theme in use: a bar in the page colour, the back button
+ * in the text colour, a condensed uppercase title.
+ */
+function stackHeader({ colors }: Theme) {
+  return {
+    headerBackTitle: 'Back',
+    headerStyle: { backgroundColor: colors.page },
+    headerShadowVisible: false,
+    headerTintColor: colors.text,
+    headerTitleStyle: { ...fonts.display, fontSize: 22, color: colors.text },
+    contentStyle: { backgroundColor: colors.page },
+  } as const;
+}
+
+/**
+ * The navigation library's own colours (what shows behind a screen during a transition, default
+ * header and tab colours), so nothing of the other theme flashes while navigating.
+ */
+function navigationTheme({ dark, colors }: Theme) {
+  const base = dark ? DarkTheme : DefaultTheme;
+  return {
+    ...base,
+    dark,
+    colors: {
+      ...base.colors,
+      primary: colors.primary,
+      background: colors.page,
+      card: colors.page,
+      text: colors.text,
+      border: colors.border,
+      notification: colors.danger,
+    },
+  };
+}
 
 export function RootNavigator() {
+  const theme = useTheme();
+  const screenOptions = useMemo(() => stackHeader(theme), [theme]);
+  const navigation = useMemo(() => navigationTheme(theme), [theme]);
   return (
-    <>
+    <ThemeProvider value={navigation}>
       <ConnectivityAnnouncer />
       <UpdateGate>
-        <Stack screenOptions={STACK_HEADER}>
+        <Stack screenOptions={screenOptions}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="pass" options={{ title: 'Facility pass' }} />
           <Stack.Screen name="inbox" options={{ title: 'Notifications' }} />
@@ -51,6 +82,6 @@ export function RootNavigator() {
           <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
         </Stack>
       </UpdateGate>
-    </>
+    </ThemeProvider>
   );
 }

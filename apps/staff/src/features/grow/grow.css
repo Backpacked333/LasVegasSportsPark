@@ -60,7 +60,7 @@
   list-style: none;
   padding: 4px;
   margin: 0;
-  background: #ebe9e2;
+  background: var(--track);
   border-radius: 10px;
   width: fit-content;
   max-width: 100%;
@@ -78,14 +78,14 @@
   text-decoration: none;
 }
 .grow .rf-section-nav a:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--track-hover);
   color: var(--ink);
 }
 .grow .rf-section-nav a[aria-current='page'] {
   border: 0;
   background: var(--card);
   color: var(--ink);
-  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
+  box-shadow: var(--shadow-chip);
 }
 
 .grow .rf-actions,
@@ -94,10 +94,9 @@
   align-items: center;
 }
 .grow .rf-facts dt {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--faint);
 }
 .grow .rf-facts dd {
@@ -110,10 +109,9 @@
   background: var(--card);
 }
 .grow .rf-table th {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--faint);
   border-bottom-color: var(--line);
 }
@@ -131,7 +129,7 @@
   flex-wrap: wrap;
   gap: 2px;
   padding: 3px;
-  background: #e9e7e0;
+  background: var(--track);
   border-radius: 9px;
   max-width: 100%;
 }
@@ -154,7 +152,7 @@
   background: var(--card);
   color: var(--ink);
   font-weight: 700;
-  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
+  box-shadow: var(--shadow-chip);
 }
 
 /* ---------- Meter: a fill bar beside its numbers (the numbers are the information) ---------- */
@@ -216,17 +214,15 @@
   display: grid;
   place-items: center;
   font-size: 12px;
-  font-weight: 800;
-  color: #fff;
+  font-weight: 700;
+  color: var(--on-avatar, var(--on-primary));
   background: var(--avatar, var(--pitch));
-  text-transform: uppercase;
 }
 .grow-avatar[data-size='lg'] {
   width: 72px;
   height: 72px;
   border-radius: 18px;
   font-size: 26px;
-  font-stretch: 75%;
   color: var(--floodlight);
 }
 .grow-avatar[data-size='sm'] {
@@ -269,10 +265,9 @@
   --tile-bg: var(--tone-pending-bg);
 }
 .type-caps {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--tile, var(--muted));
 }
 
@@ -299,7 +294,7 @@
   display: grid;
   place-items: center;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   background: var(--tone-neutral-bg);
   color: var(--tone-neutral);
 }
@@ -359,14 +354,12 @@
 .rail-hero .rail-title {
   font-size: 26px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   color: #fff;
   margin: 0;
 }
 .rail-hero .caption {
-  color: #b9cbc1;
+  color: var(--night-soft);
 }
 .rail-hero a {
   color: #fff;

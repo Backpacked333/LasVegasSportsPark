@@ -15,7 +15,7 @@ import type { UpdateRequiredError } from '@sportspark/api-client';
 import { StyleSheet, Text } from 'react-native';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 
 /** What a screen reader hears when the update screen appears, with the next action. */
 export const UPDATE_REQUIRED_ANNOUNCEMENT = sentences(
@@ -31,6 +31,7 @@ export function UpdateRequiredScreen({
   error: UpdateRequiredError;
   appVersion: string;
 }) {
+  const styles = useStyles();
   return (
     <LiveRegion
       style={styles.overlay}
@@ -56,7 +57,7 @@ export function UpdateRequiredScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   overlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: colors.background,
@@ -67,4 +68,4 @@ const styles = StyleSheet.create({
   title: { ...type.title, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

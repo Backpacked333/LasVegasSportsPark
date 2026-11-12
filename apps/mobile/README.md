@@ -111,19 +111,74 @@ build.
 
 ## Visual system
 
-The park visual system shared with the staff dashboard: tokens in `src/ui/theme.ts` (desert sand
-pages, white cards, night pitch `#0C2219`, pitch green `#0B6B3A`, floodlight `#C6F36B`, tinted
-status pills that keep glyph and text), bundled fonts loaded by `app/_layout.tsx` (Archivo for
-text; Archivo Narrow Bold as the condensed uppercase face for titles, because the static font
-packages have no condensed 800 Archivo; Material Symbols for decorative icons, always hidden from
-screen readers), and the shared pieces `Card`/`SectionCard`, `Hero`, `Icon`, `ListRow` (card rows,
-flat inside a card), `Button` variants and the tab and header chrome in `src/navigation/`.
+The park visual system shared with the staff dashboard, in two themes that carry the same token
+names (`src/ui/theme.ts`):
+
+- **Classic**: a calm warm white (`#F5F5F2`), white cards, pitch green `#0A7040` as the accent,
+  night pitch `#0C2219` and floodlight `#C6F36B` for the hero surfaces.
+- **Legends mode**: neutral black (page `#0A0A0B`, cards `#131314`) with one gold accent
+  (`#E8B84A`, labels on gold `#17120A`); the same palette as the staff dashboard's Legends mode.
+
+Both keep tinted status pills with glyph and text, the bundled fonts loaded by `app/_layout.tsx`
+(Archivo at one width, in sentence case: titles are the bold face, nothing is set in capitals;
+Material Symbols for decorative icons, always hidden from screen readers), and the shared pieces `Card`/`SectionCard`, `Hero`, `Icon`, `ListRow`
+(card rows, flat inside a card), `Button` variants and the tab and header chrome in
+`src/navigation/`.
+
+### Theming (how a screen gets its colours)
+
+- `useTheme()` returns the theme in use (`colors`, `toneBackgrounds`, `kindColors`, `dark`);
+  `makeStyles(({ colors }) => ({ ... }))` declares a stylesheet that follows it: call the returned
+  hook in the component (`const styles = useStyles()`). One sheet is created per theme and reused.
+  There is no static `colors` export: a screen cannot keep a colour of its own.
+- Text on a filled surface uses that surface's own token, never another surface's: `primaryText`
+  on `primary`, `onNight`/`onNightBody` on `night` and `pitch`, `onFloodlight` on `floodlight`,
+  `onChipSelected` on `chipSelected`.
+- `ThemeProvider` (inside `AppProviders`) holds the choice, and also sets the status bar content
+  and, through React Native's `Appearance`, the keyboard and system sheets. Navigation headers,
+  the tab bar and the navigation library's own colours read the theme (`RootNavigator`,
+  `TabsNavigator`).
+- **Legends mode switch**: `LegendsModeToggle` (role switch, name "Legends mode", state in words,
+  56 pt row), first on the Account tab (signed in or out) and under "Appearance" in Preferences.
+  The choice is a preference of the device: kept through `services.themeStore`
+  (`SecureThemeStore`, one key in expo-secure-store, read synchronously so the first frame is
+  already in the chosen theme; `MemoryThemeStore` in tests), never sent to the API.
+
+### Shared controls
+
+- Buttons are 48 pt capsules that grow with their label; a press darkens the fill and draws the
+  button in at once (no animation, so nothing moves with reduced motion). Rows that open something
+  show the soft surface while pressed (and the platform ripple on Android) and are 56 pt targets.
+- Cards, tiles and bands use continuous corners where the platform draws them (iOS
+  `borderCurve`), with nested radii kept roughly concentric (`radius` in `theme.ts`).
+- Loading keeps the page's shape with a static outline under the progress line, hidden from screen
+  readers. Text fields show their focus (`useInputChrome`) and open a keyboard that matches the
+  theme. A button under an open keyboard answers the first tap (`Screen`).
+- Surfaces are opaque. Refracting glass on the tab bar, headers and sheets is **Proposed**, not
+  built: on React Native only the system draws it (iOS 26 glass views), Android and earlier iOS can
+  only blur, and both need native modules this app does not have (`expo-glass-effect`,
+  `expo-blur`) and a device to check the result on. Until then nothing here imitates glass.
+
+### What is verified
 
 - **Verified** in jest: every accessible name, role, state and status phrase the screens had
-  before is unchanged (the existing suites pass unmodified).
-- **Not verified**: how it looks. There is no web renderer in this app (react-native-web is not a
-  dependency), so no screenshot was taken; contrast was checked by calculation, not on devices.
-  Native acceptance (§6.2) applies as for everything else here.
+  before is unchanged (the existing suites pass unmodified); the Legends mode switch exposes its
+  role, name and state, switches the colours on screen at once and back, and is kept between
+  launches through the injected store (`src/ui/__tests__/theme.test.tsx`,
+  `secure-theme-store.test.ts`, and the Account and Preferences suites); text and surface pairings
+  of both themes reach 4.5:1 by calculation (status tones on their tint and on a card included);
+  no source file outside `src/ui/theme.ts` holds a colour literal; text fields show focus and
+  follow the theme (`src/ui/__tests__/input.test.tsx`).
+- **Looked at in a browser, not on a device**: both themes were rendered once at phone size
+  through a temporary web build (react-native-web and an in-memory stand-in for the secure store,
+  neither committed: this app has no web target) against the development API, signed out and
+  signed in: the five tabs, the pass, family, enrollments, payments, credits, forms, preferences,
+  support, invitations and the inbox. In Legends mode no screen kept a light surface or
+  unreadable text. A browser render is not native acceptance (§6.2).
+- **Not verified** (needs devices): the status bar and keyboard following the theme, continuous
+  corners, the Android ripple, the platform switch's own colours, and the stored choice across a
+  reinstall or a restore from backup. Contrast was checked by calculation, not measured on a
+  device.
 - The design's scannable pass symbol (**Pending decision** DEC-023), choosing whose pass to show
   and "Add to Wallet" are not built; "Maybe" RSVP stays **Pending decision** DEC-064, and arrival
   notes and directions on the next-up card **Pending decision** POL-046.
@@ -285,6 +340,9 @@ variant="error"` directly: those views decide with `src/api/command-outcome.ts` 
   `TextField`); a required choice also makes its error each choice's hint: pass it to its group
   (`ChoiceGroup error` in `features/money/ui`, `RadioGroup error` in `features/teams/ui`) or to
   each row (account `CheckboxRow error`), never to a text field next to it.
+- **Colours.** Declare styles with `makeStyles(({ colors }) => ({ ... }))` and read inline colours
+  from `useTheme()` (`src/ui/theme.ts`); never write a colour literal in a screen (a test checks the
+  sources) and pair text with its surface's own token, so the screen works in Legends mode too.
 - **Status.** `StatusBadge` with the phrase from `docs/package-a/journeys.md` section 3; never
   colour alone. "Payment processing", "Confirmed, awaiting placement" and "Confirmed" use different
   tones, glyphs and words.
@@ -335,29 +393,29 @@ least two weeks earlier; the Expo set equals the `bundledNativeModules` of `expo
 dependencies were resolved with the same two-week floor. (`npx expo install --check` compares
 against later SDK 57 patches published after that floor.)
 
-| Package                               | Version | Published  | Why                                                                                                   |
-| ------------------------------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------------- |
-| `expo`                                | 57.0.27 | 2026-10-06 | SDK, CLI (`expo start`, `expo export`), native module runtime                                         |
-| `react`                               | 19.2.3  | 2025-12-11 | Version required by SDK 57                                                                            |
-| `react-native`                        | 0.86.3  | 2026-08-24 | Version required by SDK 57                                                                            |
-| `expo-router`                         | 57.0.25 | 2026-10-06 | File-based native navigation, tabs and stack (SPK-UX-001/002)                                         |
-| `react-native-screens`                | 4.26.2  | 2026-07-16 | Native screens, required by expo-router                                                               |
-| `react-native-safe-area-context`      | 5.7.0   | 2026-02-24 | Safe areas, required by expo-router                                                                   |
-| `expo-linking`                        | 57.0.12 | 2026-10-06 | Links, required by expo-router                                                                        |
-| `expo-constants`                      | 57.0.21 | 2026-10-06 | Reads `app.config.ts` (API base URL, app version)                                                     |
-| `@expo/metro-runtime`                 | 57.0.16 | 2026-09-18 | Metro runtime, required by expo-router                                                                |
-| `@expo/log-box`                       | 57.0.4  | 2026-08-26 | Error overlay, required by expo-router                                                                |
-| `expo-secure-store`                   | 57.0.4  | 2026-09-11 | Platform secure storage for the session (§4.13)                                                       |
-| `expo-network`                        | 57.0.2  | 2026-09-11 | Connectivity for SCR-C-40                                                                             |
-| `expo-crypto`                         | 57.0.3  | 2026-09-11 | Secure random idempotency keys (React Native has no `crypto`)                                         |
-| `@tanstack/react-query`               | 5.104.1 | 2026-10-02 | Data layer: caching, refetch on focus and reconnect, data age                                         |
-| `jest` (dev)                          | 29.7.0  | 2023-09-12 | Test runner used by jest-expo                                                                         |
-| `jest-expo` (dev)                     | 57.0.5  | 2026-08-26 | Expo's documented Jest preset for SDK 57                                                              |
-| `@react-native/jest-preset` (dev)     | 0.86.3  | 2026-08-24 | Required peer of jest-expo 57                                                                         |
-| `@testing-library/react-native` (dev) | 13.3.3  | 2025-08-26 | Component tests by role and label (14.x requires a `test-renderer@^1` peer with no published release) |
-| `react-test-renderer` (dev)           | 19.2.3  | 2025-12-11 | Renderer for React Native Testing Library 13                                                          |
-| `@types/jest` (dev)                   | 29.5.14 | 2024-10-23 | Jest types                                                                                            |
-| `@types/react` (dev)                  | 19.2.18 | 2026-07-30 | React types                                                                                           |
+| Package                               | Version | Published  | Why                                                                                                        |
+| ------------------------------------- | ------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| `expo`                                | 57.0.27 | 2026-10-06 | SDK, CLI (`expo start`, `expo export`), native module runtime                                              |
+| `react`                               | 19.2.3  | 2025-12-11 | Version required by SDK 57                                                                                 |
+| `react-native`                        | 0.86.3  | 2026-08-24 | Version required by SDK 57                                                                                 |
+| `expo-router`                         | 57.0.25 | 2026-10-06 | File-based native navigation, tabs and stack (SPK-UX-001/002)                                              |
+| `react-native-screens`                | 4.26.2  | 2026-07-16 | Native screens, required by expo-router                                                                    |
+| `react-native-safe-area-context`      | 5.7.0   | 2026-02-24 | Safe areas, required by expo-router                                                                        |
+| `expo-linking`                        | 57.0.12 | 2026-10-06 | Links, required by expo-router                                                                             |
+| `expo-constants`                      | 57.0.21 | 2026-10-06 | Reads `app.config.ts` (API base URL, app version)                                                          |
+| `@expo/metro-runtime`                 | 57.0.16 | 2026-09-18 | Metro runtime, required by expo-router                                                                     |
+| `@expo/log-box`                       | 57.0.4  | 2026-08-26 | Error overlay, required by expo-router                                                                     |
+| `expo-secure-store`                   | 57.0.4  | 2026-09-11 | Platform secure storage for the session (§4.13); also keeps the Legends mode choice (a display preference) |
+| `expo-network`                        | 57.0.2  | 2026-09-11 | Connectivity for SCR-C-40                                                                                  |
+| `expo-crypto`                         | 57.0.3  | 2026-09-11 | Secure random idempotency keys (React Native has no `crypto`)                                              |
+| `@tanstack/react-query`               | 5.104.1 | 2026-10-02 | Data layer: caching, refetch on focus and reconnect, data age                                              |
+| `jest` (dev)                          | 29.7.0  | 2023-09-12 | Test runner used by jest-expo                                                                              |
+| `jest-expo` (dev)                     | 57.0.5  | 2026-08-26 | Expo's documented Jest preset for SDK 57                                                                   |
+| `@react-native/jest-preset` (dev)     | 0.86.3  | 2026-08-24 | Required peer of jest-expo 57                                                                              |
+| `@testing-library/react-native` (dev) | 13.3.3  | 2025-08-26 | Component tests by role and label (14.x requires a `test-renderer@^1` peer with no published release)      |
+| `react-test-renderer` (dev)           | 19.2.3  | 2025-12-11 | Renderer for React Native Testing Library 13                                                               |
+| `@types/jest` (dev)                   | 29.5.14 | 2024-10-23 | Jest types                                                                                                 |
+| `@types/react` (dev)                  | 19.2.18 | 2026-07-30 | React types                                                                                                |
 
 `expo-router` brings `react-native-reanimated` and `react-native-worklets` in as peers of optional
 features (drawer, `@expo/ui`); pnpm installs them (4.7.1 and 0.13.0, not the SDK 57 versions) and

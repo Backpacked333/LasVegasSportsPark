@@ -222,7 +222,7 @@ describe('SCR-S-23 DuplicateCandidateScreen', () => {
     await user.click(within(review).getByRole('button', { name: 'Merge records' }));
     const outcome = await screen.findByRole('region', { name: 'Merge outcome' });
     expect(within(outcome).getByText('enrollments')).toBeInTheDocument();
-    expect(await within(outcome).findByText('Operation: recovery_required')).toBeInTheDocument();
+    expect(await within(outcome).findByText('Operation: recovery required')).toBeInTheDocument();
     expect(within(outcome).getByText(/The merge needs attention/)).toBeInTheDocument();
     const merge = app.fake.requests.find((r) => r.route === '/duplicate-candidates/{id}/merge');
     expect(merge?.body).toEqual({

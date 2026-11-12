@@ -10,10 +10,10 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Share, StyleSheet, Text, View } from 'react-native';
+import { Share, Text, View } from 'react-native';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 import { invitationStatus } from './status';
 
 type Issued = Schema<'TeamInvitationIssued'>;
@@ -49,6 +49,7 @@ export function InvitationIssued({
   recipient: string;
   teamName: string;
 }) {
+  const styles = useStyles();
   const [shareFailed, setShareFailed] = useState(false);
   const share = async () => {
     setShareFailed(false);
@@ -80,8 +81,8 @@ export function InvitationIssued({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { gap: spacing.xs, paddingVertical: spacing.xs },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

@@ -21,7 +21,7 @@
  * (`ui/RefusedBeforeRunning`), never "No answer yet".
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
-import { StyleSheet, Text } from 'react-native';
+import { Text } from 'react-native';
 import {
   mayHaveTakenEffect,
   refusedBeforeRunning,
@@ -34,7 +34,7 @@ import { OutcomeLost } from '../../../ui/OutcomeLost';
 import { RefusedBeforeRunning } from '../../../ui/RefusedBeforeRunning';
 import { StateView } from '../../../ui/StateView';
 import { StatusBadge } from '../../../ui/StatusBadge';
-import { colors, spacing, type } from '../../../ui/theme';
+import { makeStyles, spacing, type } from '../../../ui/theme';
 
 const NO_ANSWER_LABEL = 'No answer yet: this may already have been recorded';
 const NO_ANSWER_BODY =
@@ -63,6 +63,7 @@ export function CommandError({
   /** Words for ACCESS_DENIED or PARTICIPANT_AUTHORITY_REQUIRED; default: the API's safe message. */
   denied?: NotAvailableCopy;
 }) {
+  const styles = useStyles();
   if (error.isNotFound) {
     return <StateView variant="unavailable" {...(notFound ?? {})} />;
   }
@@ -137,8 +138,8 @@ export function CommandError({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

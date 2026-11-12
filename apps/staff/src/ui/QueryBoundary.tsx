@@ -89,7 +89,7 @@ export function QueryBoundary<T>({
   const refreshError =
     query.error !== null && presentationForError(query.error) === 'error' ? query.error : null;
   return (
-    <div>
+    <div className="query-content">
       {refreshError ? <StateView variant="error" error={refreshError} onRetry={retry} /> : null}
       {!online || refreshFailed || stale ? (
         <StateView

@@ -5,10 +5,10 @@
  * record instead of deciding the outcome itself.
  */
 import { useEffect, useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useNow } from '../../providers/AppProviders';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 import { hasPassed, timeLeftPhrase } from './format';
 
 export function ExpiryNotice({
@@ -26,6 +26,7 @@ export function ExpiryNotice({
   onLapsed?: () => void;
   testID?: string;
 }) {
+  const styles = useStyles();
   const now = useNow(15_000);
   const lapsed = hasPassed(expiresAt, now);
   const notified = useRef(false);
@@ -51,8 +52,8 @@ export function ExpiryNotice({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.xs },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

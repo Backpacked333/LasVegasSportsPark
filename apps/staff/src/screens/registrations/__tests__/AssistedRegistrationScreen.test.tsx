@@ -254,7 +254,7 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
       'href',
       `/finance/orders/${ORDER_ID}`,
     );
-    expect(await within(refs).findByText('Operation recovery_required')).toBeInTheDocument();
+    expect(await within(refs).findByText('Operation recovery required')).toBeInTheDocument();
     expect(screen.getByText(/FULFILLMENT_INCOMPLETE: A line could not be confirmed/)).toBeVisible();
     const attempts = await screen.findByRole('list', { name: 'Payment attempts of the order' });
     expect(

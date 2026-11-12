@@ -161,3 +161,22 @@ describe('ReorderableList: keyboard alternative to drag (SPK-UX-009)', () => {
     expect(order()[0]).toBe('Blue, position 1 of 3');
   });
 });
+
+describe('StatusBadge plain words (SPK-UX-010)', () => {
+  it("shows a lifecycle's state name as plain words and leaves codes, action ids and file names alone", async () => {
+    const { plainWords } = await import('../StatusBadge');
+    expect(plainWords('in_service')).toBe('in service');
+    expect(plainWords('Status: recovery_required')).toBe('Status: recovery required');
+    expect(plainWords('Case updated. State: waiting_customer.')).toBe(
+      'Case updated. State: waiting customer.',
+    );
+    expect(plainWords('ACCESS_DENIED (CAPABILITY_DISABLED)')).toBe(
+      'ACCESS_DENIED (CAPABILITY_DISABLED)',
+    );
+    expect(plainWords('You need entry.sync_offline.')).toBe('You need entry.sync_offline.');
+    expect(plainWords('Export downloaded as daily_schedule-2026-10-24.csv')).toBe(
+      'Export downloaded as daily_schedule-2026-10-24.csv',
+    );
+    expect(plainWords('Waiting on DEC-018')).toBe('Waiting on DEC-018');
+  });
+});

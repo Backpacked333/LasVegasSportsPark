@@ -1,34 +1,74 @@
 /*
- * Staff dashboard design system: "night pitch" redesign (SPK-UX-010: soccer-specific identity,
- * clear hierarchy, strong readability in busy facilities, restrained animation, dense but
- * understandable views). Colour never carries a status alone (SPK-UX-009): badges pair a glyph and
- * text. Focus is always visible for keyboard users.
+ * Staff dashboard design system (SPK-UX-010: soccer-specific identity, clear hierarchy, strong
+ * readability in busy facilities, restrained animation, dense but understandable views). Colour
+ * never carries a status alone (SPK-UX-009): badges pair a glyph and text. Focus is always visible
+ * for keyboard users.
  *
- * Type: Archivo, one family. Condensed 800 uppercase for headings, spaces and scores (reads like a
- * scoreboard); body at normal width with tabular numbers everywhere.
+ * Two themes share every rule below through the tokens of this block:
+ * - classic (default): a calm warm white, white cards, pitch green as the one accent;
+ * - legends (`[data-theme='legends']`, the "Legends mode" switch): neutral black, soft white text,
+ *   gold only where something is active or primary.
+ * A rule that needs a colour takes a token; a colour literal in a feature stylesheet would not
+ * follow the theme.
+ *
+ * Layers: content (cards, lists, tables: flat and opaque, for reading) under the chrome (sidebar,
+ * header groups, quick navigation: liquid glass, `glass/Glass.tsx`). Content is never glass.
+ *
+ * Type: Archivo, one family at its normal width. Sentence case everywhere (the words are written
+ * as they should be read; nothing is set in capitals), weights from 500 to 700, tabular numbers.
  */
 :root {
-  /* Palette, evolved from the original #0b6b3a. */
+  color-scheme: light;
+
+  /* Night pitch: dark surfaces (the sidebar artwork, hero boards). Dark in both themes. */
   --night: #0c2219;
   --night-2: #16352a;
   --night-3: #24473a;
   --night-line: #1f3d30;
+  --night-raised: #122c21;
+  --night-edge: #2f5444;
+  --night-ink: #e8f0eb;
   --night-text: #dce6e0;
+  --night-soft: #b9cbc1;
   --night-muted: #9db3a7;
   --night-faint: #7e968a;
-  --pitch: #0b6b3a;
-  --pitch-hover: #08532c;
+  /* Status on a night surface. */
+  --night-ok: #b9e4c9;
+  --night-warn: #f5c46b;
+  --night-warn-bg: #4a3510;
+  --night-danger: #ff9c92;
+  --night-pending: #e3d8ff;
+  --night-pending-bg: #3b2a5e;
+
+  /* Brand: the primary colour and the one accent. */
+  --pitch: #0a7040;
+  --pitch-hover: #085a33;
+  --on-primary: #ffffff;
+  /* Text on the primary colour mixed towards the surface (a heatmap's middle levels). */
+  --on-primary-soft: #101814;
   --floodlight: #c6f36b;
-  --sand: #f4f3ee;
-  --sand-2: #fafaf6;
-  --ink: #101814;
-  --ink-2: #3a4641;
-  --muted: #5a6660;
-  --faint: #8a948f;
-  --line: #e3e1d9;
-  --line-soft: #eeece6;
-  --line-strong: #d9d6cc;
+  --floodlight-hover: #d4f78c;
+  --accent-wash: #eef7dc;
+  --live: #1f9d55;
+
+  /* Day surfaces and text. */
+  --sand: #f5f5f2;
+  --sand-2: #f9f9f7;
+  --ink: #111614;
+  --ink-2: #39423e;
+  --muted: #5f6965;
+  --faint: #6b7570;
+  --line: #e9e8e3;
+  --line-soft: #f0efeb;
+  --line-strong: #dbd9d3;
+  --line-hover: #c3c1b9;
   --card: #ffffff;
+  --field: #ffffff;
+  /* Segmented controls: the track and a hovered segment. */
+  --track: #ecece7;
+  --track-hover: rgba(255, 255, 255, 0.6);
+  --hatch: #cfccc1;
+  --hatch-strong: #a9b1ad;
 
   /* Activity kinds (schedule and lists). */
   --kind-league: #0b6b3a;
@@ -43,6 +83,7 @@
   --kind-basketball-bg: #fbe9df;
   --kind-dropin: #5a6660;
   --kind-dropin-bg: #eef0ee;
+  --kind-futsal: #0e7c74;
 
   /* Names used across the feature stylesheets, mapped onto the palette. */
   --color-bg: var(--card);
@@ -54,12 +95,18 @@
   --color-border-strong: var(--line-strong);
   --color-primary: var(--pitch);
   --color-primary-hover: var(--pitch-hover);
-  --color-primary-text: #ffffff;
+  --color-primary-text: var(--on-primary);
   --color-focus: #1a4fd6;
+  --focus-ring: rgba(26, 79, 214, 0.22);
+  --link: var(--pitch);
+  --link-hover: var(--pitch-hover);
+  /* The label of a selected item on its own accent tint (darker than the accent itself). */
+  --accent-ink: #06512e;
 
-  /* Status tones: foreground and tinted background. */
+  /* Status tones: foreground, tinted background, border; `--on-tone` is text on a solid tone. */
   --tone-success: #0b6b3a;
   --tone-success-bg: #e3f1e8;
+  --tone-success-line: #c3e0cd;
   --tone-warning: #8a5300;
   --tone-warning-bg: #fdf0d5;
   --tone-warning-line: #f0d9a6;
@@ -68,11 +115,27 @@
   --tone-danger-line: #f3c4be;
   --tone-info: #1a4fd6;
   --tone-info-bg: #e4ebfd;
+  --tone-info-line: #c5d3f8;
   --tone-neutral: #4a5651;
   --tone-neutral-bg: #eef0ee;
   --tone-pending: #5b3fa8;
   --tone-pending-bg: #eee8fa;
   --tone-pending-line: #ddd3f4;
+  --on-tone: #ffffff;
+  --danger-solid: #b3261e;
+  --on-danger: #ffffff;
+  /* Faint washes behind a toned row or panel, and the darker ink of a toned notice. */
+  --success-wash: #f5faf6;
+  --warning-wash: #fffbf2;
+  --warning-stripe: #f7e6c2;
+  --warning-line-strong: #e8c77e;
+  --warning-edge: #d99a1e;
+  --warning-ink: #5c3a00;
+  --danger-wash: #fffafa;
+  --danger-ink: #8e1d17;
+  --info-ink: #12398f;
+  --pending-wash: #faf8ff;
+  --pending-dash: #b6a6e3;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -80,22 +143,146 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
-  --radius-sm: 7px;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --shadow-pop: 0 10px 30px rgba(16, 24, 20, 0.12);
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --radius-control: 12px;
+  --shadow-chip: 0 1px 2px rgba(16, 24, 20, 0.1);
+  --shadow-card: 0 1px 2px rgba(17, 22, 20, 0.04), 0 8px 24px -12px rgba(17, 22, 20, 0.1);
+  --shadow-raised: 0 2px 6px rgba(17, 22, 20, 0.05), 0 18px 40px -16px rgba(17, 22, 20, 0.18);
+  --shadow-pop: 0 10px 30px rgba(16, 24, 20, 0.14);
+  --scrim: rgba(12, 20, 16, 0.32);
+  /* The soft light behind the top of a page. */
+  --ambient-a: rgba(160, 226, 150, 0.32);
+  --ambient-b: rgba(120, 190, 255, 0.16);
   /* Desktop controls; coarse pointers (phones beside a field, SPK-UX-007) get 44 px below. */
   --touch: 40px;
+  --side-width: 264px;
   --font: 'Archivo Variable', Archivo, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 
   font-family: var(--font);
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   color: var(--color-text);
   background: var(--color-page);
+  scrollbar-color: var(--line-hover) transparent;
+}
+
+/*
+ * Legends mode: night black, warm ivory text and one gold accent. Surfaces step up in lightness
+ * (page, card, raised) instead of relying on shadows; the night pitch surfaces become black with a
+ * gold hairline. Status tones are lightened to keep 4.5:1 on the dark surfaces, and warning is
+ * orange so it is never mistaken for the gold accent.
+ */
+:root[data-theme='legends'] {
+  color-scheme: dark;
+
+  --night: #000000;
+  --night-2: #161617;
+  --night-3: #34343a;
+  --night-line: #242427;
+  --night-raised: #101011;
+  --night-edge: #3d3d42;
+  --night-ink: #f5f5f7;
+  --night-text: #e8e8ed;
+  --night-soft: #c7c7cc;
+  --night-muted: #a1a1a8;
+  --night-faint: #7c7c84;
+  --night-ok: #8fe3b0;
+  --night-warn: #ffb469;
+  --night-warn-bg: #3d2610;
+  --night-danger: #ff9c92;
+  --night-pending: #d6c8ff;
+  --night-pending-bg: #2b2148;
+
+  --pitch: #e8b84a;
+  --pitch-hover: #f2c968;
+  --on-primary: #17120a;
+  --on-primary-soft: #17120a;
+  --floodlight: #f0c75a;
+  --floodlight-hover: #f6d67e;
+  --accent-wash: #26200f;
+  --live: #5fd38d;
+
+  --sand: #0a0a0b;
+  --sand-2: #1a1a1c;
+  --ink: #f5f5f7;
+  --ink-2: #d6d6db;
+  --muted: #a6a6ad;
+  --faint: #8a8a92;
+  --line: #242427;
+  --line-soft: #1c1c1f;
+  --line-strong: #37373c;
+  --line-hover: #4f4f56;
+  --card: #131314;
+  --field: #0d0d0e;
+  --track: #1d1d20;
+  --track-hover: rgba(255, 255, 255, 0.06);
+  --hatch: #37373c;
+  --hatch-strong: #4f4f56;
+
+  --kind-league: #5fd38d;
+  --kind-league-bg: #14291d;
+  --kind-program: #7da2ff;
+  --kind-program-bg: #172038;
+  --kind-rental: #e8a34f;
+  --kind-rental-bg: #33240f;
+  --kind-party: #f07cb1;
+  --kind-party-bg: #35172a;
+  --kind-basketball: #ff8a5c;
+  --kind-basketball-bg: #36190f;
+  --kind-dropin: #a6a6ad;
+  --kind-dropin-bg: #222225;
+  --kind-futsal: #4fd1c5;
+
+  --color-focus: #f0c75a;
+  --focus-ring: rgba(242, 201, 76, 0.28);
+  --link: #ecc35f;
+  --accent-ink: #f0c75a;
+  --link-hover: #f6d67e;
+
+  --tone-success: #5fd38d;
+  --tone-success-bg: #14291d;
+  --tone-success-line: #255239;
+  --tone-warning: #ff9f4a;
+  --tone-warning-bg: #33210f;
+  --tone-warning-line: #5a3a16;
+  --tone-danger: #ff7b72;
+  --tone-danger-bg: #361816;
+  --tone-danger-line: #5e2a26;
+  --tone-info: #7db2ff;
+  --tone-info-bg: #152238;
+  --tone-info-line: #2a446e;
+  --tone-neutral: #b4b4bb;
+  --tone-neutral-bg: #222225;
+  --tone-pending: #b9a2ff;
+  --tone-pending-bg: #221b38;
+  --tone-pending-line: #3c3166;
+  --on-tone: #111112;
+  --danger-solid: #d6363b;
+  --on-danger: #ffffff;
+  --success-wash: #101c15;
+  --warning-wash: #1f170c;
+  --warning-stripe: #3a2a12;
+  --warning-line-strong: #7a4e1c;
+  --warning-edge: #ff9f4a;
+  --warning-ink: #ffc38a;
+  --danger-wash: #1f1210;
+  --danger-ink: #ffaaa3;
+  --info-ink: #b4d0ff;
+  --pending-wash: #17132a;
+  --pending-dash: #5a4b96;
+
+  --shadow-chip: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 28px -14px rgba(0, 0, 0, 0.8);
+  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 20px 44px -16px rgba(0, 0, 0, 0.9);
+  --shadow-pop: 0 14px 40px rgba(0, 0, 0, 0.7);
+  --scrim: rgba(0, 0, 0, 0.55);
+  --ambient-a: rgba(240, 199, 90, 0.12);
+  --ambient-b: rgba(240, 199, 90, 0.05);
 }
 @media (pointer: coarse) {
   :root {
@@ -120,6 +307,14 @@ textarea {
   outline: 3px solid var(--color-focus);
   outline-offset: 2px;
 }
+::selection {
+  background: color-mix(in srgb, var(--floodlight) 55%, transparent);
+  color: var(--ink);
+}
+:root[data-theme='legends'] ::selection {
+  background: var(--floodlight);
+  color: var(--on-primary);
+}
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
@@ -135,14 +330,30 @@ textarea {
     opacity: 0.35;
   }
 }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
 
 a {
-  color: var(--pitch);
+  color: var(--link);
   font-weight: 600;
   text-decoration: none;
 }
 a:hover {
-  color: var(--pitch-hover);
+  color: var(--link-hover);
   text-decoration: underline;
 }
 .icon {
@@ -150,35 +361,55 @@ a:hover {
   display: inline-block;
   vertical-align: middle;
 }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+kbd {
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  background: var(--card);
+  color: var(--muted);
+  white-space: nowrap;
+}
 
-/* ---------- Type ---------- */
+/* ---------- Type: sentence case, one width, calm weights ---------- */
 .display,
 .shell-main h2,
 .shell-main h3,
 .page-title {
-  font-stretch: 75%;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
   margin: 0;
+  text-wrap: balance;
 }
 /* The page title: the first heading of a screen. */
 .shell-main h2 {
-  font-size: 34px;
-  letter-spacing: -0.005em;
-  line-height: 0.95;
+  font-size: 30px;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
 }
 .shell-main h3 {
-  font-size: 20px;
-  letter-spacing: 0.03em;
+  font-size: 18px;
+  font-weight: 650;
 }
 .shell-main h4 {
   font-size: 15px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
   margin: 0;
 }
 .shell-main h5 {
@@ -190,23 +421,36 @@ a:hover {
   margin: 0;
 }
 .eyebrow {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--muted);
 }
 .label-caps {
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
   color: var(--faint);
 }
 .caption {
   color: var(--color-muted);
   font-size: 12.5px;
   line-height: 1.4;
+}
+/* The age of what is shown: there when looked for, quiet otherwise. */
+.caption[data-testid='last-updated'] {
+  font-size: 12px;
+  color: var(--faint);
+}
+/* An inventory screen id beside a name: kept in the name for assistive technology and tests,
+   not drawn (it is a reference for the people building this, not for the people using it). */
+.screen-id {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 .error-text {
   color: var(--tone-danger);
@@ -225,7 +469,7 @@ code {
 }
 .record-ref code {
   background: var(--tone-neutral-bg);
-  border-radius: 4px;
+  border-radius: 5px;
   padding: 1px 5px;
 }
 
@@ -239,307 +483,11 @@ code {
   left: var(--space-2);
   top: var(--space-2);
   background: var(--card);
+  color: var(--ink);
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  z-index: 50;
-}
-
-/* ---------- Shell: night-pitch sidebar, sticky header ---------- */
-.shell {
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  min-height: 100vh;
-}
-.shell-side {
-  background: var(--night);
-  color: var(--night-text);
-  grid-row: 1 / span 2;
-}
-.shell-side-inner {
-  position: sticky;
-  top: 0;
-  max-height: 100vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 16px 18px 12px;
-  color: #fff;
-  text-decoration: none;
-}
-.brand:hover {
-  color: #fff;
-  text-decoration: none;
-}
-.brand-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-  background: var(--floodlight);
-  color: var(--night);
-  display: grid;
-  place-items: center;
-  flex: none;
-}
-.brand-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.05;
-}
-.brand-kicker {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--night-muted);
-}
-.brand-name {
-  font-size: 17px;
-  font-weight: 800;
-  font-stretch: 75%;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-.shell-nav {
-  padding: 4px 10px 8px;
-  flex: 1;
-}
-.shell-nav ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.nav-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.nav-group-label {
-  display: block;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--night-faint);
-  padding: 6px 10px 4px;
-}
-.nav-group ul {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.shell-nav a,
-.side-link {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 8px;
-  color: var(--night-text);
-  font-size: 13.5px;
-  font-weight: 500;
-  text-decoration: none;
-}
-.shell-nav a:hover,
-.side-link:hover {
-  background: var(--night-2);
-  color: #fff;
-  text-decoration: none;
-}
-.shell-nav a[aria-current='page'] {
-  background: var(--floodlight);
-  color: var(--night);
-  font-weight: 700;
-}
-.shell-nav .nav-state {
-  padding: 8px 10px;
-}
-.shell-nav .nav-state .caption {
-  color: var(--night-muted);
-}
-.shell-side-foot {
-  border-top: 1px solid var(--night-line);
-  padding: 12px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.shell-side-foot .side-link {
-  min-height: 38px;
-  border: 1px solid var(--night-3);
-}
-.shell-side-foot .side-link[aria-current='page'] {
-  background: var(--floodlight);
-  color: var(--night);
-  border-color: var(--floodlight);
-  font-weight: 700;
-}
-.side-user {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 6px 2px;
-}
-.avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--night-3);
-  color: var(--floodlight);
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  font-size: 12px;
-  flex: none;
-}
-.side-user-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.25;
-  flex: 1;
-  min-width: 0;
-}
-.side-user-name {
-  color: #fff;
-  font-weight: 600;
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.side-user-role {
-  color: var(--night-muted);
-  font-size: 11.5px;
-}
-.icon-button-night {
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--night-muted);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-}
-.icon-button-night:hover {
-  background: var(--night-2);
-  color: #fff;
-}
-
-.shell-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.shell-header {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  background: rgba(244, 243, 238, 0.92);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 32px;
-}
-.shell-header h1 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.shell-header .spacer {
-  flex: 1;
-}
-.live-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 30px;
-  padding: 0 10px;
   border-radius: 999px;
-  background: var(--tone-success-bg);
-  color: var(--tone-success);
-  font-size: 12.5px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.live-pill[data-online='false'] {
-  background: var(--tone-warning-bg);
-  color: var(--tone-warning);
-}
-.live-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #1f9d55;
-  animation: pulse 2s infinite;
-}
-.shell-main {
-  padding: 24px 32px 48px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.shell-main:focus {
-  outline: none;
-}
-.menu-button {
-  display: none;
-}
-
-/* Phones beside a field (SPK-UX-007) and narrow tablets: navigation collapses behind a button. */
-@media (max-width: 900px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-  .shell-side {
-    grid-row: auto;
-    order: 2;
-  }
-  .shell-body {
-    order: 1;
-  }
-  .shell-side-inner {
-    position: static;
-    min-height: 0;
-    max-height: none;
-  }
-  .menu-button {
-    display: inline-flex;
-  }
-  .shell-side[data-open='false'] {
-    display: none;
-  }
-  .shell-side[data-open='true'] {
-    position: fixed;
-    inset: 0 auto 0 0;
-    width: min(300px, 86vw);
-    z-index: 40;
-    overflow-y: auto;
-    box-shadow: var(--shadow-pop);
-  }
-  .shell-header {
-    padding: 10px 16px;
-  }
-  .shell-main {
-    padding: 16px 16px 40px;
-  }
-  .shell-main h2 {
-    font-size: 28px;
-  }
+  box-shadow: var(--shadow-pop);
+  z-index: 80;
 }
 
 /* ---------- Page header ---------- */
@@ -561,16 +509,16 @@ code {
   max-width: 72ch;
 }
 
-/* ---------- Buttons ---------- */
+/* ---------- Buttons: capsules; one solid primary per group, the rest quiet ---------- */
 .button {
   min-height: var(--touch);
   min-width: var(--touch);
-  padding: 0 14px;
-  border-radius: 8px;
+  padding: 0 16px;
+  border-radius: 999px;
   border: 1px solid transparent;
   font: inherit;
   font-size: 13.5px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -578,16 +526,24 @@ code {
   gap: 6px;
   white-space: nowrap;
   text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
   transition:
-    background 0.12s,
-    border-color 0.12s;
+    background 0.14s,
+    border-color 0.14s,
+    box-shadow 0.14s,
+    transform 0.14s cubic-bezier(0.3, 1.3, 0.5, 1);
+}
+.button:active:not([disabled]) {
+  transform: scale(0.97);
 }
 .button-primary {
   background: var(--pitch);
-  color: #fff;
+  color: var(--on-primary);
+  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.16);
 }
 .button-primary:hover:not([disabled]) {
   background: var(--pitch-hover);
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--pitch) 60%, transparent);
 }
 .button-secondary {
   background: var(--card);
@@ -597,36 +553,48 @@ code {
 }
 .button-secondary:hover:not([disabled]) {
   background: var(--sand-2);
-  border-color: #c6c2b6;
+  border-color: var(--line-hover);
 }
 .button[disabled] {
   opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none;
 }
 .button[aria-busy='true'] {
   cursor: progress;
 }
+/* A command in flight (SPK-UX-008 processing): the button says so itself. */
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  animation: spin 0.7s linear infinite;
+  flex: none;
+}
 .button-danger {
-  background: var(--tone-danger);
-  color: #fff;
+  background: var(--danger-solid);
+  color: var(--on-danger);
 }
 .button-lime {
   background: var(--floodlight);
   color: var(--night);
 }
+.button-lime:hover:not([disabled]) {
+  background: var(--floodlight-hover);
+}
 .button-sm {
   min-height: 32px;
   min-width: 32px;
-  padding: 0 10px;
+  padding: 0 12px;
   font-size: 12.5px;
-  border-radius: var(--radius-sm);
 }
 .icon-button {
   width: var(--touch);
   height: var(--touch);
   padding: 0;
 }
-
 /* ---------- Status pills: glyph + text, never colour alone ---------- */
 .badge {
   display: inline-flex;
@@ -636,7 +604,7 @@ code {
   padding: 1px 9px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
   background: var(--tone-neutral-bg);
   color: var(--tone-neutral);
@@ -690,13 +658,14 @@ code {
   flex: none;
 }
 
-/* ---------- Cards and panels ---------- */
+/* ---------- Cards and panels (content layer: opaque, for reading) ---------- */
 .panel,
 .card {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: 16px 18px;
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -710,6 +679,7 @@ code {
 .panel .panel {
   border-radius: var(--radius);
   background: var(--sand-2);
+  box-shadow: none;
 }
 .card-flush {
   padding: 0;
@@ -726,7 +696,7 @@ code {
 }
 .card-dark {
   background: var(--night);
-  color: #e8f0eb;
+  color: var(--night-ink);
   border-color: var(--night);
 }
 .card-dark .caption {
@@ -739,6 +709,11 @@ code {
 .card-dark h4 {
   color: #fff;
 }
+:root[data-theme='legends'] .card-dark {
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(242, 201, 76, 0.1), transparent 55%), var(--night);
+  border-color: var(--night-3);
+}
 
 /* KPI tiles */
 .kpis {
@@ -749,20 +724,46 @@ code {
 .kpi {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 .kpi-label {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--muted);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+/* The glyph of a tile sits on its tone's tint, so the tone reads at a glance beside the label. */
+.kpi-label > [class^='tone-'] {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--tone-neutral-bg);
+}
+.kpi-label > .tone-success {
+  background: var(--tone-success-bg);
+}
+.kpi-label > .tone-warning {
+  background: var(--tone-warning-bg);
+}
+.kpi-label > .tone-danger {
+  background: var(--tone-danger-bg);
+}
+.kpi-label > .tone-info {
+  background: var(--tone-info-bg);
+}
+.kpi-label > .tone-pending {
+  background: var(--tone-pending-bg);
 }
 .kpi-value-row {
   display: flex;
@@ -771,10 +772,10 @@ code {
   flex-wrap: wrap;
 }
 .kpi-value {
-  font-size: 34px;
+  font-size: 32px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 650;
+  letter-spacing: -0.025em;
 }
 .kpi-sub {
   font-size: 12.5px;
@@ -806,7 +807,7 @@ code {
 @media (min-width: 1200px) {
   .split-side {
     position: sticky;
-    top: 86px;
+    top: 92px;
   }
 }
 
@@ -831,8 +832,12 @@ code {
 .state h2,
 .shell-main .state h2 {
   margin: 0;
-  font-size: 18px;
-  letter-spacing: 0.02em;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.state > p {
+  max-width: 72ch;
 }
 .state [role='progressbar'] {
   color: var(--muted);
@@ -849,10 +854,63 @@ code {
   border-top-color: var(--pitch);
   animation: spin 0.8s linear infinite;
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+/* While something loads, the shape of what is coming: quiet placeholder lines under the words. */
+.state[data-variant='loading'] {
+  align-items: stretch;
+}
+.state[data-variant='loading']::after {
+  content: '';
+  display: block;
+  height: 44px;
+  max-width: 520px;
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, transparent 0%, var(--card) 50%, transparent 100%) 0 0 / 200% 100%,
+    linear-gradient(var(--line-soft) 0 0) 0 0 / 100% 12px no-repeat,
+    linear-gradient(var(--line-soft) 0 0) 0 16px / 82% 12px no-repeat,
+    linear-gradient(var(--line-soft) 0 0) 0 32px / 56% 12px no-repeat;
+  animation: shimmer 1.4s linear infinite;
+  opacity: 0.9;
+}
+
+/* Each state has its own look as well as its own words and glyph (SPK-UX-009). */
+.state-glyph {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  background: var(--tone-neutral-bg);
+  color: var(--muted);
+}
+.state[data-variant='error'] {
+  border-style: solid;
+  border-color: var(--tone-danger-line);
+  background: var(--danger-wash);
+}
+.state[data-variant='offline-stale'] {
+  border-style: solid;
+  border-color: var(--tone-warning-line);
+  background: var(--warning-wash);
+}
+.state[data-variant='pending-decision'] {
+  border-color: var(--pending-dash);
+  background: var(--pending-wash);
+}
+.panel .state[data-variant],
+.card .state[data-variant],
+.list .state[data-variant] {
+  border: 0;
+  background: transparent;
+}
+
+/* What a read shows (its age, then its content): blocks keep a breath between them instead of
+   touching. Inline content and paragraphs are unaffected (`.shell-main p` keeps them tight). */
+.query-content > * + * {
+  margin-top: 12px;
+}
+.query-content > .query-content {
+  margin-top: 2px;
 }
 
 /* Banners: connectivity and notices. */
@@ -860,7 +918,7 @@ code {
   padding: 12px 16px;
   background: var(--tone-warning-bg);
   border: 1px solid var(--tone-warning-line);
-  color: #5c3a00;
+  color: var(--warning-ink);
   border-radius: var(--radius);
   display: flex;
   flex-wrap: wrap;
@@ -871,7 +929,7 @@ code {
   padding: 12px 16px;
   border-radius: var(--radius);
   background: var(--tone-info-bg);
-  color: #12398f;
+  color: var(--info-ink);
   display: flex;
   gap: 10px;
   align-items: flex-start;
@@ -908,12 +966,14 @@ code {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
 }
 .shell-main > section > .list > li,
 .shell-main > .list > li,
 .list.list-card > li {
   padding: 12px 18px;
+  transition: background 0.12s;
 }
 .shell-main > section > .list > li:hover,
 .list.list-card > li:hover {
@@ -948,6 +1008,10 @@ details > summary {
   font-weight: 600;
   color: var(--ink-2);
   padding: 2px 0;
+  border-radius: 6px;
+}
+details > summary:hover {
+  color: var(--ink);
 }
 details[open] > summary {
   margin-bottom: 6px;
@@ -962,20 +1026,22 @@ details[open] > summary {
 }
 .shell-main th {
   text-align: left;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--faint);
-  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
+  padding: 10px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--sand-2);
   white-space: nowrap;
 }
 .shell-main td {
-  padding: 10px 12px;
+  padding: 11px 14px;
   border-top: 1px solid var(--line-soft);
   vertical-align: top;
+}
+.shell-main tbody tr {
+  transition: background 0.12s;
 }
 .shell-main tbody tr:hover td {
   background: var(--sand-2);
@@ -986,20 +1052,21 @@ details[open] > summary {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--card);
+  box-shadow: var(--shadow-card);
 }
 
-/* ---------- Navigation inside an area: segmented tabs ---------- */
+/* ---------- Navigation inside an area: a segmented track with a raised pill ---------- */
 .subnav,
 .sub-nav,
 .area-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 3px;
   list-style: none;
   padding: 4px;
   margin: 0;
-  background: #ebe9e2;
-  border-radius: 10px;
+  background: var(--track);
+  border-radius: 14px;
   width: fit-content;
   max-width: 100%;
 }
@@ -1008,18 +1075,21 @@ details[open] > summary {
 .area-tabs a {
   display: inline-flex;
   align-items: center;
-  min-height: 32px;
-  padding: 0 12px;
-  border-radius: 7px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 10px;
   color: var(--ink-2);
   font-size: 13px;
   font-weight: 600;
   text-decoration: none;
+  transition:
+    background 0.14s,
+    color 0.14s;
 }
 .subnav a:hover,
 .sub-nav a:hover,
 .area-tabs a:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--track-hover);
   color: var(--ink);
   text-decoration: none;
 }
@@ -1028,43 +1098,15 @@ details[open] > summary {
 .area-tabs a[aria-current='page'] {
   background: var(--card);
   color: var(--ink);
-  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
-}
-
-/* ---------- Facility switcher ---------- */
-.facility-switcher {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  height: 38px;
-  padding: 0 4px 0 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--card);
-  font-size: 13.5px;
-  font-weight: 600;
-  margin: 0;
-  color: var(--ink);
-}
-.facility-switcher .icon {
-  color: var(--pitch);
-}
-.facility-switcher label {
-  color: var(--muted);
-  font-weight: 600;
-}
-.facility-switcher select {
-  min-height: 32px;
-  font: inherit;
   font-weight: 700;
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  padding: 0 6px;
-  cursor: pointer;
+  box-shadow: var(--shadow-chip);
 }
-p.facility-switcher {
-  padding-right: 12px;
+:root[data-theme='legends'] .subnav a[aria-current='page'],
+:root[data-theme='legends'] .sub-nav a[aria-current='page'],
+:root[data-theme='legends'] .area-tabs a[aria-current='page'] {
+  background: var(--accent-wash);
+  color: var(--floodlight);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--floodlight) 34%, transparent);
 }
 
 /* ---------- Forms (base) ---------- */
@@ -1083,18 +1125,25 @@ p.facility-switcher {
   font-size: 14px;
   padding: 0 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--card);
+  border-radius: var(--radius-control);
+  background: var(--field);
   color: var(--ink);
+  transition:
+    border-color 0.14s,
+    box-shadow 0.14s;
 }
 .shell-main textarea {
   padding: 10px 12px;
   min-height: 88px;
 }
+.shell-main input::placeholder,
+.shell-main textarea::placeholder {
+  color: var(--faint);
+}
 .shell-main input:hover,
 .shell-main select:hover,
 .shell-main textarea:hover {
-  border-color: #c6c2b6;
+  border-color: var(--line-hover);
 }
 .shell-main input:focus-visible,
 .shell-main select:focus-visible,
@@ -1102,6 +1151,7 @@ p.facility-switcher {
   outline: 2px solid var(--color-focus);
   outline-offset: 0;
   border-color: var(--color-focus);
+  box-shadow: 0 0 0 4px var(--focus-ring);
 }
 .shell-main input[type='checkbox'],
 .shell-main input[type='radio'] {
@@ -1148,11 +1198,12 @@ p.facility-switcher {
 .card-dark .card-head h4,
 .card-flush .card-head h4,
 .card-flush .card-head h3 {
-  font-size: 20px;
-  letter-spacing: 0.03em;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
 }
 .card-dark .state {
-  color: #e8f0eb;
+  color: var(--night-ink);
 }
 .live-chip {
   display: inline-flex;
@@ -1163,11 +1214,18 @@ p.facility-switcher {
   border-radius: 999px;
   background: var(--floodlight);
   color: var(--night);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
   white-space: nowrap;
-  text-transform: uppercase;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  animation: pulse 2s infinite;
+  flex: none;
 }
 .live-chip .live-dot {
   background: var(--night);
@@ -1210,14 +1268,6 @@ p.facility-switcher {
   --kind-color: var(--kind-dropin);
   --kind-bg: var(--kind-dropin-bg);
 }
-.button.menu-button {
-  display: none;
-}
-@media (max-width: 900px) {
-  .button.menu-button {
-    display: inline-flex;
-  }
-}
 .card-head-title {
   display: flex;
   align-items: center;
@@ -1225,36 +1275,8 @@ p.facility-switcher {
   min-width: 0;
 }
 
-/* Phones: a compact header and two KPI tiles per row. */
+/* Phones: two KPI tiles per row. */
 @media (max-width: 600px) {
-  .shell-header h1 {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-  }
-  .shell-header {
-    gap: 8px;
-  }
-  .shell-header .facility-switcher {
-    flex: 1;
-    min-width: 0;
-  }
-  .shell-header .facility-switcher select {
-    min-width: 0;
-    flex: 1;
-  }
-  .shell-header .facility-switcher label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-  }
-  .shell-header .spacer {
-    display: none;
-  }
   .kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -1272,4 +1294,116 @@ p.facility-switcher {
   gap: 6px;
   font-size: 13px;
   width: fit-content;
+}
+
+/* ---------- Brand (sidebar and sign-in) ---------- */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+.brand:hover {
+  color: inherit;
+  text-decoration: none;
+}
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--floodlight);
+  color: var(--night);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+:root[data-theme='legends'] .brand-mark {
+  background: linear-gradient(160deg, #fbe29a 0%, #e9b949 50%, #b8841c 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 0 18px -4px rgba(242, 201, 76, 0.6);
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+  min-width: 0;
+}
+.brand-kicker {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--glass-ink-2, var(--night-muted));
+}
+.brand-name {
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--glass-chip, var(--night-3));
+  color: var(--pitch);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 12px;
+  flex: none;
+}
+
+/*
+ * Content on a night surface (glass over the pitch, a dark hero): the same components, with the
+ * tokens of a dark surface. The primary action there is the accent itself, with night text.
+ */
+.on-night {
+  color: #fff;
+  --ink: #ffffff;
+  --ink-2: var(--night-ink);
+  --muted: var(--night-soft);
+  --faint: var(--night-muted);
+  --line: rgba(255, 255, 255, 0.16);
+  --line-soft: rgba(255, 255, 255, 0.12);
+  --line-strong: rgba(255, 255, 255, 0.26);
+  --line-hover: rgba(255, 255, 255, 0.42);
+  --card: rgba(255, 255, 255, 0.08);
+  --field: rgba(0, 0, 0, 0.3);
+  --sand-2: rgba(255, 255, 255, 0.08);
+  --link: var(--floodlight);
+  --link-hover: var(--floodlight-hover);
+  --pitch: var(--floodlight);
+  --pitch-hover: var(--floodlight-hover);
+  --on-primary: var(--night);
+  --color-focus: var(--floodlight);
+  --focus-ring: color-mix(in srgb, var(--floodlight) 30%, transparent);
+  --tone-success: var(--night-ok);
+  --tone-warning: var(--night-warn);
+  --tone-danger: var(--night-danger);
+  --tone-info: #a9c7ff;
+  --tone-neutral: var(--night-soft);
+  --tone-pending: var(--night-pending);
+  --tone-success-bg: rgba(255, 255, 255, 0.1);
+  --tone-warning-bg: var(--night-warn-bg);
+  --tone-warning-line: rgba(245, 196, 107, 0.4);
+  --tone-danger-bg: rgba(255, 120, 110, 0.16);
+  --tone-info-bg: rgba(255, 255, 255, 0.1);
+  --tone-neutral-bg: rgba(255, 255, 255, 0.12);
+  --tone-pending-bg: var(--night-pending-bg);
+  --danger-wash: rgba(255, 120, 110, 0.1);
+  /* The aliases resolve where they are declared, so they are declared again here. */
+  --color-bg: var(--card);
+  --color-surface: var(--sand-2);
+  --color-text: var(--ink);
+  --color-muted: var(--muted);
+  --color-border: var(--line);
+  --color-border-strong: var(--line-strong);
+  --color-primary: var(--pitch);
+  --color-primary-hover: var(--pitch-hover);
+  --color-primary-text: var(--on-primary);
+}
+.on-night .eyebrow,
+.on-night .caption {
+  color: var(--night-soft);
 }

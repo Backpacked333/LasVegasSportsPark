@@ -5,12 +5,12 @@
  * it needs a connection (§4.15).
  */
 import { presentationForError } from '@sportspark/api-client';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { ApiPagesResult } from '../api/useApiPages';
 import { useConnectivity } from '../providers/AppProviders';
 import { Button } from './Button';
 import { StateView } from './StateView';
-import { colors, spacing, type } from './theme';
+import { makeStyles, spacing, type } from './theme';
 
 export function LoadMore({
   pages,
@@ -23,6 +23,7 @@ export function LoadMore({
   /** What the next page holds, e.g. "bookings". */
   label: string;
 }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   if (pages.data === undefined || !pages.hasNextPage) return null;
   const failure = pages.nextPageError;
@@ -47,7 +48,7 @@ export function LoadMore({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.sm, alignItems: 'flex-start' },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

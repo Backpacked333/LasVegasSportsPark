@@ -1,6 +1,7 @@
 /**
  * Test harness for screens and components: real providers with deterministic services (memory
- * session store, manual connectivity, fake fetch from @sportspark/api-client/testing, fixed clock).
+ * session store, manual connectivity, fake fetch from @sportspark/api-client/testing, fixed clock,
+ * memory theme store).
  *
  *   const app = createTestApp({ routes: { 'GET /me/inbox': { status: 200, body: page } } });
  *   render(<InboxScreen />, { wrapper: app.wrapper });
@@ -21,6 +22,8 @@ import type { AppConfig } from '../config/app-config';
 import { createManualSources, type Reachability } from '../connectivity/sources';
 import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
 import type { AppServices } from '../providers/services';
+import type { ThemeName } from '../ui/theme';
+import { MemoryThemeStore } from '../ui/theme-preference';
 
 export const TEST_NOW = new Date('2026-10-24T12:00:00.000Z');
 export const TEST_SESSION: Session = {
@@ -48,6 +51,8 @@ export interface TestAppOptions {
   reachable?: Reachability;
   config?: Partial<AppConfig>;
   now?: () => Date;
+  /** The stored theme choice at launch (`'legends'` for Legends mode); none by default. */
+  theme?: ThemeName | null;
 }
 
 export function createTestApp(options: TestAppOptions = {}) {
@@ -60,6 +65,7 @@ export function createTestApp(options: TestAppOptions = {}) {
   const sessionStore = new MemorySessionStore(
     options.session === undefined ? TEST_SESSION : options.session,
   );
+  const themeStore = new MemoryThemeStore(options.theme ?? null);
   const services: AppServices = {
     config: {
       apiBaseUrl: 'http://api.test/v1',
@@ -74,6 +80,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     fetch: fake.fetch,
     generateKey: sequentialKeys(),
     now: options.now ?? (() => TEST_NOW),
+    themeStore,
   };
   // No retries and no cache time in tests: each assertion sees the API's first answer.
   const queryClient = new QueryClient({
@@ -89,7 +96,7 @@ export function createTestApp(options: TestAppOptions = {}) {
       </AppProviders>
     );
   }
-  return { services, fake, sources, sessionStore, queryClient, wrapper };
+  return { services, fake, sources, sessionStore, themeStore, queryClient, wrapper };
 }
 
 /**

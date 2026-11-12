@@ -14,7 +14,7 @@
  */
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateOnly } from '../../features/registration/format';
 import { useParticipants } from '../../features/registration/participants';
@@ -26,13 +26,15 @@ import { Card, Eyebrow } from '../../ui/Card';
 import { ListRow } from '../../ui/ListRow';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type, useTheme } from '../../ui/theme';
 import { KIND_LOOK, offeringSummary } from './offering-look';
 
 /** How many suggestions are asked for (the API allows up to 20). */
 export const SUGGESTIONS_SHOWN = 3;
 
 export function PickedFor() {
+  const { colors, kindColors } = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const { participants } = useParticipants();
   // Family members the account may register (the API checks again): never the adult themselves.
@@ -107,7 +109,7 @@ export function PickedFor() {
               status={registrationWindowStatus(offering)}
               badges={promotionBadges(offering)}
               icon={KIND_LOOK[offering.kind][0]}
-              iconTone={[KIND_LOOK[offering.kind][1], colors.primaryText]}
+              iconTone={[kindColors[KIND_LOOK[offering.kind][1]], colors.primaryText]}
               onPress={() => router.push(registrationRoutes.offering(offering.id))}
               accessibilityHint="Opens the activity details"
               testID={`suggestion-${offering.id}`}
@@ -122,7 +124,7 @@ export function PickedFor() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   people: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingVertical: spacing.sm },
   chip: {
     minHeight: MIN_TOUCH_SIZE,
@@ -133,7 +135,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.background,
   },
-  chipOn: { backgroundColor: colors.night, borderColor: colors.night },
+  chipOn: { backgroundColor: colors.chipSelected, borderColor: colors.chipSelected },
   chipText: { ...type.caption, ...fonts.bold, color: colors.text },
-  chipTextOn: { color: colors.primaryText },
-});
+  chipTextOn: { color: colors.onChipSelected },
+}));

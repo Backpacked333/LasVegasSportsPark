@@ -4,9 +4,9 @@
  * lines in the facility's own time zone from the notice, worded rather than coloured
  * (SPK-UX-009). One focusable element reads the whole change.
  */
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, radius, spacing, toneBackgrounds, type } from '../../ui/theme';
+import { fonts, makeStyles, radius, spacing, type, useTheme } from '../../ui/theme';
 import type { EventDetailsView, ScheduleChange } from './notices';
 import { formatRange } from './time';
 
@@ -23,6 +23,8 @@ export function changeSummary(change: ScheduleChange): { was: string | null; now
 }
 
 export function ChangeDetails({ change, testID }: { change: ScheduleChange; testID?: string }) {
+  const { toneBackgrounds } = useTheme();
+  const styles = useStyles();
   const { was, now } = changeSummary(change);
   const badge =
     change.kind === 'canceled'
@@ -53,7 +55,7 @@ export function ChangeDetails({ change, testID }: { change: ScheduleChange; test
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: {
     gap: spacing.xs,
     paddingVertical: spacing.md,
@@ -62,4 +64,4 @@ const styles = StyleSheet.create({
   },
   line: { ...type.caption, color: colors.text },
   key: { ...fonts.bold },
-});
+}));

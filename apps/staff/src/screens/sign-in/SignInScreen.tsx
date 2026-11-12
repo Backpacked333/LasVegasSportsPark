@@ -3,13 +3,17 @@
  * (Technical lead/account owners), so production builds show the pending state; development builds
  * offer the development sign-in, which production bundles do not contain.
  *
- * Layout (SPK-UX-010 soccer-specific identity): a night-pitch panel with the park's field markings
- * beside the sign-in card. The pitch is decorative (`aria-hidden`); below 900 px it shrinks to a
- * band above the card so the form stays first on a phone.
+ * Layout (SPK-UX-010 soccer-specific identity): the night pitch with the park's field markings
+ * fills the page; the sign-in card is a frosted glass panel floating over it (`ui/glass`), its
+ * words and fields flat and at full contrast. The pitch is decorative (`aria-hidden`); below
+ * 900 px its copy shrinks to a band above the card so the form stays first on a phone. The
+ * Legends mode switch is offered here too, so the theme is chosen before signing in.
  */
 import { Suspense } from 'react';
 import { useLocation } from 'react-router';
 import { DevSignIn } from '../../dev';
+import { LegendsToggle } from '../../theme/LegendsToggle';
+import { Glass } from '../../ui/glass/Glass';
 import { Icon, type IconName } from '../../ui/Icon';
 import { StateView } from '../../ui/StateView';
 import './sign-in.css';
@@ -61,10 +65,17 @@ export function SignInScreen() {
   const expired = (location.state as { expired?: boolean } | null)?.expired === true;
   return (
     <div className="signin">
-      <aside className="signin-pitch" aria-hidden="true">
+      <div className="signin-art" aria-hidden="true">
         <span className="signin-glow signin-glow-a" />
         <span className="signin-glow signin-glow-b" />
         <PitchMarkings />
+      </div>
+      <div className="signin-theme">
+        <Glass className="glass-night" material="lens" radius={23} blur={2}>
+          <LegendsToggle />
+        </Glass>
+      </div>
+      <aside className="signin-pitch" aria-hidden="true">
         <div className="signin-pitch-top">
           <span className="brand-mark">
             <Icon name="sports_soccer" size={22} filled />
@@ -98,7 +109,14 @@ export function SignInScreen() {
         </div>
       </aside>
       <main id="main" className="shell-main signin-main">
-        <div className="signin-card">
+        <Glass
+          className="signin-card-glass glass-night"
+          contentClassName="signin-card on-night"
+          material="frost"
+          radius={28}
+          blur={12}
+          squircle
+        >
           <span className="eyebrow">Staff sign-in</span>
           <h1>Sportspark staff</h1>
           <p className="signin-intro">
@@ -122,7 +140,7 @@ export function SignInScreen() {
               owner="Technical lead/account owners"
             />
           )}
-        </div>
+        </Glass>
         <p className="signin-foot caption">
           <Icon name="lock" size={14} /> Sessions expire. Sign out when you leave a shared desk
           device.

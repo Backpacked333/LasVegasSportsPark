@@ -21,6 +21,9 @@
  * completion: not permitted; recovery required: a registration checkout in `recovery_required`
  * (`GET /v1/me/registration-checkouts?status=recovery_required`) is pinned at the top, "Payment
  * received. We are completing your registration." with "Do not pay again", as on Home (SCR-C-03).
+ *
+ * The Legends mode switch (`ui/LegendsModeToggle`: dark with a gold accent, kept on this device)
+ * opens the page, above the sign-in prompt too: it is a display preference, not account data.
  */
 import { presentationForError, type CapabilityId } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
@@ -34,6 +37,7 @@ import { RECOVERY_PHRASE } from '../../features/today/status';
 import { useApp } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { LegendsModeToggle } from '../../ui/LegendsModeToggle';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
@@ -294,6 +298,8 @@ function SignedInAccount() {
 export function AccountScreen() {
   return (
     <Screen>
+      {/* A display preference of this device: offered signed in or out, first on the page. */}
+      <LegendsModeToggle />
       <RequireSession what="your account">
         <SignedInAccount />
       </RequireSession>

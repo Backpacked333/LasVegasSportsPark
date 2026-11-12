@@ -30,7 +30,7 @@
  * again. The outcome is being confirmed.").
  */
 import { recoveryActionFor, type ApiError } from '@sportspark/api-client';
-import { StyleSheet, Text } from 'react-native';
+import { Text } from 'react-native';
 import {
   mayHaveTakenEffect,
   refusedBeforeRunning,
@@ -44,7 +44,7 @@ import { QueryErrorView } from '../../ui/QueryBoundary';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 
 const STALE_LABEL = 'This changed since you opened it';
 
@@ -68,6 +68,7 @@ export function CommandFailure({
   read = false,
 }: CommandFailureProps) {
   // R3-SCREEN-STATES-01: "Check again" needs a connection; offline it neither queues nor fails.
+  const styles = useStyles();
   const offline = useConnectivity().reachable === false;
   if (error.isNotFound || error.isPermissionRestriction) {
     return (
@@ -147,8 +148,8 @@ export function CommandFailure({
   return <StateView variant="error" error={error} onRetry={recovery.retry ? onRetry : undefined} />;
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));
