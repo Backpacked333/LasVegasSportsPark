@@ -10,24 +10,27 @@ import {
   type OfferingKind,
 } from '../../features/registration/format';
 import { offeringDates } from '../../features/registration/status';
-import { kindColors } from '../../ui/theme';
+import type { ThemeKindColors } from '../../ui/theme';
 
 type PublicOffering = Schema<'PublicOffering'>;
 
-/** Decorative icon and tile colour per kind; the kind's name is always in the row's text. */
-export const KIND_LOOK: Record<OfferingKind, readonly [string, string]> = {
-  season: ['sports_soccer', kindColors.league],
-  term: ['school', kindColors.program],
-  camp: ['wb_sunny', kindColors.rental],
-  session: ['event', kindColors.program],
-  trial: ['sports', kindColors.league],
-  makeup: ['replay', kindColors.program],
-  pickup: ['stadium', kindColors.dropin],
-  private_coaching: ['person', kindColors.basketball],
-  rental: ['event_available', kindColors.rental],
-  package: ['confirmation_number', kindColors.dropin],
-  membership: ['card_membership', kindColors.league],
-  party: ['cake', kindColors.party],
+/**
+ * Decorative icon and tile colour per kind, the colour as the theme's kind colour to use
+ * (`useTheme().kindColors[...]`); the kind's name is always in the row's text.
+ */
+export const KIND_LOOK: Record<OfferingKind, readonly [string, keyof ThemeKindColors]> = {
+  season: ['sports_soccer', 'league'],
+  term: ['school', 'program'],
+  camp: ['wb_sunny', 'rental'],
+  session: ['event', 'program'],
+  trial: ['sports', 'league'],
+  makeup: ['replay', 'program'],
+  pickup: ['stadium', 'dropin'],
+  private_coaching: ['person', 'basketball'],
+  rental: ['event_available', 'rental'],
+  package: ['confirmation_number', 'dropin'],
+  membership: ['card_membership', 'league'],
+  party: ['cake', 'party'],
 };
 
 export function offeringSummary(offering: PublicOffering): string {

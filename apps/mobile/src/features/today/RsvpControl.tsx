@@ -26,13 +26,13 @@
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
 import { LiveText } from '../../ui/announce';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import { CommandFailure } from '../teams/ui';
 import { fixtureAcceptsRsvp, rsvpStatus, type RsvpState } from './status';
 
@@ -69,7 +69,12 @@ function detailsCode(error: ApiError): string | null {
   return typeof details?.code === 'string' ? details.code : null;
 }
 
-function rsvpErrorView(error: ApiError, onRetry: () => void, onReload?: () => void) {
+function rsvpErrorView(
+  styles: ReturnType<typeof useStyles>,
+  error: ApiError,
+  onRetry: () => void,
+  onReload?: () => void,
+) {
   if (error.code === 'PARTICIPANT_AUTHORITY_REQUIRED' || error.code === 'ACCESS_DENIED') {
     return (
       <StateView
@@ -107,6 +112,7 @@ export function RsvpControl({
   onRoster,
   onReload,
 }: RsvpControlProps) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const rsvp = useApiCommand('post', '/fixtures/{id}/availability', {
@@ -206,6 +212,7 @@ export function RsvpControl({
       ) : null}
       {rsvp.error
         ? rsvpErrorView(
+            styles,
             rsvp.error,
             () => lastRequest && send(lastRequest),
             () => {
@@ -222,7 +229,7 @@ export function RsvpControl({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { gap: spacing.sm },
   heading: { ...type.eyebrow, color: colors.textMuted },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
@@ -243,4 +250,4 @@ const styles = StyleSheet.create({
   choiceText: { ...type.body, ...fonts.extrabold, color: colors.text },
   selectedText: { color: colors.primaryText },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

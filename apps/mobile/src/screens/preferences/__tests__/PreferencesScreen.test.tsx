@@ -102,6 +102,18 @@ describe('SCR-C-36 PreferencesScreen', () => {
     expect(screen.getAllByText('Off. Facility default').length).toBeGreaterThan(0);
   });
 
+  it('Appearance: the Legends mode switch is offered first and is not sent to the API', async () => {
+    const app = prefsApp();
+    render(<PreferencesScreen />, { wrapper: app.wrapper });
+    expect(screen.getByRole('header', { name: 'Appearance' })).toBeOnTheScreen();
+    await screen.findByRole('header', { name: 'Essential notices' });
+    const before = app.fake.requests.length;
+    fireEvent.press(screen.getByRole('switch', { name: 'Legends mode' }));
+    expect(screen.getByRole('switch', { name: 'Legends mode' })).toBeChecked();
+    expect(app.themeStore.read()).toBe('legends');
+    expect(app.fake.requests).toHaveLength(before);
+  });
+
   it('shows which channels the facility uses as pending DEC-062', async () => {
     const app = prefsApp();
     render(<PreferencesScreen />, { wrapper: app.wrapper });

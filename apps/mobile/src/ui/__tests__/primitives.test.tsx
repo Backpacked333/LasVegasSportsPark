@@ -3,6 +3,7 @@
  */
 import { ApiError } from '@sportspark/api-client';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import { Button } from '../Button';
 import { ListRow } from '../ListRow';
 import { STATUS_GLYPHS, StatusBadge } from '../StatusBadge';
@@ -150,6 +151,37 @@ describe('StatusBadge (SPK-UX-004, SPK-UX-009)', () => {
       'Confirmed: U10 Red',
     ];
     for (const label of labels) expect(screen.getByLabelText(label)).toBeOnTheScreen();
+  });
+});
+
+describe('Touch targets and feedback of the shared controls (SPK-UX-009, SPK-UX-010)', () => {
+  const flat = (element: { props: { style?: unknown } }) =>
+    StyleSheet.flatten(
+      typeof element.props.style === 'function'
+        ? (element.props.style as (state: { pressed: boolean }) => unknown)({ pressed: false })
+        : element.props.style,
+    ) as Record<string, number>;
+
+  it('a button is a 48 pt capsule that grows with its label instead of truncating it', () => {
+    render(<Button label="Finish setting up" onPress={() => undefined} />);
+    const style = flat(screen.getByRole('button', { name: 'Finish setting up' }));
+    expect(style.minHeight).toBe(48);
+    expect(style.borderRadius).toBe(24);
+    expect(style.height).toBeUndefined();
+  });
+
+  it('a row that opens something is a full touch target', () => {
+    render(<ListRow title="Support" onPress={() => undefined} testID="row" />);
+    expect(flat(screen.getByTestId('row')).minHeight).toBeGreaterThanOrEqual(44);
+  });
+
+  it('loading keeps the shape of the page with a static outline hidden from screen readers', () => {
+    render(<StateView variant="loading" label="your teams" />);
+    const outline = screen.getByTestId('state-loading-outline', { includeHiddenElements: true });
+    expect(outline).toHaveProp('accessibilityElementsHidden', true);
+    expect(outline).toHaveProp('importantForAccessibility', 'no-hide-descendants');
+    // What screen readers hear is unchanged: one busy progress indicator.
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
   });
 });
 

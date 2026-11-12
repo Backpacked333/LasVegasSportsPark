@@ -24,7 +24,7 @@
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { calendarWindowQuery, mergeCalendars } from '../../features/today/calendar';
 import { ChangeDetails } from '../../features/today/ChangeDetails';
 import {
@@ -78,7 +78,7 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { ListRow } from '../../ui/ListRow';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
-import { colors, fonts, kindColors, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, spacing, type, useTheme, type ThemeKindColors } from '../../ui/theme';
 
 type FamilyCalendarItem = Schema<'FamilyCalendarItem'>;
 type FixtureDetail = Schema<'FixtureDetail'>;
@@ -172,13 +172,14 @@ function NextFixtureCard({
 }
 
 /** Stripe colour per kind of entry (decorative; the row's words name the activity). */
-function entryAccent(entry: TodayEntry): string {
+function entryAccent(entry: TodayEntry, kindColors: ThemeKindColors): string {
   if (entry.type === 'fixture') return kindColors.league;
   return entry.item.kind === 'session_booking' ? kindColors.dropin : kindColors.program;
 }
 
 /** "6:30" over "PM" in condensed figures, on the activity's own clock (SPK-SCHED-008). */
 function StartTime({ entry }: { entry: TodayEntry }) {
+  const styles = useStyles();
   const [clock, meridiem] = formatTime(entry.start, entry.zone.zone).split(/\s+/);
   return (
     <View style={styles.time}>
@@ -199,6 +200,7 @@ function EntryRow({
   names: Map<string, string>;
 }) {
   const router = useRouter();
+  const { kindColors } = useTheme();
   const z = entry.zone.zone;
   const time = `${formatTime(entry.start, z)} to ${formatTime(entry.end, z)} ${zoneAbbreviation(entry.start, z)}`;
   if (entry.type === 'session') {
@@ -209,7 +211,7 @@ function EntryRow({
         title={item.title}
         detail={`${time}. For: ${nameOf(names, item.personId)}`}
         status={calendarItemStatus(item)}
-        accent={entryAccent(entry)}
+        accent={entryAccent(entry, kindColors)}
         leading={<StartTime entry={entry} />}
         onPress={href ? () => router.push(href as Href) : undefined}
         accessibilityHint={href ? 'Opens the activity' : undefined}
@@ -226,7 +228,7 @@ function EntryRow({
         .filter(Boolean)
         .join('. ')}
       status={fixtureStatus(fixture.status)}
-      accent={entryAccent(entry)}
+      accent={entryAccent(entry, kindColors)}
       leading={<StartTime entry={entry} />}
       onPress={() =>
         router.push({ pathname: '/fixtures/[id]', params: { id: fixture.id } } as Href)
@@ -238,6 +240,7 @@ function EntryRow({
 }
 
 function ScheduleContent() {
+  const styles = useStyles();
   const router = useRouter();
   const now = useNow();
   const zone = displayZone(null);
@@ -404,7 +407,7 @@ export function ScheduleScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   pad: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
   change: { paddingHorizontal: spacing.lg, gap: spacing.xs },
   changeTitle: { ...type.body, ...fonts.semibold, color: colors.text },
@@ -417,4 +420,4 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     color: colors.textMuted,
   },
-});
+}));

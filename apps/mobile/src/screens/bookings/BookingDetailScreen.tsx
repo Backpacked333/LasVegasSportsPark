@@ -25,7 +25,7 @@
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { Body, ButtonRow, Caption, Field, Section } from '../../features/money/ui';
 import {
@@ -49,7 +49,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { CancelBooking } from './CancelBooking';
 
@@ -208,6 +208,7 @@ function BookingPrice({ basketId }: { basketId: string }) {
 }
 
 function BookingView({ booking, reload }: { booking: Booking; reload: () => void }) {
+  const styles = useStyles();
   const zone = displayZone(booking.timezone);
   const status = bookingStatus(booking);
   const outstanding = outstandingText(booking.outstanding);
@@ -339,7 +340,7 @@ export function BookingDetailRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.sm },
   title: { ...type.title, color: colors.text },
-});
+}));

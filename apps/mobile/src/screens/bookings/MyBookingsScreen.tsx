@@ -17,7 +17,7 @@
  * age, cancelling needs a connection); turned off (notice above the list).
  */
 import { useRouter } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import { Caption } from '../../features/money/ui';
@@ -31,7 +31,7 @@ import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 
 export const BOOKINGS_STILL_AVAILABLE = 'Bookings you already made stay available here.';
 export const BOOKINGS_PAGE_SIZE = 20;
@@ -48,6 +48,7 @@ export function bookingSummary(booking: Booking): string {
 }
 
 function BookingRows({ items }: { items: Booking[] }) {
+  const styles = useStyles();
   const router = useRouter();
   const deviceZoneNotice = items.find((b) => !displayZone(b.timezone).facility);
   return (
@@ -102,6 +103,7 @@ function BookingsList() {
 
 /** Booking something new is offered only while a switch is on (the gate shows the notice). */
 function FindNew() {
+  const styles = useStyles();
   const router = useRouter();
   const permissions = usePermissions();
   const on =
@@ -120,6 +122,7 @@ function FindNew() {
 }
 
 export function MyBookingsScreen() {
+  const styles = useStyles();
   return (
     <Screen>
       <View testID="screen-my-bookings">
@@ -148,9 +151,9 @@ export function MyBookingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
   title: { ...type.title, color: colors.text },
   note: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
   footer: { padding: spacing.lg },
-});
+}));

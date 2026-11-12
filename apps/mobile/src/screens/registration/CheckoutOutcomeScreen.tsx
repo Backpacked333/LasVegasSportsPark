@@ -60,7 +60,7 @@ import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type Checkout = Schema<'Checkout'>;
 
@@ -150,6 +150,7 @@ function RetryPayment({
 }
 
 function OutcomeContent({ checkout }: { checkout: Checkout }) {
+  const styles = useStyles();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { progress, update } = useRegistrationProgress();
@@ -422,11 +423,11 @@ export function CheckoutOutcomeRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   line: {
     paddingVertical: spacing.sm,
     gap: spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-});
+}));

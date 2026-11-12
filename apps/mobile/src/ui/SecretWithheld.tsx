@@ -32,7 +32,7 @@
 import type { ApiError } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import {
   mayHaveTakenEffect,
   secretWithheldOf,
@@ -45,7 +45,7 @@ import { Button } from './Button';
 import { OUTCOME_LOST_LABEL } from './OutcomeLost';
 import { StateView } from './StateView';
 import { StatusBadge } from './StatusBadge';
-import { colors, spacing, type } from './theme';
+import { makeStyles, spacing, type } from './theme';
 
 /** The revoke commands of the records whose create withholds a one-time link. */
 export type WithheldRevokePath =
@@ -99,6 +99,7 @@ export function SecretWithheld({
   onStartOver,
   testID = 'secret-withheld',
 }: SecretWithheldProps) {
+  const styles = useStyles();
   const queryClient = useQueryClient();
   const { reachable } = useConnectivity();
   const lost = tookEffectOutcomeLost(error);
@@ -268,9 +269,9 @@ function WithheldOutcomes({
   return null;
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   inner: { gap: spacing.sm },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

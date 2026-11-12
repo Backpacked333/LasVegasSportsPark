@@ -29,13 +29,13 @@
 import { ApiError, formatAge } from '@sportspark/api-client';
 import { notifyManager, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { Text } from 'react-native';
 import { receivedAtOf } from '../api/useApiQuery';
 import { useApp, useConnectivity, useNow } from '../providers/AppProviders';
 import { LiveRegion, sentences, useAnnouncement } from '../ui/announce';
 import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
-import { colors, radius, spacing, toneBackgrounds, type } from '../ui/theme';
+import { makeStyles, radius, spacing, type } from '../ui/theme';
 
 /** Actions the customer app never performs offline (§4.15: no payments, no capacity commitments). */
 export const OFFLINE_UNAVAILABLE_ACTIONS = ['registration', 'payment', 'RSVP', 'account changes'];
@@ -205,6 +205,7 @@ export function ConnectivityAnnouncer() {
 }
 
 export function ConnectivityBanner() {
+  const styles = useStyles();
   const { notice, now } = useConnectivityNotice();
   const queryClient = useQueryClient();
   const refreshNow = () => void queryClient.refetchQueries({ type: 'active' });
@@ -284,7 +285,7 @@ export function ConnectivityBanner() {
   }
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, toneBackgrounds }) => ({
   banner: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.sm,
@@ -297,4 +298,4 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   text: { ...type.caption, color: colors.text },
-});
+}));

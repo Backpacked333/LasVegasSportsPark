@@ -3,8 +3,8 @@
  * provider tokens (apps/api/src/modules/finance/providers/fake-payment.provider.ts). No card
  * details exist anywhere: a token only selects the provider scenario (§4.14).
  */
-import { StyleSheet, Text, View } from 'react-native';
-import { colors, spacing, type } from '../../../ui/theme';
+import { Text, View } from 'react-native';
+import { makeStyles, spacing, type } from '../../../ui/theme';
 import { ChoiceRow } from '../ui';
 import type { PaymentMethodPickerProps } from './index';
 
@@ -19,6 +19,7 @@ export const DEV_PAYMENT_SCENARIOS = [
 ] as const;
 
 export function DevPaymentMethodPickerView({ value, onChange }: PaymentMethodPickerProps) {
+  const styles = useStyles();
   return (
     <View style={styles.box} testID="dev-payment-method">
       <Text style={styles.title} accessibilityRole="header">
@@ -43,7 +44,7 @@ export function DevPaymentMethodPickerView({ value, onChange }: PaymentMethodPic
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: {
     margin: spacing.lg,
     padding: spacing.md,
@@ -55,4 +56,4 @@ const styles = StyleSheet.create({
   },
   title: { ...type.heading, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

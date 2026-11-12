@@ -33,7 +33,7 @@
  */
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { calendarWindowQuery } from '../../features/today/calendar';
 import {
   entryPersonIds,
@@ -83,7 +83,15 @@ import { LoadMore } from '../../ui/LoadMore';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, kindColors, radius, spacing, toneBackgrounds, type } from '../../ui/theme';
+import {
+  fonts,
+  makeStyles,
+  radius,
+  spacing,
+  type,
+  useTheme,
+  type ThemeToneBackgrounds,
+} from '../../ui/theme';
 import { usePendingRegistrations, type PendingRegistration } from './pending-registrations';
 
 type InboxItem = Schema<'InboxItem'>;
@@ -137,13 +145,13 @@ export function availabilityRequestAnswered(
 /** How many notices each Home section shows before "See all in notifications". */
 const NOTICES_PER_SECTION = 3;
 
-/** Decorative icon tile per notice section: [icon, tile, icon colour]. */
-const SECTION_ICONS: Record<NoticeSection, readonly [string, string, string]> = {
-  urgent: ['swap_horiz', toneBackgrounds.warning, colors.warning],
-  actions: ['assignment_late', toneBackgrounds.warning, colors.warning],
-  invitations: ['mail', toneBackgrounds.info, colors.info],
-  results: ['emoji_events', toneBackgrounds.success, colors.success],
-  renewals: ['autorenew', toneBackgrounds.neutral, colors.neutral],
+/** Decorative icon tile per notice section: [icon, tone of the tile and its icon]. */
+const SECTION_ICONS: Record<NoticeSection, readonly [string, keyof ThemeToneBackgrounds]> = {
+  urgent: ['swap_horiz', 'warning'],
+  actions: ['assignment_late', 'warning'],
+  invitations: ['mail', 'info'],
+  results: ['emoji_events', 'success'],
+  renewals: ['autorenew', 'neutral'],
 };
 
 const NOTICE_SECTIONS: readonly { key: NoticeSection; title: string }[] = [
@@ -190,7 +198,8 @@ function NoticeRows({
   section: NoticeSection;
 }) {
   const router = useRouter();
-  const [icon, tile, tint] = SECTION_ICONS[section];
+  const { colors, toneBackgrounds } = useTheme();
+  const [icon, tone] = SECTION_ICONS[section];
   return (
     <View accessibilityRole="list">
       {items.map((item) => (
@@ -200,7 +209,7 @@ function NoticeRows({
           detail={`${noticeFor(item, names)}${item.body}`}
           status={noticeStatus(item)}
           icon={icon}
-          iconTone={[tile, tint]}
+          iconTone={[toneBackgrounds[tone], colors[tone]]}
           onPress={() => openNotice(router, item)}
           accessibilityHint="Opens the notice in your notifications"
           testID={`home-notice-${item.attemptId}`}
@@ -334,13 +343,8 @@ function initials(name: string): string {
     .join('');
 }
 
-const AVATAR_COLORS = [
-  kindColors.program,
-  kindColors.party,
-  kindColors.league,
-  kindColors.basketball,
-  kindColors.rental,
-] as const;
+/** Avatar fills, as the theme's kind colours (`useTheme().kindColors`). */
+const AVATAR_COLORS = ['program', 'party', 'league', 'basketball', 'rental'] as const;
 
 /** "Sat, Oct 25, 10:00 AM · Junior Skills" on the activity's own clock (SPK-SCHED-008). */
 function entryLine(entry: TodayEntry, title: string): string {
@@ -363,6 +367,8 @@ function FamilyTiles({
   teams: readonly MyTeamEntry[] | undefined;
   names: Map<string, string>;
 }) {
+  const { kindColors } = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   if (personIds.length < 2) return null;
   return (
@@ -390,7 +396,10 @@ function FamilyTiles({
               <View
                 style={[
                   styles.avatar,
-                  { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] },
+                  {
+                    backgroundColor:
+                      kindColors[AVATAR_COLORS[index % AVATAR_COLORS.length] ?? 'program'],
+                  },
                 ]}
               >
                 <Text style={styles.avatarText}>{initials(name)}</Text>
@@ -680,6 +689,7 @@ function HomeContent() {
 
 /** The day on the device clock and "Hi, <given name>" when the API names the person. */
 function Greeting() {
+  const styles = useStyles();
   const now = useNow();
   const me = useMe();
   const given = me.data?.person?.givenName?.trim();
@@ -694,6 +704,7 @@ function Greeting() {
 }
 
 export function HomeScreen() {
+  const styles = useStyles();
   const router = useRouter();
   return (
     <Screen>
@@ -721,7 +732,7 @@ export function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   greeting: { paddingHorizontal: spacing.lg + 2, paddingTop: spacing.xs, gap: 2 },
   day: { ...type.caption, ...fonts.semibold, color: colors.textMuted },
   hello: { ...type.display, color: colors.text },
@@ -765,4 +776,4 @@ const styles = StyleSheet.create({
   tileText: { flex: 1, gap: 2 },
   tileName: { ...type.body, ...fonts.bold, color: colors.text },
   tileLine: { ...type.caption, fontSize: 12, lineHeight: 16, color: colors.textMuted },
-});
+}));

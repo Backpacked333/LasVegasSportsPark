@@ -227,6 +227,36 @@ describe('SCR-C-30 AccountScreen', () => {
     expect(screen.getByLabelText('Alex Morgan, Signed in, Linked')).toBeOnTheScreen();
   });
 
+  it('Legends mode (SPK-UX-009): the switch opens the page, signed in, and turns the hub dark at once', async () => {
+    const app = createTestApp({
+      routes: {
+        'GET /me': ok(me({})),
+        'GET /me/registration-checkouts': page([]),
+        'GET /me/access-grants': page([]),
+      },
+    });
+    render(<AccountScreen />, { wrapper: app.wrapper });
+    const toggle = screen.getByRole('switch', { name: 'Legends mode' });
+    expect(toggle).not.toBeChecked();
+    await screen.findByLabelText('Alex Morgan, Signed in, Linked');
+    fireEvent.press(toggle);
+    expect(screen.getByRole('switch', { name: 'Legends mode' })).toBeChecked();
+    expect(app.themeStore.read()).toBe('legends');
+    // The hub is still there, with the same names.
+    for (const title of SECTION_TITLES) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${title}`) })).toBeOnTheScreen();
+    }
+  });
+
+  it('Legends mode is offered signed out too: it is a preference of the device, not of the account', async () => {
+    const app = createTestApp({ session: null });
+    render(<AccountScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('switch', { name: 'Legends mode' }));
+    expect(screen.getByRole('switch', { name: 'Legends mode' })).toBeChecked();
+    expect(app.fake.requests).toHaveLength(0);
+  });
+
   it('shows an error loading the account with its code and "Try again"', async () => {
     const app = createTestApp({
       routes: {

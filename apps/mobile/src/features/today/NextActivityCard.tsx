@@ -10,10 +10,10 @@
  * names are shown only when the API provides them.
  */
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { Button } from '../../ui/Button';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { colors, fonts, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, radius, spacing, type } from '../../ui/theme';
 import { ChangeDetails } from './ChangeDetails';
 import type { ScheduleChange } from './notices';
 import { formatRange, type DisplayZone } from './time';
@@ -66,6 +66,7 @@ export function NextActivityCard({
   eyebrow,
   testID = 'next-activity-card',
 }: NextActivityCardProps) {
+  const styles = useStyles();
   const when = whenText(model);
   const hasBody = Boolean(model.change || model.requiredAction || rsvp || onOpen);
   return (
@@ -126,6 +127,7 @@ function Fact({
   value: string;
   strong?: boolean;
 }) {
+  const styles = useStyles();
   return (
     <Text style={strong ? styles.factStrong : styles.fact}>
       <Text style={styles.key}>{label}: </Text>
@@ -134,7 +136,7 @@ function Fact({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   card: {
     marginHorizontal: spacing.lg,
     borderRadius: radius.xl,
@@ -145,12 +147,12 @@ const styles = StyleSheet.create({
   },
   hero: { backgroundColor: colors.night, padding: spacing.lg, gap: spacing.sm },
   eyebrow: { ...type.eyebrow, color: colors.floodlight },
-  title: { ...type.title, fontSize: 30, lineHeight: 32, color: colors.primaryText },
+  title: { ...type.title, fontSize: 30, lineHeight: 32, color: colors.onNight },
   facts: { gap: 2 },
   fact: { ...type.caption, color: colors.nightText },
-  factStrong: { ...type.body, ...fonts.semibold, color: colors.primaryText },
+  factStrong: { ...type.body, ...fonts.semibold, color: colors.onNight },
   key: { ...fonts.regular, color: colors.nightMuted },
   body: { padding: spacing.lg, gap: spacing.md },
   action: { gap: spacing.xs },
   actionText: { ...type.body, color: colors.text },
-});
+}));
