@@ -1,6 +1,6 @@
 /*
  * SCR-S-01 shell chrome. The sidebar and the header groups are liquid glass bodies floating above
- * the page (`ui/glass`): the sidebar over the night pitch artwork, the header groups over the
+ * the page (`ui/glass`): the sidebar over a soft field of colour, the header groups over the
  * content that scrolls beneath them. Everything inside a glass body is flat (labels, rows, the
  * facility select, the switch): no glass inside glass.
  *
@@ -29,48 +29,22 @@
   z-index: 30;
   min-width: 0;
 }
-/* The night pitch the glass floats on: stripes of mown grass, the halfway line and the centre
-   circle under the floodlights. Decorative. */
+/* The soft field of colour the sidebar glass floats on: it gives the glass something to take its
+   tint from without drawing attention. Decorative. */
 .shell-side-art {
   position: absolute;
   inset: 0;
   overflow: hidden;
   background:
-    radial-gradient(
-      70% 34% at 20% 0%,
-      color-mix(in srgb, var(--floodlight) 26%, transparent),
-      transparent 72%
-    ),
-    radial-gradient(
-      60% 30% at 90% 100%,
-      color-mix(in srgb, var(--floodlight) 12%, transparent),
-      transparent 70%
-    ),
-    repeating-linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.035) 0 58px,
-      rgba(0, 0, 0, 0.1) 58px 116px
-    ),
-    radial-gradient(130% 80% at 50% 40%, #14402f 0%, var(--night) 72%);
-  color: color-mix(in srgb, var(--floodlight) 42%, transparent);
+    radial-gradient(90% 38% at 0% 0%, rgba(150, 224, 160, 0.55), transparent 70%),
+    radial-gradient(80% 34% at 100% 38%, rgba(196, 240, 130, 0.38), transparent 72%),
+    radial-gradient(90% 40% at 10% 100%, rgba(140, 200, 255, 0.34), transparent 70%), var(--sand);
 }
 :root[data-theme='legends'] .shell-side-art {
   background:
-    radial-gradient(70% 34% at 20% 0%, rgba(242, 201, 76, 0.3), transparent 72%),
-    radial-gradient(60% 30% at 90% 100%, rgba(200, 120, 30, 0.2), transparent 70%),
-    repeating-linear-gradient(
-      180deg,
-      rgba(255, 236, 190, 0.03) 0 58px,
-      rgba(0, 0, 0, 0.3) 58px 116px
-    ),
-    radial-gradient(130% 80% at 50% 40%, #1c1608 0%, #050504 72%);
-  color: rgba(242, 201, 76, 0.5);
-}
-.shell-side-art svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+    radial-gradient(90% 36% at 0% 0%, rgba(240, 199, 90, 0.26), transparent 70%),
+    radial-gradient(80% 34% at 100% 46%, rgba(240, 199, 90, 0.08), transparent 72%),
+    radial-gradient(90% 40% at 10% 100%, rgba(200, 130, 40, 0.16), transparent 70%), var(--sand);
 }
 .shell-side-glass {
   height: 100%;
@@ -114,7 +88,7 @@
 .rail-button:hover,
 .side-icon-button:hover {
   background: var(--glass-child);
-  color: #fff;
+  color: var(--glass-ink);
 }
 .rail-button .icon {
   transition: transform 0.22s ease;
@@ -128,7 +102,7 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: var(--glass-separator) transparent;
 }
 .shell-nav ul {
   list-style: none;
@@ -142,12 +116,11 @@
 }
 .nav-group-label {
   display: block;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
   color: var(--glass-ink-2);
-  opacity: 0.8;
+  opacity: 0.85;
   padding: 6px 12px 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -182,32 +155,20 @@
 }
 .shell-nav a .icon,
 .side-link .icon {
-  color: var(--floodlight);
-  opacity: 0.92;
+  color: var(--pitch);
 }
 .shell-nav a:hover,
 .side-link:hover {
   background: var(--glass-child);
-  color: #fff;
+  color: var(--glass-ink);
   text-decoration: none;
 }
 /* The current area: an accent tint pill, heavier text and a filled glyph (never colour alone). */
 .shell-nav a[aria-current='page'],
 .shell-side-foot .side-link[aria-current='page'] {
-  background: color-mix(in srgb, var(--floodlight) 20%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--floodlight) 30%, transparent);
-  color: var(--floodlight);
-  font-weight: 700;
-}
-.shell-nav a[aria-current='page']::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 9px;
-  bottom: 9px;
-  width: 4px;
-  border-radius: 0 4px 4px 0;
-  background: var(--floodlight);
+  background: color-mix(in srgb, var(--pitch) 13%, transparent);
+  color: var(--link);
+  font-weight: 650;
 }
 .shell-nav .nav-state {
   padding: 8px 12px;
@@ -241,7 +202,7 @@
   min-width: 0;
 }
 .side-user-name {
-  color: #fff;
+  color: var(--glass-ink);
   font-weight: 600;
   font-size: 13px;
   overflow: hidden;

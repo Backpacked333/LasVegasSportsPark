@@ -165,8 +165,7 @@
   display: grid;
   place-items: center;
   font-size: 17px;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   background: var(--tone-neutral-bg);
   color: var(--ink-2);
 }

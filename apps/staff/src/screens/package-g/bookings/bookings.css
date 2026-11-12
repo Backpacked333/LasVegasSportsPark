@@ -60,17 +60,14 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--edge);
 }
 .booking-guests {
   font-size: 16px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
 }
 .booking-title {
   font-size: 16px;
@@ -146,9 +143,8 @@
 .week-grid-head h5 {
   margin: 0;
   font-size: 14px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .week-grid-scroll {
   overflow-x: auto;
@@ -204,7 +200,7 @@ span.week-cell {
 /* Booking price (GET /v1/basket-prices/{id}): the order's total or an estimate. */
 .booking-price {
   margin-left: auto;
-  font-weight: 800;
+  font-weight: 700;
   font-size: 15px;
   color: var(--ink);
   white-space: nowrap;

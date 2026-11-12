@@ -99,10 +99,9 @@
   scrollbar-width: thin;
 }
 .palette-group-label {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--glass-ink-2);
   padding: 8px 12px 4px;
 }

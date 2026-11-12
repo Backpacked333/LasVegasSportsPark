@@ -1,8 +1,9 @@
 /**
  * Design tokens of the park visual system (SPK-UX-010: clear hierarchy, strong readability in busy
  * facilities, restrained animation), shared with the staff dashboard, in two themes with the same
- * token names: classic (night pitch, pitch green and floodlight on desert sand) and Legends mode
- * (dark with one gold accent). Archivo for everything, condensed uppercase for titles and scores.
+ * token names: classic (a calm warm white, white cards, pitch green as the accent) and Legends
+ * mode (neutral black with one gold accent). Archivo for everything, at one width and in sentence
+ * case: nothing is set in capitals.
  *
  * Colours are read through the theme in use, never statically: `useTheme()` in a component and
  * `makeStyles` for its stylesheet (below), so the whole app follows the Legends mode switch
@@ -13,17 +14,14 @@
  * glyph and a text label (see StatusBadge). Text sizes are base sizes; the OS text-size setting
  * scales them (no `allowFontScaling={false}` anywhere).
  *
- * Fonts are bundled (`@expo-google-fonts/archivo`, `archivo-narrow`, `material-symbols`) and loaded
- * by the root layout before anything renders (`FONT_ASSETS`). Each font token names the face and
- * its matching weight, so a face that failed to load still falls back to a system font of the
- * same weight. The condensed display face is Archivo Narrow Bold: the static font packages carry
- * no condensed 800 instance of Archivo.
+ * Fonts are bundled (`@expo-google-fonts/archivo`, `material-symbols`) and loaded by the root
+ * layout before anything renders (`FONT_ASSETS`). Each font token names the face and its matching
+ * weight, so a face that failed to load still falls back to a system font of the same weight.
  */
 import { Archivo_400Regular } from '@expo-google-fonts/archivo/400Regular';
 import { Archivo_600SemiBold } from '@expo-google-fonts/archivo/600SemiBold';
 import { Archivo_700Bold } from '@expo-google-fonts/archivo/700Bold';
 import { Archivo_800ExtraBold } from '@expo-google-fonts/archivo/800ExtraBold';
-import { ArchivoNarrow_700Bold } from '@expo-google-fonts/archivo-narrow/700Bold';
 import { MaterialSymbols_400Regular } from '@expo-google-fonts/material-symbols/400Regular';
 import { createContext, useContext } from 'react';
 import { StyleSheet } from 'react-native';
@@ -31,21 +29,21 @@ import { StyleSheet } from 'react-native';
 /** The classic park palette: night pitch, pitch green and floodlight on desert sand. */
 const classicColors = {
   /** Screen background: desert sand. */
-  page: '#F4F3EE',
+  page: '#F5F5F2',
   /** Card and control surface (white). */
   background: '#FFFFFF',
   /** Soft fill: pressed rows, highlighted table rows, empty bars. */
-  surface: '#EEECE6',
-  text: '#101814',
-  textMuted: '#5A6660',
+  surface: '#EFEFEB',
+  text: '#111614',
+  textMuted: '#5F6965',
   /** Card borders. */
-  border: '#E3E1D9',
+  border: '#E9E8E3',
   /** Dividers inside a card. */
-  divider: '#EEECE6',
+  divider: '#F0EFEB',
   /** Borders of controls (unselected chips, secondary buttons). */
-  control: '#D9D6CC',
-  primary: '#0B6B3A',
-  primaryPressed: '#08532C',
+  control: '#DBD9D3',
+  primary: '#0A7040',
+  primaryPressed: '#085A33',
   /** Text and icons on `primary` (and on `danger` fills). Not for night surfaces: use `onNight`. */
   primaryText: '#FFFFFF',
   /** Night pitch: hero cards, the pass, the selected chip. */
@@ -59,7 +57,7 @@ const classicColors = {
   /** Body text on `night` and `pitch` surfaces. */
   onNightBody: '#E3F1E8',
   /** The team hero band; night-surface text colours apply on it. */
-  pitch: '#0B6B3A',
+  pitch: '#0A7040',
   /** Floodlight: the one accent; text on it is night. */
   floodlight: '#C6F36B',
   /** Text and icons on `floodlight` fills. */
@@ -71,7 +69,7 @@ const classicColors = {
   onChipSelected: '#FFFFFF',
   chipSelectedIcon: '#C6F36B',
   focus: '#1A4FD6',
-  success: '#0B6B3A',
+  success: '#0A7040',
   warning: '#8A5300',
   /** Border of a warning notice (changes affecting you, the offline banner). */
   warningBorder: '#F0D9A6',
@@ -90,38 +88,38 @@ export type ThemeColors = { readonly [K in keyof typeof classicColors]: string }
  * text on every surface 4.5:1 or more, the label on a gold button 4.5:1 or more.
  */
 const legendsColors: ThemeColors = {
-  page: '#0A0907',
-  background: '#15130F',
-  surface: '#1D1A14',
-  text: '#F7F2E4',
-  textMuted: '#B3AA94',
-  border: '#2B261C',
-  divider: '#221E16',
-  control: '#3D3628',
-  primary: '#E9B949',
-  primaryPressed: '#D4A22E',
-  primaryText: '#1A1304',
-  night: '#050504',
-  nightRaised: '#12100B',
-  nightLine: '#3A3020',
-  nightMuted: '#A39A84',
-  nightText: '#D9D1BD',
-  onNight: '#F7F2E4',
-  onNightBody: '#D9D1BD',
-  pitch: '#2A2110',
-  floodlight: '#F2C94C',
-  onFloodlight: '#050504',
-  tabActive: '#F2C94C',
-  chipSelected: '#E9B949',
-  onChipSelected: '#1A1304',
-  chipSelectedIcon: '#1A1304',
-  focus: '#F2C94C',
+  page: '#0A0A0B',
+  background: '#131314',
+  surface: '#1D1D20',
+  text: '#F5F5F7',
+  textMuted: '#A6A6AD',
+  border: '#242427',
+  divider: '#1C1C1F',
+  control: '#37373C',
+  primary: '#E8B84A',
+  primaryPressed: '#D4A337',
+  primaryText: '#17120A',
+  night: '#000000',
+  nightRaised: '#101011',
+  nightLine: '#34343A',
+  nightMuted: '#A1A1A8',
+  nightText: '#C7C7CC',
+  onNight: '#F5F5F7',
+  onNightBody: '#D6D6DB',
+  pitch: '#211C0E',
+  floodlight: '#F0C75A',
+  onFloodlight: '#000000',
+  tabActive: '#F0C75A',
+  chipSelected: '#E8B84A',
+  onChipSelected: '#17120A',
+  chipSelectedIcon: '#17120A',
+  focus: '#F0C75A',
   success: '#5FD38D',
   warning: '#FF9F4A',
   warningBorder: '#5A3A16',
   danger: '#FF7B72',
   info: '#7DB2FF',
-  neutral: '#B3AA94',
+  neutral: '#B4B4BB',
   pending: '#B9A2FF',
 };
 
@@ -144,7 +142,7 @@ const legendsToneBackgrounds: ThemeToneBackgrounds = {
   warning: '#33210F',
   danger: '#361816',
   info: '#152238',
-  neutral: '#24211A',
+  neutral: '#222225',
   pending: '#221B38',
 };
 
@@ -166,7 +164,7 @@ const legendsKindColors: ThemeKindColors = {
   rental: '#E8A34F',
   party: '#F07CB1',
   basketball: '#FF8A5C',
-  dropin: '#A8A08C',
+  dropin: '#A6A6AD',
 };
 
 export type ThemeName = 'classic' | 'legends';
@@ -274,8 +272,8 @@ export const fonts = {
   semibold: { fontFamily: 'Archivo_600SemiBold', fontWeight: '600' as const },
   bold: { fontFamily: 'Archivo_700Bold', fontWeight: '700' as const },
   extrabold: { fontFamily: 'Archivo_800ExtraBold', fontWeight: '800' as const },
-  /** Condensed, for titles and scores; always uppercase. */
-  display: { fontFamily: 'ArchivoNarrow_700Bold', fontWeight: '700' as const },
+  /** Titles and scores: the bold face at its normal width, written in sentence case. */
+  display: { fontFamily: 'Archivo_700Bold', fontWeight: '700' as const },
   icon: { fontFamily: 'MaterialSymbols_400Regular', fontWeight: '400' as const },
 } as const;
 
@@ -285,35 +283,18 @@ export const FONT_ASSETS = {
   Archivo_600SemiBold,
   Archivo_700Bold,
   Archivo_800ExtraBold,
-  ArchivoNarrow_700Bold,
   MaterialSymbols_400Regular,
 };
 
 export const type = {
-  /** Screen titles ("DISCOVER", a team's name). */
-  display: {
-    ...fonts.display,
-    fontSize: 34,
-    lineHeight: 36,
-    textTransform: 'uppercase' as const,
-  },
+  /** Screen titles ("Discover", a team's name). Sentence case: nothing is set in capitals. */
+  display: { ...fonts.display, fontSize: 30, lineHeight: 36, letterSpacing: -0.5 },
   /** Card and page titles. */
-  title: {
-    ...fonts.display,
-    fontSize: 26,
-    lineHeight: 28,
-    textTransform: 'uppercase' as const,
-  },
-  heading: { ...fonts.bold, fontSize: 18, lineHeight: 24 },
-  /** Section labels ("FOR YOU TO KNOW"). */
-  eyebrow: {
-    ...fonts.extrabold,
-    fontSize: 12,
-    lineHeight: 16,
-    letterSpacing: 1.4,
-    textTransform: 'uppercase' as const,
-  },
-  body: { ...fonts.regular, fontSize: 16, lineHeight: 22 },
+  title: { ...fonts.display, fontSize: 22, lineHeight: 28, letterSpacing: -0.3 },
+  heading: { ...fonts.semibold, fontSize: 17, lineHeight: 24 },
+  /** Section labels ("For you to know"): quiet, above the content they name. */
+  eyebrow: { ...fonts.semibold, fontSize: 13, lineHeight: 18 },
+  body: { ...fonts.regular, fontSize: 16, lineHeight: 23 },
   caption: { ...fonts.regular, fontSize: 14, lineHeight: 20 },
 } as const;
 

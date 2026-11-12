@@ -25,10 +25,9 @@
   border-radius: 999px;
   background: var(--night-warn-bg);
   color: var(--night-warn);
-  font-size: 11.5px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .scanner-frame {
   position: relative;
@@ -92,7 +91,7 @@
   color: #fff;
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 .shell-main .ops-screen .scanner .ops-field input::placeholder {
   color: var(--night-muted);
@@ -108,7 +107,7 @@
   padding: 0 20px;
   background: var(--floodlight);
   color: var(--night);
-  font-weight: 800;
+  font-weight: 700;
   font-size: 14.5px;
 }
 .scanner .button-primary:hover:not([disabled]) {
@@ -146,10 +145,8 @@
 }
 .selection-band-title {
   font-size: 18px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .selection-band .caption,
 .selection-band [data-testid='last-updated'] {
@@ -193,10 +190,8 @@
 .arrival-person-name {
   font-size: 21px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .arrival-person .ops-history {
   list-style: none;
@@ -232,10 +227,8 @@
 .verdict-word {
   font-size: 30px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .verdict-meta {
   margin-left: auto;
@@ -326,8 +319,7 @@
 }
 .fill-count {
   font-size: 17px;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   white-space: nowrap;
 }
 .ops-link-list .ops-link-row {

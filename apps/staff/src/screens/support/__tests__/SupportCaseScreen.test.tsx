@@ -287,7 +287,7 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     expect(within(facts).getByText('staff')).toBeInTheDocument();
     // The related checkout is in recovery: shown beside the case.
     const related = screen.getByRole('list', { name: 'Related records' });
-    expect(await within(related).findByText('State: recovery_required')).toBeInTheDocument();
+    expect(await within(related).findByText('State: recovery required')).toBeInTheDocument();
     // The origin exception and its own status.
     expect(await screen.findByText('Exception status: open')).toBeInTheDocument();
     const history = screen.getByRole('list', { name: 'Case history' });
@@ -661,7 +661,7 @@ describe('SCR-S-49 SupportCaseScreen', () => {
     await within(panel).findByRole('list', { name: 'Records still in recovery' });
     await user.click(within(panel).getByRole('button', { name: 'Wait for the customer' }));
     expect(
-      await within(panel).findByText('Case updated. State: waiting_customer.'),
+      await within(panel).findByText('Case updated. State: waiting customer.'),
     ).toBeInTheDocument();
     const post = app.fake.requests.find((r) => r.route === '/cases/{id}/transition');
     expect(post?.body).toEqual({ event: 'wait_customer', expectedRevision: 3 });

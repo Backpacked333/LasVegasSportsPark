@@ -154,7 +154,7 @@
   background: var(--pitch);
   color: var(--on-primary);
   font-size: 11.5px;
-  font-weight: 800;
+  font-weight: 700;
   display: grid;
   place-items: center;
   padding: 0 6px;
@@ -296,14 +296,13 @@
 .pos-ticket-totals .fact:nth-child(3) dd {
   font-size: 32px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
 }
 .pos-ticket-totals .fact:nth-child(6) {
   color: var(--ink);
 }
 .pos-ticket-totals .fact:nth-child(6) dd {
-  font-weight: 800;
+  font-weight: 700;
   font-size: 15px;
 }
 .pos-ticket-actions {

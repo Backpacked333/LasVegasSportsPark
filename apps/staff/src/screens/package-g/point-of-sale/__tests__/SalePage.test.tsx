@@ -405,7 +405,7 @@ describe('SCR-S-55 SalePage', () => {
     });
     // A definitive refusal ends the intent: the corrected return is a new key.
     expect(calls[1]?.headers['idempotency-key']).not.toBe(calls[0]?.headers['idempotency-key']);
-    expect(screen.getByText('partially_returned')).toBeInTheDocument();
+    expect(screen.getByText('partially returned')).toBeInTheDocument();
   });
 
   it('SPK-PAY-007: a card payment still processing is "not paid yet": no void, no receipt, never paid', async () => {

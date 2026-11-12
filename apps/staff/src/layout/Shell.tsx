@@ -1,7 +1,7 @@
 /**
  * SCR-S-01 shell. Chrome floats as liquid glass above the page (`ui/glass`):
  *
- * - the sidebar, over the night pitch artwork: the SPK-UX-005 areas the API lists for this
+ * - the sidebar, a frosted panel over a soft field of colour: the SPK-UX-005 areas the API lists for this
  *   principal (`GET /v1/me/permissions`, AreaNav) grouped by job, Today as the operating home, the
  *   coach and referee workspace link (SPK-UX-007) and the signed-in person. On wide screens it
  *   collapses to an icon rail (remembered in this browser); below 900 px it is a drawer over a
@@ -72,26 +72,6 @@ function isEditable(target: EventTarget | null): boolean {
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
     target instanceof HTMLSelectElement
-  );
-}
-
-/** Field markings under the sidebar glass: touchline, halfway line, centre circle, penalty areas. */
-function SidePitch() {
-  return (
-    <svg viewBox="0 0 272 900" preserveAspectRatio="xMidYMid slice" focusable="false">
-      <g fill="none" stroke="currentColor" strokeWidth="2">
-        <rect x="-60" y="26" width="392" height="848" rx="2" />
-        <line x1="-60" y1="450" x2="332" y2="450" />
-        <circle cx="136" cy="450" r="74" />
-        <rect x="24" y="26" width="224" height="118" />
-        <rect x="80" y="26" width="112" height="42" />
-        <path d="M 84 144 A 62 62 0 0 0 188 144" />
-        <rect x="24" y="756" width="224" height="118" />
-        <rect x="80" y="832" width="112" height="42" />
-        <path d="M 84 756 A 62 62 0 0 1 188 756" />
-      </g>
-      <circle cx="136" cy="450" r="4" fill="currentColor" />
-    </svg>
   );
 }
 
@@ -220,15 +200,13 @@ export function Shell() {
         <RouteProgress />
         {menuOpen ? <div className="shell-scrim" onClick={close} /> : null}
         <aside className="shell-side" data-open={menuOpen} inert={paletteOpen}>
-          <div className="shell-side-art" aria-hidden="true">
-            <SidePitch />
-          </div>
+          <div className="shell-side-art" aria-hidden="true" />
           <Glass
-            className="shell-side-glass glass-night"
+            className="shell-side-glass"
             contentClassName="shell-side-inner"
             material="frost"
             radius={26}
-            blur={7}
+            blur={14}
             squircle
           >
             <div className="shell-side-head">

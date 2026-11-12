@@ -5,16 +5,17 @@
  * for keyboard users.
  *
  * Two themes share every rule below through the tokens of this block:
- * - classic (default): desert sand, pitch green and the floodlight accent;
- * - legends (`[data-theme='legends']`, the "Legends mode" switch): night black with a gold accent.
+ * - classic (default): a calm warm white, white cards, pitch green as the one accent;
+ * - legends (`[data-theme='legends']`, the "Legends mode" switch): neutral black, soft white text,
+ *   gold only where something is active or primary.
  * A rule that needs a colour takes a token; a colour literal in a feature stylesheet would not
  * follow the theme.
  *
  * Layers: content (cards, lists, tables: flat and opaque, for reading) under the chrome (sidebar,
  * header groups, quick navigation: liquid glass, `glass/Glass.tsx`). Content is never glass.
  *
- * Type: Archivo, one family. Condensed 800 uppercase for headings, spaces and scores (reads like a
- * scoreboard); body at normal width with tabular numbers everywhere.
+ * Type: Archivo, one family at its normal width. Sentence case everywhere (the words are written
+ * as they should be read; nothing is set in capitals), weights from 500 to 700, tabular numbers.
  */
 :root {
   color-scheme: light;
@@ -40,8 +41,8 @@
   --night-pending-bg: #3b2a5e;
 
   /* Brand: the primary colour and the one accent. */
-  --pitch: #0b6b3a;
-  --pitch-hover: #08532c;
+  --pitch: #0a7040;
+  --pitch-hover: #085a33;
   --on-primary: #ffffff;
   /* Text on the primary colour mixed towards the surface (a heatmap's middle levels). */
   --on-primary-soft: #101814;
@@ -51,20 +52,20 @@
   --live: #1f9d55;
 
   /* Day surfaces and text. */
-  --sand: #f3f2ec;
-  --sand-2: #fafaf6;
-  --ink: #101814;
-  --ink-2: #3a4641;
-  --muted: #5a6660;
-  --faint: #66706b;
-  --line: #e3e1d9;
-  --line-soft: #eeece6;
-  --line-strong: #d6d3c8;
-  --line-hover: #c2beb1;
+  --sand: #f5f5f2;
+  --sand-2: #f9f9f7;
+  --ink: #111614;
+  --ink-2: #39423e;
+  --muted: #5f6965;
+  --faint: #6b7570;
+  --line: #e9e8e3;
+  --line-soft: #f0efeb;
+  --line-strong: #dbd9d3;
+  --line-hover: #c3c1b9;
   --card: #ffffff;
   --field: #ffffff;
   /* Segmented controls: the track and a hovered segment. */
-  --track: #e9e7e0;
+  --track: #ecece7;
   --track-hover: rgba(255, 255, 255, 0.6);
   --hatch: #cfccc1;
   --hatch-strong: #a9b1ad;
@@ -140,27 +141,27 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
-  --radius-sm: 9px;
-  --radius: 13px;
-  --radius-lg: 18px;
-  --radius-control: 11px;
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --radius-control: 12px;
   --shadow-chip: 0 1px 2px rgba(16, 24, 20, 0.1);
-  --shadow-card: 0 1px 2px rgba(16, 24, 20, 0.04), 0 6px 20px -8px rgba(16, 24, 20, 0.08);
-  --shadow-raised: 0 2px 4px rgba(16, 24, 20, 0.05), 0 14px 32px -12px rgba(16, 24, 20, 0.16);
+  --shadow-card: 0 1px 2px rgba(17, 22, 20, 0.04), 0 8px 24px -12px rgba(17, 22, 20, 0.1);
+  --shadow-raised: 0 2px 6px rgba(17, 22, 20, 0.05), 0 18px 40px -16px rgba(17, 22, 20, 0.18);
   --shadow-pop: 0 10px 30px rgba(16, 24, 20, 0.14);
   --scrim: rgba(12, 20, 16, 0.32);
   /* The soft light behind the top of a page. */
-  --ambient-a: rgba(198, 243, 107, 0.34);
-  --ambient-b: rgba(11, 107, 58, 0.14);
+  --ambient-a: rgba(160, 226, 150, 0.32);
+  --ambient-b: rgba(120, 190, 255, 0.16);
   /* Desktop controls; coarse pointers (phones beside a field, SPK-UX-007) get 44 px below. */
   --touch: 40px;
-  --side-width: 272px;
+  --side-width: 264px;
   --font: 'Archivo Variable', Archivo, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 
   font-family: var(--font);
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   color: var(--color-text);
@@ -177,17 +178,17 @@
 :root[data-theme='legends'] {
   color-scheme: dark;
 
-  --night: #050504;
-  --night-2: #17140d;
-  --night-3: #3a3020;
-  --night-line: #2a2416;
-  --night-raised: #12100b;
-  --night-edge: #4a3d22;
-  --night-ink: #f4eedd;
-  --night-text: #e9e2d0;
-  --night-soft: #d9d1bd;
-  --night-muted: #a39a84;
-  --night-faint: #7d7562;
+  --night: #000000;
+  --night-2: #161617;
+  --night-3: #34343a;
+  --night-line: #242427;
+  --night-raised: #101011;
+  --night-edge: #3d3d42;
+  --night-ink: #f5f5f7;
+  --night-text: #e8e8ed;
+  --night-soft: #c7c7cc;
+  --night-muted: #a1a1a8;
+  --night-faint: #7c7c84;
   --night-ok: #8fe3b0;
   --night-warn: #ffb469;
   --night-warn-bg: #3d2610;
@@ -195,31 +196,31 @@
   --night-pending: #d6c8ff;
   --night-pending-bg: #2b2148;
 
-  --pitch: #e9b949;
-  --pitch-hover: #f4cd6c;
-  --on-primary: #1a1304;
-  --on-primary-soft: #1a1304;
-  --floodlight: #f2c94c;
-  --floodlight-hover: #f8da7e;
-  --accent-wash: #2a2210;
+  --pitch: #e8b84a;
+  --pitch-hover: #f2c968;
+  --on-primary: #17120a;
+  --on-primary-soft: #17120a;
+  --floodlight: #f0c75a;
+  --floodlight-hover: #f6d67e;
+  --accent-wash: #26200f;
   --live: #5fd38d;
 
-  --sand: #0a0907;
-  --sand-2: #1b1812;
-  --ink: #f7f2e4;
-  --ink-2: #d9d1bd;
-  --muted: #b3aa94;
-  --faint: #8f8672;
-  --line: #2b261c;
-  --line-soft: #221e16;
-  --line-strong: #3d3628;
-  --line-hover: #574d39;
-  --card: #15130f;
-  --field: #0e0c09;
-  --track: #1f1b14;
+  --sand: #0a0a0b;
+  --sand-2: #1a1a1c;
+  --ink: #f5f5f7;
+  --ink-2: #d6d6db;
+  --muted: #a6a6ad;
+  --faint: #8a8a92;
+  --line: #242427;
+  --line-soft: #1c1c1f;
+  --line-strong: #37373c;
+  --line-hover: #4f4f56;
+  --card: #131314;
+  --field: #0d0d0e;
+  --track: #1d1d20;
   --track-hover: rgba(255, 255, 255, 0.06);
-  --hatch: #3d3628;
-  --hatch-strong: #574d39;
+  --hatch: #37373c;
+  --hatch-strong: #4f4f56;
 
   --kind-league: #5fd38d;
   --kind-league-bg: #14291d;
@@ -231,14 +232,14 @@
   --kind-party-bg: #35172a;
   --kind-basketball: #ff8a5c;
   --kind-basketball-bg: #36190f;
-  --kind-dropin: #a8a08c;
-  --kind-dropin-bg: #24211a;
+  --kind-dropin: #a6a6ad;
+  --kind-dropin-bg: #222225;
   --kind-futsal: #4fd1c5;
 
-  --color-focus: #f2c94c;
+  --color-focus: #f0c75a;
   --focus-ring: rgba(242, 201, 76, 0.28);
-  --link: #edc25a;
-  --link-hover: #f8da7e;
+  --link: #ecc35f;
+  --link-hover: #f6d67e;
 
   --tone-success: #5fd38d;
   --tone-success-bg: #14291d;
@@ -252,12 +253,12 @@
   --tone-info: #7db2ff;
   --tone-info-bg: #152238;
   --tone-info-line: #2a446e;
-  --tone-neutral: #b3aa94;
-  --tone-neutral-bg: #24211a;
+  --tone-neutral: #b4b4bb;
+  --tone-neutral-bg: #222225;
   --tone-pending: #b9a2ff;
   --tone-pending-bg: #221b38;
   --tone-pending-line: #3c3166;
-  --on-tone: #14110a;
+  --on-tone: #111112;
   --danger-solid: #d6363b;
   --on-danger: #ffffff;
   --success-wash: #101c15;
@@ -273,12 +274,12 @@
   --pending-dash: #5a4b96;
 
   --shadow-chip: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-card: 0 1px 0 rgba(255, 240, 200, 0.03) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.7);
-  --shadow-raised: 0 1px 0 rgba(255, 240, 200, 0.05) inset, 0 18px 40px -14px rgba(0, 0, 0, 0.85);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 28px -14px rgba(0, 0, 0, 0.8);
+  --shadow-raised: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 20px 44px -16px rgba(0, 0, 0, 0.9);
   --shadow-pop: 0 14px 40px rgba(0, 0, 0, 0.7);
   --scrim: rgba(0, 0, 0, 0.55);
-  --ambient-a: rgba(242, 201, 76, 0.16);
-  --ambient-b: rgba(190, 120, 30, 0.1);
+  --ambient-a: rgba(240, 199, 90, 0.12);
+  --ambient-b: rgba(240, 199, 90, 0.05);
 }
 @media (pointer: coarse) {
   :root {
@@ -380,56 +381,32 @@ kbd {
   white-space: nowrap;
 }
 
-/* ---------- Type ---------- */
+/* ---------- Type: sentence case, one width, calm weights ---------- */
 .display,
 .shell-main h2,
 .shell-main h3,
 .page-title {
-  font-stretch: 75%;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
   margin: 0;
+  text-wrap: balance;
 }
 /* The page title: the first heading of a screen. */
 .shell-main h2 {
-  font-size: 36px;
-  letter-spacing: -0.005em;
-  line-height: 0.95;
-}
-/* Legends mode: page titles are lit from above, ivory running to gold. Where the gradient cannot
-   be clipped to the letters (forced colours, an old engine) the plain ivory of the theme stays. */
-@supports ((-webkit-background-clip: text) or (background-clip: text)) {
-  :root[data-theme='legends'] .shell-main h2:not(.state h2) {
-    background: linear-gradient(180deg, #fffaf0 18%, #f3d684 62%, #d9a52c 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    width: fit-content;
-    max-width: 100%;
-    /* Room for descenders, which the clip would otherwise cut at a line height under 1. */
-    padding-bottom: 0.08em;
-  }
-}
-@media (forced-colors: active) {
-  :root[data-theme='legends'] .shell-main h2:not(.state h2) {
-    background: none;
-    color: CanvasText;
-    -webkit-text-fill-color: currentColor;
-  }
+  font-size: 30px;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
 }
 .shell-main h3 {
-  font-size: 20px;
-  letter-spacing: 0.03em;
+  font-size: 18px;
+  font-weight: 650;
 }
 .shell-main h4 {
   font-size: 15px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
   margin: 0;
 }
 .shell-main h5 {
@@ -441,23 +418,36 @@ kbd {
   margin: 0;
 }
 .eyebrow {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--muted);
 }
 .label-caps {
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
   color: var(--faint);
 }
 .caption {
   color: var(--color-muted);
   font-size: 12.5px;
   line-height: 1.4;
+}
+/* The age of what is shown: there when looked for, quiet otherwise. */
+.caption[data-testid='last-updated'] {
+  font-size: 12px;
+  color: var(--faint);
+}
+/* An inventory screen id beside a name: kept in the name for assistive technology and tests,
+   not drawn (it is a reference for the people building this, not for the people using it). */
+.screen-id {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 .error-text {
   color: var(--tone-danger);
@@ -525,7 +515,7 @@ code {
   border: 1px solid transparent;
   font: inherit;
   font-size: 13.5px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -602,20 +592,6 @@ code {
   height: var(--touch);
   padding: 0;
 }
-/* Legends mode: the primary action is struck gold. */
-:root[data-theme='legends'] .button-primary {
-  background: linear-gradient(180deg, #f6d57b 0%, #e9b949 46%, #cf9a26 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.45),
-    0 1px 2px rgba(0, 0, 0, 0.5);
-}
-:root[data-theme='legends'] .button-primary:hover:not([disabled]) {
-  background: linear-gradient(180deg, #fbe29a 0%, #f2c75c 46%, #dba733 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    0 6px 18px -6px rgba(233, 185, 73, 0.55);
-}
-
 /* ---------- Status pills: glyph + text, never colour alone ---------- */
 .badge {
   display: inline-flex;
@@ -625,7 +601,7 @@ code {
   padding: 1px 9px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
   background: var(--tone-neutral-bg);
   color: var(--tone-neutral);
@@ -686,7 +662,7 @@ code {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
-  padding: 16px 18px;
+  padding: 18px 20px;
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -793,10 +769,10 @@ code {
   flex-wrap: wrap;
 }
 .kpi-value {
-  font-size: 36px;
+  font-size: 32px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 650;
+  letter-spacing: -0.025em;
 }
 .kpi-sub {
   font-size: 12.5px;
@@ -853,8 +829,9 @@ code {
 .state h2,
 .shell-main .state h2 {
   margin: 0;
-  font-size: 18px;
-  letter-spacing: 0.02em;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 .state > p {
   max-width: 72ch;
@@ -1046,11 +1023,10 @@ details[open] > summary {
 }
 .shell-main th {
   text-align: left;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--sand-2);
@@ -1219,8 +1195,9 @@ details[open] > summary {
 .card-dark .card-head h4,
 .card-flush .card-head h4,
 .card-flush .card-head h3 {
-  font-size: 20px;
-  letter-spacing: 0.03em;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
 }
 .card-dark .state {
   color: var(--night-ink);
@@ -1234,11 +1211,10 @@ details[open] > summary {
   border-radius: 999px;
   background: var(--floodlight);
   color: var(--night);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
   white-space: nowrap;
-  text-transform: uppercase;
 }
 .live-dot {
   width: 7px;
@@ -1322,12 +1298,12 @@ details[open] > summary {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #fff;
+  color: inherit;
   text-decoration: none;
   min-width: 0;
 }
 .brand:hover {
-  color: #fff;
+  color: inherit;
   text-decoration: none;
 }
 .brand-mark {
@@ -1353,25 +1329,21 @@ details[open] > summary {
   min-width: 0;
 }
 .brand-kicker {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--night-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--glass-ink-2, var(--night-muted));
 }
 .brand-name {
-  font-size: 17px;
-  font-weight: 800;
-  font-stretch: 75%;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 .avatar {
   width: 34px;
   height: 34px;
   border-radius: 50%;
   background: var(--glass-chip, var(--night-3));
-  color: var(--floodlight);
+  color: var(--pitch);
   display: grid;
   place-items: center;
   font-weight: 700;

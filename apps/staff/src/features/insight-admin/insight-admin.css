@@ -260,10 +260,9 @@
   font-size: 13.5px;
 }
 .ia-dl dt {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--faint);
   padding-top: 2px;
 }
@@ -311,8 +310,7 @@
 .ia-figure {
   font-size: 32px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   color: var(--ink);
 }
 .ia-table-wrap {
@@ -329,10 +327,8 @@
 }
 .ia-table caption {
   text-align: left;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0;
   font-size: 14px;
   padding: 12px 14px 8px;
 }

@@ -114,15 +114,14 @@ build.
 The park visual system shared with the staff dashboard, in two themes that carry the same token
 names (`src/ui/theme.ts`):
 
-- **Classic**: desert sand pages, white cards, night pitch `#0C2219`, pitch green `#0B6B3A`,
-  floodlight `#C6F36B`.
-- **Legends mode**: dark (page `#0A0907`, cards `#15130F`) with one gold accent (`#E9B949`, labels
-  on gold `#1A1304`); the same palette as the staff dashboard's Legends mode.
+- **Classic**: a calm warm white (`#F5F5F2`), white cards, pitch green `#0A7040` as the accent,
+  night pitch `#0C2219` and floodlight `#C6F36B` for the hero surfaces.
+- **Legends mode**: neutral black (page `#0A0A0B`, cards `#131314`) with one gold accent
+  (`#E8B84A`, labels on gold `#17120A`); the same palette as the staff dashboard's Legends mode.
 
 Both keep tinted status pills with glyph and text, the bundled fonts loaded by `app/_layout.tsx`
-(Archivo for text; Archivo Narrow Bold as the condensed uppercase face for titles, because the
-static font packages have no condensed 800 Archivo; Material Symbols for decorative icons, always
-hidden from screen readers), and the shared pieces `Card`/`SectionCard`, `Hero`, `Icon`, `ListRow`
+(Archivo at one width, in sentence case: titles are the bold face, nothing is set in capitals;
+Material Symbols for decorative icons, always hidden from screen readers), and the shared pieces `Card`/`SectionCard`, `Hero`, `Icon`, `ListRow`
 (card rows, flat inside a card), `Button` variants and the tab and header chrome in
 `src/navigation/`.
 

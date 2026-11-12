@@ -94,10 +94,9 @@
   align-items: center;
 }
 .grow .rf-facts dt {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--faint);
 }
 .grow .rf-facts dd {
@@ -110,10 +109,9 @@
   background: var(--card);
 }
 .grow .rf-table th {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--faint);
   border-bottom-color: var(--line);
 }
@@ -216,17 +214,15 @@
   display: grid;
   place-items: center;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--on-avatar, var(--on-primary));
   background: var(--avatar, var(--pitch));
-  text-transform: uppercase;
 }
 .grow-avatar[data-size='lg'] {
   width: 72px;
   height: 72px;
   border-radius: 18px;
   font-size: 26px;
-  font-stretch: 75%;
   color: var(--floodlight);
 }
 .grow-avatar[data-size='sm'] {
@@ -269,10 +265,9 @@
   --tile-bg: var(--tone-pending-bg);
 }
 .type-caps {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--tile, var(--muted));
 }
 
@@ -299,7 +294,7 @@
   display: grid;
   place-items: center;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   background: var(--tone-neutral-bg);
   color: var(--tone-neutral);
 }
@@ -359,9 +354,7 @@
 .rail-hero .rail-title {
   font-size: 26px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   color: #fff;
   margin: 0;
 }

@@ -405,7 +405,7 @@ describe('SCR-S-01 TodayScreen activities and field status', () => {
     expect(within(pitch2).getByText('Status: restricted')).toBeInTheDocument();
     expect(within(pitch2).getByText(/closed: Goal frame repair until/)).toBeInTheDocument();
     const pitch1 = within(list).getByText('Pitch 1').closest('li') as HTMLElement;
-    expect(within(pitch1).getByText('Status: in_service')).toBeInTheDocument();
+    expect(within(pitch1).getByText('Status: in service')).toBeInTheDocument();
     expect(screen.getByText('No more activities today at this facility.')).toBeInTheDocument();
   });
 

@@ -75,14 +75,12 @@
 }
 .fin-amount {
   font-size: 20px;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   white-space: nowrap;
 }
 .fin-total {
   font-size: 18px;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
 }
 
 /* Past-due table: rows are links to the obligation. */
@@ -101,10 +99,9 @@
 }
 .fin-table-head {
   background: var(--sand-2);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--faint);
   padding-top: 7px;
   padding-bottom: 7px;
@@ -182,8 +179,7 @@
 .fin-recon-value {
   font-size: 34px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   color: #fff;
 }
 .fin-recon-bar {
@@ -317,7 +313,7 @@
 .shell-main .fin-body .state h2,
 .fin-recon .state h2 {
   font-size: 15px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 .fin-body [data-testid='state-empty'] {
   display: grid;
@@ -337,7 +333,7 @@
   color: var(--tone-success);
   display: grid;
   place-items: center;
-  font-weight: 800;
+  font-weight: 700;
 }
 .fin-body [data-testid='state-empty'] p {
   color: var(--muted);

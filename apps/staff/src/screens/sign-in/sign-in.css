@@ -107,8 +107,7 @@
   gap: 8px;
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--floodlight);
 }
 .signin-kicker .live-dot {
@@ -118,10 +117,8 @@
   margin: 0;
   font-size: clamp(54px, 7vw, 96px);
   line-height: 0.88;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: -0.005em;
+  font-weight: 700;
+  letter-spacing: 0;
   color: #fff;
 }
 .signin-sub {
@@ -179,9 +176,7 @@
   margin: 0;
   font-size: 40px;
   line-height: 0.95;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   letter-spacing: 0;
 }
 .signin-intro {
@@ -209,7 +204,7 @@
 }
 .signin-card .state h2 {
   font-size: 15px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
 }
 .signin-card .state > p {
   color: var(--muted);
@@ -275,4 +270,7 @@
   .signin-card h1 {
     font-size: 32px;
   }
+}
+.signin-pitch .brand-kicker {
+  color: var(--night-muted);
 }
