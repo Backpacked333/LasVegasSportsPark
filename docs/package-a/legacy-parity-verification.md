@@ -9,7 +9,8 @@ The facility runs today on DaySmart Dash. This document records what the assembl
 ```bash
 pnpm --filter @sportspark/api exec vitest run src/__tests__/journeys/facility-register.spec.ts \
   src/__tests__/journeys/facility-class.spec.ts src/__tests__/journeys/facility-rental.spec.ts \
-  src/__tests__/journeys/facility-league.spec.ts src/__tests__/journeys/facility-refund.spec.ts
+  src/__tests__/journeys/facility-league.spec.ts src/__tests__/journeys/facility-refund.spec.ts \
+  src/modules/migration/__tests__/legacy-source-fixture.spec.ts
 ```
 
 Each file asserts the behaviour that works and, separately, the behaviour that is missing. An assertion commented "recorded gap" documents present behaviour so that the gap cannot close or reopen unnoticed; it is not a requirement, and it is expected to be replaced when the matching amendment (`proposed-specification-amendments.md`) is accepted and built.
@@ -84,6 +85,25 @@ Pools, tie-breaks and bracket seeding are covered by the existing `tournaments.s
 | The child's place after a partial refund  | Unchanged; a refund moves money and withdrawal is a separate step           | **Verified**                           |
 | The ledger after the refund               | Debits equal credits                                                        | **Verified**                           |
 
+### 2.6 Import of source-shaped data (`modules/migration/__tests__/legacy-source-fixture.spec.ts`)
+
+The fixture (`modules/migration/testing/legacy-source-fixture.ts`) is synthetic. Its record kinds and oddities are **Proposed**: they follow what the current system's screens show, because no export has been supplied (§1.4, **Pending decision**, questionnaire A1). It holds one person entered twice, two people with one name, a parent with two children and an authorized adult, paper and outdated waivers, 1.00 products used for open amounts, negative products used for discounts and refunds, a fake league used as a rental waiver list, a season used as a team waiting list, zero-price tournament groups and a team used as a bucket for individual children and a jersey price.
+
+| Step                                                 | Result                                                                                                   | Status                                      |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Every source record is carried or listed with reason | People, households, parent links, invoices, balances, credits and waivers are staged; the rest is listed | **Verified**                                |
+| First import                                         | Every staged row ends created, or skipped with a reason; nothing is charged and no message is sent       | **Verified**                                |
+| Opening balances                                     | Equal the source to the cent (1,250.00 owed, 75.00 in credits)                                           | **Verified**                                |
+| Reconciliation                                       | No money difference; the one row rejected in review is reported with who decided and why                 | **Verified**                                |
+| Second import of the same data                       | Creates nothing and changes no count or total                                                            | **Verified**                                |
+| The person entered twice                             | Imported as two people; no matching of duplicate records exists                                          | **Verified** gap, **Pending decision** (M6) |
+| Seasons, divisions, teams and rosters                | Not staged: a staged season must name a competition and rule set the facility has not configured         | **Pending decision** (DEC-001, DEC-002)     |
+| Register products                                    | Not staged: the staging contract has no product record                                                   | **Proposed** (set up afresh)                |
+| Authorized-adult links                               | Not staged: which permissions such an adult holds is undecided                                           | **Pending decision** (E3, DEC-005)          |
+| Invoices and waivers                                 | Kept as history on the staged row; no browsable order history or waiver record is created from them      | **Verified** gap (PA-01)                    |
+
+An interrupted import resuming without creating a record twice is **Verified** separately, on smaller data, by `modules/migration/__tests__/apply-recovery.spec.ts`.
+
 ## 3. Requirements with no counterpart today
 
 Found by searching the code and the master specification (inspection, 2026-11-13). Each has a drafted amendment.
@@ -114,6 +134,6 @@ Two further gaps were found in this pass and have no drafted amendment because t
 ## 5. Not covered by this pass
 
 - No staff-app or mobile screen was exercised; every result above is at the API. A scenario that works here can still be unusable at the desk.
-- No real data was used. Migration behaviour against source-shaped data is tracked separately.
+- No real data was used, and no export of the current system has been seen. The fixture in 2.6 reflects its screens, not its export format.
 - Reports were not reconciled against finance records beyond the ledger balance in 2.5.
-- PostgreSQL was not used for these five files; they ran on the in-process database. The continuous-integration run covers PostgreSQL.
+- PostgreSQL was not used for the five journey files; they ran on the in-process database. The continuous-integration run covers PostgreSQL.
