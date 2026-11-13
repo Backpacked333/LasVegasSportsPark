@@ -19,13 +19,14 @@
  * code with a way to load it again.
  */
 import { presentationForError, type ApiError, type Schema } from '@sportspark/api-client';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useDivisionZones } from '../../features/competition/facilities';
 import { useSeasonForm } from '../../features/competition/form';
 import { READINESS_STATUS, humanizeCode } from '../../features/competition/labels';
 import { effectiveCounts, effectiveReadiness } from '../../features/competition/readiness';
+import { useStandingsDivision } from '../../features/competition/standings-division';
 import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { CardHead } from '../../ui/Page';
@@ -119,15 +120,17 @@ export function SeasonStandingsCard({
 }: {
   seasonId: string;
   ruleSetId: string;
+  /** Undefined until the divisions read has answered; empty when it failed or there are none. */
   divisions: readonly Division[] | undefined;
 }) {
-  const [divisionId, setDivisionId] = useState('');
+  const { divisionId, choose: setDivisionId, ready } = useStandingsDivision(divisions);
   const standings = useApiQuery({
     path: '/seasons/{id}/standings',
     request: { path: { id: seasonId }, query: { ...(divisionId ? { divisionId } : {}) } },
+    enabled: ready,
   });
   const form = useSeasonForm(seasonId, divisionId || undefined);
-  const choices = [{ id: '', name: 'Whole season' }, ...(divisions ?? [])];
+  const choices = divisions ?? [];
   const data = standings.data;
   return (
     <section className="card card-flush" aria-labelledby="season-standings-title">
@@ -137,7 +140,7 @@ export function SeasonStandingsCard({
             <div className="segmented" role="group" aria-label="Standings of">
               {choices.map((d) => (
                 <button
-                  key={d.id || 'season'}
+                  key={d.id}
                   type="button"
                   aria-pressed={divisionId === d.id}
                   onClick={() => setDivisionId(d.id)}
