@@ -2,7 +2,7 @@
 
 Status of this document: **Verified** where a row names a test or an inspection and its date; **Proposed** where it recommends work; **Pending decision** where the facility must answer first. Checked on 2026-11-13 against the `main` branch.
 
-The facility runs today on DaySmart Dash. This document records what the assembled application does when it is driven through the facility's everyday scenarios, as opposed to what its modules implement in isolation. "Works" below means a named test drives the HTTP API of the whole application and passes. It does not mean a staff member has completed the task in the staff app: no screen was exercised in this pass (section 5).
+The facility runs today on DaySmart Dash. This document records what the assembled application does when it is driven through the facility's everyday scenarios, as opposed to what its modules implement in isolation. "Works" in sections 2 to 4 means a named test drives the HTTP API of the whole application and passes. It does not mean a staff member has completed the task in the staff app; what happened when the same five scenarios were driven at the staff and customer screens is recorded separately in section 5.
 
 ## 1. How to re-run
 
@@ -131,9 +131,65 @@ Two further gaps were found in this pass and have no drafted amendment because t
 2. The team-fee path is the largest unverified area of the core league workflow and should be verified, or built, before any other league work.
 3. Three role boundaries differ from what desk staff do today (register returns, registration refunds, defining products). They are deliberate in the current design and should be confirmed or changed by the facility, not by code.
 
-## 5. Not covered by this pass
+## 5. The same scenarios at the screens
 
-- No staff-app or mobile screen was exercised; every result above is at the API. A scenario that works here can still be unusable at the desk.
+**Verified** by a manual run on 2026-11-13 against revision `5cfdc608` of this branch: the staff app in a desktop browser and the customer app in a development client on a phone simulator, against one local application with the fake payment provider and an in-process database. This run is not automated and nothing re-runs it; a later change can break a row here without a test failing. "At the screen" means the step was completed, or refused, through the interface a staff member or customer uses.
+
+### 5.1 Results
+
+| Scenario                                                         | At the screen                        | Finding                                                                                                           |
+| ---------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| Register: manager defines an 8.00 product; desk staff cannot     | Works                                | Desk staff see no form, and the screen names the missing permission                                               |
+| Register: a negative price                                       | Works                                | Refused by the form                                                                                               |
+| Register: 100.00 float, 3 × 8.00, cash, receipt, close at 124.00 | Works                                | Closed with no difference                                                                                         |
+| Register: desk staff return                                      | Works, in part                       | A paid sale offers desk staff no return action. A return command was not sent as desk staff from the screen       |
+| Register: one-off amount with a description                      | Absent, as in 2.1                    | Only a product and a quantity can be added (PA-08)                                                                |
+| Class: programme, ten-session term, 200.00 price, publish        | Works                                | The customer app lists it from 200.00                                                                             |
+| Class: two children, sibling discount, checkout                  | Works                                | Quote 400.00 less 40.00, 360.00 received, both children confirmed                                                 |
+| Class: the same child again                                      | Works                                | Refused, naming the existing registration                                                                         |
+| Class: joining after sessions have been held                     | Absent, as in 2.2                    | Full price charged for each child (PA-02)                                                                         |
+| Rental: a field and its two halves                               | Works                                | The inventory screen shows the whole-and-half conflicts                                                           |
+| Rental: whole field for a named renter                           | Works                                | Held, waiting for payment                                                                                         |
+| Rental: half of that field at the same time                      | Works                                | The start time is no longer offered; a form prepared earlier is refused as a conflict                             |
+| Rental: half field at another time                               | Works                                | Held                                                                                                              |
+| Rental: another customer's own list                              | Works                                | Shows no other renter's booking or name                                                                           |
+| Rental: another customer opening the booking directly            | **Not verified**                     | The customer app has no link to a booking by its identifier, so the refusal in 2.3 was not reproduced at a screen |
+| League: rules, league, season, division of two                   | Works                                |                                                                                                                   |
+| League: three teams entered, two approved                        | Works                                | Teams entered in the customer app, approved in the staff app                                                      |
+| League: third team for the full division                         | Absent, as in 2.4                    | Refused as full; no waiting-list action is offered (PA-10)                                                        |
+| League: game generated, schedule validated and published         | Works                                |                                                                                                                   |
+| League: 5–3 result entered and made official                     | Works                                |                                                                                                                   |
+| League: standings after the result                               | Works once a division is chosen      | Winner first with 3 points. See defect 1                                                                          |
+| League: a result entered before the game has started             | Refused correctly, explained wrongly | See defect 2                                                                                                      |
+| League: standings and schedule without signing in                | Absent, as in 2.4                    | Both redirect to sign-in (PA-06)                                                                                  |
+| Refund: desk staff                                               | Works                                | The form is shown; submitting is refused, naming the permission                                                   |
+| Refund: general manager 10.00, finance 50.00                     | Works                                | 60.00 refunded, 140.00 still refundable                                                                           |
+| Refund: 140.01 against 140.00 left                               | Works                                | Refused with the amounts                                                                                          |
+| Refund: the child's place afterwards                             | Works                                | Still confirmed                                                                                                   |
+
+### 5.2 Defects found
+
+Both are in the staff app as it stands on `main`, not in this change. Both are **Verified** as present at `5cfdc608`; a correction is **Proposed** in a separate change and is not part of this one.
+
+1. **Standings of a season with divisions open on an error.** The screen opens on "Whole season", which the API refuses for a divided season, so the table shows a validation error and an empty state until a division is chosen by hand. The season page's standings card behaves the same way.
+2. **A result entered before kickoff is reported as a changed record.** The API refuses it because the game has not started. The screen shows "This record changed" and offers a reload, which cannot help.
+
+### 5.3 Steps with no screen
+
+No screen for the following was found in the areas of the staff and customer apps used during the run; the apps were not searched exhaustively, so each row is a finding to confirm, not a proof of absence. **Verified**: each was set up by calling the API directly, signed in as staff, before the scenario could continue, and the scenario itself was then driven at the screens. **Proposed**: confirm each row against the staff app's routes and, where it holds, treat the missing screen as work a facility needs before it can run the scenario unaided.
+
+| Needed before                      | No screen found for                                                                                                           |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| A class can be published           | Eligibility and cancellation policy versions and their approval; the entitlement a registration grants; an automatic discount |
+| A rental offering can be published | The booking-terms policy and the entitlement attached to the offering                                                         |
+| A season can be corrected          | Changing a season's dates after it is created                                                                                 |
+| A family can register two children | Adding a second child and guardian link in the path used here                                                                 |
+
+## 6. Not covered by this pass
+
+- Sections 2 to 4 are at the API. Section 5 covers the five scenarios at the screens once, by hand, on one browser and one simulator; no other role, entry point, screen size or device was tried.
+- The customer app was not run as a signed build on a physical phone, and no register hardware or real payment provider was used.
+- One recording was made, of the register scenario; the other scenarios are evidenced by screenshots kept with the review of this change, not in the repository.
 - No real data was used, and no export of the current system has been seen. The fixture in 2.6 reflects its screens, not its export format.
 - Reports were not reconciled against finance records beyond the ledger balance in 2.5.
 - PostgreSQL was not used for the five journey files; they ran on the in-process database. The continuous-integration run covers PostgreSQL.
