@@ -413,7 +413,7 @@ export function SeasonScreen() {
               <SeasonStandingsCard
                 seasonId={data.id}
                 ruleSetId={data.ruleSetId}
-                divisions={divisions.data}
+                divisions={divisions.data ?? (divisions.error ? [] : undefined)}
               />
               <GameReadinessCard seasonId={data.id} divisions={divisions.data} />
               <Divisions season={data} />

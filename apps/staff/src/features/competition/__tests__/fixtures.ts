@@ -11,6 +11,7 @@ export const ID = {
   season: '0192f1a0-0000-7000-8000-00000000c101',
   ruleSet: '0192f1a0-0000-7000-8000-00000000c201',
   division: '0192f1a0-0000-7000-8000-00000000c301',
+  division2: '0192f1a0-0000-7000-8000-00000000c302',
   teamRed: '0192f1a0-0000-7000-8000-00000000c401',
   teamBlue: '0192f1a0-0000-7000-8000-00000000c402',
   entryRed: '0192f1a0-0000-7000-8000-00000000c501',
@@ -60,6 +61,24 @@ export function fail(
   extra: { message?: string; details?: unknown } = {},
 ): FakeHandler {
   return () => fakeResponse(status, apiErrorBody(code, { nextAction, ...extra }));
+}
+
+/**
+ * `GET /v1/seasons/{id}/standings` of a divided season (CMP-12): one table per division, and a
+ * read that names none is refused VALIDATION_FAILED DIVISION_REQUIRED.
+ */
+export function dividedStandings(table: (divisionId: string) => unknown): FakeHandler {
+  return (request) =>
+    request.query.divisionId
+      ? fakeResponse(200, table(request.query.divisionId))
+      : fakeResponse(
+          400,
+          apiErrorBody('VALIDATION_FAILED', {
+            nextAction: 'correct_input',
+            message: 'This season has divisions; name one with divisionId.',
+            details: { code: 'DIVISION_REQUIRED', divisionIds: [ID.division] },
+          }),
+        );
 }
 
 const actor = (label: string) => ({

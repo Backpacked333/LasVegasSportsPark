@@ -98,6 +98,20 @@ function isShootoutRefusal(error: ApiError | null): boolean {
 }
 
 /**
+ * CMP-12 (SPK-RESULT-001): a played result waits for kickoff. The API refuses it with
+ * INVALID_TRANSITION FIXTURE_NOT_STARTED; nothing changed on the record, so reloading is not the
+ * remedy and the refusal is explained instead of shown as a changed record.
+ */
+function notStartedRefusal(error: ApiError | null): { scheduledStart: string | null } | null {
+  if (error?.code !== 'INVALID_TRANSITION') return null;
+  const details = (error.details ?? {}) as { code?: unknown; scheduledStart?: unknown };
+  if (details.code !== 'FIXTURE_NOT_STARTED') return null;
+  return {
+    scheduledStart: typeof details.scheduledStart === 'string' ? details.scheduledStart : null,
+  };
+}
+
+/**
  * R4-LIFECYCLES-REVISIONS-02 (§4.9, SPK-RESULT-004): the API refused a correction because the
  * official result it was drafted from is no longer the official one (a newer correction replaced
  * it, or its revision moved on), or because it named no base.
@@ -416,6 +430,7 @@ function ResultForm({
     shootout.inBracket &&
     (shootout.playoff === undefined || shootout.playoff === 'shootout');
   const shootoutRefused = isShootoutRefusal(command.error);
+  const notStarted = notStartedRefusal(command.error);
 
   const submit = () => {
     const next: Record<string, string> = {};
@@ -627,6 +642,18 @@ function ResultForm({
           published. The results were reloaded; start the correction again from the current official
           result.
         </p>
+      ) : notStarted ? (
+        <section className="state" aria-live="polite" data-testid="fixture-not-started">
+          <StatusBadge tone="warning" label="The game has not started yet" />
+          <p>
+            A played result can be entered once the game has kicked off
+            {notStarted.scheduledStart
+              ? ` (scheduled ${formatInstant(notStarted.scheduledStart)})`
+              : ''}
+            . Before then only a forfeit, a cancellation or a postponement can be recorded.
+          </p>
+          <p className="caption">Error code: INVALID_TRANSITION (FIXTURE_NOT_STARTED)</p>
+        </section>
       ) : (
         <CommandError error={command.error} onRetry={submit} />
       )}
