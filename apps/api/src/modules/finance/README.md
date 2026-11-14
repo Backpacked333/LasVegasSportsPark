@@ -529,14 +529,16 @@ register closed through the API. The staff dashboard's sale page offers the tend
 sale whatever the switch, and hides only adding a line while it is off (`SalePage.test.tsx`
 "DEC-016 / CAPABILITIES-01: ...").
 
-| Method   | Path                                                                                                             | Who (action)                                                                    |
-| -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| POST/GET | `/pos-products`, PATCH `/pos-products/{id}`, POST `/pos-products/{id}/retire`                                    | finance operator, GM (`finance.manage_pos_products`); read `finance.read_pos`   |
-| POST/GET | `/pos-registers`, POST `/pos-registers/{id}/retire`                                                              | finance operator, GM (`finance.manage_pos_registers`) within facility scope     |
-| POST/GET | `/pos-registers/{id}/sessions`, GET `/pos-register-sessions/{id}`, POST `/pos-register-sessions/{id}/close`      | front desk, finance operator (`finance.operate_register`) within facility scope |
-| POST/GET | `/pos-sales`, `/pos-sales/{id}`, POST `/pos-sales/{id}/lines`, `/pos-sales/{id}/tenders`, `/pos-sales/{id}/void` | `finance.operate_register`; read `finance.read_pos`                             |
-| POST     | `/pos-sales/{id}/returns`                                                                                        | finance operator, GM (`finance.approve_pos_return`)                             |
-| GET      | `/pos-sales/{id}/receipt`, `/me/pos-receipts`                                                                    | facility staff, or the customer the sale names (`finance.read_pos_receipt`)     |
+| Method   | Path                                                                                                             | Who (action)                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| POST/GET | `/pos-products`, PATCH `/pos-products/{id}`, POST `/pos-products/{id}/retire`                                    | finance operator, GM (`finance.manage_pos_products`); read `finance.read_pos`                         |
+| POST/GET | `/pos-registers`, POST `/pos-registers/{id}/retire`                                                              | finance operator, GM (`finance.manage_pos_registers`) within facility scope                           |
+| POST/GET | `/pos-registers/{id}/sessions`, GET `/pos-register-sessions/{id}`, POST `/pos-register-sessions/{id}/close`      | front desk, finance operator (`finance.operate_register`) within facility scope                       |
+| POST/GET | `/pos-sales`, `/pos-sales/{id}`, POST `/pos-sales/{id}/lines`, `/pos-sales/{id}/tenders`, `/pos-sales/{id}/void` | `finance.operate_register`; read `finance.read_pos`                                                   |
+| POST     | `/pos-sales/{id}/returns`                                                                                        | finance operator, GM (`finance.approve_pos_return`)                                                   |
+| GET      | `/pos-sales/{id}/receipt`, `/me/pos-receipts`                                                                    | facility staff, or the customer the sale names (`finance.read_pos_receipt`)                           |
+| POST     | `/pos-sales/{id}/lines` with an open amount, `/pos-sales/{id}/lines/{lineId}/approval` (SPK-PAY-016, proposed)   | `finance.enter_open_amount_line`; `finance.approve_open_amount_line` (capability `open_amount_lines`) |
+| GET      | `/pos-open-amount-rules`, `/pos-register-sessions/{id}/open-amount-lines` (SPK-PAY-016, proposed)                | `finance.read_pos`, or desk staff through `finance.operate_register`                                  |
 
 - Reads: finance operator, GM, system administrator and support operator hold
   `finance.read_pos` / `finance.read_pos_receipt`; the front desk reads the sales, sessions,
@@ -837,3 +839,81 @@ on an enrollment still records the rule's base price (for a per-session rule, th
 session), and the screens that show that snapshot before the quote show that figure; a checkout
 re-prices nothing and relies on the quote's expiry (POL-013) for sessions that start between quote
 and payment.
+
+## Open-amount register lines (PA-08): implemented behind a capability switch
+
+SPK-PAY-016 (capability `open_amount_lines`, DEC-102) is a **Proposed** requirement
+(`docs/package-a/proposed-specification-amendments.md`); it is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendment leaves open are **Pending decision**.
+
+**Verified** (`__tests__/pos-open-amount.spec.ts`,
+`apps/api/src/__tests__/journeys/facility-register.spec.ts`; migrations
+`0695_finance_pos_open_amount_lines.sql`, `0696_finance_pos_line_approvals.sql`;
+`services/pos/pos-open-amount.service.ts`):
+
+- A sale line is a product line, exactly as before, or an open-amount line (`kind`
+  `open_amount`): no product and no SKU; a typed description (1 to 200 characters), a positive
+  amount, the reason category chosen (its label as approved is the line's `name`), the revenue
+  category it books to, who entered it, the ceiling that applied to that person, whether the
+  amount is above it, and the policy version the category and ceiling came from. The database
+  refuses a line that is both or neither (`pos_sale_lines_shape`), an amount that is not positive
+  or a quantity other than one (`pos_sale_lines_open_amount_positive`), a category that is not a
+  code or an empty description (`pos_sale_lines_open_amount_text`), and an approval flag that does
+  not follow from the amount and the ceiling (`pos_sale_lines_open_amount_ceiling`). A discount or
+  a refund is never a negative line (SPK-PAY-003, SPK-PAY-008).
+- `POST /v1/pos-sales/{id}/lines` takes either body: a product and a quantity, or a description,
+  an amount and a reason category (`finance.enter_open_amount_line`: front desk, finance
+  operator). The second needs `point_of_sale` and `open_amount_lines`; with the second switch off
+  it is refused with ACCESS_DENIED `CAPABILITY_DISABLED` and product lines are unchanged. A
+  category that is not on the list is refused (`OPEN_AMOUNT_CATEGORY_UNKNOWN`).
+- The category gives the tax treatment: the keys of approved `tax_fee` policies applied to the
+  line, with the same refusals as a product's charges (`CHARGE_POLICY_NOT_APPROVED` and the others,
+  DEC-057). The ceiling is on the amount entered, before taxes and fees.
+- Categories and ceilings are policy content, read through `FinancePolicyResolver.openAmountRules`:
+  the approved catalog policy version of the family `OPEN_AMOUNT_POLICY` (`finance.policy.ts`) in
+  effect, whose content is `OpenAmountPolicyContent` (categories with a revenue category and
+  charge policy keys; a default ceiling and ceilings by staff role; optionally the currency the
+  ceilings are stated in, which then refuses a sale in another currency,
+  `OPEN_AMOUNT_POLICY_CURRENCY_MISMATCH`). An approved version whose content is not usable refuses
+  every open-amount line (`OPEN_AMOUNT_POLICY_INVALID`). A person's ceiling at a facility is the
+  highest among the roles through which they may enter a line there. `GET
+/v1/pos-open-amount-rules?facilityId=` gives the categories and the caller's own ceiling.
+- Above the ceiling a second person approves: `POST /v1/pos-sales/{id}/lines/{lineId}/approval`
+  (`finance.approve_open_amount_line`: finance operator, general manager; expected revision and a
+  reason required) writes its own append-only record (`pos_line_approvals`: who, when, why, the
+  amount and ceiling). The approver is never the person who entered the line
+  (`SECOND_PERSON_REQUIRED`; `pos_line_approvals_second_person` in the database), there is one
+  approval per line, and it is never rewritten or deleted. Until then the sale takes no tender
+  (`OPEN_AMOUNT_APPROVAL_REQUIRED`; `pos_tenders_open_amount_approved`) and is not paid
+  (`pos_sales_open_amount_approved`). The approval moves the sale's revision on (§4.9).
+- An open-amount line is corrected only by removing it (`POST
+/v1/pos-sales/{id}/lines/{lineId}/quantity` with 0; any other quantity answers
+  `OPEN_AMOUNT_LINE_QUANTITY`; `pos_sale_lines_open_amount_supersede` in the database). The
+  removed line is kept as history, and removing it lifts the block on tenders.
+- The sale's journal credits `pos_revenue` per product kind and, for open-amount lines, per revenue
+  category (memo `open amount, revenue category <code>`); a return debits the same back. A return
+  or a void follows the rules of any sale line (finance approves a return; a void needs no
+  approval of the line).
+- Never gated by `open_amount_lines` (DEC-016): reads, removing a line (which then needs no
+  `point_of_sale` either), tenders, voids and returns. The approval is gated: with the switch off
+  a waiting line is removed, or its sale voided, so no sale is stranded.
+- The receipt shows an open-amount line with its description and category label, never who entered
+  or approved it. `GET /v1/pos-register-sessions/{id}/open-amount-lines` lists a session's
+  open-amount lines in effect apart from its sales, newest first, with description, categories,
+  who entered and who approved, for POS readers of the facility.
+
+**Proposed** (assumed defaults, `DEFAULT_FINANCE_POLICY.openAmountLines`, applied while no policy
+version is approved and recorded on the line as `policy_version_id` null): three categories (field
+damage fee and lost key booking to `facility_fees`, one-off service booking to `services`), none
+taxed; a ceiling of 50.00 in the sale's currency for the front desk and 250.00 for a finance
+operator. The role assignments of the two actions are proposed as well.
+
+**Pending decision** (DEC-102): who may use an open-amount line and each ceiling (questionnaire
+H2); the categories, including tips and deposits (H9, G12), which are not revenue and for which
+no ledger account is assumed here; whether the approver needs a ceiling of their own.
+
+Known limits (see `.10x/decisions/sde/track-f.md`): the policy family uses the finance-approved
+catalog kind `overpayment` with the key `register-open-amount`, because catalog has no kind for
+register rules; revenue categories are codes in the journal memo under `pos_revenue`, not ledger
+accounts of their own, so the accounting export maps them through that one account.

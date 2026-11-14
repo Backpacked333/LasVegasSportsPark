@@ -549,6 +549,51 @@ describe('point of sale: open-amount lines (SPK-PAY-016, proposed)', () => {
     expect((await rules(customer)).status).toBe(403);
   });
 
+  it('SPK-PAY-016, §4.7: two approvals at once leave one record, and a tender racing a line above the ceiling never pays the sale with that line unapproved', async () => {
+    // Runs serialized under PGlite and truly concurrently under PostgreSQL (TEST_DATABASE_URL);
+    // every writer locks the sale row first, so both modes give one of the two orders.
+    const sale = await openSale();
+    const added = await openLine(sale, desk, { amountMinor: 9_000 });
+    const lineId = added.body.lines[0].id as string;
+    const [byManager, byFinance] = await Promise.all([
+      approve(added.body, lineId, manager),
+      approve(added.body, lineId, finance),
+    ]);
+    expect([byManager.status, byFinance.status].sort()).toEqual([200, 409]);
+    const records = await t.db
+      .selectFrom('pos_line_approvals')
+      .select('approved_by_person_id')
+      .where('sale_line_id', '=', lineId)
+      .execute();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.approved_by_person_id).toBe(
+      byManager.status === 200 ? manager.personId : finance.personId,
+    );
+
+    const racing = await openSale();
+    const first = await openLine(racing, desk, { amountMinor: 1_000 });
+    const [tender, line] = await Promise.all([
+      cash(first.body, 1_000),
+      openLine(first.body, desk, { amountMinor: 9_000, expectedRevision: first.body.revision }),
+    ]);
+    const after = await t.http.get(`/v1/pos-sales/${racing.id}`).set(desk.header);
+    const unapproved = (after.body.lines as SaleBody['lines']).filter(
+      (l) => l.openAmount?.approvalRequired === true && !l.openAmount.approval,
+    );
+    if (tender.status === 201) {
+      // The tender came first: the sale was paid for what it held, and took no further line.
+      expect(after.body).toMatchObject({ status: 'paid', totalMinor: 1_000 });
+      expect(line.status).toBe(409);
+      expect(unapproved).toEqual([]);
+    } else {
+      // The line came first: the tender was decided on an earlier view of the sale.
+      expect(tender.status).toBe(409);
+      expect(line.status).toBe(201);
+      expect(after.body).toMatchObject({ status: 'open', totalMinor: 10_000, settledMinor: 0 });
+      expect(unapproved).toHaveLength(1);
+    }
+  });
+
   describe('integrity the database enforces (migrations 0695, 0696)', () => {
     let sale: SaleBody;
     let productId: string;

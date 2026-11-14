@@ -267,6 +267,31 @@ Verified by `__tests__/redesign-reports.spec.ts`:
   list the viewer may not read is omitted. Facilities, schedule, competition and workforce areas
   have no count yet (their modules export no suitable list here).
 
+## Open-amount register lines in the sales report (PA-08)
+
+SPK-PAY-016 is a **Proposed** requirement (capability `open_amount_lines`, **Pending decision**
+DEC-102). **Verified** by `__tests__/open-amount-lines.spec.ts` (migration
+`1310_reporting_pos_open_amount_lines.sql`):
+
+- `reporting_pos_open_amount_lines_v` and `reporting_pos_open_amount_return_lines_v` are
+  read-only views over the open-amount lines in effect of paid sales and over their returns, with
+  the reason category (code and the label as approved when sold), the revenue category, the
+  description typed at the register, the amount, and whether a second approval was needed and
+  given. They expose no customer and no staff member; the description is exposed on purpose,
+  because it is what a reviewer reads.
+- `sales_by_product_line` leaves the `open_amount` kind out of the point-of-sale product lines
+  and lists each open-amount line as its own row (source `point_of_sale_open_amount`) after the
+  product lines, with `revenueCategory`, `description`, `saleNumber` and `secondApproval` (`not
+needed`, `given`); its return is shown beside it. MET-109 and MET-110 add these lines up by
+  reason category under that source, with the revenue category as a dimension. Rows of the other
+  sources carry null in the four new columns. With the capability off no such line exists and the
+  report is as before.
+- Who entered and who approved a line is not in the report; the finance module's own read of a
+  register session (`GET /v1/pos-register-sessions/{id}/open-amount-lines`) shows them.
+
+Also: `reporting_team_entries_v.status` is typed with the `waiting` state competition added
+(SPK-COMP-006, proposed); no report counts a waiting entry.
+
 ## Known gaps
 
 - §1.2 success measures MET-091..MET-105 (benchmark task metrics, staff exception resolution,
