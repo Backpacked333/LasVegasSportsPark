@@ -10,7 +10,14 @@ import {
   type Principal,
   type WaiverOverride,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  NoRecordAuthority,
+  RecordAuthority,
+  ZodBody,
+  ZodParams,
+} from '../../../kernel';
 import { CorrelationId } from '../catalog.shared';
 import { WaiversService } from '../services/waivers.service';
 
@@ -20,6 +27,10 @@ const IdParams = z.object({ id: z.uuid() });
  * Liability waivers (SPK-REG-011, proposed amendment PA-01; capability `liability_waivers`,
  * DEC-095). The waiver wording and rule are policy versions of kind `waiver` (policy version
  * routes); these routes cover the acceptance, the person read, the override and the requirement.
+ *
+ * Record authority (§5.3, §5.6): an acceptance is a document record like every acknowledgment;
+ * the requirement is configuration of its offering (the program category); an override is a
+ * staff decision that exists in no source system.
  */
 @Controller()
 export class WaiversController {
@@ -35,6 +46,7 @@ export class WaiversController {
 
   @Post('waiver-acceptances')
   @Idempotent()
+  @RecordAuthority('document')
   accept(
     @CurrentPrincipal() principal: Principal,
     @ZodBody(RecordWaiverAcceptanceBody) body: z.infer<typeof RecordWaiverAcceptanceBody>,
@@ -45,6 +57,7 @@ export class WaiversController {
 
   @Post('waiver-overrides')
   @Idempotent()
+  @NoRecordAuthority('A staff override decision is not a §5.3 record category')
   override(
     @CurrentPrincipal() principal: Principal,
     @ZodBody(RecordWaiverOverrideBody) body: z.infer<typeof RecordWaiverOverrideBody>,
@@ -64,6 +77,7 @@ export class WaiversController {
   @Post('offerings/:id/required-waivers')
   @HttpCode(200)
   @Idempotent()
+  @RecordAuthority('program')
   setRequiredWaivers(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
