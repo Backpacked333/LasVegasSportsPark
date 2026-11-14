@@ -154,10 +154,27 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
 - Loading keeps the page's shape with a static outline under the progress line, hidden from screen
   readers. Text fields show their focus (`useInputChrome`) and open a keyboard that matches the
   theme. A button under an open keyboard answers the first tap (`Screen`).
-- Surfaces are opaque. Refracting glass on the tab bar, headers and sheets is **Proposed**, not
-  built: on React Native only the system draws it (iOS 26 glass views), Android and earlier iOS can
-  only blur, and both need native modules this app does not have (`expo-glass-effect`,
-  `expo-blur`) and a device to check the result on. Until then nothing here imitates glass.
+- **Glass** (`src/ui/GlassSurface.tsx`, ADR-001). One primitive decides what a device gets, and
+  no screen imports the native packages itself:
+  - `liquid`: the system's liquid glass (`expo-glass-effect`), where the device offers it
+    (iOS 26 and later);
+  - `blur`: a system material blur (`expo-blur`) on earlier iOS;
+  - `solid`: the opaque themed surface, on Android, on the web, whenever the person has asked the
+    device to reduce transparency (SPK-UX-009), and until the device has answered.
+    It is used in two places. The tab bar floats over the page as one glass surface and content
+    scrolls beneath it; `Screen` ends its content above the bar (`BottomBarInsetContext`), so the
+    last control is never covered. The hero band (`Hero`) is coloured glass in its night or pitch
+    tint under `liquid`, and the solid band otherwise. Headers stay solid. The app has no sheets.
+  - **Verified** (unit tests, no device): which device facts give which mode; `solid` without a
+    provider, so every screen test runs on the opaque path; the same five labelled tabs in each
+    mode; the content inset under a floating bar; the hero's labels on glass.
+  - **Not verified**: how any of this looks or performs on a phone. Nothing here was run on iOS or
+    Android. Before release the product owner checks on an iPhone with iOS 26, an earlier iPhone
+    and an Android phone: the tab bar over a long list (labels readable, last row reachable), the
+    hero band in both themes, and the device's "Reduce Transparency" setting (everything solid).
+  - **Pending decision**: glass on Android. `expo-blur` can blur there only through an
+    experimental method that needs each screen wrapped in a blur target; it is left off until it
+    can be tried on devices.
 
 ### What is verified
 
@@ -408,6 +425,8 @@ against later SDK 57 patches published after that floor.)
 | `expo-secure-store`                   | 57.0.4  | 2026-09-11 | Platform secure storage for the session (§4.13); also keeps the Legends mode choice (a display preference) |
 | `expo-network`                        | 57.0.2  | 2026-09-11 | Connectivity for SCR-C-40                                                                                  |
 | `expo-crypto`                         | 57.0.3  | 2026-09-11 | Secure random idempotency keys (React Native has no `crypto`)                                              |
+| `expo-glass-effect`                   | 57.0.5  | 2026-11-05 | The system's liquid glass on iOS 26 and later, behind `GlassSurface` only (ADR-001)                        |
+| `expo-blur`                           | 57.0.3  | 2026-09-11 | System material blur on earlier iOS, behind `GlassSurface` only (ADR-001)                                  |
 | `@tanstack/react-query`               | 5.104.1 | 2026-10-02 | Data layer: caching, refetch on focus and reconnect, data age                                              |
 | `jest` (dev)                          | 29.7.0  | 2023-09-12 | Test runner used by jest-expo                                                                              |
 | `jest-expo` (dev)                     | 57.0.5  | 2026-08-26 | Expo's documented Jest preset for SDK 57                                                                   |

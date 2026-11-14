@@ -3,10 +3,14 @@
  * detail page with a floodlight eyebrow, the page's name as a condensed uppercase title and its
  * status underneath. The eyebrow and the title are headers for screen readers (SPK-UX-009); the
  * status keeps its glyph and words on the dark band (StatusBadge pills are tinted, not outlined).
+ *
+ * Where the system offers liquid glass the band is coloured glass in the same night or pitch tint
+ * (`GlassSurface`); everywhere else it is the solid band. The labels are the same on both.
  */
 import type { ReactNode } from 'react';
-import { Text, View } from 'react-native';
-import { continuousCorners, makeStyles, radius, spacing, type } from './theme';
+import { Text } from 'react-native';
+import { GlassSurface } from './GlassSurface';
+import { continuousCorners, makeStyles, radius, spacing, type, useTheme } from './theme';
 
 export function Hero({
   eyebrow,
@@ -23,8 +27,13 @@ export function Hero({
   testID?: string;
 }) {
   const styles = useStyles();
+  const { colors } = useTheme();
   return (
-    <View style={[styles.hero, tone === 'pitch' && styles.pitch]} testID={testID}>
+    <GlassSurface
+      style={[styles.hero, tone === 'pitch' && styles.pitch]}
+      tint={tone === 'pitch' ? colors.pitch : colors.night}
+      testID={testID}
+    >
       {eyebrow ? (
         <Text style={styles.eyebrow} accessibilityRole="header">
           {eyebrow}
@@ -34,7 +43,7 @@ export function Hero({
         {title}
       </Text>
       {children}
-    </View>
+    </GlassSurface>
   );
 }
 
@@ -54,12 +63,12 @@ const useStyles = makeStyles(({ colors, dark }) => ({
     gap: spacing.sm,
     borderRadius: radius.xl,
     ...continuousCorners,
-    backgroundColor: colors.night,
+    // The fill is the surface's tint (night or pitch): solid, or coloured glass.
     // A hairline keeps the band's edge on a page that is itself dark (Legends mode).
     borderWidth: 1,
     borderColor: dark ? colors.nightLine : colors.night,
   },
-  pitch: { backgroundColor: colors.pitch, borderColor: dark ? colors.nightLine : colors.pitch },
+  pitch: { borderColor: dark ? colors.nightLine : colors.pitch },
   eyebrow: { ...type.eyebrow, color: colors.floodlight },
   title: { ...type.display, color: colors.onNight },
   // Light enough on both the night and the pitch band (AA for body text).

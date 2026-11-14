@@ -101,10 +101,21 @@ recorded decision; **Not verified** names what this environment could not check.
   preference kept in this browser (`providers/preferences`, never sent to the API) and applied
   before first paint by `public/theme-init.js` (a file, because the Content-Security-Policy allows
   scripts from `'self'` only). Verified: `src/theme/__tests__/legends-mode.test.tsx`.
-- **Layers.** Content (cards, lists, tables, forms) is flat and opaque, for reading. Chrome
-  floats above it as liquid glass (`src/ui/glass/`): the sidebar, a frosted panel over a soft
-  field of colour; the header groups over the page scrolling beneath them; the quick navigation
-  dialog; the sign-in card over the pitch artwork; the workspace's phone tab bar. Rules every glass body follows:
+- **Layers** (ADR-001, glass-forward). Three of them:
+  - the **backdrop** behind the whole application (`layout/shell.css`): soft fields of colour and
+    the faint markings of a pitch (`public/field-lines.svg`), scrolling with the page;
+  - **content** that people read at length or type into (lists, tables, forms, long text): flat,
+    opaque cards;
+  - **glass** (`src/ui/glass/`) for the chrome and for the headline pieces of a screen: the
+    sidebar, the header groups, the quick navigation dialog, the sign-in card, the workspace's
+    phone tab bar, and through the shared kit the stat tiles (`Kpi`), the hero card (`GlassCard`;
+    `tone="night"` is coloured glass that keeps the dark-card tokens in both themes), the page
+    toolbar (`Toolbar`, for a toolbar that stands on the page, not one inside a card) and the tab
+    strip of every area (`TabTrack`; on a phone it stays on one row, scrolls sideways and brings
+    the current tab into view). The dashboard has no sheets or toasts: a command's outcome stays
+    where the command was given (SPK-UX-008).
+
+  Rules every glass body follows:
   1. the backdrop bends inside a band along its edge (an SVG displacement filter through
      `backdrop-filter`; only Chromium renders it, every other engine gets the blur, fill and rim
      of the stylesheet with no bend);
@@ -117,9 +128,13 @@ recorded decision; **Not verified** names what this environment could not check.
      Verified in headless Chromium at both themes: every body carries its filter, lines curve inside
      the bezel with the blur turned down, and every label on glass measures at least 4.5:1 (glyphs
      3:1) against the pixels behind it with the fills at their default, halved and doubled, at the
-     scroll positions where the darkest content passes under the header.
+     scroll positions where the darkest content passes under the header. Coloured glass is the one
+     exception to halving: its tint carries its labels, so it may deepen and never thins. Measured
+     on Today, Finance, Schedule, Leagues, Arrival, People, the registration queue and the message
+     composer.
      Not verified: Safari and Firefox on real devices (the fallback was checked by removing the
      filter in Chromium), and staff acceptance on the facility's workstations (§6.3).
+
 - **Quick navigation** (`src/layout/CommandPalette.tsx`, `src/navigation/destinations.ts`): the
   header's "Jump to", Ctrl+K or Command+K anywhere, or "/" outside a field. It offers every screen
   that opens without first choosing a record, the facility choices, Legends mode, the sidebar and
