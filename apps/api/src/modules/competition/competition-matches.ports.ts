@@ -32,6 +32,11 @@ export type ConditionStatus = 'satisfied' | 'unsatisfied' | 'unknown';
 /** A readiness condition reported by another module (SPK-READY-003 fields). */
 export interface ConditionFinding {
   status: ConditionStatus;
+  /**
+   * How an `unsatisfied` condition counts; `blocking` when absent. A required waiver whose
+   * approved rule warns and does not block reports `warning` (SPK-REG-011, proposed).
+   */
+  severity?: 'warning' | 'blocking';
   code: string;
   message: string;
   source: { type: string; id: string | null };

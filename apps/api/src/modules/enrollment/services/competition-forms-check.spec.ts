@@ -19,6 +19,7 @@ describe('CompetitionFormsCheck (R3-PERFORMANCE-01)', () => {
           { id: FORM_A, title: 'Waiver' },
           { id: FORM_B, title: 'Code of conduct' },
         ],
+        requiredWaiverKeys: [],
       })),
     } as unknown as OfferingLookupPort;
     const acknowledgedSubjects = vi.fn(
@@ -46,5 +47,65 @@ describe('CompetitionFormsCheck (R3-PERFORMANCE-01)', () => {
       message: '2 rostered participant(s) have not acknowledged "Code of conduct".',
       source: { type: 'policy_version', id: FORM_B },
     });
+  });
+
+  it('SPK-REG-011: required waivers are asked of the catalog once for the roster; a block anywhere in a group blocks, otherwise it warns', async () => {
+    const offerings = {
+      getOffering: vi.fn(async () => ({
+        offering: { id: OFFERING },
+        requiredForms: [],
+        requiredWaiverKeys: ['liability'],
+      })),
+    } as unknown as OfferingLookupPort;
+    const finding = (personId: string, status: string, severity: string) => ({
+      personId,
+      policyKey: 'liability',
+      title: 'Liability waiver',
+      status,
+      severity,
+      override: null,
+      waiver: { currentVersion: { policyVersionId: FORM_A } },
+    });
+    const waiverFindings = vi.fn(async () => [
+      finding('p1', 'missing', 'blocking'),
+      finding('p2', 'missing', 'warning'),
+      finding('p3', 'lapsed', 'warning'),
+    ]);
+    const policies = { waiverFindings } as unknown as PolicyPort;
+    const at = new Date('2026-11-02T15:00:00Z');
+    const findings = await new CompetitionFormsCheck(offerings, policies).requiredForms('org', {
+      fixtureId: 'f1',
+      seasonId: 's1',
+      teamEntryIds: [],
+      personIds: ['p1', 'p2', 'p3', 'p4'],
+      at,
+      registrationOfferingRef: OFFERING,
+    });
+    expect(waiverFindings).toHaveBeenCalledTimes(1);
+    expect(waiverFindings).toHaveBeenCalledWith(
+      'org',
+      {
+        personIds: ['p1', 'p2', 'p3', 'p4'],
+        policyKeys: ['liability'],
+        at,
+        activities: [{ type: 'offering', id: OFFERING }],
+      },
+      undefined,
+    );
+    expect(findings).toEqual([
+      expect.objectContaining({
+        status: 'unsatisfied',
+        severity: 'blocking',
+        code: 'waiver_missing',
+        message: '2 rostered participant(s) have not accepted "Liability waiver".',
+        source: { type: 'waiver', id: FORM_A },
+      }),
+      expect.objectContaining({
+        status: 'unsatisfied',
+        severity: 'warning',
+        code: 'waiver_lapsed',
+        message: 'The acceptance of "Liability waiver" has lapsed for 1 rostered participant(s).',
+      }),
+    ]);
   });
 });

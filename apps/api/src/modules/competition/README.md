@@ -778,3 +778,11 @@ Verified in `__tests__/placement-field.spec.ts` and `__tests__/team-workspace.sp
 **Pending:** communications does not subscribe to `competition.result_reminder_requested` yet, so a
 reminder is recorded and nothing is delivered (communications imports competition, so competition
 cannot call `NotificationsService` without a module cycle). Player profiles follow no person merge.
+
+## Required waivers in fixture readiness (SPK-REG-011, proposed amendment PA-01)
+
+**Proposed**, behind `liability_waivers` (DEC-095). `ConditionFinding` gained an optional
+`severity` (`warning` | `blocking`, blocking when absent) so the forms check, which enrollment
+implements (`enrollment/services/competition-forms-check.ts`), can report a required waiver whose
+approved rule warns as a readiness warning instead of a block. Nothing else in this module changed;
+with the capability off the forms check reports exactly what it did before.

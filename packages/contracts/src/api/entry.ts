@@ -68,6 +68,10 @@ export const ArrivalIssueCodeSchema = z
     'no_participation',
     'enrollment_not_confirmed',
     'missing_acknowledgment',
+    // SPK-REG-011 (proposed amendment PA-01): a required waiver that was never accepted, or whose
+    // acceptance has lapsed; a warning or a block by the approved waiver rule.
+    'waiver_missing',
+    'waiver_lapsed',
     'outstanding_balance',
     'balance_unknown',
     'activity_canceled',

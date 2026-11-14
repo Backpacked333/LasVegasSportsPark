@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { ArrivalIssue } from '@sportspark/contracts';
+import type { ArrivalIssue, WaiverActivityRef } from '@sportspark/contracts';
 import { CLOCK, type Clock, type Trx } from '../../../kernel';
 import { POLICY_PORT, type PolicyPort } from '../../catalog';
 import { FIXTURE_PORT, ROSTER_PORT, type FixturePort, type RosterPort } from '../../competition';
@@ -27,6 +27,19 @@ const issue = (
   reference: ArrivalIssue['reference'] = null,
 ): ArrivalIssue => ({ code, severity, message, nextAction, reference });
 
+/** The references a waiver override may have been recorded against for this activity. */
+function waiverActivities(activity: ResolvedActivity): WaiverActivityRef[] {
+  const refs: WaiverActivityRef[] = [];
+  if (activity.detail.type === 'session' && activity.detail.sessionId) {
+    refs.push({ type: 'offering_session', id: activity.detail.sessionId });
+  }
+  if (activity.offeringId) refs.push({ type: 'offering', id: activity.offeringId });
+  if (activity.schedulingEventId) {
+    refs.push({ type: 'scheduling_event', id: activity.schedulingEventId });
+  }
+  return refs;
+}
+
 export function hasBlocking(issues: readonly ArrivalIssue[]): boolean {
   return issues.some((i) => i.severity === 'blocking');
 }
@@ -40,6 +53,10 @@ export function hasBlocking(issues: readonly ArrivalIssue[]): boolean {
  *     A pending one is `enrollment_not_confirmed`; none at all is `no_participation`.
  *   - required forms: each required policy version needs an active acknowledgment (catalog
  *     POLICY_PORT); a missing one blocks (MISSING_ACKNOWLEDGMENT category, §4.10).
+ *   - required waivers (SPK-REG-011, proposed): each waiver family the offering requires is
+ *     judged current, lapsed or missing by the catalog; a missing or lapsed one is `waiver_missing`
+ *     or `waiver_lapsed`, a warning or a block by the approved waiver rule. Not evaluated while
+ *     the organization has not turned liability waivers on.
  *   - balance: read from finance's FINANCIAL_STANDING_PORT. An unrelated balance is informational
  *     unless the approved policy expressly requires blocking (DEC-056); a related one is a warning
  *     (the enrollment state already expresses payment); an unknown standing never blocks.
@@ -87,6 +104,39 @@ export class ArrivalChecks {
             'A required form has not been acknowledged for this participant.',
             'complete_acknowledgment',
             { type: 'policy_version', id: formId },
+          ),
+        );
+      }
+    }
+
+    // SPK-REG-011 (proposed amendment PA-01): the offering's required waivers, judged by the
+    // catalog rule. Nothing is returned while liability waivers are turned off. Whether a missing
+    // or lapsed waiver warns or blocks is the approved waiver rule; a recorded override of a block
+    // for this session or its offering makes it a warning.
+    if (activity.requiredWaiverKeys.length > 0) {
+      const waivers = await this.policies.waiverFindings(
+        organizationId,
+        {
+          personIds: [personId],
+          policyKeys: activity.requiredWaiverKeys,
+          at: now,
+          activities: waiverActivities(activity),
+        },
+        trx,
+      );
+      for (const finding of waivers) {
+        const what = finding.status === 'missing' ? 'has not been accepted' : 'has lapsed';
+        issues.push(
+          issue(
+            finding.status === 'missing' ? 'waiver_missing' : 'waiver_lapsed',
+            finding.severity,
+            finding.override
+              ? `"${finding.title}" ${what} for this participant; staff recorded an override.`
+              : `"${finding.title}" ${what} for this participant.`,
+            'accept_waiver',
+            finding.waiver.currentVersion
+              ? { type: 'policy_version', id: finding.waiver.currentVersion.policyVersionId }
+              : null,
           ),
         );
       }
