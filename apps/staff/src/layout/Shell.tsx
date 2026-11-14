@@ -5,7 +5,8 @@
  *   principal (`GET /v1/me/permissions`, AreaNav) grouped by job, Today as the operating home, the
  *   coach and referee workspace link (SPK-UX-007) and the signed-in person. On wide screens it
  *   collapses to an icon rail (remembered in this browser); below 900 px it is a drawer over a
- *   scrim that closes on Escape, on the scrim and on a route change;
+ *   modal drawer over a scrim: focus moves into it and stays there, Escape, "Close menu", the
+ *   scrim or a route change closes it and focus returns to Menu (SPK-UX-009);
  * - the header groups, over the content scrolling beneath: the facility switcher, quick
  *   navigation ("Jump to", Ctrl+K or Command+K, or "/"; `CommandPalette`), the live or offline
  *   indicator and the Legends mode switch (`theme/`). While quick navigation is open the rest of
@@ -16,7 +17,7 @@
  * starts at its top, and the browser tab is titled with the screen it shows.
  */
 import { useIsFetching } from '@tanstack/react-query';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { useApiQuery } from '../api/useApiQuery';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
@@ -35,6 +36,9 @@ import { FacilitySwitcher } from './FacilitySwitcher';
 import './shell.css';
 
 const RAIL_KEY = 'sportspark.sidebar';
+
+const DRAWER_FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 const ROLE_LABELS: Record<string, string> = {
   front_desk: 'Front desk',
@@ -140,6 +144,10 @@ export function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [rail, setRail] = useState(() => preferences.get(RAIL_KEY) === 'rail');
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const wasMenuOpen = useRef(false);
+  const focusSidebarAfterResize = useRef(false);
   const location = useLocation();
 
   // A route change closes the phone menu, starts the page at its top and is remembered for
@@ -160,8 +168,7 @@ export function Shell() {
     });
   }, [preferences]);
 
-  // Quick navigation from anywhere: Ctrl+K or Command+K; "/" when not typing. Escape closes the
-  // phone menu.
+  // Quick navigation from anywhere: Ctrl+K or Command+K; "/" when not typing.
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k') {
@@ -176,8 +183,6 @@ export function Shell() {
       ) {
         event.preventDefault();
         setPaletteOpen(true);
-      } else if (event.key === 'Escape') {
-        setMenuOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -185,6 +190,75 @@ export function Shell() {
   }, []);
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  // SPK-UX-009: keep focus in the modal drawer and return it to Menu when dismissed.
+  useEffect(() => {
+    if (menuOpen) {
+      wasMenuOpen.current = true;
+      drawerRef.current?.querySelector<HTMLElement>(DRAWER_FOCUSABLE_SELECTOR)?.focus();
+    } else if (wasMenuOpen.current) {
+      wasMenuOpen.current = false;
+      if (focusSidebarAfterResize.current) {
+        focusSidebarAfterResize.current = false;
+        drawerRef.current?.querySelector<HTMLElement>('.brand')?.focus();
+      } else {
+        menuButtonRef.current?.focus();
+      }
+    }
+  }, [menuOpen]);
+
+  // Keep the modal state aligned with the sidebar's 900 px CSS breakpoint.
+  useEffect(() => {
+    if (!menuOpen || typeof window.matchMedia !== 'function') return;
+    const narrowViewport = window.matchMedia('(max-width: 900px)');
+    const closeOnDesktop = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        focusSidebarAfterResize.current = true;
+        setMenuOpen(false);
+      }
+    };
+
+    if (!narrowViewport.matches) {
+      focusSidebarAfterResize.current = true;
+      setMenuOpen(false);
+      return;
+    }
+
+    narrowViewport.addEventListener('change', closeOnDesktop);
+    return () => narrowViewport.removeEventListener('change', closeOnDesktop);
+  }, [menuOpen]);
+
+  const handleDrawerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setMenuOpen(false);
+      return;
+    }
+    if (event.key !== 'Tab') return;
+
+    const drawer = drawerRef.current;
+    if (!drawer) return;
+    const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(DRAWER_FOCUSABLE_SELECTOR));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      drawer.focus();
+      return;
+    }
+
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+    if (activeIndex === -1) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && activeIndex === 0) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   if (updateRequired) return <UpdateRequiredNotice error={updateRequired} />;
 
@@ -194,12 +268,22 @@ export function Shell() {
     // viewer is (§4.15, SPK-AT-018).
     <OfflineQueueProvider>
       <div className="shell" data-rail={rail}>
-        <a className="skip-link" href="#main">
+        <a className="skip-link" href="#main" inert={menuOpen}>
           Skip to main content
         </a>
         <RouteProgress />
         {menuOpen ? <div className="shell-scrim" onClick={close} /> : null}
-        <aside className="shell-side" data-open={menuOpen} inert={paletteOpen}>
+        <aside
+          ref={drawerRef}
+          className="shell-side"
+          data-open={menuOpen}
+          inert={paletteOpen}
+          role={menuOpen ? 'dialog' : undefined}
+          aria-modal={menuOpen || undefined}
+          aria-label={menuOpen ? 'Staff navigation' : undefined}
+          tabIndex={menuOpen ? -1 : undefined}
+          onKeyDown={menuOpen ? handleDrawerKeyDown : undefined}
+        >
           <div className="shell-side-art" aria-hidden="true" />
           <Glass
             className="shell-side-glass"
@@ -209,6 +293,12 @@ export function Shell() {
             blur={14}
             squircle
           >
+            {menuOpen ? (
+              <button type="button" className="side-close" onClick={() => setMenuOpen(false)}>
+                <Icon name="close" size={16} />
+                Close menu
+              </button>
+            ) : null}
             <div className="shell-side-head">
               <NavLink
                 to="/today"
@@ -263,7 +353,7 @@ export function Shell() {
             </div>
           </Glass>
         </aside>
-        <div className="shell-body" inert={paletteOpen}>
+        <div className="shell-body" inert={menuOpen || paletteOpen}>
           <header className="shell-header">
             <h1 className="visually-hidden">Sportspark staff</h1>
             <Glass className="header-group header-group-main" radius={23} blur={5}>
@@ -272,7 +362,10 @@ export function Shell() {
                 className="header-button menu-button"
                 aria-expanded={menuOpen}
                 aria-controls="main-nav"
-                onClick={() => setMenuOpen((open) => !open)}
+                onClick={(event) => {
+                  menuButtonRef.current = event.currentTarget;
+                  setMenuOpen((open) => !open);
+                }}
               >
                 <Icon name="menu" size={18} />
                 <span>Menu</span>

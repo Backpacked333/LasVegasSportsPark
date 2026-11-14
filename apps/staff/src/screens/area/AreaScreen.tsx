@@ -7,6 +7,7 @@
  * Administration a read-only overview of accounts, capability switches and integrations above it.
  */
 import { Link } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import type { StaffArea } from '../../navigation/areas';
 import { Icon, type IconName } from '../../ui/Icon';
 import { PageHeader } from '../../ui/Page';
@@ -22,12 +23,15 @@ const LINK_ICON: Record<string, IconName> = {
   '/admin/capabilities': 'tune',
   '/admin/provider-events': 'inbox',
   '/admin/migration': 'upload_file',
-  '/admin/cases': 'support_agent',
+  '/support/cases': 'support_agent',
   '/admin/access-hardware': 'qr_code_scanner',
 };
 
 export function AreaScreen({ area }: { area: StaffArea }) {
-  const links = area.links ?? [];
+  const permissions = usePermissions();
+  const links = (area.links ?? []).filter(
+    (link) => !link.actionId || permissions.isPermitted(link.actionId) === true,
+  );
   return (
     <section aria-labelledby={`area-${area.id}`} className="area">
       <PageHeader

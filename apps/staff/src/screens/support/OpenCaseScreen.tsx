@@ -72,19 +72,15 @@ export function OpenCaseScreen() {
           relatedRecords: relatedType ? [{ type: relatedType, id: relatedId.trim() }] : [],
         },
       })
-      .then((created) => navigate(`/admin/cases/${created.id}`))
+      .then((created) => navigate(`/support/cases/${created.id}`))
       .catch(() => undefined);
   };
 
   return (
     <section aria-labelledby="open-case-title" className="ia-screen">
-      <PageHeader
-        eyebrow="Business · Administration · Support"
-        title="Open a support case"
-        titleId="open-case-title"
-      />
+      <PageHeader eyebrow="Support" title="Open a support case" titleId="open-case-title" />
       <p>
-        <Link to="/admin/cases">Back to support cases</Link>
+        <Link to="/support/cases">Back to support cases</Link>
       </p>
       <form
         noValidate

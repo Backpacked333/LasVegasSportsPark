@@ -12,6 +12,7 @@ import {
   TEAM_ROUTES,
   bracketNode,
   created,
+  dividedStandings,
   division,
   fail,
   ok,
@@ -28,7 +29,7 @@ const base = {
     teamEntry({ status: 'approved' }),
     teamEntry({ id: ID.entryBlue, teamId: ID.teamBlue, status: 'approved' }),
   ]),
-  'GET /seasons/{id}/standings': ok(standings()),
+  'GET /seasons/{id}/standings': dividedStandings(() => standings()),
   'GET /seasons/{id}/bracket-nodes': ok([]),
   'GET /exceptions': ok(page([])),
 };
@@ -95,31 +96,57 @@ describe('SCR-S-13 StandingsScreen (SPK-RESULT-003)', () => {
     ).toBeInTheDocument();
   });
 
-  it('asks for a division’s standings and says when no result is official yet', async () => {
-    const user = userEvent.setup();
+  it('CMP-12: opens on the first division of a divided season and never reads the season as a whole', async () => {
+    const app = createTestApp({ routes: base });
+    render(app.at(`/leagues/seasons/${ID.season}/standings`));
+    await screen.findByRole('table', { name: 'Standings' });
+    expect(screen.getByLabelText('Division')).toHaveValue(ID.division);
+    expect(
+      within(screen.getByLabelText('Division')).queryByRole('option', { name: 'Whole season' }),
+    ).toBeNull();
+    const reads = app.fake.requests.filter((r) => r.route === '/seasons/{id}/standings');
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((r) => r.query.divisionId === ID.division)).toBe(true);
+    expect(screen.queryByText(/VALIDATION_FAILED/)).toBeNull();
+  });
+
+  it('reads the one season table of a season without divisions', async () => {
     const app = createTestApp({
       routes: {
         ...base,
-        'GET /seasons/{id}/standings': (req) =>
-          new Response(
-            JSON.stringify(
-              req.query.divisionId
-                ? standings({ sourceResultIds: [], rows: [], tiebreakExplanations: [] })
-                : standings(),
-            ),
-            { status: 200 },
-          ),
+        'GET /divisions': ok([]),
+        'GET /seasons/{id}/standings': ok(standings()),
       },
     });
     render(app.at(`/leagues/seasons/${ID.season}/standings`));
     await screen.findByRole('table', { name: 'Standings' });
-    await user.selectOptions(screen.getByLabelText('Division'), ID.division);
+    expect(screen.getByRole('option', { name: 'Whole season' })).toBeInTheDocument();
+    const read = app.fake.requests.find((r) => r.route === '/seasons/{id}/standings');
+    expect(read?.query.divisionId).toBeUndefined();
+  });
+
+  it('asks for another division’s standings and says when no result is official yet', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...base,
+        'GET /divisions': ok([division(), division({ id: ID.division2, name: 'Division B' })]),
+        'GET /seasons/{id}/standings': dividedStandings((divisionId) =>
+          divisionId === ID.division2
+            ? standings({ sourceResultIds: [], rows: [], tiebreakExplanations: [] })
+            : standings(),
+        ),
+      },
+    });
+    render(app.at(`/leagues/seasons/${ID.season}/standings`));
+    await screen.findByRole('table', { name: 'Standings' });
+    await user.selectOptions(screen.getByLabelText('Division'), ID.division2);
     expect(
       await screen.findByRole('heading', { name: 'No official results yet' }),
     ).toBeInTheDocument();
     expect(
       app.fake.requests.some(
-        (r) => r.route === '/seasons/{id}/standings' && r.query.divisionId === ID.division,
+        (r) => r.route === '/seasons/{id}/standings' && r.query.divisionId === ID.division2,
       ),
     ).toBe(true);
   });
@@ -235,10 +262,10 @@ describe('SCR-S-13 brackets (SPK-COMP-001 bracket progression, SPK-AT-014)', () 
       },
     });
     render(app.at(`/leagues/seasons/${ID.season}/standings`));
-    // No division chosen: the season-wide list offers nothing to create.
+    // The bracket is read for the whole season until a division is chosen: nothing to create.
     await screen.findByRole('table', { name: 'Standings' });
     expect(screen.queryByRole('form', { name: /Create the .* bracket/ })).toBeNull();
-    await user.selectOptions(screen.getByLabelText('Division'), ID.division);
+    await user.selectOptions(screen.getByLabelText('Bracket of'), ID.division);
     const form = await screen.findByRole('form', { name: 'Create the Division A bracket' });
     await user.click(within(form).getByRole('button', { name: 'Create bracket' }));
     expect(

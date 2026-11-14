@@ -79,6 +79,17 @@ The contract is a proposal: once the actual export is known, a transformation st
 these rows (or the contract is extended). **Pending decision:** migration scope and writer
 authority (DEC-014, §6.6, owner Migration owner/operator).
 
+### Source-shaped fixture (proposed)
+
+`testing/legacy-source-fixture.ts` is a synthetic snapshot shaped like the records the facility's
+current system shows on screen (customers, family links, products, seasons, levels, teams,
+rosters, invoices, credits), with its known oddities named in `LEGACY_SOURCE_ODDITIES`, and a
+proposed transformation to `staging-v1` rows (`legacySourceToStaging`). Source records the
+contract cannot carry yet are returned as `unmapped` with a reason, never dropped.
+`__tests__/legacy-source-fixture.spec.ts` imports it twice and reconciles it (SPK-AT-024, §5.5).
+The record kinds are **proposed** until an export is supplied; the transformation applies no
+identity resolution, so one person held as two source records is imported as two people.
+
 ## Tables (migrations `1200_migration_core.sql`, `1201_migration_import_commands.sql`, `1281_migration_exception_reraise.sql`)
 
 | Table                          | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                     |

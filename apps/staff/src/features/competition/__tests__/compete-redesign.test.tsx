@@ -17,6 +17,7 @@ import {
   TEAM_ROUTES,
   division,
   fixture,
+  dividedStandings,
   ok,
   page,
   personNames,
@@ -83,7 +84,7 @@ describe('Season home (SCR-S-08, SCR-S-10, SCR-S-13)', () => {
     'GET /seasons/{id}': ok(season({ status: 'active' })),
     'GET /divisions': ok([division()]),
     'GET /rule-sets/{id}': ok(ruleSet()),
-    'GET /seasons/{id}/standings': ok(standings()),
+    'GET /seasons/{id}/standings': dividedStandings(() => standings()),
     'GET /seasons/{id}/fixtures': ok(page([fixture({ scheduledStart: '2026-10-24T18:00:00Z' })])),
     'GET /fixtures/{id}/readiness': ok({
       fixtureId: ID.fixture,
@@ -122,6 +123,16 @@ describe('Season home (SCR-S-08, SCR-S-10, SCR-S-13)', () => {
     expect(within(games).queryByText('Ready')).toBeNull();
     expect(within(games).getByText('Officials · 1')).toBeInTheDocument();
     expect(screen.getByText('Nothing waiting')).toBeInTheDocument();
+  });
+
+  it('CMP-12: the standings card reads the first division of a divided season, never the season as a whole', async () => {
+    const app = createTestApp({ routes });
+    render(app.at(`/leagues/seasons/${ID.season}`));
+    await screen.findByRole('table', { name: 'Season standings' });
+    const reads = app.fake.requests.filter((r) => r.route === '/seasons/{id}/standings');
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((r) => r.query.divisionId === ID.division)).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Whole season' })).toBeNull();
   });
 
   it('SPK-READY-001: reads every game’s per-check readiness from one season read, never one per game', async () => {
@@ -164,7 +175,7 @@ describe('Needs your call: inline result decisions (SPK-RESULT-001, SPK-RESULT-0
     'GET /seasons/{id}': ok(season({ status: 'active' })),
     'GET /divisions': ok([division()]),
     'GET /rule-sets/{id}': ok(ruleSet()),
-    'GET /seasons/{id}/standings': ok(standings()),
+    'GET /seasons/{id}/standings': dividedStandings(() => standings()),
     'GET /seasons/{id}/fixtures': ok(page([])),
     'GET /seasons/{id}/readiness': ok({ seasonId: ID.season, evaluatedAt: T0, items: [] }),
     'GET /seasons/{id}/result-revisions': ok(page([])),
