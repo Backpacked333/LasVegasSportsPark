@@ -54,6 +54,7 @@ import { CheckinOutcome } from './CheckinOutcome';
 import './arrival.css';
 import { PersonLookupArrival } from './PersonLookupArrival';
 import { SessionsNow } from './SessionsNow';
+import { GlassCard } from '../../ui/glass/GlassCard';
 
 type PassScan = Schema<'PassScan'>;
 type ScanPerson = Schema<'ScanPerson'>;
@@ -144,7 +145,7 @@ export function ArrivalScannerScreen() {
       ) : (
         <div className="split arrival-split">
           <div className="split-main">
-            <section className="card card-dark scanner" aria-labelledby="scan-title">
+            <GlassCard tone="night" className="scanner" aria-labelledby="scan-title">
               <div className="scanner-head">
                 <h3 id="scan-title">Scan a pass</h3>
                 <span className={online ? 'live-chip' : 'scanner-offline'}>
@@ -217,7 +218,7 @@ export function ArrivalScannerScreen() {
               {scanError && passMessage ? (
                 <p className="caption">Error code: {scanError.code}</p>
               ) : null}
-            </section>
+            </GlassCard>
             {scan ? (
               <ArrivalSelection
                 key={scan.result.pass.id + scan.result.scannedAt}

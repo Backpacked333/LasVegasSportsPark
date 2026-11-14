@@ -4,6 +4,7 @@
  * keyboard (SPK-UX-009).
  */
 import { NavLink } from 'react-router';
+import { TabTrack } from '../../ui/glass/GlassCard';
 
 export interface SectionLink {
   to: string;
@@ -30,15 +31,17 @@ function SectionLabel({ label }: { label: string }) {
 export function SectionNav({ label, links }: { label: string; links: readonly SectionLink[] }) {
   return (
     <nav aria-label={label} className="rf-section-nav">
-      <ul>
-        {links.map((link) => (
-          <li key={link.to}>
-            <NavLink to={link.to} end={link.end}>
-              <SectionLabel label={link.label} />
-            </NavLink>
-          </li>
-        ))}
-      </ul>
+      <TabTrack>
+        <ul>
+          {links.map((link) => (
+            <li key={link.to}>
+              <NavLink to={link.to} end={link.end}>
+                <SectionLabel label={link.label} />
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </TabTrack>
     </nav>
   );
 }

@@ -46,6 +46,7 @@ import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { MY_ASSIGNMENTS_KEY, MyAssignmentPage, type WorkspaceAssignment } from './MyAssignment';
 import { MatchSheetPlayers } from './MatchSheet';
 import { ASSIGNMENT_BADGE, activityZone } from './WorkspaceScreen';
+import { GlassCard } from '../../ui/glass/GlassCard';
 
 export function AssignmentWorkspaceScreen() {
   return (
@@ -105,7 +106,7 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
   };
   const outcome = accept.data ?? decline.data ?? withdraw.data;
   return (
-    <section className="card card-dark ws-hero" aria-labelledby="offer-title">
+    <GlassCard tone="night" className="ws-hero" aria-labelledby="offer-title">
       <div className="ws-hero-top">
         <h3 id="offer-title">
           {humanize(a.role)}
@@ -201,7 +202,7 @@ function OfferAndResponse({ item }: { item: WorkspaceAssignment }) {
           <CommandSuccess label={ASSIGNMENT_BADGE[outcome.assignment.status].label} />
         </div>
       ) : null}
-    </section>
+    </GlassCard>
   );
 }
 

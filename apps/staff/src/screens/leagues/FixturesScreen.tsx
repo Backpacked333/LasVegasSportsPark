@@ -23,6 +23,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { SeasonReadinessStatus, SummaryReadinessBadge, useSeasonReadiness } from './Readiness';
+import { Toolbar } from '../../ui/glass/GlassCard';
 
 type FixtureStatus = Schema<'FixtureStatus'>;
 
@@ -65,7 +66,7 @@ export function FixturesScreen() {
         intro="A fixture's state and its readiness are shown apart: a scheduled game can still be blocked. Readiness is derived from rosters, fees and officials on every evaluation."
       />
       <SeasonLinks seasonId={seasonId} />
-      <div className="toolbar">
+      <Toolbar>
         <SelectField
           label="Division"
           value={divisionId}
@@ -86,7 +87,7 @@ export function FixturesScreen() {
           options={STATUS_OPTIONS}
           placeholder="All states"
         />
-      </div>
+      </Toolbar>
       <QueryBoundary
         query={fixtures}
         label="fixtures"

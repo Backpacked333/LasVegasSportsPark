@@ -155,6 +155,11 @@
   /* The soft light behind the top of a page. */
   --ambient-a: rgba(160, 226, 150, 0.32);
   --ambient-b: rgba(120, 190, 255, 0.16);
+  /* Application backdrop (layout/shell.css): three fields of colour and the pitch markings. */
+  --backdrop-a: rgba(150, 224, 160, 0.5);
+  --backdrop-b: rgba(140, 200, 255, 0.3);
+  --backdrop-c: rgba(206, 240, 140, 0.34);
+  --backdrop-line: rgba(10, 112, 64, 0.075);
   /* Desktop controls; coarse pointers (phones beside a field, SPK-UX-007) get 44 px below. */
   --touch: 40px;
   --side-width: 264px;
@@ -283,6 +288,10 @@
   --scrim: rgba(0, 0, 0, 0.55);
   --ambient-a: rgba(240, 199, 90, 0.12);
   --ambient-b: rgba(240, 199, 90, 0.05);
+  --backdrop-a: rgba(240, 199, 90, 0.2);
+  --backdrop-b: rgba(200, 130, 40, 0.13);
+  --backdrop-c: rgba(240, 199, 90, 0.1);
+  --backdrop-line: rgba(240, 199, 90, 0.06);
 }
 @media (pointer: coarse) {
   :root {

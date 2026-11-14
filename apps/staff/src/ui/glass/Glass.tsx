@@ -10,11 +10,14 @@
  * solid fill and `prefers-reduced-motion` removes the press transition (`glass.css`).
  */
 import {
+  createElement,
   useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type AriaAttributes,
+  type AriaRole,
   type CSSProperties,
   type ReactNode,
 } from 'react';
@@ -26,9 +29,17 @@ import {
 } from './liquidGlass';
 import './glass.css';
 
-export type GlassMaterial = 'lens' | 'regular' | 'frost';
+/**
+ * `tint` is coloured glass (the night slab of a hero card): its fill carries the legibility of the
+ * labels on it, so it is deeper than the others and never thinned by `--glass-amount`.
+ */
+export type GlassMaterial = 'lens' | 'regular' | 'frost' | 'tint';
 
-export interface GlassProps {
+export interface GlassProps extends AriaAttributes {
+  /** The element of the body: a `section` for a card with a heading, a `div` otherwise. */
+  as?: 'div' | 'section' | 'nav' | 'aside' | 'header';
+  id?: string;
+  role?: AriaRole;
   /** Corner radius in px; a capsule passes half its height or more. */
   radius: number;
   /** Width of the band along the edge that bends the backdrop; defaults to the radius. */
@@ -47,9 +58,15 @@ export interface GlassProps {
   children?: ReactNode;
 }
 
-const DEFAULT_BLUR: Record<GlassMaterial, number> = { lens: 0.8, regular: 4, frost: 14 };
+const DEFAULT_BLUR: Record<GlassMaterial, number> = {
+  lens: 0.8,
+  regular: 4,
+  frost: 14,
+  tint: 12,
+};
 
 export function Glass({
+  as = 'div',
   radius,
   bezel = radius,
   displacement,
@@ -61,9 +78,10 @@ export function Glass({
   contentClassName,
   style,
   children,
+  ...rest
 }: GlassProps) {
   const corner = squircle && squircleCorners ? 'squircle' : 'round';
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLElement>(null);
   const id = `lg${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const bends = useMemo(() => supportsSvgBackdrop(), []);
@@ -107,27 +125,32 @@ export function Glass({
     .filter(Boolean)
     .join(' ');
 
-  return (
-    <div ref={ref} className={classes} style={{ ...style, ['--radius' as string]: `${radius}px` }}>
-      {svg ? (
-        <svg
-          className="glass__defs"
-          width="0"
-          height="0"
-          aria-hidden="true"
-          focusable="false"
-          dangerouslySetInnerHTML={{ __html: `<defs>${svg}</defs>` }}
-        />
-      ) : null}
-      <span
-        className="glass__optic"
-        style={svg ? ({ ['--glass-filter' as string]: `url(#${id})` } as CSSProperties) : undefined}
+  return createElement(
+    as,
+    {
+      ...rest,
+      ref,
+      className: classes,
+      style: { ...style, ['--radius' as string]: `${radius}px` },
+    },
+    svg ? (
+      <svg
+        className="glass__defs"
+        width="0"
+        height="0"
+        aria-hidden="true"
+        focusable="false"
+        dangerouslySetInnerHTML={{ __html: `<defs>${svg}</defs>` }}
       />
-      <span className="glass__glow" />
-      <span className="glass__rim" />
-      <div className={['glass__content', contentClassName].filter(Boolean).join(' ')}>
-        {children}
-      </div>
-    </div>
+    ) : null,
+    <span
+      className="glass__optic"
+      style={svg ? ({ ['--glass-filter' as string]: `url(#${id})` } as CSSProperties) : undefined}
+    />,
+    <span className="glass__glow" />,
+    <span className="glass__rim" />,
+    <div className={['glass__content', contentClassName].filter(Boolean).join(' ')}>
+      {children}
+    </div>,
   );
 }

@@ -13,10 +13,35 @@
   grid-template-columns: var(--side-width) minmax(0, 1fr);
   min-height: 100vh;
   position: relative;
+  isolation: isolate;
   transition: grid-template-columns 0.22s ease;
 }
 .shell[data-rail='true'] {
   --side-width: 84px;
+}
+/* The application backdrop: soft fields of colour and the faint markings of a pitch, behind
+   everything and scrolling with the page. It is what every glass body bends. Decorative. */
+.shell::before,
+.shell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.shell::before {
+  background:
+    radial-gradient(46% 520px at 6% 120px, var(--backdrop-a), transparent 72%),
+    radial-gradient(38% 460px at 96% 60px, var(--backdrop-b), transparent 72%),
+    radial-gradient(44% 560px at 70% 900px, var(--backdrop-c), transparent 72%),
+    radial-gradient(40% 520px at 18% 1300px, var(--backdrop-b), transparent 72%);
+  background-size: 100% 1700px;
+  background-repeat: repeat-y;
+}
+.shell::after {
+  background: var(--backdrop-line);
+  -webkit-mask: url('/field-lines.svg') 50% 40px / max(1200px, 92%) auto repeat-y;
+  mask: url('/field-lines.svg') 50% 40px / max(1200px, 92%) auto repeat-y;
 }
 
 /* ---------- Sidebar ---------- */
@@ -29,22 +54,10 @@
   z-index: 30;
   min-width: 0;
 }
-/* The soft field of colour the sidebar glass floats on: it gives the glass something to take its
-   tint from without drawing attention. Decorative. */
+/* Only the drawer keeps a backing of its own (below): on wide screens the sidebar glass floats
+   over the application backdrop like everything else. */
 .shell-side-art {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  background:
-    radial-gradient(90% 38% at 0% 0%, rgba(150, 224, 160, 0.55), transparent 70%),
-    radial-gradient(80% 34% at 100% 38%, rgba(196, 240, 130, 0.38), transparent 72%),
-    radial-gradient(90% 40% at 10% 100%, rgba(140, 200, 255, 0.34), transparent 70%), var(--sand);
-}
-:root[data-theme='legends'] .shell-side-art {
-  background:
-    radial-gradient(90% 36% at 0% 0%, rgba(240, 199, 90, 0.26), transparent 70%),
-    radial-gradient(80% 34% at 100% 46%, rgba(240, 199, 90, 0.08), transparent 72%),
-    radial-gradient(90% 40% at 10% 100%, rgba(200, 130, 40, 0.16), transparent 70%), var(--sand);
+  display: none;
 }
 .shell-side-glass {
   height: 100%;
@@ -320,18 +333,6 @@
   min-width: 0;
   position: relative;
 }
-/* Soft light behind the top of the page: something for the header glass to pick colour from
-   before any content scrolls under it. It scrolls away with the page. */
-.shell-body::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 460px;
-  pointer-events: none;
-  background:
-    radial-gradient(48% 70% at 12% -12%, var(--ambient-a), transparent 70%),
-    radial-gradient(40% 60% at 88% -18%, var(--ambient-b), transparent 72%);
-}
 .shell-header {
   position: sticky;
   top: 0;
@@ -554,8 +555,16 @@ p.facility-switcher {
       transform 0.26s cubic-bezier(0.3, 1, 0.4, 1),
       visibility 0s;
   }
+  /* The drawer slides over the page: an opaque sheet behind its glass keeps every link legible
+     whatever is under it. */
   .shell-side-art {
+    display: block;
+    position: absolute;
+    inset: 0;
     border-radius: 0 28px 28px 0;
+    background:
+      radial-gradient(90% 38% at 0% 0%, var(--backdrop-a), transparent 70%),
+      radial-gradient(90% 40% at 10% 100%, var(--backdrop-b), transparent 70%), var(--sand);
   }
   .shell-scrim {
     display: block;

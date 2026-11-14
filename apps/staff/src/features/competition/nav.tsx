@@ -4,29 +4,32 @@
  * both. Links carry only opaque ids, never personal data (§4.14).
  */
 import { NavLink } from 'react-router';
+import { TabTrack } from '../../ui/glass/GlassCard';
 
 export function LeaguesNav() {
   return (
     <nav aria-label="Leagues and tournaments screens" className="subnav">
-      <ul>
-        <li>
-          <NavLink to="/leagues" end>
-            Competitions
-          </NavLink>
-        </li>
-        <li>
-          <NavLink to="/leagues/rule-sets">Rule sets</NavLink>
-        </li>
-        <li>
-          <NavLink to="/leagues/results-review">Result review tasks</NavLink>
-        </li>
-        <li>
-          <NavLink to="/leagues/disputes">Disputes</NavLink>
-        </li>
-        <li>
-          <NavLink to="/leagues/discipline">Discipline</NavLink>
-        </li>
-      </ul>
+      <TabTrack>
+        <ul>
+          <li>
+            <NavLink to="/leagues" end>
+              Competitions
+            </NavLink>
+          </li>
+          <li>
+            <NavLink to="/leagues/rule-sets">Rule sets</NavLink>
+          </li>
+          <li>
+            <NavLink to="/leagues/results-review">Result review tasks</NavLink>
+          </li>
+          <li>
+            <NavLink to="/leagues/disputes">Disputes</NavLink>
+          </li>
+          <li>
+            <NavLink to="/leagues/discipline">Discipline</NavLink>
+          </li>
+        </ul>
+      </TabTrack>
     </nav>
   );
 }
@@ -34,16 +37,18 @@ export function LeaguesNav() {
 export function TeamsNav() {
   return (
     <nav aria-label="Teams and placement screens" className="subnav">
-      <ul>
-        <li>
-          <NavLink to="/teams" end>
-            Seasons
-          </NavLink>
-        </li>
-        <li>
-          <NavLink to="/teams/youth-groups">Youth group placement</NavLink>
-        </li>
-      </ul>
+      <TabTrack>
+        <ul>
+          <li>
+            <NavLink to="/teams" end>
+              Seasons
+            </NavLink>
+          </li>
+          <li>
+            <NavLink to="/teams/youth-groups">Youth group placement</NavLink>
+          </li>
+        </ul>
+      </TabTrack>
     </nav>
   );
 }

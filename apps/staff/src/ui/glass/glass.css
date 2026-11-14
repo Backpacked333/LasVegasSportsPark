@@ -29,6 +29,8 @@
   --glass-separator: rgba(16, 24, 20, 0.12);
   /* Where content scrolls under a floating bar. */
   --scroll-edge: rgba(245, 245, 242, 0.86);
+  /* Coloured glass: the night slab of a hero card. Deep enough to carry white labels. */
+  --glass-fill-tint: rgba(9, 38, 26, 0.9);
 }
 :root[data-theme='legends'],
 .glass-night {
@@ -57,12 +59,16 @@
   --glass-rim-counter: rgba(255, 226, 160, 0.32);
   --glass-glow-key: rgba(255, 232, 176, 0.42);
   --scroll-edge: rgba(10, 10, 11, 0.86);
+  --glass-fill-tint: rgba(22, 20, 16, 0.78);
 }
 .glass-night {
   --glass-solid: rgba(12, 34, 25, 0.97);
 }
 :root[data-theme='legends'] .glass-night {
   --glass-solid: rgba(14, 12, 8, 0.97);
+  --glass-rim-key: rgba(255, 236, 190, 0.7);
+  --glass-rim-counter: rgba(255, 226, 160, 0.32);
+  --glass-glow-key: rgba(255, 232, 176, 0.42);
 }
 
 /* The edge line is a 1 px ring outside the silhouette, drawn with the shadow so it follows the radius. */
@@ -87,6 +93,15 @@
 .glass--frost {
   --fill: var(--glass-fill-frost);
   --blur-fallback: 24px;
+}
+.glass--tint {
+  --fill: var(--glass-fill-tint);
+  --blur-fallback: 20px;
+}
+/* The tint carries the labels on it: `--glass-amount` may deepen it and never thins it. */
+.glass--tint > .glass__optic {
+  background: var(--fill);
+  background: rgb(from var(--fill) r g b / calc(alpha * max(var(--glass-amount, 1), 1)));
 }
 /* Direct children only: the layers fill the body; the content sits in the flow. */
 .glass > * {
@@ -160,4 +175,104 @@
   :root .glass * {
     transition: none !important;
   }
+}
+
+/* ---------- Headline pieces (GlassCard.tsx) ---------- */
+/* The card classes ride on the content layer, so a screen's own rules keep applying; the surface
+   itself is the glass body. */
+.glass.glass-card > .glass__content.card,
+:root[data-theme='legends'] .glass.glass-card > .glass__content.card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  border-radius: inherit;
+  height: 100%;
+}
+.glass-card > .glass__content.card-flush {
+  overflow: hidden;
+}
+.glass.glass-toolbar {
+  width: fit-content;
+  max-width: 100%;
+}
+.glass.glass-toolbar--fill {
+  width: auto;
+}
+.glass-toolbar > .glass__content {
+  padding: 10px 12px;
+}
+/* Fields on a glass bar sit in a flat trough: no second surface inside the glass. */
+.glass-toolbar input:not([type='checkbox'], [type='radio']),
+.glass-toolbar select {
+  background-color: var(--glass-chip);
+  border-color: var(--glass-separator);
+}
+/* Stat tiles: one small glass body per figure. */
+.glass.kpi-glass {
+  min-width: 0;
+}
+.glass.kpi-glass > .glass__content.kpi {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  border-radius: inherit;
+  height: 100%;
+}
+/* The tabs of an area: the track is the glass; the links and the raised pill are flat on it. */
+.glass.glass-track {
+  width: fit-content;
+  max-width: 100%;
+}
+/* Whichever element drew the track before (the navigation or its list) is now transparent. */
+.subnav:has(> .glass-track),
+.sub-nav:has(> .glass-track),
+.area-tabs:has(> .glass-track) {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.glass-track-scroll {
+  border-radius: inherit;
+  overflow-x: auto;
+  scrollbar-width: none;
+  position: relative;
+}
+.glass-track-scroll::-webkit-scrollbar {
+  display: none;
+}
+.glass.glass-track .glass-track-scroll > ul {
+  background: transparent;
+  margin: 0;
+  padding: 4px;
+  width: auto;
+}
+.glass-track-scroll a {
+  white-space: nowrap;
+}
+/* Phones: one row of tabs that scrolls sideways, instead of a block of wrapped rows. */
+@media (max-width: 640px) {
+  .glass.glass-track .glass-track-scroll > ul {
+    flex-wrap: nowrap;
+    width: max-content;
+  }
+}
+/* The space a track's list kept below itself belongs to the track now. */
+.rf-section-nav > .glass-track {
+  margin-bottom: var(--space-4);
+}
+.ops-tabs > .glass-track {
+  margin-bottom: var(--space-3);
+}
+.ops-screen .ops-tabs > .glass-track {
+  margin-bottom: 0;
+}
+/* A control that is not available yet, on coloured glass: a flat quiet fill with a readable label
+   instead of a faded one (SPK-UX-009). */
+.glass-night .button:disabled,
+.glass-night .button[aria-disabled='true'] {
+  opacity: 1;
+  background: var(--glass-child);
+  border-color: transparent;
+  color: var(--glass-ink-2);
+  box-shadow: none;
 }

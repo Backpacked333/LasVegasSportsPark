@@ -62,6 +62,7 @@ import {
 import { TimelineDetail } from './TimelineDetail';
 import './schedule.css';
 import { FacilitySessions } from './FacilitySessions';
+import { Toolbar } from '../../ui/glass/GlassCard';
 
 type Resource = Schema<'Resource'>;
 type Event = Schema<'Event'>;
@@ -356,7 +357,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
   return (
     <div className="schedule-calendar">
       <ZoneCaption facility={facility} />
-      <div className="cal-toolbar" role="group" aria-label="Calendar range">
+      <Toolbar fill className="cal-toolbar" role="group" aria-label="Calendar range">
         <div className="cal-stepper">
           <button
             type="button"
@@ -436,7 +437,7 @@ function CalendarBody({ facility }: { facility: FacilityContext }) {
             {openDrafts > 0 ? <span className="cal-count">{openDrafts} open</span> : null}
           </Link>
         </span>
-      </div>
+      </Toolbar>
       {pinned.changed ? (
         <div className="banner" role="status" data-testid="schedule-changed">
           <StatusBadge tone="warning" label="Schedule changed" />

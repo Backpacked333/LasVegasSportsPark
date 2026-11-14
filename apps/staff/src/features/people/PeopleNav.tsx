@@ -6,26 +6,29 @@
  */
 import { NavLink } from 'react-router';
 import '../../ui/form-fields.css';
+import { TabTrack } from '../../ui/glass/GlassCard';
 
 export function PeopleNav() {
   return (
     <nav aria-label="People and families">
-      <ul className="subnav">
-        <li>
-          <NavLink to="/people" end>
-            Find a person
-          </NavLink>
-        </li>
-        <li>
-          <NavLink to="/people/invitations">Invitations</NavLink>
-        </li>
-        <li>
-          <NavLink to="/people/access-reviews">Access reviews</NavLink>
-        </li>
-        <li>
-          <NavLink to="/people/duplicates">Duplicate review</NavLink>
-        </li>
-      </ul>
+      <TabTrack>
+        <ul className="subnav">
+          <li>
+            <NavLink to="/people" end>
+              Find a person
+            </NavLink>
+          </li>
+          <li>
+            <NavLink to="/people/invitations">Invitations</NavLink>
+          </li>
+          <li>
+            <NavLink to="/people/access-reviews">Access reviews</NavLink>
+          </li>
+          <li>
+            <NavLink to="/people/duplicates">Duplicate review</NavLink>
+          </li>
+        </ul>
+      </TabTrack>
     </nav>
   );
 }

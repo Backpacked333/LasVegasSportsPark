@@ -33,6 +33,7 @@ import { PageHeader } from '../../ui/Page';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import './workspace.css';
+import { GlassCard } from '../../ui/glass/GlassCard';
 
 type WorkspaceAssignment = Schema<'WorkspaceAssignment'>;
 type AssignmentStatus = WorkspaceAssignment['assignment']['status'];
@@ -221,7 +222,7 @@ function NowBoard({ items }: { items: readonly WorkspaceAssignment[] }) {
   const progress =
     live && end > start ? Math.min(100, Math.round(((t - start) / (end - start)) * 100)) : 0;
   return (
-    <section className="card card-dark ws-now" aria-labelledby="ws-now-title">
+    <GlassCard tone="night" className="ws-now" aria-labelledby="ws-now-title">
       <div className="ws-now-top">
         <h3 id="ws-now-title" className="ws-now-kicker">
           {live ? 'On now' : 'Next up'}
@@ -274,7 +275,7 @@ function NowBoard({ items }: { items: readonly WorkspaceAssignment[] }) {
       ) : (
         <p className="caption">No accepted assignment ahead. Offers you accept appear here.</p>
       )}
-    </section>
+    </GlassCard>
   );
 }
 

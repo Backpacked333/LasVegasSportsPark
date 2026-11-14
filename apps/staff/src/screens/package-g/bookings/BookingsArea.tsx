@@ -26,6 +26,7 @@ import { BookingOfferings } from './BookingOfferings';
 import { KIND_CAPABILITY, KIND_PATH, KIND_WORDS, type BookingKind } from './labels';
 import { NewBooking } from './NewBooking';
 import '../../../features/grow/grow.css';
+import { TabTrack } from '../../../ui/glass/GlassCard';
 
 function Sections({ kind }: { kind: BookingKind }) {
   const base = KIND_PATH[kind];
@@ -37,15 +38,17 @@ function Sections({ kind }: { kind: BookingKind }) {
   ];
   return (
     <nav aria-label={`${words.title} sections`} className="sub-nav">
-      <ul>
-        {items.map((item) => (
-          <li key={item.to}>
-            <NavLink to={item.to} end={item.end}>
-              {item.label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
+      <TabTrack>
+        <ul>
+          {items.map((item) => (
+            <li key={item.to}>
+              <NavLink to={item.to} end={item.end}>
+                {item.label}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </TabTrack>
     </nav>
   );
 }

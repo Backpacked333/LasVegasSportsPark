@@ -49,6 +49,7 @@ import {
   domainActions,
   permittedVerbs,
 } from './exception-actions';
+import { GlassCard } from '../../ui/glass/GlassCard';
 
 type TodayItem = Schema<'TodayItem'>;
 type TodayFacility = Schema<'TodayFeed'>['facilities'][number];
@@ -451,7 +452,7 @@ function FieldStatusSection({ facility, now }: { facility: TodayFacility; now: D
   const remaining = stillRunning(events.data?.items ?? [], now);
   const headingId = `field-status-${facility.facilityId}`;
   return (
-    <section className="card card-dark card-flush field-board" aria-labelledby={headingId}>
+    <GlassCard tone="night" className="card-flush field-board" aria-labelledby={headingId}>
       <div className="card-head">
         <span className="field-board-title">
           <h4 id={headingId}>Field status</h4>
@@ -557,7 +558,7 @@ function FieldStatusSection({ facility, now }: { facility: TodayFacility; now: D
           }}
         </QueryBoundary>
       </div>
-    </section>
+    </GlassCard>
   );
 }
 

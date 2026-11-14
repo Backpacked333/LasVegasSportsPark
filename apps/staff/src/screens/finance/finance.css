@@ -335,6 +335,13 @@
   place-items: center;
   font-weight: 700;
 }
+/* The tick stands in for the shared empty glyph here; the text keeps the second column. */
+.fin-body [data-testid='state-empty'] > .state-glyph {
+  display: none;
+}
+.fin-body [data-testid='state-empty'] > :not(.state-glyph) {
+  grid-column: 2;
+}
 .fin-body [data-testid='state-empty'] p {
   color: var(--muted);
   font-size: 13px;

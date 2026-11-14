@@ -50,6 +50,7 @@ import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { Icon, type IconName } from '../../ui/Icon';
 import { PageHeader } from '../../ui/Page';
 import './registrations.css';
+import { Toolbar } from '../../ui/glass/GlassCard';
 
 type Application = Schema<'Application'>;
 type ApplicationStatus = Schema<'ApplicationStatus'>;
@@ -445,7 +446,7 @@ export function RegistrationQueueScreen() {
       <SectionNav label="Registrations and waitlists" links={REGISTRATION_LINKS} />
       <div className="split">
         <div className="split-main">
-          <div className="queue-toolbar">
+          <Toolbar className="queue-toolbar">
             <SelectField
               label="Applications"
               value={status}
@@ -459,7 +460,7 @@ export function RegistrationQueueScreen() {
                 ...STATUS_FILTERS.map((s) => ({ value: s, label: APPLICATION_STATUS[s].label })),
               ]}
             />
-          </div>
+          </Toolbar>
           {status === NEEDS_DECISION ? <DecisionQueue /> : <StatusQueue status={status} />}
         </div>
         <aside className="split-side" aria-label="How approval works">
