@@ -573,6 +573,8 @@ describe('reporting schema invariants (migration 1300)', () => {
       }),
       passThrough('reporting_team_entries_v', 'status', 'team_entries', 'status', {
         applied: true,
+        // Competition migration 0467 (SPK-COMP-006, proposed): an entry waiting for a place.
+        waiting: true,
         approved: true,
         withdrawn: true,
         rejected: true,
