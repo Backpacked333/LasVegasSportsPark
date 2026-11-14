@@ -37,7 +37,16 @@ const WEEK3 = '0192f1a0-0000-7000-8000-0000000000f3';
 const camp = (overrides: Parameters<typeof offering>[0]) =>
   offering({
     kind: 'camp',
-    price: { priceRuleId: IDS.priceRule, basePriceMinor: 26900, currency: 'USD', chargeLines: [] },
+    price: {
+      priceRuleId: IDS.priceRule,
+      basePriceMinor: 26900,
+      currency: 'USD',
+      chargeLines: [],
+      pricingBasis: 'term',
+      remainingSessionCount: null,
+      remainingSessionsPriceMinor: null,
+      memberPrice: null,
+    },
     ...overrides,
   });
 const WEEK_1 = camp({ name: 'Winter Camp Week 1', startsOn: '2026-12-21', endsOn: '2026-12-24' });

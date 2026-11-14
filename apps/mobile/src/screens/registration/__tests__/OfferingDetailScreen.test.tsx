@@ -79,6 +79,92 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     expect(await screen.findByLabelText(/^Week 1: /)).toBeOnTheScreen();
   });
 
+  it('SPK-PAY-013: a price for each class is shown with the classes still to come and their product', async () => {
+    const base = offering();
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': {
+          status: 200,
+          body: offering({
+            price: {
+              ...(base.price as NonNullable<typeof base.price>),
+              basePriceMinor: 2400,
+              chargeLines: [],
+              pricingBasis: 'per_session',
+              remainingSessionCount: 7,
+              remainingSessionsPriceMinor: 16800,
+            },
+          }),
+        },
+      }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Price per class: $24.00')).toBeOnTheScreen();
+    expect(screen.getByText('$24.00 per class × 7 classes = $168.00')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'You pay for the classes still to come. They are counted again when you ask for a price.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Base price/)).not.toBeOnTheScreen();
+    expect(screen.queryByLabelText(/^Member price/)).not.toBeOnTheScreen();
+  });
+
+  it('SPK-PAY-013: a per-class price with no class left says so and shows no product', async () => {
+    const base = offering();
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': {
+          status: 200,
+          body: offering({
+            price: {
+              ...(base.price as NonNullable<typeof base.price>),
+              basePriceMinor: 2400,
+              pricingBasis: 'per_session',
+              remainingSessionCount: 0,
+              remainingSessionsPriceMinor: 0,
+            },
+          }),
+        },
+      }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Price per class: $24.00')).toBeOnTheScreen();
+    expect(screen.getByText('No class of this activity is still to come.')).toBeOnTheScreen();
+    expect(screen.queryByText(/classes =/)).not.toBeOnTheScreen();
+  });
+
+  it('SPK-PAY-015: a member price is shown with the membership it is for', async () => {
+    const base = offering();
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': {
+          status: 200,
+          body: offering({
+            price: {
+              ...(base.price as NonNullable<typeof base.price>),
+              basePriceMinor: 30000,
+              memberPrice: {
+                priceMinor: 25000,
+                entitlementDefinitionId: '0192f1a0-0000-7000-8000-0000000000f1',
+                entitlementName: 'Annual membership',
+              },
+            },
+          }),
+        },
+      }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Base price: $300.00')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Member price (Annual membership): $250.00')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'The member price applies to a participant who holds this membership when the price is made.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/per class/)).not.toBeOnTheScreen();
+  });
+
   it('SPK-SCHED-008: session and registration times are in the facility time zone, with the facility named', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });

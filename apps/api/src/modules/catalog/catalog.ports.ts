@@ -160,6 +160,13 @@ export interface RedemptionOutcome {
   replayed: boolean;
 }
 
+/** A session a participant joining at an instant can still attend (SPK-PAY-013, PA-02). */
+export interface RemainingSession {
+  id: string;
+  /** ISO instant of the scheduled start. */
+  scheduledStart: string;
+}
+
 export interface PricingPort {
   effectivePriceRule(
     organizationId: string,
@@ -167,6 +174,18 @@ export interface PricingPort {
     at: Date,
     trx?: Trx,
   ): Promise<PriceRule | null>;
+  /**
+   * SPK-PAY-013 (PA-02): the offering's sessions that are scheduled and start strictly after
+   * `at`, ordered by start. A per-session price is multiplied by their number; a quote stores
+   * their ids so the count can be reproduced. Unknown and cross-organization ids answer [].
+   * Read it before the caller's unit of work (or pass the transaction).
+   */
+  remainingSessions(
+    organizationId: string,
+    offeringId: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<RemainingSession[]>;
   /** Explainable discount lines (SPK-PAY-003): pure evaluation over the active definitions, no redemption. */
   evaluateDiscounts(
     organizationId: string,

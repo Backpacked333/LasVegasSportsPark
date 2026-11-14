@@ -7554,6 +7554,13 @@
           "reason"
         ]
       },
+      "PricingBasis": {
+        "type": "string",
+        "enum": [
+          "term",
+          "per_session"
+        ]
+      },
       "PriceRule": {
         "type": "object",
         "properties": {
@@ -7594,6 +7601,28 @@
               "$ref": "#/components/schemas/ChargeLine"
             }
           },
+          "pricingBasis": {
+            "$ref": "#/components/schemas/PricingBasis"
+          },
+          "memberPriceMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memberEntitlementDefinitionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "memberEntitlementName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -7612,6 +7641,10 @@
           "basePriceMinor",
           "currency",
           "chargeLines",
+          "pricingBasis",
+          "memberPriceMinor",
+          "memberEntitlementDefinitionId",
+          "memberEntitlementName",
           "revision",
           "createdAt"
         ]
@@ -7644,6 +7677,17 @@
             },
             "maxItems": 20,
             "default": []
+          },
+          "pricingBasis": {
+            "$ref": "#/components/schemas/PricingBasis"
+          },
+          "memberPriceMinor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memberEntitlementDefinitionId": {
+            "type": "string",
+            "format": "uuid"
           },
           "expectedRevision": {
             "type": "integer",
@@ -7738,6 +7782,26 @@
           "availableUntil"
         ]
       },
+      "PublicMemberPrice": {
+        "type": "object",
+        "properties": {
+          "priceMinor": {
+            "type": "integer"
+          },
+          "entitlementDefinitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entitlementName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "priceMinor",
+          "entitlementDefinitionId",
+          "entitlementName"
+        ]
+      },
       "PublicPrice": {
         "type": "object",
         "properties": {
@@ -7759,13 +7823,42 @@
             "items": {
               "$ref": "#/components/schemas/ChargeLine"
             }
+          },
+          "pricingBasis": {
+            "$ref": "#/components/schemas/PricingBasis"
+          },
+          "remainingSessionCount": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "remainingSessionsPriceMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memberPrice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicMemberPrice"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "priceRuleId",
           "basePriceMinor",
           "currency",
-          "chargeLines"
+          "chargeLines",
+          "pricingBasis",
+          "remainingSessionCount",
+          "remainingSessionsPriceMinor",
+          "memberPrice"
         ]
       },
       "OfferingFacility": {
@@ -35774,6 +35867,122 @@
           "defaults"
         ]
       },
+      "MemberPriceReason": {
+        "type": "string",
+        "enum": [
+          "active_membership",
+          "no_active_membership",
+          "membership_suspended"
+        ]
+      },
+      "QuoteLinePriceBasis": {
+        "type": "object",
+        "properties": {
+          "pricingBasis": {
+            "type": "string",
+            "enum": [
+              "term",
+              "per_session"
+            ]
+          },
+          "standardPriceMinor": {
+            "type": "integer"
+          },
+          "appliedPrice": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "member"
+            ]
+          },
+          "appliedPriceMinor": {
+            "type": "integer"
+          },
+          "member": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "priceMinor": {
+                "type": "integer"
+              },
+              "entitlementDefinitionId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "entitlementName": {
+                "type": "string"
+              },
+              "applied": {
+                "type": "boolean"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/MemberPriceReason"
+              },
+              "membershipEnrollmentId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "priceMinor",
+              "entitlementDefinitionId",
+              "entitlementName",
+              "applied",
+              "reason",
+              "membershipEnrollmentId",
+              "checkedAt"
+            ]
+          },
+          "sessions": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "sessionIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "countedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "count",
+              "sessionIds",
+              "countedAt"
+            ]
+          },
+          "unitPriceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pricingBasis",
+          "standardPriceMinor",
+          "appliedPrice",
+          "appliedPriceMinor",
+          "member",
+          "sessions",
+          "unitPriceMinor"
+        ]
+      },
       "QuoteLine": {
         "type": "object",
         "properties": {
@@ -35857,6 +36066,16 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "priceBasis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuoteLinePriceBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -35879,7 +36098,8 @@
           "discounts",
           "charges",
           "policies",
-          "enrollmentId"
+          "enrollmentId",
+          "priceBasis"
         ]
       },
       "FutureObligation": {

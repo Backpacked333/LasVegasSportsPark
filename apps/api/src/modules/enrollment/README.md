@@ -154,6 +154,15 @@ holdIds)` (locks in id order; CAPACITY_UNAVAILABLE and nothing written when any 
 - `FINANCE_POLICY_PORT` (`FinancePolicyPort` interface): finance registers `FINANCE_POLICY_IMPL`
   (`transferConsequence`, `cancellationConsequence`); until then the consequence is `none`
   (resolved lazily through the kernel's `lazyPort`).
+- `MEMBERSHIP_PRICING_PORT` (`MembershipPricingPort`, finance): `memberStanding(organizationId,
+participantPersonId, entitlementDefinitionId, at)` says whether the participant, after
+  merged-person resolution (SPK-IAM-007), holds a confirmed, unsuspended membership granting that
+  entitlement whose term covers the instant, which membership qualified, and otherwise why not
+  (`no_active_membership`, `membership_suspended`). It is the membership ledger's own rule
+  (ENR-12, SPK-COND-001). **Verified** `__tests__/membership-pricing.spec.ts`. It serves the
+  **Proposed** requirement SPK-PAY-015 (amendment PA-04; the reference date and whose membership
+  counts for a child are **Pending decision** DEC-098), and finance calls it only while the
+  `member_pricing` capability is on.
 - Fixtures for downstream tests: `testing/enrollment-fixtures.ts` (`createCapacityPoolFixture`,
   `createEnrollmentFixture`, `createHoldFixture`, `createSessionBookingFixture`,
   `createMakeupEntitlementFixture`).

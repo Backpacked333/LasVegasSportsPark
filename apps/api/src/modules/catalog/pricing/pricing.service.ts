@@ -6,6 +6,7 @@ import type {
   PricingPort,
   RedeemDiscountInput,
   RedemptionOutcome,
+  RemainingSession,
 } from '../catalog.ports';
 import { DiscountsService } from '../services/discounts.service';
 import { PriceRulesService } from '../services/price-rules.service';
@@ -25,6 +26,15 @@ export class PricingService implements PricingPort {
     trx?: Trx,
   ): Promise<PriceRule | null> {
     return this.priceRules.effectivePriceRule(organizationId, offeringId, at, trx);
+  }
+
+  remainingSessions(
+    organizationId: string,
+    offeringId: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<RemainingSession[]> {
+    return this.priceRules.remainingSessions(organizationId, offeringId, at, trx);
   }
 
   evaluateDiscounts(

@@ -133,6 +133,11 @@ export interface OfferingRow {
 export interface OfferingViewContext {
   ageBand: AgeBand;
   price: PriceRule | null;
+  /**
+   * SPK-PAY-013: for a per-session price, the offering's scheduled sessions that start after the
+   * view instant; null for a term price or an unpriced offering.
+   */
+  remainingSessionCount: number | null;
   requiredFormPolicyVersionIds: string[];
   /** SPK-SCHED-008: the facility and its IANA zone (kernel facility directory, K-04). */
   facility: OfferingFacility;
@@ -177,6 +182,21 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
           basePriceMinor: ctx.price.basePriceMinor,
           currency: ctx.price.currency,
           chargeLines: ctx.price.chargeLines,
+          pricingBasis: ctx.price.pricingBasis,
+          remainingSessionCount:
+            ctx.price.pricingBasis === 'per_session' ? (ctx.remainingSessionCount ?? 0) : null,
+          remainingSessionsPriceMinor:
+            ctx.price.pricingBasis === 'per_session'
+              ? ctx.price.basePriceMinor * (ctx.remainingSessionCount ?? 0)
+              : null,
+          memberPrice:
+            ctx.price.memberPriceMinor !== null && ctx.price.memberEntitlementDefinitionId
+              ? {
+                  priceMinor: ctx.price.memberPriceMinor,
+                  entitlementDefinitionId: ctx.price.memberEntitlementDefinitionId,
+                  entitlementName: ctx.price.memberEntitlementName ?? '',
+                }
+              : null,
         }
       : null,
     eligibilityPolicyVersionId: row.eligibility_policy_version_id,
@@ -340,7 +360,14 @@ export function toPublicOfferingSession(row: Selectable<OfferingSessionsTable>):
   };
 }
 
-export function toPriceRule(row: Selectable<PriceRulesTable>): PriceRule {
+/**
+ * `memberEntitlementName` is the name of the rule's membership entitlement (SPK-PAY-015), read by
+ * the caller with the rule; it is null exactly when the rule carries no member price.
+ */
+export function toPriceRule(
+  row: Selectable<PriceRulesTable>,
+  memberEntitlementName: string | null = null,
+): PriceRule {
   return {
     id: row.id,
     offeringId: row.offering_id,
@@ -350,6 +377,10 @@ export function toPriceRule(row: Selectable<PriceRulesTable>): PriceRule {
     basePriceMinor: row.base_price_minor,
     currency: row.currency,
     chargeLines: row.charge_lines as ChargeLine[],
+    pricingBasis: row.pricing_basis,
+    memberPriceMinor: row.member_price_minor,
+    memberEntitlementDefinitionId: row.member_entitlement_definition_id,
+    memberEntitlementName: row.member_entitlement_definition_id ? memberEntitlementName : null,
     revision: row.revision,
     createdAt: iso(row.created_at),
   };

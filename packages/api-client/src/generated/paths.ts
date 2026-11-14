@@ -57446,7 +57446,11 @@ export type components = {
             /** Format: date-time */
             effectiveTo?: string;
             expectedRevision?: number;
+            /** Format: uuid */
+            memberEntitlementDefinitionId?: string;
+            memberPriceMinor?: number;
             policyReferences?: string[];
+            pricingBasis?: components["schemas"]["PricingBasis"];
             reason?: string;
         };
         CreateProgramRequest: {
@@ -60147,6 +60151,8 @@ export type components = {
             subjectPermission: string | null;
             teamRole: string | null;
         };
+        /** @enum {string} */
+        MemberPriceReason: "active_membership" | "no_active_membership" | "membership_suspended";
         Membership: {
             attendance: components["schemas"]["MembershipAttendanceSummary"] | null;
             /** Format: date-time */
@@ -62048,7 +62054,12 @@ export type components = {
             /** Format: uuid */
             id: string;
             /** Format: uuid */
+            memberEntitlementDefinitionId: string | null;
+            memberEntitlementName: string | null;
+            memberPriceMinor: number | null;
+            /** Format: uuid */
             offeringId: string;
+            pricingBasis: components["schemas"]["PricingBasis"];
             revision: number;
             version: number;
         };
@@ -62059,6 +62070,8 @@ export type components = {
             /** Format: uuid */
             priceRuleId: string;
         };
+        /** @enum {string} */
+        PricingBasis: "term" | "per_session";
         Program: {
             activityType: string;
             ageBand: components["schemas"]["AgeBand"];
@@ -62230,6 +62243,12 @@ export type components = {
             limit: number;
             unit: components["schemas"]["CapacityUnitKind"];
         };
+        PublicMemberPrice: {
+            /** Format: uuid */
+            entitlementDefinitionId: string;
+            entitlementName: string;
+            priceMinor: number;
+        };
         PublicOffering: {
             activityType: string;
             ageBand: components["schemas"]["AgeBand"];
@@ -62271,8 +62290,12 @@ export type components = {
             basePriceMinor: number;
             chargeLines: components["schemas"]["ChargeLine"][];
             currency: string;
+            memberPrice: components["schemas"]["PublicMemberPrice"] | null;
             /** Format: uuid */
             priceRuleId: string;
+            pricingBasis: components["schemas"]["PricingBasis"];
+            remainingSessionCount: number | null;
+            remainingSessionsPriceMinor: number | null;
         };
         PublicPromotion: {
             amountKind: components["schemas"]["DiscountAmountKind"];
@@ -62437,12 +62460,40 @@ export type components = {
             /** Format: uuid */
             participantPersonId: string;
             policies: components["schemas"]["LinePolicyReferences"];
+            priceBasis: components["schemas"]["QuoteLinePriceBasis"] | null;
             /** Format: uuid */
             priceRuleId: string | null;
             quantity: number;
             sequence: number;
             taxMinor: number;
             totalMinor: number;
+            unitPriceMinor: number;
+        };
+        QuoteLinePriceBasis: {
+            /** @enum {string} */
+            appliedPrice: "standard" | "member";
+            appliedPriceMinor: number;
+            member: {
+                applied: boolean;
+                /** Format: date-time */
+                checkedAt: string;
+                /** Format: uuid */
+                entitlementDefinitionId: string;
+                entitlementName: string;
+                /** Format: uuid */
+                membershipEnrollmentId: string | null;
+                priceMinor: number;
+                reason: components["schemas"]["MemberPriceReason"];
+            } | null;
+            /** @enum {string} */
+            pricingBasis: "term" | "per_session";
+            sessions: {
+                count: number;
+                /** Format: date-time */
+                countedAt: string;
+                sessionIds: string[];
+            } | null;
+            standardPriceMinor: number;
             unitPriceMinor: number;
         };
         QuotePolicyReferences: {

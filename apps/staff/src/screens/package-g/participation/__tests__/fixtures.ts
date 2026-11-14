@@ -401,7 +401,16 @@ export function membershipOffering(
     name: 'Adult membership',
     entitlementDefinitionId: MEMBERSHIP_DEFINITION_ID,
     bookingTermsPolicyVersionId: null,
-    price: { priceRuleId: TERMS_ID, basePriceMinor: 12000, currency: 'USD', chargeLines: [] },
+    price: {
+      priceRuleId: TERMS_ID,
+      basePriceMinor: 12000,
+      currency: 'USD',
+      chargeLines: [],
+      pricingBasis: 'term',
+      remainingSessionCount: null,
+      remainingSessionsPriceMinor: null,
+      memberPrice: null,
+    },
     ...overrides,
   });
 }

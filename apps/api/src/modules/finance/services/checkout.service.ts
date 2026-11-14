@@ -605,6 +605,10 @@ export class CheckoutService {
             unitPriceMinor: line.unit_price_minor,
             discounts: line.discount_lines,
             charges: line.charge_lines,
+            // SPK-PAY-013, SPK-PAY-015: the sessions counted and the member price decision the
+            // quote recorded travel with the purchase; a later change of sessions or membership
+            // never re-prices it. Absent for a plain term price, as before.
+            ...(line.price_basis ? { pricing: line.price_basis } : {}),
           }),
           policy_references: json(line.policy_references),
         })),

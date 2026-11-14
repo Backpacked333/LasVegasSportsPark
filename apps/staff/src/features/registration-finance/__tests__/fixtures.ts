@@ -409,6 +409,7 @@ export function quote(overrides: Partial<Model<'Quote'>> = {}): Model<'Quote'> {
         charges: [],
         policies,
         enrollmentId: null,
+        priceBasis: null,
       },
     ],
     subtotalMinor: 12500,

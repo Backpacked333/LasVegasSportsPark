@@ -158,6 +158,18 @@ route above resolves to its screen.
 | DEC-016, DEC-072 to DEC-082 conditional capabilities          | Product owner                                  | SCR-C-07 filters, SCR-C-09 intents (from `GET /me/permissions`) |
 | DEC-006, DEC-026 to DEC-030 holds, waitlist, approval, basket | Product and operations                         | Only server values are shown (expiry, approval flags)           |
 | DEC-007, DEC-057 prices, taxes, discounts                     | Finance                                        | SCR-C-12 shows the API's prices and its stated defaults         |
+| DEC-096 per-session price, DEC-098 member price               | Product owner; Finance for the values          | SCR-C-08 and SCR-C-12 show what the API states (see below)      |
+
+Per-session and member price (SPK-PAY-013, SPK-PAY-015; amendments PA-02 and PA-04, **Proposed**,
+shown only when the API carries them, which needs the organization's `per_session_pricing` or
+`member_pricing` capability): SCR-C-08 shows "Price per class", the classes still to come with
+their product as the API counted them ("$24.00 per class × 7 classes = $168.00"), and the member
+price with the membership it is for. SCR-C-12 shows, per line, the basis the quote stored: the
+same product, and "Member price applied: <membership>" or why the standard price applied. The app
+computes none of it. **Verified** `__tests__/OfferingDetailScreen.test.tsx`,
+`__tests__/QuoteReviewScreen.test.tsx`; not seen on a device. The basket (SCR-C-11) still shows
+the basket line's price snapshot, which for a per-class price is the price of one class (reported
+in `.10x/decisions/sde/track-a.md`).
 
 ## Configuration
 

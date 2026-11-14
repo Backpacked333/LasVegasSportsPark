@@ -3,7 +3,10 @@
  * POL-013; journey A4). Reads `GET /v1/registration-quotes/{id}`: each participant and item, base
  * price, discounts with their explanation, approved taxes and fees, credits applied, due now,
  * future obligations, the server-owned expiry and the applicable policies. Every amount is the
- * API's integer minor units with its currency; the app never computes a price.
+ * API's integer minor units with its currency; the app never computes a price. A line priced per
+ * class or with a member price evaluated (SPK-PAY-013, SPK-PAY-015; proposed amendments PA-02 and
+ * PA-04) shows the basis the quote stored: the per-class price, the count and the product, and
+ * which price applied and why.
  *
  * A discount code or credits produce a new quote (`POST /v1/registration-quotes`, the body carries
  * no amounts). An expired quote reads "Price expired. Get a new price." (QUOTE_EXPIRED,
@@ -31,6 +34,7 @@ import {
   hasPassed,
 } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
+import { priceBasisLines } from '../../features/registration/price-basis';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { quoteStatus } from '../../features/registration/status';
@@ -98,6 +102,12 @@ function LineDetail({ line, name }: { line: QuoteLine; name: string }) {
         label={line.quantity > 1 ? `${line.quantity} × ${m(line.unitPriceMinor)}` : 'Base price'}
         value={m(line.baseAmountMinor)}
       />
+      {/* SPK-PAY-013, SPK-PAY-015: the basis the quote stored, when it has one. */}
+      {priceBasisLines(line.priceBasis, line.currency).map((text) => (
+        <Body key={text} muted>
+          {text}
+        </Body>
+      ))}
       {line.discounts.map((d) => (
         <View key={d.discountDefinitionId}>
           <Detail label={d.code ? `${d.name} (${d.code})` : d.name} value={m(-d.amountMinor)} />
