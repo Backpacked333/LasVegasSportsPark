@@ -221,6 +221,37 @@ export const noFinancialConsequence: FinancePolicyPort = {
   }),
 };
 
+/**
+ * Whether a participant holds a membership entitlement at an instant, for pricing (SPK-PAY-015,
+ * proposed amendment PA-04; SPK-COND-001: a membership grants only what its entitlement states).
+ * `reason` says why: `active_membership` (a confirmed membership granting the entitlement covers
+ * the instant), `membership_suspended` (one does, under an active suspension) or
+ * `no_active_membership`.
+ */
+export interface MembershipPricingStanding {
+  holds: boolean;
+  reason: 'active_membership' | 'no_active_membership' | 'membership_suspended';
+  /** The membership (an enrollment) that qualified; null when none did. */
+  membershipEnrollmentId: string | null;
+}
+
+/**
+ * Finance prices a line through this port and never reads enrollment's tables (§4.2). The
+ * participant is resolved through identity's merge history first (SPK-IAM-007), so a membership
+ * bought under a record since merged into the participant still counts. The read is
+ * organization-scoped and takes an optional transaction; unknown ids hold nothing.
+ */
+export interface MembershipPricingPort {
+  memberStanding(
+    organizationId: string,
+    participantPersonId: string,
+    entitlementDefinitionId: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<MembershipPricingStanding>;
+}
+export const MEMBERSHIP_PRICING_PORT = Symbol('MEMBERSHIP_PRICING_PORT');
+
 /** One booking in a period (ENR-10, IF-36), for reporting. */
 export interface BookingOfPeriod {
   bookingId: string;

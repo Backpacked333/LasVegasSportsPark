@@ -47,18 +47,7 @@ export class MembershipLedger {
     requirement: AppliesTo,
     at: Date,
   ): Promise<boolean> {
-    if (personIds.length === 0) return false;
-    const rows = await (trx ?? this.db)
-      .selectFrom('enrollments')
-      .select(['id', 'offering_id'])
-      .where('organization_id', '=', organizationId)
-      .where('participant_person_id', 'in', [...personIds])
-      .where('intent', '=', 'membership')
-      .where('status', '=', 'confirmed')
-      .where('membership_starts_at', '<=', at)
-      .where('membership_ends_at', '>', at)
-      .orderBy('id')
-      .execute();
+    const rows = await this.confirmedMembershipsAt(trx, organizationId, personIds, at);
     for (const row of rows) {
       const snapshot = await this.offerings.getOffering(organizationId, row.offering_id, at, trx);
       if (!snapshot || !covers(requirement, snapshot.offering)) continue;
@@ -67,4 +56,66 @@ export class MembershipLedger {
     }
     return false;
   }
+
+  /**
+   * SPK-PAY-015 (proposed amendment PA-04): whether one of `personIds` holds, at `at`, a
+   * membership that grants the named entitlement definition, by the same rule as `holds` (a
+   * confirmed membership whose term covers the instant and that no active suspension covers).
+   * The membership is matched by the entitlement recorded on it when it was bought (the offering
+   * is not read again), so a later change to the membership offering never changes who was a
+   * member. The answer names the membership that qualified, or why none did.
+   */
+  async holdsEntitlement(
+    trx: Trx | undefined,
+    organizationId: string,
+    personIds: readonly string[],
+    entitlementDefinitionId: string,
+    at: Date,
+  ): Promise<MembershipEntitlementStanding> {
+    const rows = await this.confirmedMembershipsAt(trx, organizationId, personIds, at);
+    let suspended = false;
+    for (const row of rows) {
+      if (row.entitlement_definition_id !== entitlementDefinitionId) continue;
+      if (await this.suspendedAt(trx, organizationId, row.id, at)) {
+        suspended = true;
+        continue;
+      }
+      return { holds: true, reason: 'active_membership', membershipEnrollmentId: row.id };
+    }
+    return {
+      holds: false,
+      reason: suspended ? 'membership_suspended' : 'no_active_membership',
+      membershipEnrollmentId: null,
+    };
+  }
+
+  /** Confirmed membership enrollments of `personIds` whose term covers `at`, in id order. */
+  private async confirmedMembershipsAt(
+    trx: Trx | undefined,
+    organizationId: string,
+    personIds: readonly string[],
+    at: Date,
+  ) {
+    if (personIds.length === 0) return [];
+    return (trx ?? this.db)
+      .selectFrom('enrollments')
+      .select(['id', 'offering_id', 'entitlement_definition_id'])
+      .where('organization_id', '=', organizationId)
+      .where('participant_person_id', 'in', [...personIds])
+      .where('intent', '=', 'membership')
+      .where('status', '=', 'confirmed')
+      .where('membership_starts_at', '<=', at)
+      .where('membership_ends_at', '>', at)
+      .orderBy('id')
+      .execute();
+  }
 }
+
+/** Whether a membership granting an entitlement is held at an instant, and by which membership. */
+export type MembershipEntitlementStanding =
+  | { holds: true; reason: 'active_membership'; membershipEnrollmentId: string }
+  | {
+      holds: false;
+      reason: 'no_active_membership' | 'membership_suspended';
+      membershipEnrollmentId: null;
+    };

@@ -46,6 +46,7 @@ import {
   ENROLLMENT_PORT,
   FINANCE_POLICY_IMPL,
   FINANCE_POLICY_PORT,
+  MEMBERSHIP_PRICING_PORT,
   WAITLIST_PORT,
   noBookings,
   noFinancialConsequence,
@@ -64,6 +65,7 @@ import { EnrollmentJobs } from './services/enrollment-jobs';
 import { EnrollmentNotices } from './services/enrollment-notices';
 import { EnrollmentViews } from './services/enrollment-views';
 import { MembershipLedger } from './services/membership-ledger';
+import { MembershipPricing } from './services/membership-pricing';
 import { MembershipsService } from './services/memberships.service';
 import { MergeFollowUp } from './services/merge-follow-up';
 import { MyRegistrationsService } from './services/my-registrations.service';
@@ -111,6 +113,9 @@ const providers: Provider[] = [
   },
   RegistrationEvaluator,
   MembershipLedger,
+  // SPK-PAY-015 (PA-04): finance asks whether a participant holds a membership entitlement.
+  MembershipPricing,
+  { provide: MEMBERSHIP_PRICING_PORT, useExisting: MembershipPricing },
   PackageEntitlementsService,
   MembershipsService,
   BookingsService,
@@ -212,6 +217,7 @@ const providers: Provider[] = [
     BASKET_PORT,
     WAITLIST_PORT,
     BOOKING_QUERY_PORT,
+    MEMBERSHIP_PRICING_PORT,
   ],
 })
 export class EnrollmentModule implements OnModuleInit {
