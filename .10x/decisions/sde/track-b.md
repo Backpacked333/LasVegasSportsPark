@@ -49,7 +49,7 @@ Module READMEs updated: catalog, enrollment, entry, competition (one paragraph),
 ## 2. Deviations from the architect contract, and why
 
 1. **The branch base.** The worktree was created at `main` (51253046), which has neither `.10x/`
-   nor the ten capability ids. The branch was fast-forwarded to `claude/jolly-johnson-gd61vv`
+   nor the ten capability ids. The branch was fast-forwarded to the head of pull request 21's branch
    (95921687) before any work. Commits are listed against that base.
 2. **Entry migration `0881` is not used.** Arrival issues are JSON on the check-in and no database
    check lists their codes, so there was nothing to migrate.
