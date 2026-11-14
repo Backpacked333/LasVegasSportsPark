@@ -560,3 +560,125 @@ export async function createAcknowledgmentFixture(
     .execute();
   return id;
 }
+
+/** 0215 (SPK-PAY-014): a price tier of a price rule; `sequence` defaults to the next position. */
+export async function createPriceRuleTierFixture(
+  ctx: CatalogFixtureContext,
+  input: {
+    priceRuleId: string;
+    offeringId: string;
+    code: string;
+    name?: string;
+    attendance?: 'all_sessions' | 'chosen_sessions';
+    minSessions?: number | null;
+    maxSessions?: number | null;
+    priceMinor: number;
+    memberPriceMinor?: number | null;
+    availableUntil?: Date | null;
+    organizationId?: string;
+  },
+): Promise<string> {
+  const id = newId();
+  const organizationId = input.organizationId ?? ctx.organizationId;
+  const latest = await ctx.db
+    .selectFrom('price_rule_tiers')
+    .select((eb) => eb.fn.max('sequence').as('sequence'))
+    .where('organization_id', '=', organizationId)
+    .where('price_rule_id', '=', input.priceRuleId)
+    .executeTakeFirst();
+  const attendance = input.attendance ?? 'all_sessions';
+  await ctx.db
+    .insertInto('price_rule_tiers')
+    .values({
+      id,
+      organization_id: organizationId,
+      price_rule_id: input.priceRuleId,
+      offering_id: input.offeringId,
+      code: input.code,
+      name: input.name ?? input.code,
+      sequence: (latest?.sequence ?? 0) + 1,
+      attendance,
+      min_sessions: attendance === 'chosen_sessions' ? (input.minSessions ?? 1) : null,
+      max_sessions: attendance === 'chosen_sessions' ? (input.maxSessions ?? null) : null,
+      price_minor: input.priceMinor,
+      member_price_minor: input.memberPriceMinor ?? null,
+      available_until: input.availableUntil ?? null,
+    })
+    .execute();
+  return id;
+}
+
+/** 0216 (SPK-PAY-014): an add-on of an offering. */
+export async function createOfferingAddonFixture(
+  ctx: CatalogFixtureContext,
+  input: {
+    offeringId: string;
+    code?: string;
+    name?: string;
+    priceMinor: number;
+    currency?: string;
+    chargeLines?: ChargeLine[];
+    selection?: 'per_registration' | 'per_session';
+    capacity?: number | null;
+    organizationId?: string;
+  },
+): Promise<string> {
+  const id = newId();
+  const n = next();
+  await ctx.db
+    .insertInto('offering_addons')
+    .values({
+      id,
+      organization_id: input.organizationId ?? ctx.organizationId,
+      offering_id: input.offeringId,
+      code: input.code ?? `addon_${n}`,
+      name: input.name ?? `Add-on ${n}`,
+      description: null,
+      price_minor: input.priceMinor,
+      currency: input.currency ?? 'USD',
+      charge_lines: json(input.chargeLines ?? []),
+      selection: input.selection ?? 'per_registration',
+      capacity: input.capacity ?? null,
+      created_by: json(FIXTURE_ACTOR),
+    })
+    .execute();
+  return id;
+}
+
+/** 0217 (SPK-REG-012): the uniform of an offering. */
+export async function createOfferingUniformFixture(
+  ctx: CatalogFixtureContext,
+  input: {
+    offeringId: string;
+    itemKey?: string;
+    name?: string;
+    sizes?: string[];
+    requirement?: 'required' | 'optional';
+    priceMinor?: number | null;
+    currency?: string | null;
+    chargeLines?: ChargeLine[];
+    returningHolderFree?: boolean;
+    organizationId?: string;
+  },
+): Promise<string> {
+  const id = newId();
+  const priceMinor = input.priceMinor === undefined ? null : input.priceMinor;
+  await ctx.db
+    .insertInto('offering_uniforms')
+    .values({
+      id,
+      organization_id: input.organizationId ?? ctx.organizationId,
+      offering_id: input.offeringId,
+      item_key: input.itemKey ?? `kit-${next()}`,
+      name: input.name ?? 'Team kit',
+      sizes: json(input.sizes ?? ['YS', 'YM', 'YL']),
+      requirement: input.requirement ?? 'optional',
+      price_minor: priceMinor,
+      currency: priceMinor === null ? null : (input.currency ?? 'USD'),
+      charge_lines: json(input.chargeLines ?? []),
+      returning_holder_free: input.returningHolderFree ?? false,
+      created_by: json(FIXTURE_ACTOR),
+    })
+    .execute();
+  return id;
+}

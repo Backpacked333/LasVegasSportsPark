@@ -10,11 +10,14 @@ import {
   type DiscountEligibilityRules,
   type EntitlementDefinition,
   type Offering,
+  type OfferingAddon,
   type OfferingFacility,
   type OfferingLocation,
   type OfferingSession,
+  type OfferingUniform,
   type PolicyVersion,
   type PriceRule,
+  type PriceRuleTier,
   type Principal,
   type Program,
   type PublicOffering,
@@ -25,9 +28,12 @@ import type {
   ApprovalsTable,
   DiscountDefinitionsTable,
   EntitlementDefinitionsTable,
+  OfferingAddonsTable,
   OfferingKind,
   OfferingSessionsTable,
+  OfferingUniformsTable,
   PolicyVersionsTable,
+  PriceRuleTiersTable,
   PriceRulesTable,
   ProgramsTable,
   PublicationState,
@@ -138,6 +144,11 @@ export interface OfferingViewContext {
    * view instant; null for a term price or an unpriced offering.
    */
   remainingSessionCount: number | null;
+  /**
+   * SPK-PAY-014 (PA-03): whether the price tiers of the rule are shown (`price_tiers_addons` is
+   * on); absent or false shows none, as before the amendment.
+   */
+  priceTiersVisible?: boolean;
   requiredFormPolicyVersionIds: string[];
   /** SPK-SCHED-008: the facility and its IANA zone (kernel facility directory, K-04). */
   facility: OfferingFacility;
@@ -197,6 +208,7 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
                   entitlementName: ctx.price.memberEntitlementName ?? '',
                 }
               : null,
+          tiers: ctx.priceTiersVisible ? ctx.price.tiers : [],
         }
       : null,
     eligibilityPolicyVersionId: row.eligibility_policy_version_id,
@@ -364,9 +376,61 @@ export function toPublicOfferingSession(row: Selectable<OfferingSessionsTable>):
  * `memberEntitlementName` is the name of the rule's membership entitlement (SPK-PAY-015), read by
  * the caller with the rule; it is null exactly when the rule carries no member price.
  */
+export function toPriceRuleTier(row: Selectable<PriceRuleTiersTable>): PriceRuleTier {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    sequence: row.sequence,
+    attendance: row.attendance,
+    minSessions: row.min_sessions,
+    maxSessions: row.max_sessions,
+    priceMinor: row.price_minor,
+    memberPriceMinor: row.member_price_minor,
+    availableUntil: isoOrNull(row.available_until),
+  };
+}
+
+export function toOfferingAddon(row: Selectable<OfferingAddonsTable>): OfferingAddon {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    code: row.code,
+    name: row.name,
+    description: row.description,
+    priceMinor: row.price_minor,
+    currency: row.currency,
+    chargeLines: row.charge_lines as ChargeLine[],
+    selection: row.selection,
+    capacity: row.capacity,
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toOfferingUniform(row: Selectable<OfferingUniformsTable>): OfferingUniform {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    itemKey: row.item_key,
+    name: row.name,
+    sizes: row.sizes,
+    requirement: row.requirement,
+    priceMinor: row.price_minor,
+    currency: row.currency,
+    chargeLines: row.charge_lines as ChargeLine[],
+    returningHolderFree: row.returning_holder_free,
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
 export function toPriceRule(
   row: Selectable<PriceRulesTable>,
   memberEntitlementName: string | null = null,
+  tiers: PriceRuleTier[] = [],
 ): PriceRule {
   return {
     id: row.id,
@@ -381,6 +445,7 @@ export function toPriceRule(
     memberPriceMinor: row.member_price_minor,
     memberEntitlementDefinitionId: row.member_entitlement_definition_id,
     memberEntitlementName: row.member_entitlement_definition_id ? memberEntitlementName : null,
+    tiers,
     revision: row.revision,
     createdAt: iso(row.created_at),
   };

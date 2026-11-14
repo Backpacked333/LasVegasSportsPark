@@ -6,6 +6,8 @@ import type {
   EntitlementKind,
   MembershipBenefitScope,
   Offering,
+  OfferingAddon,
+  OfferingUniform,
   PolicyKind,
   PackageCreditsScope,
   PartyPackageScope,
@@ -167,7 +169,23 @@ export interface RemainingSession {
   scheduledStart: string;
 }
 
+/**
+ * Every add-on and uniform of an offering, retired ones included (SPK-PAY-014, SPK-REG-012):
+ * enrollment validates a selection against the active ones and names the retired ones a past
+ * purchase still carries; finance prices a selection from them.
+ */
+export interface OfferingExtras {
+  addons: OfferingAddon[];
+  uniforms: OfferingUniform[];
+}
+
 export interface PricingPort {
+  /**
+   * SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): the add-ons and uniforms of an offering. Unknown and
+   * cross-organization ids answer empty lists. Whether a capability is on is the caller's to
+   * check: this is the catalog's record, not a decision to offer it.
+   */
+  offeringExtras(organizationId: string, offeringId: string, trx?: Trx): Promise<OfferingExtras>;
   effectivePriceRule(
     organizationId: string,
     offeringId: string,

@@ -33,6 +33,7 @@ export {
 export { PoliciesService, parsePolicyContent } from './services/policies.service';
 export { AcknowledgmentsService } from './services/acknowledgments.service';
 export { PriceRulesService } from './services/price-rules.service';
+export { OfferingExtrasService } from './services/offering-extras.service';
 export { DiscountsService } from './services/discounts.service';
 export {
   OfferingsService,

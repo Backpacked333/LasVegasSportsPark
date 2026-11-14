@@ -5,6 +5,7 @@ import {
   PUBLIC_PUBLICATION_STATES,
   type CreatePriceRuleInput,
   type PriceRule,
+  type PriceRuleTier,
   type Principal,
 } from '@sportspark/contracts';
 import { isExclusionViolation, json, type Db } from '@sportspark/db';
@@ -24,7 +25,7 @@ import {
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import type { RemainingSession } from '../catalog.ports';
-import { organizationOf, toPriceRule } from '../catalog.shared';
+import { organizationOf, toPriceRule, toPriceRuleTier } from '../catalog.shared';
 
 /**
  * Versioned price rules (SPK-PAY-001, SPK-PAY-002 "historical purchases retain their price
@@ -37,6 +38,9 @@ import { organizationOf, toPriceRule } from '../catalog.shared';
  * capability `per_session_pricing`) and may carry a member price with the membership entitlement
  * it requires (SPK-PAY-015, PA-04, capability `member_pricing`). With a capability off the
  * corresponding fields are refused on write; a rule without them is written exactly as before.
+ *
+ * Proposed amendment PA-03 (migration 0215, SPK-PAY-014, capability `price_tiers_addons`): a rule
+ * may carry price tiers, written with it and immutable like the rest of its pricing content.
  */
 @Injectable()
 export class PriceRulesService {
@@ -106,6 +110,11 @@ export class PriceRulesService {
           );
         }
         memberEntitlementName = definition.name;
+      }
+      // SPK-PAY-014 (PA-03): tiers are a commitment of `price_tiers_addons`, refused while it is
+      // off; a rule without tiers is written exactly as before.
+      if (body.tiers.length > 0) {
+        await this.capabilities.require(organizationId, 'price_tiers_addons', trx);
       }
       const now = this.clock.now();
       const effectiveFrom = new Date(body.effectiveFrom);
@@ -193,6 +202,36 @@ export class PriceRulesService {
         }
         throw error;
       }
+      const tiers: PriceRuleTier[] = [];
+      for (const [index, tier] of body.tiers.entries()) {
+        const availableUntil = tier.availableUntil ? new Date(tier.availableUntil) : null;
+        if (availableUntil && availableUntil.getTime() <= effectiveFrom.getTime()) {
+          throw errors.validation(
+            'A tier purchase deadline is after the instant the rule takes effect.',
+            { path: `tiers.${index}.availableUntil` },
+          );
+        }
+        const tierRow = await trx
+          .insertInto('price_rule_tiers')
+          .values({
+            id: newId(),
+            organization_id: organizationId,
+            price_rule_id: id,
+            offering_id: offeringId,
+            code: tier.code,
+            name: tier.name,
+            sequence: index + 1,
+            attendance: tier.attendance,
+            min_sessions: tier.minSessions ?? null,
+            max_sessions: tier.maxSessions ?? null,
+            price_minor: tier.priceMinor,
+            member_price_minor: tier.memberPriceMinor ?? null,
+            available_until: availableUntil,
+          })
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        tiers.push(toPriceRuleTier(tierRow));
+      }
       await this.audit.record(trx, {
         organizationId,
         actor: principal,
@@ -210,6 +249,12 @@ export class PriceRulesService {
           pricingBasis: body.pricingBasis,
           memberPriceMinor: body.memberPriceMinor ?? null,
           memberEntitlementDefinitionId: body.memberEntitlementDefinitionId ?? null,
+          tiers: tiers.map((tier) => ({
+            id: tier.id,
+            code: tier.code,
+            attendance: tier.attendance,
+            priceMinor: tier.priceMinor,
+          })),
           supersededPriceRuleId,
           policyReferences: body.policyReferences ?? [],
         },
@@ -230,7 +275,7 @@ export class PriceRulesService {
         },
         correlationId,
       });
-      return toPriceRule(row, memberEntitlementName);
+      return toPriceRule(row, memberEntitlementName, tiers);
     });
   }
 
@@ -268,9 +313,42 @@ export class PriceRulesService {
       .orderBy('version')
       .execute();
     const names = await this.memberEntitlementNames(this.db, organizationId, rows);
-    return rows.map((row) =>
-      toPriceRule(row, names.get(row.member_entitlement_definition_id ?? '') ?? null),
+    const tiers = await this.tiersOf(
+      this.db,
+      organizationId,
+      rows.map((row) => row.id),
     );
+    return rows.map((row) =>
+      toPriceRule(
+        row,
+        names.get(row.member_entitlement_definition_id ?? '') ?? null,
+        tiers.get(row.id) ?? [],
+      ),
+    );
+  }
+
+  /** SPK-PAY-014 (PA-03): the tiers of the given rules in display order, in one read. */
+  private async tiersOf(
+    db: Db | Trx,
+    organizationId: string,
+    priceRuleIds: readonly string[],
+  ): Promise<Map<string, PriceRuleTier[]>> {
+    const out = new Map<string, PriceRuleTier[]>();
+    if (priceRuleIds.length === 0) return out;
+    const rows = await db
+      .selectFrom('price_rule_tiers')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('price_rule_id', 'in', [...priceRuleIds])
+      .orderBy('price_rule_id')
+      .orderBy('sequence')
+      .execute();
+    for (const row of rows) {
+      const list = out.get(row.price_rule_id) ?? [];
+      list.push(toPriceRuleTier(row));
+      out.set(row.price_rule_id, list);
+    }
+    return out;
   }
 
   /** The names of the membership entitlements the rules name (SPK-PAY-015), in one read. */
@@ -321,10 +399,19 @@ export class PriceRulesService {
       .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]))
       .execute();
     const names = await this.memberEntitlementNames(db, organizationId, rows);
+    const tiers = await this.tiersOf(
+      db,
+      organizationId,
+      rows.map((row) => row.id),
+    );
     for (const row of rows) {
       out.set(
         row.offering_id,
-        toPriceRule(row, names.get(row.member_entitlement_definition_id ?? '') ?? null),
+        toPriceRule(
+          row,
+          names.get(row.member_entitlement_definition_id ?? '') ?? null,
+          tiers.get(row.id) ?? [],
+        ),
       );
     }
     return out;

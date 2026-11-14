@@ -191,6 +191,24 @@ export const CatalogEvents = {
       supersededPriceRuleId: z.uuid().nullable(),
     }),
   ),
+  /** SPK-PAY-014 (PA-03): an add-on of an offering was created or retired. */
+  offeringAddonChanged: defineEvent(
+    'catalog.offering_addon_changed',
+    z.object({
+      addonId: z.uuid(),
+      offeringId: z.uuid(),
+      status: z.enum(['active', 'retired']),
+    }),
+  ),
+  /** SPK-REG-012 (PA-07): the uniform of an offering was set or retired. */
+  offeringUniformChanged: defineEvent(
+    'catalog.offering_uniform_changed',
+    z.object({
+      offeringUniformId: z.uuid(),
+      offeringId: z.uuid(),
+      status: z.enum(['active', 'retired']),
+    }),
+  ),
   discountCreated: defineEvent(
     'catalog.discount_created',
     z.object({ discountDefinitionId: z.uuid(), code: z.string().nullable(), status: z.string() }),
