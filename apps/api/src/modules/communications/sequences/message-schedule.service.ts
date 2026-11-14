@@ -119,6 +119,14 @@ interface Delivery {
   recipientCount: number;
 }
 
+/** A confirmed message that is due, as the sending job reads it before claiming it. */
+export interface DueCandidate {
+  id: string;
+  organization_id: string;
+  facility_id: string;
+  due_at: Date;
+}
+
 export interface SyncOptions {
   /** Also produce the messages of the sequences that apply and are not there yet. */
   materialize: boolean;
@@ -924,21 +932,37 @@ export class MessageScheduleService {
   // -------------------------------------------------------------------------------------------
   // Sending (the periodic job)
   // -------------------------------------------------------------------------------------------
-  /** Confirmed messages that are due, oldest first (the job's candidates; nothing is locked). */
-  dueCandidates(
+  /**
+   * Confirmed messages that are due, oldest first, after the one a previous page ended on (the
+   * job's candidates; nothing is locked). The job pages through them, so messages it cannot send
+   * now (an organization with the switch off, a message that fails) never hold back the rest.
+   */
+  async dueCandidates(
     now: Date,
     limit: number,
-  ): Promise<Array<{ id: string; organization_id: string; facility_id: string }>> {
-    return this.uow
+    after: DueCandidate | null,
+  ): Promise<DueCandidate[]> {
+    let query = this.uow
       .reader()
       .selectFrom('scheduled_messages')
-      .select(['id', 'organization_id', 'facility_id'])
+      .select(['id', 'organization_id', 'facility_id', 'due_at'])
       .where('status', '=', 'confirmed')
-      .where('due_at', '<=', now)
-      .orderBy('due_at')
-      .orderBy('id')
-      .limit(limit)
-      .execute();
+      .where('due_at', '<=', now);
+    if (after) {
+      query = query.where((eb) =>
+        eb.or([
+          eb('due_at', '>', after.due_at),
+          eb.and([eb('due_at', '=', after.due_at), eb('id', '>', after.id)]),
+        ]),
+      );
+    }
+    const rows = await query.orderBy('due_at').orderBy('id').limit(limit).execute();
+    return rows.map((row) => ({ ...row, due_at: new Date(row.due_at as Date) }));
+  }
+
+  /** Whether the organization has message sequences turned on (the job asks once per run). */
+  sendingEnabled(organizationId: string): Promise<boolean> {
+    return this.capabilities.isEnabled(organizationId, 'message_sequences');
   }
 
   /**

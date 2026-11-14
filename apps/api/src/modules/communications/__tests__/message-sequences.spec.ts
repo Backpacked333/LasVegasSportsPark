@@ -1,6 +1,6 @@
 import { newId } from '@sportspark/contracts';
-import { json } from '@sportspark/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { json, seedOrganization } from '@sportspark/db';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Outbox, UnitOfWork } from '../../../kernel';
 import { createTestApp, drainOutboxChecked, type TestApp } from '../../../testing';
 import { CatalogEvents, CatalogModule, createOfferingFixture } from '../../catalog';
@@ -33,7 +33,11 @@ import {
   MESSAGE_SEQUENCE_POLICY,
 } from '../sequences/message-sequences.policy';
 import { SEND_SCHEDULED_MESSAGES_JOB } from '../sequences/message-schedule.service';
-import { ScheduledMessageSender } from '../sequences/scheduled-message-sender';
+import {
+  SCHEDULED_MESSAGE_SEND_FAILED,
+  ScheduledMessageSender,
+} from '../sequences/scheduled-message-sender';
+import { NotificationsService } from '../services/notifications.service';
 import { attemptsOf, recipientsOf } from '../testing/communications-fixtures';
 import { withDeclaredPortDoubles } from './support';
 
@@ -1468,6 +1472,148 @@ describe('message templates and sequences (SPK-COMMS-009, proposed amendment PA-
       .set(manager)
       .send({ expectedRevision: message!.revision });
     expect(missingKey.status).toBe(400);
+  });
+
+  it('SPK-COMMS-009: messages the job cannot send now (another organization with the switch off, a message that fails) never hold back the rest; a failure is owned by support and tried again', async () => {
+    t.clock.set(CLOCK_START);
+    const template = await makeTemplate({ title: 'Reminder for {{season_name}}', body: 'Soon.' });
+    const in_ = await league();
+    await makeSequence({
+      subjectType: 'season',
+      scopeId: in_.competitionId,
+      steps: [
+        { templateId: template.id, anchor: 'starts', offsetDays: -7 },
+        { templateId: template.id, anchor: 'starts', offsetDays: -6 },
+      ],
+    });
+    const season = await createSeason(in_);
+    await team(season.id);
+    const [first, second] = (await scheduleOf('season', season.id)).messages as Json[];
+    const confirmedFirst = await confirm(first!);
+    const confirmedSecond = await confirm(second!);
+
+    // Another organization, with message sequences turned off, has more confirmed messages due
+    // than one pass handles, all due before this organization's.
+    const other = await seedOrganization(t.db, { slug: `other-${newId()}` });
+    const actor = json({ kind: 'system', actorLabel: 'test' });
+    const [otherTemplate, otherSequence, otherStep] = [newId(), newId(), newId()];
+    await t.db
+      .insertInto('message_templates')
+      .values({
+        id: otherTemplate,
+        organization_id: other.organizationId,
+        name: 'Other',
+        category: 'operational',
+        title: 'Other',
+        body: 'Other',
+        created_by: actor,
+      })
+      .execute();
+    await t.db
+      .insertInto('message_sequences')
+      .values({
+        id: otherSequence,
+        organization_id: other.organizationId,
+        facility_id: other.facilityId,
+        name: 'Other',
+        subject_type: 'season',
+        scope_id: null,
+        active: true,
+        created_by: actor,
+      })
+      .execute();
+    await t.db
+      .insertInto('message_sequence_steps')
+      .values({
+        id: otherStep,
+        organization_id: other.organizationId,
+        sequence_id: otherSequence,
+        template_id: otherTemplate,
+        position: 1,
+        anchor: 'starts',
+        offset_days: -7,
+        send_time_local: null,
+        retired_at: null,
+      })
+      .execute();
+    await t.db
+      .insertInto('scheduled_messages')
+      .values(
+        Array.from({ length: 55 }, () => ({
+          id: newId(),
+          organization_id: other.organizationId,
+          facility_id: other.facilityId,
+          sequence_id: otherSequence,
+          sequence_step_id: otherStep,
+          subject_type: 'season' as const,
+          subject_id: newId(),
+          anchor_at: new Date('2026-12-08T08:00:00Z'),
+          due_at: new Date('2026-12-01T17:00:00Z'),
+        })),
+      )
+      .execute();
+    await t.db
+      .updateTable('scheduled_messages')
+      .set({
+        status: 'confirmed',
+        confirmed_title: 'Other',
+        confirmed_body: 'Other',
+        confirmed_by: actor,
+        confirmed_at: t.clock.now(),
+      })
+      .where('organization_id', '=', other.organizationId)
+      .execute();
+    const waitingElsewhere = () =>
+      t.db
+        .selectFrom('scheduled_messages')
+        .select('status')
+        .where('organization_id', '=', other.organizationId)
+        .execute();
+
+    // The first of this organization's two messages fails once on its way out.
+    const compose = vi
+      .spyOn(t.app.get(NotificationsService), 'composeAndQueueIn')
+      .mockRejectedValueOnce(new Error('could not compose'));
+    try {
+      t.clock.set('2027-01-04T17:00:00.000Z'); // both are due
+      const result = await runSender();
+      // the 55 of the other organization were passed over, the failure too; the second was sent
+      expect(result).toEqual({ processed: 1, remaining: 0 });
+      expect(await messageOf(confirmedSecond.id)).toMatchObject({ status: 'sent' });
+      expect(await messageOf(confirmedFirst.id)).toMatchObject({
+        status: 'confirmed',
+        revision: confirmedFirst.revision,
+      });
+      expect((await waitingElsewhere()).every((r) => r.status === 'confirmed')).toBe(true);
+      expect(
+        await t.db
+          .selectFrom('notifications')
+          .select('id')
+          .where('organization_id', '=', other.organizationId)
+          .execute(),
+      ).toEqual([]);
+      const raised = await t.db
+        .selectFrom('operational_exceptions')
+        .select(['category', 'owner_queue', 'affected_id', 'status'])
+        .where('organization_id', '=', org)
+        .where('category', '=', SCHEDULED_MESSAGE_SEND_FAILED)
+        .execute();
+      expect(raised).toEqual([
+        expect.objectContaining({
+          owner_queue: 'support_operator',
+          affected_id: confirmedFirst.id,
+        }),
+      ]);
+      // the next run sends the one that failed, once
+      expect(await runSender()).toEqual({ processed: 1, remaining: 0 });
+      expect(await messageOf(confirmedFirst.id)).toMatchObject({ status: 'sent' });
+      expect(await runSender()).toEqual({ processed: 0, remaining: 0 });
+      expect(await noticesAbout(season.id)).toHaveLength(2);
+      expect((await waitingElsewhere()).every((r) => r.status === 'confirmed')).toBe(true);
+    } finally {
+      compose.mockRestore();
+      t.clock.set(CLOCK_START);
+    }
   });
 
   it('SPK-COMMS-009: the assumed defaults are policy content, and nothing is automatic (DEC-099 pending)', () => {

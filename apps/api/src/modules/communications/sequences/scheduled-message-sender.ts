@@ -6,7 +6,11 @@ import {
   type PeriodicJobContext,
   type PeriodicJobResult,
 } from '../../../kernel';
-import { MessageScheduleService, SEND_SCHEDULED_MESSAGES_JOB } from './message-schedule.service';
+import {
+  MessageScheduleService,
+  SEND_SCHEDULED_MESSAGES_JOB,
+  type DueCandidate,
+} from './message-schedule.service';
 import { MESSAGE_SEQUENCE_POLICY, type MessageSequencePolicy } from './message-sequences.policy';
 
 export const SCHEDULED_MESSAGE_SEND_FAILED = 'communications.scheduled_message_send_failed';
@@ -21,8 +25,11 @@ export const SCHEDULED_MESSAGE_SEND_FAILED = 'communications.scheduled_message_s
  * nothing is sent for an organization that has message sequences turned off. No provider is
  * called here: delivery stays with the delivery worker (§4.11).
  *
- * One message that cannot be sent never stalls the pass: its transaction rolls back, it stays
- * confirmed for the next run, and support gets one owned exception naming it.
+ * A pass handles up to `batchSize` messages and reads the due ones page by page, oldest first.
+ * Messages it cannot send now are passed over, never waited for: those of an organization with
+ * the switch off (they stay confirmed), and one that fails (its transaction rolls back, it stays
+ * confirmed for the next run, and support gets one owned exception naming it). So neither holds
+ * back the messages behind it.
  */
 @Injectable()
 export class ScheduledMessageSender {
@@ -45,24 +52,34 @@ export class ScheduledMessageSender {
   }
 
   async run({ now, batchSize }: PeriodicJobContext): Promise<PeriodicJobResult> {
-    const due = await this.schedule.dueCandidates(now, batchSize + 1);
+    const enabled = new Map<string, boolean>();
     let processed = 0;
-    for (const candidate of due.slice(0, batchSize)) {
-      try {
-        if (await this.schedule.sendDue(candidate.organization_id, candidate.id, now)) {
-          processed += 1;
+    let after: DueCandidate | null = null;
+    for (;;) {
+      const page = await this.schedule.dueCandidates(now, batchSize, after);
+      for (const candidate of page) {
+        // The batch is full: the rest waits for the next pass of this run.
+        if (processed >= batchSize) return { processed, remaining: 1 };
+        let on = enabled.get(candidate.organization_id);
+        if (on === undefined) {
+          on = await this.schedule.sendingEnabled(candidate.organization_id);
+          enabled.set(candidate.organization_id, on);
         }
-      } catch (error) {
-        await this.raiseFailure(candidate, error);
+        if (!on) continue; // switched off: the confirmed message waits as it is
+        try {
+          if (await this.schedule.sendDue(candidate.organization_id, candidate.id, now)) {
+            processed += 1;
+          }
+        } catch (error) {
+          await this.raiseFailure(candidate, error);
+        }
       }
+      if (page.length < batchSize) return { processed, remaining: 0 };
+      after = page[page.length - 1] ?? null;
     }
-    return { processed, remaining: Math.max(0, due.length - batchSize) };
   }
 
-  private async raiseFailure(
-    candidate: { id: string; organization_id: string; facility_id: string },
-    error: unknown,
-  ): Promise<void> {
+  private async raiseFailure(candidate: DueCandidate, error: unknown): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     this.logger.warn(`scheduled message ${candidate.id} could not be sent: ${message}`);
     try {
