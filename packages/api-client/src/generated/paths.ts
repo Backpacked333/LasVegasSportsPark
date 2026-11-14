@@ -29896,6 +29896,1181 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/message-placeholders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The named placeholders a template may hold and the records that fill them (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessagePlaceholderList"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/message-schedules/{subjectType}/{subjectId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A season's or an offering's message schedule: what is waiting, confirmed, skipped and sent (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    subjectId: string;
+                    subjectType: components["schemas"]["MessageSubjectType"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSchedule"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/message-schedules/{subjectType}/{subjectId}/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Produce the schedule of a season or an offering from the sequences that apply; existing messages are kept (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    subjectId: string;
+                    subjectType: components["schemas"]["MessageSubjectType"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["GenerateMessageScheduleRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSchedule"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/message-sequences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Message sequences with their steps (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    facilityId?: string;
+                    subjectType?: components["schemas"]["MessageSubjectType"];
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSequenceList"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create a message sequence for seasons or offerings; it produces nothing until it is active (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CreateMessageSequenceRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSequence"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/message-sequences/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One message sequence with its steps (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSequence"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename a message sequence, change what it belongs to, or switch it on or off (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["UpdateMessageSequenceRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSequence"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/message-sequences/{id}/steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a step: a template and a time relative to an anchor date (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["AddMessageSequenceStepRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSequence"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/message-sequences/{id}/steps/{stepId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change a step; its unsent messages follow and need confirming again (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                    stepId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["UpdateMessageSequenceStepRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSequence"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/message-sequences/{id}/steps/{stepId}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove a step; its unsent messages are canceled and what was sent is kept (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). It creates nothing, so it stays available while message sequences are turned off.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                    stepId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RemoveMessageSequenceStepRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageSequence"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/message-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reusable message templates (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    status?: components["schemas"]["MessageTemplateStatus"];
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageTemplateList"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create a message template (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CreateMessageTemplateRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageTemplate"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/message-templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One message template (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageTemplate"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change or archive a message template; messages already sent keep their text (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["UpdateMessageTemplateRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MessageTemplate"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -48064,6 +49239,546 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/scheduled-messages/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One scheduled message (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduledMessage"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scheduled-messages/{id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a scheduled message: it is sent when it is due, to the recipients resolved then (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ConfirmScheduledMessageRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduledMessage"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scheduled-messages/{id}/edit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep an edited copy of the title and body for this message; the template is not changed (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["EditScheduledMessageRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduledMessage"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scheduled-messages/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The text with real details filled in and who would receive it now (SPK-COMMS-006) (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). A read: available whether or not message sequences are turned on.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduledMessagePreview"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scheduled-messages/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bring a skipped message back to needing confirmation (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). Refused with ACCESS_DENIED `CAPABILITY_DISABLED` while the organization has not turned message sequences on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RestoreScheduledMessageRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduledMessage"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scheduled-messages/{id}/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip a scheduled message: it is not sent (SPK-COMMS-009, proposed)
+         * @description Implements SPK-COMMS-009 (proposed amendment PA-05, DEC-099 pending). Requires an Idempotency-Key header (§4.9). It creates nothing, so it stays available while message sequences are turned off.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["SkipScheduledMessageRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduledMessage"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the capability is turned off */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/seasons": {
         parameters: {
             query?: never;
@@ -55755,6 +57470,17 @@ export type components = {
             /** Format: uuid */
             personId: string;
         };
+        AddMessageSequenceStepRequest: {
+            anchor: components["schemas"]["MessageAnchor"];
+            expectedRevision?: number;
+            offsetDays: number;
+            policyReferences?: string[];
+            position?: number;
+            reason?: string;
+            sendTimeLocal?: string;
+            /** Format: uuid */
+            templateId: string;
+        };
         AddPoolEntryRequest: {
             expectedRevision?: number;
             policyReferences?: string[];
@@ -57671,6 +59397,11 @@ export type components = {
             subject?: components["schemas"]["NotificationSubject"];
             title: string;
         };
+        ConfirmScheduledMessageRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
+        };
         ConfirmSessionBookingRequest: {
             expectedRevision: number;
             policyReferences?: string[];
@@ -58468,6 +60199,26 @@ export type components = {
             reason: string;
             /** Format: date-time */
             until?: string;
+        };
+        CreateMessageSequenceRequest: {
+            expectedRevision?: number;
+            /** Format: uuid */
+            facilityId: string;
+            name: string;
+            policyReferences?: string[];
+            reason?: string;
+            /** Format: uuid */
+            scopeId?: string;
+            subjectType: components["schemas"]["MessageSubjectType"];
+        };
+        CreateMessageTemplateRequest: {
+            body: string;
+            category: components["schemas"]["NotificationCategory"];
+            expectedRevision?: number;
+            name: string;
+            policyReferences?: string[];
+            reason?: string;
+            title: string;
         };
         CreateObligationRequest: {
             amountMinor: number;
@@ -59697,6 +61448,13 @@ export type components = {
             /** @enum {string} */
             scope: "one" | "this_and_future" | "entire_series";
         };
+        EditScheduledMessageRequest: {
+            body: string | null;
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
+            title: string | null;
+        };
         EligibilityAlternative: {
             /** @enum {string} */
             kind: "join_waitlist" | "trial" | "other_offering" | "request_placement" | "complete_acknowledgment" | "contact_staff";
@@ -60606,6 +62364,11 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
             searchSettings?: components["schemas"]["SearchSettings"];
+        };
+        GenerateMessageScheduleRequest: {
+            expectedRevision?: number;
+            policyReferences?: string[];
+            reason?: string;
         };
         GenerateMigrationReconciliationRequest: {
             expectedRevision?: number;
@@ -61521,6 +63284,100 @@ export type components = {
             /** Format: uuid */
             survivorPersonId: string;
         };
+        /** @enum {string} */
+        MessageAnchor: "registration_opens" | "registration_closes" | "starts" | "ends" | "first_game";
+        MessagePlaceholder: {
+            label: string;
+            name: string;
+            subjects: components["schemas"]["MessageSubjectType"][];
+        };
+        MessagePlaceholderList: {
+            items: components["schemas"]["MessagePlaceholder"][];
+        };
+        MessageRecipientPreviewEntry: {
+            basis: components["schemas"]["RecipientBasis"];
+            displayName: string;
+            /** Format: uuid */
+            personId: string;
+            reachable: boolean;
+        };
+        MessageSchedule: {
+            /** Format: uuid */
+            facilityId: string | null;
+            messages: components["schemas"]["ScheduledMessage"][];
+            sequences: {
+                /** Format: uuid */
+                id: string;
+                name: string;
+            }[];
+            subject: components["schemas"]["MessageSubject"];
+            subjectName: string;
+            timezone: string | null;
+        };
+        MessageSequence: {
+            active: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            facilityId: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            revision: number;
+            /** Format: uuid */
+            scopeId: string | null;
+            steps: components["schemas"]["MessageSequenceStep"][];
+            subjectType: components["schemas"]["MessageSubjectType"];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        MessageSequenceList: {
+            items: components["schemas"]["MessageSequence"][];
+        };
+        MessageSequenceStep: {
+            anchor: components["schemas"]["MessageAnchor"];
+            effectiveSendTimeLocal: string;
+            /** Format: uuid */
+            id: string;
+            offsetDays: number;
+            position: number;
+            /** Format: date-time */
+            retiredAt: string | null;
+            revision: number;
+            sendTimeLocal: string | null;
+            /** Format: uuid */
+            sequenceId: string;
+            /** Format: uuid */
+            templateId: string;
+            templateName: string;
+        };
+        MessageSubject: {
+            /** Format: uuid */
+            id: string;
+            type: components["schemas"]["MessageSubjectType"];
+        };
+        /** @enum {string} */
+        MessageSubjectType: "season" | "offering";
+        MessageTemplate: {
+            body: string;
+            category: components["schemas"]["NotificationCategory"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            placeholders: string[];
+            revision: number;
+            status: components["schemas"]["MessageTemplateStatus"];
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        MessageTemplateList: {
+            items: components["schemas"]["MessageTemplate"][];
+        };
+        /** @enum {string} */
+        MessageTemplateStatus: "active" | "archived";
         MessagingWebhookRequest: {
             data: components["schemas"]["DeliveryReceipt"];
             id: string;
@@ -64626,6 +66483,11 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
         };
+        RemoveMessageSequenceStepRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
+        };
         RemovePoolEntryRequest: {
             expectedRevision?: number;
             policyReferences?: string[];
@@ -64980,6 +66842,11 @@ export type components = {
             }[];
             /** @enum {string} */
             status: "in_service" | "restricted";
+        };
+        RestoreScheduledMessageRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
         };
         Restriction: {
             affectedConflictUnitIds: string[];
@@ -65474,6 +67341,87 @@ export type components = {
             /** Format: uuid */
             visitId: string | null;
         };
+        ScheduledMessage: {
+            anchor: components["schemas"]["MessageAnchor"];
+            /** Format: date-time */
+            anchorAt: string | null;
+            attention: components["schemas"]["ScheduledMessageAttention"] | null;
+            body: string;
+            /** Format: date-time */
+            canceledAt: string | null;
+            cancelReason: string | null;
+            category: components["schemas"]["NotificationCategory"];
+            /** Format: date-time */
+            confirmedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            delivery: components["schemas"]["ScheduledMessageDelivery"] | null;
+            /** Format: date-time */
+            dueAt: string | null;
+            edited: boolean;
+            /** Format: uuid */
+            facilityId: string;
+            /** Format: uuid */
+            id: string;
+            missingPlaceholders: string[];
+            offsetDays: number;
+            revision: number;
+            sendTimeLocal: string;
+            /** Format: date-time */
+            sentAt: string | null;
+            /** Format: uuid */
+            sequenceId: string;
+            sequenceName: string;
+            /** Format: date-time */
+            skippedAt: string | null;
+            skipReason: string | null;
+            sourceBody: string;
+            sourceTitle: string;
+            status: components["schemas"]["ScheduledMessageStatus"];
+            /** Format: uuid */
+            stepId: string;
+            subject: components["schemas"]["MessageSubject"];
+            /** Format: uuid */
+            templateId: string;
+            templateName: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @enum {string} */
+        ScheduledMessageAttention: "anchor_moved" | "text_changed" | "no_audience" | "audience_too_large";
+        ScheduledMessageDelivery: {
+            /** Format: uuid */
+            notificationId: string;
+            notificationStatus: components["schemas"]["NotificationStatus"];
+            recipientCount: number;
+            suppressionReason: components["schemas"]["SuppressionReason"] | null;
+        };
+        ScheduledMessagePreview: {
+            blockers: ("missing_placeholder" | "no_due_time" | "text_too_long" | "not_awaiting_confirmation")[];
+            body: string;
+            category: components["schemas"]["NotificationCategory"];
+            /** Format: date-time */
+            dueAt: string | null;
+            missingPlaceholders: {
+                label: string;
+                name: string;
+            }[];
+            recipients: {
+                count: number;
+                entries: components["schemas"]["MessageRecipientPreviewEntry"][];
+                reachableCount: number;
+                /** Format: date-time */
+                resolvedAt: string;
+                tooLarge: boolean;
+            };
+            /** Format: uuid */
+            scheduledMessageId: string;
+            status: components["schemas"]["ScheduledMessageStatus"];
+            title: string;
+        };
+        /** @enum {string} */
+        ScheduledMessageStatus: "needs_confirmation" | "confirmed" | "skipped" | "sent" | "canceled";
         ScheduleDraft: {
             author: {
                 /** Format: uuid */
@@ -65812,6 +67760,11 @@ export type components = {
         ShootoutRules: {
             enabled: boolean;
             kicks: number | null;
+        };
+        SkipScheduledMessageRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
         };
         SmallSidedOtherRules: {
             boards: boolean;
@@ -66877,6 +68830,35 @@ export type components = {
             severity?: "low" | "medium" | "high" | "critical";
             /** @enum {string} */
             status?: "in_progress" | "resolved" | "closed";
+        };
+        UpdateMessageSequenceRequest: {
+            active?: boolean;
+            expectedRevision: number;
+            name?: string;
+            policyReferences?: string[];
+            reason?: string;
+            /** Format: uuid */
+            scopeId?: string | null;
+        };
+        UpdateMessageSequenceStepRequest: {
+            anchor?: components["schemas"]["MessageAnchor"];
+            expectedRevision: number;
+            offsetDays?: number;
+            policyReferences?: string[];
+            position?: number;
+            reason?: string;
+            sendTimeLocal?: string | null;
+            /** Format: uuid */
+            templateId?: string;
+        };
+        UpdateMessageTemplateRequest: {
+            body?: string;
+            expectedRevision: number;
+            name?: string;
+            policyReferences?: string[];
+            reason?: string;
+            status?: components["schemas"]["MessageTemplateStatus"];
+            title?: string;
         };
         UpdateOfferingRequest: {
             activityType?: string;
