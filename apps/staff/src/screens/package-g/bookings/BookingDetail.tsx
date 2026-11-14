@@ -15,6 +15,9 @@
  * (`GET /v1/assignment-requirements` and `GET /v1/assignments`, target the occurrence's event;
  * SPK-STAFF-002: proposed and offered never count as covered), and the commands the state allows:
  * approve or decline a request, cancel with its bound consequence.
+ *
+ * A rental also shows its group roster (`BookingRoster`; SPK-COND-005, proposed) while the
+ * organization has turned rental rosters on.
  */
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
@@ -29,6 +32,7 @@ import { DefinitionView } from '../participation/DefinitionView';
 import { formatInstant, formatRange, plural, shortRef, zoneOf } from '../participation/format';
 import { AssetName, JoinedList, PersonNameView } from '../participation/names';
 import { ApproveBooking, DeclineBooking } from './BookingDecision';
+import { BookingRoster } from './BookingRoster';
 import { BookingTermsView, CONFIRMATION_WORDS } from './BookingTermsView';
 import { CancelBooking } from './CancelBooking';
 import { StaffCoverage } from './StaffCoverage';
@@ -210,6 +214,7 @@ function Detail({ booking }: { booking: Booking }) {
       </section>
       <StaffingState booking={booking} />
       <Payment booking={booking} />
+      <BookingRoster booking={booking} />
       {booking.status === 'requested' && booking.terms.confirmationMode === 'request' ? (
         <StateView
           variant="pending-decision"
