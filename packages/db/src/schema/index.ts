@@ -1,5 +1,6 @@
 import type { CoreTables } from './core';
 import type { AutomationTables } from './automation';
+import type { CatalogWaiversTables } from './catalog-waivers';
 import type { CatalogTables } from './catalog';
 import type { CommunicationsTables } from './communications';
 import type { CompetitionFieldTables } from './competition-field';
@@ -21,6 +22,7 @@ import type { WorkforceTables } from './workforce';
 
 export * from './core';
 export * from './automation';
+export * from './catalog-waivers';
 export * from './catalog';
 export * from './communications';
 export * from './competition-field';
@@ -48,6 +50,7 @@ export interface Database
   extends
     CoreTables,
     AutomationTables,
+    CatalogWaiversTables,
     CatalogTables,
     CommunicationsTables,
     CompetitionFieldTables,

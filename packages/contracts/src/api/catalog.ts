@@ -3,6 +3,7 @@ import { Revision, withCommandMeta } from '../commands';
 import { CurrencyCode } from '../money';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
+import { StaffRole } from '../principal';
 import { Instant } from '../time';
 
 /**
@@ -109,6 +110,8 @@ export const PolicyKindSchema = z
     'installment',
     'booking_terms',
     'tax_fee',
+    // SPK-REG-011 (proposed amendment PA-01, DEC-095): a liability waiver family.
+    'waiver',
   ])
   .openapi('PolicyKind');
 export type PolicyKind = z.infer<typeof PolicyKindSchema>;
@@ -124,6 +127,14 @@ export const AcknowledgmentBasisSchema = z
 export const AcknowledgmentStatusSchema = z
   .enum(['active', 'withdrawn'])
   .openapi('AcknowledgmentStatus');
+/**
+ * SPK-REG-011, SPK-REG-009: how an acknowledgment was given. `paper` is only ever a staff entry
+ * that names the staff member and the date on the paper; it is never a customer's signature.
+ */
+export const AcknowledgmentMethodSchema = z
+  .enum(['digital', 'paper'])
+  .openapi('AcknowledgmentMethod');
+export type AcknowledgmentMethod = z.infer<typeof AcknowledgmentMethodSchema>;
 
 export const DiscountKindSchema = z.enum(['promo_code', 'automatic']).openapi('DiscountKind');
 export const DiscountAmountKindSchema = z
@@ -575,6 +586,37 @@ export const TaxFeeContentSchema = z
   .openapi('TaxFeeContent');
 export type TaxFeeContent = z.infer<typeof TaxFeeContentSchema>;
 
+/**
+ * SPK-REG-011 (proposed amendment PA-01): content of a `waiver` version. Every value is stated by
+ * the version (none is assumed): the open values of DEC-095 (whether a new version requires
+ * re-acceptance, how often it is renewed, whether a missing or lapsed waiver warns or blocks, who
+ * may override a block) are answered by approving a version, not by a release.
+ */
+export const WaiverRenewalSchema = z
+  .strictObject({
+    /** True: only an acceptance of the version in force counts. */
+    reacceptOnNewVersion: z.boolean(),
+    /** An acceptance counts for this many months; null means it never lapses by time. */
+    renewEveryMonths: z.number().int().min(1).max(240).nullable(),
+  })
+  .openapi('WaiverRenewal');
+export type WaiverRenewal = z.infer<typeof WaiverRenewalSchema>;
+
+export const WaiverEnforcementSchema = z.enum(['warn', 'block']).openapi('WaiverEnforcement');
+export type WaiverEnforcement = z.infer<typeof WaiverEnforcementSchema>;
+
+export const WaiverContentSchema = z
+  .strictObject({
+    /** The wording the person accepts. */
+    text: z.string().trim().min(1).max(50_000),
+    renewal: WaiverRenewalSchema,
+    enforcement: WaiverEnforcementSchema,
+    /** Staff roles that may record an override of a block; empty means nobody may. */
+    overrideRoles: z.array(StaffRole).max(20),
+  })
+  .openapi('WaiverContent');
+export type WaiverContent = z.infer<typeof WaiverContentSchema>;
+
 /** Eligibility content may require an active membership in these offerings or programs (ENR-12). */
 export const MembershipRequirementSchema = offeringOrProgramIds().openapi('MembershipRequirement');
 
@@ -593,6 +635,7 @@ export const POLICY_CONTENT_SCHEMAS = {
   tax_fee: TaxFeeContentSchema,
   eligibility: z.looseObject({ membershipRequired: MembershipRequirementSchema.optional() }),
   cancellation: z.looseObject({ packageCreditReturn: PackageCreditReturnSchema.optional() }),
+  waiver: WaiverContentSchema,
 } as const satisfies Partial<Record<PolicyKind, z.ZodType>>;
 
 export const ApprovalSchema = z
@@ -620,6 +663,10 @@ export const AcknowledgmentSchema = z
     recordedByKind: z.enum(['customer', 'staff', 'system']),
     signedAt: Instant,
     evidence: z.record(z.string(), z.unknown()),
+    /** SPK-REG-011: `paper` is a staff entry from a signed paper, never a digital signature. */
+    method: AcknowledgmentMethodSchema,
+    /** The date written on the paper; null for a digital acknowledgment. */
+    paperDatedOn: z.iso.date().nullable(),
     status: AcknowledgmentStatusSchema,
     withdrawnAt: Instant.nullable(),
     withdrawnReason: z.string().nullable(),

@@ -27,6 +27,8 @@ export const POLICY_APPROVAL_ACTION: Record<PolicyKind, ActionDefinition> = {
   hold: CatalogActions.approveParticipationPolicy,
   approval: CatalogActions.approveParticipationPolicy,
   form: CatalogActions.approveParticipationPolicy,
+  // SPK-REG-011 (proposed, DEC-095): a waiver decides participation, as a form does.
+  waiver: CatalogActions.approveParticipationPolicy,
   cancellation: CatalogActions.approveFinancialPolicy,
   refund: CatalogActions.approveFinancialPolicy,
   discount: CatalogActions.approveFinancialPolicy,

@@ -6,6 +6,7 @@ import {
   type ListAcknowledgmentsQuery,
   type Principal,
   type RecordAcknowledgmentInput,
+  type RecordWaiverAcceptanceInput,
   type WithdrawAcknowledgmentInput,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, type Db } from '@sportspark/db';
@@ -13,12 +14,14 @@ import {
   assertExpectedRevision,
   AuditWriter,
   AuthorizationService,
+  CapabilityService,
   CLOCK,
   DATABASE,
   Outbox,
   snapshotActor,
   UnitOfWork,
   type Clock,
+  type Trx,
 } from '../../../kernel';
 import {
   AUTHORITY_LOOKUP_PORT,
@@ -29,6 +32,30 @@ import {
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { organizationOf, toAcknowledgment } from '../catalog.shared';
+import { WaiverStatusReader } from './waiver-status.reader';
+
+/** What `record` and `recordWaiverAcceptance` hand to the one signing path. */
+interface SignedInput {
+  subjectPersonId: string;
+  /** Absent only for a waiver: the version in force is taken. */
+  policyVersionId?: string;
+  signedByPersonId?: string;
+  signedAt?: string;
+  evidence: Record<string, unknown>;
+  reason?: string;
+}
+
+/** SPK-REG-011: the waiver family accepted and how (digitally, or from a signed paper). */
+interface WaiverAcceptanceSpec {
+  policyKey: string;
+  method: 'digital' | 'paper';
+  paperDatedOn: string | null;
+}
+
+const HOUR = 3_600_000;
+/** Why a lapsed acceptance of the same version is closed when the person accepts again. */
+export const WAIVER_RENEWED_REASON =
+  'Superseded by a renewed acceptance of the same waiver version.';
 
 /**
  * Policy acknowledgments (§4.4 Acknowledgment, SPK-REG-009, POL-037). The signer is always a
@@ -39,6 +66,12 @@ import { organizationOf, toAcknowledgment } from '../catalog.shared';
  *
  * Subject-permission authorization runs before the transaction: the kernel consults the identity
  * port without a transaction handle, which would deadlock the single PGlite connection.
+ *
+ * A waiver acceptance (SPK-REG-011, proposed amendment PA-01) is an acknowledgment of a `waiver`
+ * version and goes through the same signing path, so every rule above holds for it. It adds the
+ * method: `digital`, or `paper`, which is only ever a staff entry naming the staff member and the
+ * date on the paper and so never reads as a customer's digital signature (the database refuses
+ * anything else, acknowledgments_paper_is_staff_entry).
  */
 @Injectable()
 export class AcknowledgmentsService {
@@ -51,14 +84,63 @@ export class AcknowledgmentsService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly capabilities: CapabilityService,
+    private readonly waivers: WaiverStatusReader,
   ) {}
 
-  async record(
+  record(
     principal: Principal,
     body: RecordAcknowledgmentInput,
     correlationId: string | null,
   ): Promise<Acknowledgment> {
+    return this.recordSigned(principal, body, null, correlationId);
+  }
+
+  /**
+   * SPK-REG-011 (proposed amendment PA-01; capability `liability_waivers`): a digital acceptance
+   * by the adult or a guardian (or at the desk, where staff name the signer), or a signed paper
+   * entered by staff with the date on it. A digital acceptance is of the version in force; the
+   * signing time is always the server's.
+   */
+  recordWaiverAcceptance(
+    principal: Principal,
+    body: RecordWaiverAcceptanceInput,
+    correlationId: string | null,
+  ): Promise<Acknowledgment> {
+    return this.recordSigned(
+      principal,
+      {
+        subjectPersonId: body.subjectPersonId,
+        policyVersionId: body.policyVersionId,
+        signedByPersonId: body.signedByPersonId,
+        evidence: body.evidence,
+        reason: body.reason,
+      },
+      {
+        policyKey: body.policyKey,
+        method: body.method,
+        paperDatedOn: body.paperDatedOn ?? null,
+      },
+      correlationId,
+    );
+  }
+
+  private async recordSigned(
+    principal: Principal,
+    body: SignedInput,
+    waiver: WaiverAcceptanceSpec | null,
+    correlationId: string | null,
+  ): Promise<Acknowledgment> {
     const organizationId = organizationOf(principal);
+    const action = waiver ? CatalogActions.acceptWaiver : CatalogActions.recordAcknowledgment;
+    const method = waiver?.method ?? 'digital';
+    if (method === 'paper' && (principal.kind !== 'staff' || !principal.personId)) {
+      // SPK-REG-009, SPK-REG-011: paper is a staff entry by a named staff member, nothing else.
+      throw errors.accessDenied(
+        'A waiver signed on paper is recorded by a named staff member, with the date on the paper.',
+        { action: action.id, code: 'PAPER_WAIVER_STAFF_ONLY' },
+      );
+    }
     const staffActor = principal.kind === 'staff' || principal.kind === 'system';
     let signedByPersonId: string;
     if (staffActor) {
@@ -74,10 +156,10 @@ export class AcknowledgmentsService {
       if (principal.personId !== null && body.signedByPersonId === principal.personId) {
         throw errors.accessDenied(
           'A staff actor cannot be the signer of an acknowledgment; the guardian or the adult participant signs.',
-          { action: CatalogActions.recordAcknowledgment.id },
+          { action: action.id },
         );
       }
-      await this.authorization.require(principal, CatalogActions.recordAcknowledgment, {
+      await this.authorization.require(principal, action, {
         type: 'acknowledgment',
         organizationId,
       });
@@ -91,7 +173,7 @@ export class AcknowledgmentsService {
       }
       signedByPersonId = principal.personId;
       // Self (adult subject) or a guardian holding complete_forms over the participant.
-      await this.authorization.require(principal, CatalogActions.recordAcknowledgment, {
+      await this.authorization.require(principal, action, {
         type: 'acknowledgment',
         organizationId,
         subjectPersonIds: [body.subjectPersonId],
@@ -100,6 +182,8 @@ export class AcknowledgmentsService {
     }
 
     return this.uow.run(async ({ trx }) => {
+      if (waiver) await this.capabilities.require(organizationId, 'liability_waivers', trx);
+      const now = this.clock.now();
       const subject = await this.persons.findPerson(organizationId, body.subjectPersonId, trx);
       if (!subject || subject.status !== 'active') throw errors.protectedNotFound('person');
       const signer = await this.persons.findPerson(organizationId, signedByPersonId, trx);
@@ -108,21 +192,52 @@ export class AcknowledgmentsService {
           path: 'signedByPersonId',
         });
       }
+      const inForce = waiver
+        ? ((await this.waivers.families(organizationId, now, [waiver.policyKey], trx)).get(
+            waiver.policyKey,
+          )?.inForce ?? null)
+        : null;
+      const policyVersionId = body.policyVersionId ?? inForce?.ref.policyVersionId;
+      if (!policyVersionId) {
+        throw errors.validation('No approved version of this waiver is in force.', {
+          path: 'policyKey',
+          code: 'WAIVER_NOT_IN_FORCE',
+        });
+      }
       const policy = await trx
         .selectFrom('policy_versions')
-        .select(['id', 'approval_status', 'kind', 'effective_from', 'approved_at'])
+        .select(['id', 'approval_status', 'kind', 'key', 'effective_from', 'approved_at'])
         .where('organization_id', '=', organizationId)
-        .where('id', '=', body.policyVersionId)
+        .where('id', '=', policyVersionId)
         .executeTakeFirst();
-      if (!policy) throw errors.notFound('policy version', body.policyVersionId);
+      if (!policy) throw errors.notFound('policy version', policyVersionId);
+      if (!waiver && policy.kind === 'waiver') {
+        // One path records a waiver acceptance, so its method and the capability are never skipped.
+        throw errors.validation('A waiver is accepted through the waiver acceptance command.', {
+          path: 'policyVersionId',
+          code: 'USE_WAIVER_ACCEPTANCE',
+        });
+      }
+      if (waiver && (policy.kind !== 'waiver' || policy.key !== waiver.policyKey)) {
+        throw errors.validation('The policy version is not a version of this waiver.', {
+          path: 'policyVersionId',
+        });
+      }
       if (policy.approval_status !== 'approved') {
         throw errors.validation('Only an approved policy version can be acknowledged.', {
           path: 'policyVersionId',
           approvalStatus: policy.approval_status,
         });
       }
-      const now = this.clock.now();
-      const signedAt = this.signedAt(principal, body, policy, now);
+      if (waiver?.method === 'digital' && inForce?.ref.policyVersionId !== policy.id) {
+        throw errors.validation('A waiver is accepted digitally in the version in force.', {
+          path: 'policyVersionId',
+          code: 'WAIVER_VERSION_NOT_IN_FORCE',
+        });
+      }
+      if (waiver?.paperDatedOn) this.assertPaperDate(waiver.paperDatedOn, policy, now);
+      // A waiver acceptance is always stamped by the server; a paper one carries the paper's date.
+      const signedAt = waiver ? now : this.signedAt(principal, body, policy, now);
 
       let basis: 'self' | 'guardian';
       if (signedByPersonId === body.subjectPersonId) {
@@ -150,15 +265,37 @@ export class AcknowledgmentsService {
 
       const existing = await trx
         .selectFrom('acknowledgments')
-        .select('id')
+        .select(['id', 'revision'])
         .where('organization_id', '=', organizationId)
         .where('subject_person_id', '=', body.subjectPersonId)
-        .where('policy_version_id', '=', body.policyVersionId)
+        .where('policy_version_id', '=', policyVersionId)
         .where('status', '=', 'active')
+        .forUpdate()
         .executeTakeFirst();
       if (existing) {
-        throw errors.resourceConflict('An active acknowledgment of this policy already exists.', {
-          acknowledgmentId: existing.id,
+        const lapsed =
+          waiver !== null &&
+          (
+            await this.waivers.status(
+              organizationId,
+              body.subjectPersonId,
+              waiver.policyKey,
+              now,
+              trx,
+            )
+          ).status !== 'current';
+        if (!lapsed) {
+          throw errors.resourceConflict('An active acknowledgment of this policy already exists.', {
+            acknowledgmentId: existing.id,
+            ...(waiver ? { code: 'WAIVER_ALREADY_CURRENT' } : {}),
+          });
+        }
+        // SPK-REG-011: a renewal of the same version. One active acknowledgment per person and
+        // version is a database rule, so the lapsed one is closed (and kept) before the new one.
+        await this.supersede(trx, principal, organizationId, existing, {
+          subjectPersonId: body.subjectPersonId,
+          policyVersionId,
+          correlationId,
         });
       }
 
@@ -171,7 +308,7 @@ export class AcknowledgmentsService {
             id,
             organization_id: organizationId,
             subject_person_id: body.subjectPersonId,
-            policy_version_id: body.policyVersionId,
+            policy_version_id: policyVersionId,
             signed_by_person_id: signedByPersonId,
             basis,
             recorded_by: json(snapshotActor(principal)),
@@ -184,6 +321,8 @@ export class AcknowledgmentsService {
             recorded_by_person_id: principal.personId,
             signed_at: signedAt,
             evidence: json(body.evidence),
+            method,
+            paper_dated_on: waiver?.paperDatedOn ?? null,
             withdrawn_at: null,
             withdrawn_reason: null,
           })
@@ -206,13 +345,17 @@ export class AcknowledgmentsService {
         correlationId,
         details: {
           subjectPersonId: body.subjectPersonId,
-          policyVersionId: body.policyVersionId,
+          policyVersionId,
           signedByPersonId,
           basis,
           assistedByStaff: staffActor,
           signedAt: signedAt.toISOString(),
           // a backdated (paper) signature is visible next to the true occurred_at
-          retrospective: body.signedAt !== undefined,
+          retrospective: body.signedAt !== undefined || method === 'paper',
+          method,
+          ...(waiver
+            ? { waiverPolicyKey: waiver.policyKey, paperDatedOn: waiver.paperDatedOn }
+            : {}),
         },
       });
       await this.outbox.enqueue(trx, CatalogEvents.acknowledgmentRecorded, {
@@ -222,7 +365,7 @@ export class AcknowledgmentsService {
         payload: {
           acknowledgmentId: id,
           subjectPersonId: body.subjectPersonId,
-          policyVersionId: body.policyVersionId,
+          policyVersionId,
           signedByPersonId,
           basis,
           assistedByStaff: staffActor,
@@ -240,7 +383,7 @@ export class AcknowledgmentsService {
    */
   private signedAt(
     principal: Principal,
-    body: RecordAcknowledgmentInput,
+    body: SignedInput,
     policy: { effective_from: Date | string; approved_at: Date | string | null },
     now: Date,
   ): Date {
@@ -274,6 +417,82 @@ export class AcknowledgmentsService {
       );
     }
     return signedAt;
+  }
+
+  /**
+   * SPK-REG-011: the date on a paper waiver is a calendar date with no zone. It is refused only
+   * when it is in the future everywhere on earth, or when that day had ended everywhere before
+   * the waiver version existed (the same two bounds a backdated signature has).
+   */
+  private assertPaperDate(
+    paperDatedOn: string,
+    policy: { effective_from: Date | string; approved_at: Date | string | null },
+    now: Date,
+  ): void {
+    const dayStartUtc = new Date(`${paperDatedOn}T00:00:00.000Z`).getTime();
+    if (dayStartUtc - 14 * HOUR > now.getTime()) {
+      throw errors.validation('The date on the paper cannot be in the future.', {
+        path: 'paperDatedOn',
+        code: 'signed_in_future',
+      });
+    }
+    const earliest = Math.min(
+      new Date(policy.effective_from).getTime(),
+      policy.approved_at ? new Date(policy.approved_at).getTime() : Number.POSITIVE_INFINITY,
+    );
+    if (dayStartUtc + 36 * HOUR < earliest) {
+      throw errors.validation('The paper cannot be dated before the waiver version it accepts.', {
+        path: 'paperDatedOn',
+        code: 'signed_before_policy',
+      });
+    }
+  }
+
+  /** Closes a lapsed acceptance that a renewal of the same version replaces; the row is kept. */
+  private async supersede(
+    trx: Trx,
+    principal: Principal,
+    organizationId: string,
+    existing: { id: string; revision: number },
+    context: { subjectPersonId: string; policyVersionId: string; correlationId: string | null },
+  ): Promise<void> {
+    const updated = await trx
+      .updateTable('acknowledgments')
+      .set({
+        status: 'withdrawn',
+        withdrawn_at: this.clock.now(),
+        withdrawn_reason: WAIVER_RENEWED_REASON,
+        revision: existing.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', existing.id)
+      .where('revision', '=', existing.revision)
+      .returning('revision')
+      .executeTakeFirstOrThrow();
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: 'catalog.acknowledgment_withdrawn',
+      targetType: 'acknowledgment',
+      targetId: existing.id,
+      beforeRevision: existing.revision,
+      afterRevision: updated.revision,
+      reason: WAIVER_RENEWED_REASON,
+      correlationId: context.correlationId,
+      details: { supersededByRenewal: true },
+    });
+    await this.outbox.enqueue(trx, CatalogEvents.acknowledgmentWithdrawn, {
+      organizationId,
+      aggregateType: 'acknowledgment',
+      aggregateId: existing.id,
+      payload: {
+        acknowledgmentId: existing.id,
+        subjectPersonId: context.subjectPersonId,
+        policyVersionId: context.policyVersionId,
+        reason: WAIVER_RENEWED_REASON,
+      },
+      correlationId: context.correlationId,
+    });
   }
 
   /** Staff, or the signer giving up their own acknowledgment; strangers see NOT_FOUND. */

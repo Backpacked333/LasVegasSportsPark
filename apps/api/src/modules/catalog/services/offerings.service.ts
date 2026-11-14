@@ -90,6 +90,7 @@ import {
 } from '../catalog.state-machines';
 import { loadPromotionCandidates, promotionsFor } from '../pricing/promotions';
 import { PoliciesService } from './policies.service';
+import { WaiversService } from './waivers.service';
 import { PriceRulesService } from './price-rules.service';
 
 const Cursor = z.object({ startsOn: z.string(), id: z.string() });
@@ -155,6 +156,7 @@ export class OfferingsService implements OfferingLookupPort {
     private readonly facilities: FacilityDirectory,
     private readonly resources: ResourcesService,
     @Inject(ASSET_DIRECTORY_PORT) private readonly assets: AssetDirectoryPort,
+    private readonly waivers: WaiversService,
   ) {}
 
   /**
@@ -798,6 +800,8 @@ export class OfferingsService implements OfferingLookupPort {
         .execute();
       const forms = (await this.requiredFormIds(trx, organizationId, [id])).get(id) ?? [];
       await this.replaceRequiredForms(trx, organizationId, newId_, forms);
+      // SPK-REG-011 (proposed): the copy requires the waivers its source requires.
+      await this.waivers.copyRequired(trx, principal, organizationId, id, newId_);
       const copiedSessionIds: string[] = [];
       if (body.copySessions) {
         const sessions = await trx
@@ -1203,6 +1207,7 @@ export class OfferingsService implements OfferingLookupPort {
       eligibilityPolicy,
       cancellationPolicy,
       requiredForms,
+      requiredWaiverKeys: await this.waivers.requiredKeys(organizationId, offeringId, trx),
       bookingTerms,
       registrationOpen:
         row.publication_state === 'registration_open' &&

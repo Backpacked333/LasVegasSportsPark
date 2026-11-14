@@ -84,7 +84,48 @@ function fixturePolicyContent(kind: PolicyKind): Record<string, unknown> {
       rounding: 'half_up',
     };
   }
+  if (kind === 'waiver') return fixtureWaiverContent();
   return { text: `${kind} policy wording` };
+}
+
+/**
+ * A complete waiver rule (SPK-REG-011, proposed). The fixture values are the assumed defaults the
+ * design proposes for DEC-095 (warn, a new version does not require re-acceptance, no periodic
+ * renewal); they are test content of one version, never constants of the system.
+ */
+export function fixtureWaiverContent(
+  rule: {
+    reacceptOnNewVersion?: boolean;
+    renewEveryMonths?: number | null;
+    enforcement?: 'warn' | 'block';
+    overrideRoles?: string[];
+  } = {},
+): Record<string, unknown> {
+  return {
+    text: 'I accept the risks of taking part.',
+    renewal: {
+      reacceptOnNewVersion: rule.reacceptOnNewVersion ?? false,
+      renewEveryMonths: rule.renewEveryMonths ?? null,
+    },
+    enforcement: rule.enforcement ?? 'warn',
+    overrideRoles: rule.overrideRoles ?? [],
+  };
+}
+
+/** Requires a waiver family on an offering, written directly (fixtures are never gated). */
+export async function requireWaiverFixture(
+  ctx: CatalogFixtureContext,
+  input: { offeringId: string; policyKey: string; organizationId?: string },
+): Promise<void> {
+  await ctx.db
+    .insertInto('offering_required_waivers')
+    .values({
+      organization_id: input.organizationId ?? ctx.organizationId,
+      offering_id: input.offeringId,
+      policy_key: input.policyKey,
+      added_by: json(FIXTURE_ACTOR),
+    })
+    .execute();
 }
 
 export async function createPolicyVersionFixture(
@@ -526,6 +567,11 @@ export async function createAcknowledgmentFixture(
     recordedByPersonId?: string | null;
     status?: 'active' | 'withdrawn';
     organizationId?: string;
+    /** Defaults to the fixture clock. */
+    signedAt?: Date;
+    /** SPK-REG-011: `paper` needs a staff recorder and `paperDatedOn` (the database checks). */
+    method?: 'digital' | 'paper';
+    paperDatedOn?: string | null;
   },
 ): Promise<string> {
   const id = newId();
@@ -543,8 +589,10 @@ export async function createAcknowledgmentFixture(
       recorded_by_kind: input.recordedByKind ?? 'customer',
       recorded_by_person_id:
         input.recordedByPersonId === undefined ? input.signedByPersonId : input.recordedByPersonId,
-      signed_at: ctx.clock.now(),
+      signed_at: input.signedAt ?? ctx.clock.now(),
       evidence: json({ channel: 'fixture' }),
+      method: input.method ?? 'digital',
+      paper_dated_on: input.paperDatedOn ?? null,
       status,
       withdrawn_at: status === 'withdrawn' ? ctx.clock.now() : null,
       withdrawn_reason: status === 'withdrawn' ? 'fixture' : null,
