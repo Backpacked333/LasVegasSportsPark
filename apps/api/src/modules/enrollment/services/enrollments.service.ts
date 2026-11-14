@@ -77,6 +77,7 @@ import { CapacityService, type HoldRow } from './capacity.service';
 import { EnrollmentViews } from './enrollment-views';
 import { RegistrationEvaluator } from './registration-evaluator';
 import { EnrollmentFacilityScope } from './facility-scope';
+import { UniformOrdersService } from './uniform-orders.service';
 
 export type EnrollmentRow = Selectable<EnrollmentsTable>;
 
@@ -101,6 +102,9 @@ export interface CreatePendingEnrollmentInput {
   trialParticipationId?: string | null;
   /** ENR-12: the membership a renewal line continues. */
   renewedFromEnrollmentId?: string | null;
+  /** SPK-PAY-014 (PA-03): the tier bought and the sessions attended (null = every session). */
+  priceTierId?: string | null;
+  selectedSessionIds?: string[] | null;
   priceSnapshot: PriceSnapshot | null;
   policyReferences: PolicyReferences;
   eligibilityResult: EligibilityResult | null;
@@ -130,6 +134,7 @@ export class EnrollmentsService implements EnrollmentPort {
     private readonly scope: EnrollmentFacilityScope,
     @Inject(ROSTER_PORT) private readonly rosters: RosterPort,
     private readonly views: EnrollmentViews,
+    private readonly uniforms: UniformOrdersService,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -340,6 +345,8 @@ export class EnrollmentsService implements EnrollmentPort {
           placement_request_id: input.placementRequestId ?? null,
           trial_participation_id: input.trialParticipationId ?? null,
           renewed_from_enrollment_id: input.renewedFromEnrollmentId ?? null,
+          price_tier_id: input.priceTierId ?? null,
+          selected_session_ids: input.selectedSessionIds ?? null,
           order_ref: null,
           last_operation_id: null,
           price_snapshot: input.priceSnapshot ? json(input.priceSnapshot) : null,
@@ -671,6 +678,13 @@ export class EnrollmentsService implements EnrollmentPort {
         .where('id', '=', row.basket_line_id)
         .execute();
     }
+    // SPK-REG-012 (PA-07): the uniform ordered with the registration is paid with it.
+    await this.uniforms.onEnrollmentConfirmed(
+      trx,
+      organizationId,
+      enrollmentId,
+      options.correlationId ?? null,
+    );
     if (row.trial_participation_id) {
       // SPK-AT-019: the trial history stays; the paid entitlement is a separate record linked here.
       await trx
@@ -1167,6 +1181,8 @@ export class EnrollmentsService implements EnrollmentPort {
       .where('id', '=', row.id)
       .where('revision', '=', row.revision)
       .execute();
+    // SPK-REG-012 (PA-07): a uniform not yet handed over ends with its registration.
+    await this.uniforms.onEnrollmentCanceled(trx, organizationId, row.id, reason, correlationId);
     await this.audit.record(trx, {
       organizationId,
       actor,
@@ -1728,8 +1744,19 @@ export class EnrollmentsService implements EnrollmentPort {
   }
 
   private priceOf(row: EnrollmentRow): { amountMinor: number; currency: string } | null {
-    const snapshot = row.price_snapshot as { basePriceMinor?: number; currency?: string } | null;
+    const snapshot = row.price_snapshot as {
+      basePriceMinor?: number;
+      currency?: string;
+      estimate?: { unitPriceMinor?: number };
+    } | null;
     if (!snapshot || typeof snapshot.basePriceMinor !== 'number' || !snapshot.currency) return null;
-    return { amountMinor: snapshot.basePriceMinor, currency: snapshot.currency };
+    // SPK-PAY-013, SPK-PAY-014, SPK-PAY-015: where the place was not a plain term price, its
+    // price is the estimate recorded at the hold (the tier, the member price, the sessions
+    // counted), not the rule's base price. Finance still prefers what its order line charged.
+    const amountMinor =
+      typeof snapshot.estimate?.unitPriceMinor === 'number'
+        ? snapshot.estimate.unitPriceMinor
+        : snapshot.basePriceMinor;
+    return { amountMinor, currency: snapshot.currency };
   }
 }

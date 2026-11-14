@@ -475,6 +475,53 @@ export class CapacityService implements CapacityPort {
     return row;
   }
 
+  /**
+   * SPK-PAY-014 (PA-03): the add-on's own capacity pool, created where missing. An add-on limited
+   * per registration has one pool; one limited per session has one pool per session
+   * (`scope_session_id`, migration 0522). The pool names no offering, so no offering-level read
+   * or hold ever counts it as places of the offering; it is held and committed like any other
+   * pool, and `capacity_pools_within_capacity` is the guarantee it is never oversold.
+   */
+  async ensureAddonPool(
+    trx: Trx,
+    organizationId: string,
+    addon: { id: string; capacity: number },
+    sessionId: string | null,
+    actor: Principal,
+  ): Promise<string> {
+    const find = () => {
+      const q = trx
+        .selectFrom('capacity_pools')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .where('scope_type', '=', 'addon')
+        .where('scope_id', '=', addon.id);
+      return (
+        sessionId
+          ? q.where('scope_session_id', '=', sessionId)
+          : q.where('scope_session_id', 'is', null)
+      ).executeTakeFirst();
+    };
+    const existing = await find();
+    if (existing) return existing.id;
+    await this.insertPool(trx, organizationId, {
+      offeringId: null,
+      scopeType: 'addon',
+      scopeId: addon.id,
+      scopeSessionId: sessionId,
+      unit: 'seats',
+      constraintKind: 'commercial',
+      capacity: addon.capacity,
+      participantsPerStaff: null,
+      staffCount: null,
+      actor,
+    });
+    // A concurrent creator may have won the insert: its committed row is the pool to hold.
+    const pool = await find();
+    if (!pool) throw errors.internal('the add-on capacity pool could not be created');
+    return pool.id;
+  }
+
   private offeringPoolSpecs(units: readonly CapacityUnit[]): Array<{
     unit: CapacityPoolUnit;
     constraintKind: CapacityConstraintKind;
@@ -519,6 +566,8 @@ export class CapacityService implements CapacityPort {
       offeringId: string | null;
       scopeType: PoolRow['scope_type'];
       scopeId: string;
+      /** 0522: the session of an add-on pool limited per session. */
+      scopeSessionId?: string | null;
       unit: CapacityPoolUnit;
       constraintKind: CapacityConstraintKind;
       capacity: number;
@@ -538,6 +587,7 @@ export class CapacityService implements CapacityPort {
         offering_id: input.offeringId,
         scope_type: input.scopeType,
         scope_id: input.scopeId,
+        scope_session_id: input.scopeSessionId ?? null,
         unit: input.unit,
         constraint_kind: input.constraintKind,
         capacity: input.capacity,
@@ -545,11 +595,11 @@ export class CapacityService implements CapacityPort {
         staff_count: input.staffCount,
         created_by: json(snapshotActor(input.actor)),
       })
-      .onConflict((oc) =>
-        oc
-          .columns(['organization_id', 'scope_type', 'scope_id', 'unit', 'constraint_kind'])
-          .doNothing(),
-      )
+      // The uniqueness is the index capacity_pools_scope_idx (migration 0522: scope, unit,
+      // constraint kind and the session scope of an add-on pool). An index over an expression
+      // cannot be named as a conflict target column list, so every unique conflict is skipped;
+      // the id is new, so the scope index is the only one that can conflict.
+      .onConflict((oc) => oc.doNothing())
       .returning('id')
       .executeTakeFirst();
     return inserted ? id : null;
