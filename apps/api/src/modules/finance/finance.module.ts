@@ -96,6 +96,7 @@ import { FinanceNotices } from './services/finance-notices.service';
 import { FinancialStandingService } from './services/financial-standing.service';
 import { MoneyReadsService } from './services/money-reads.service';
 import { PosSaleFinalizer } from './services/pos/pos-sale-finalizer.service';
+import { PosOpenAmountService } from './services/pos/pos-open-amount.service';
 import { PosSalesService } from './services/pos/pos-sales.service';
 import { PosSetupService } from './services/pos/pos-setup.service';
 import { LinePricing } from './pricing/line-pricing.service';
@@ -214,6 +215,7 @@ const providers: Provider[] = [
   PosSaleFinalizer,
   PosSetupService,
   PosSalesService,
+  PosOpenAmountService,
   // FIN-07: accounting export (capability accounting, DEC-016, DEC-081; connection DEC-022).
   moduleSettings(FinanceSettings.module),
   AccountingExportService,
@@ -279,6 +281,7 @@ const providers: Provider[] = [
     MoneyReadsService,
     FinanceDeskService,
     PosSalesService,
+    PosOpenAmountService,
     PosSetupService,
     AccountingExportService,
   ],

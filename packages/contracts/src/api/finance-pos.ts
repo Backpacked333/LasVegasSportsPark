@@ -17,6 +17,13 @@ import { PaymentMethodToken } from './finance';
  * be paid, returned and its session closed. Prices come from the product, never from the request
  * (SPK-PAY-001); taxes and fees only from approved catalog `tax_fee` policy versions (DEC-057).
  * Registrations, memberships, packages and bookings are never sold here (SPK-PAY-012).
+ *
+ * SPK-PAY-016 (proposed amendment PA-08; capability `open_amount_lines`, DEC-102 pending): an
+ * open-amount line is a line without a product, with a typed description, a positive amount and a
+ * reason category from the approved list. The category gives the revenue category and the approved
+ * taxes and fees; the person who enters it has a ceiling, and a line above it needs a second
+ * person's approval before the sale takes a tender. With that switch off the open-amount body is
+ * refused (ACCESS_DENIED, `details.code CAPABILITY_DISABLED`) and product lines are unchanged.
  */
 
 const Reason = z.string().trim().min(1).max(2000);
@@ -37,6 +44,18 @@ export const PosProductKindSchema = z
     description:
       'What a point-of-sale product is. Registrations, memberships, packages and bookings are never POS products (SPK-PAY-012).',
   });
+/** SPK-PAY-016 (proposed): a line is a product line of a product kind, or an open-amount line. */
+export const PosSaleLineKindSchema = z
+  .enum(['merchandise', 'concession', 'service', 'open_amount'])
+  .openapi('PosSaleLineKind', {
+    description:
+      'What a sale line is: a product of one of the product kinds, or `open_amount`, a line without a product whose amount a permitted staff member entered (SPK-PAY-016, proposed amendment PA-08).',
+  });
+/** The code of a reason category or of a revenue category. */
+const CategoryCode = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9][a-z0-9_-]{0,39}$/, 'lowercase letters, digits, "-" and "_" only');
 export const PosLifecycleStatusSchema = z.enum(['active', 'retired']).openapi('PosLifecycleStatus');
 export const PosSaleStatusSchema = z
   .enum(['open', 'paid', 'voided', 'partially_returned', 'returned'])
@@ -214,14 +233,48 @@ export const PosLineChargeSchema = z
   })
   .openapi('PosLineCharge');
 
+const PosLineApprovalSchema = z.object({
+  id: z.uuid(),
+  approvedByPersonId: z.uuid(),
+  approvedAt: Instant,
+  reason: z.string(),
+});
+
+/** SPK-PAY-016 (proposed): what an open-amount line records beyond its amount. */
+export const PosOpenAmountLineSchema = z
+  .object({
+    /** What the amount is for, as typed at the register. */
+    description: z.string(),
+    /** The reason category chosen; its label as approved when it was sold is the line's `name`. */
+    reasonCategory: z.string(),
+    /** The revenue category the line books to (from the category). */
+    revenueCategory: z.string(),
+    enteredByPersonId: z.uuid(),
+    /** The ceiling that applied to the person who entered the line, in the sale's currency. */
+    ceilingMinor: z.number().int(),
+    /** True when the amount is above that ceiling: a second person approves before any tender. */
+    approvalRequired: z.boolean(),
+    /** The second approval, once given; never by the person who entered the line. */
+    approval: PosLineApprovalSchema.nullable(),
+    /** The approved policy version the category and ceiling came from; null: the proposed default. */
+    policyVersionId: z.uuid().nullable(),
+  })
+  .openapi('PosOpenAmountLine');
+export type PosOpenAmountLine = z.infer<typeof PosOpenAmountLineSchema>;
+
 export const PosSaleLineSchema = z
   .object({
     id: z.uuid(),
     lineNumber: z.number().int(),
-    productId: z.uuid(),
-    sku: z.string(),
+    /** Null on an open-amount line. */
+    productId: z.uuid().nullable(),
+    /** Null on an open-amount line. */
+    sku: z.string().nullable(),
+    /** The product's name as sold; on an open-amount line the reason category's approved label. */
     name: z.string(),
-    kind: PosProductKindSchema,
+    kind: PosSaleLineKindSchema,
+    /** Present on an open-amount line (`kind` `open_amount`), null on a product line. */
+    openAmount: PosOpenAmountLineSchema.nullable(),
     unitPriceMinor: z.number().int(),
     quantity: z.number().int(),
     baseMinor: z.number().int(),
@@ -355,13 +408,109 @@ export const CreatePosSaleBody = withCommandMeta({
 export type CreatePosSaleInput = z.infer<typeof CreatePosSaleBody>;
 
 /** No price is accepted (SPK-PAY-001): the product's price and approved charges apply. */
-export const AddPosSaleLineBody = withCommandMeta({
+export const AddPosProductLineBody = withCommandMeta({
   productId: z.uuid(),
   quantity: z.number().int().min(1).max(999),
 })
   .strict()
+  .openapi('AddPosProductLineRequest');
+export type AddPosProductLineInput = z.infer<typeof AddPosProductLineBody>;
+
+/**
+ * SPK-PAY-016 (proposed amendment PA-08; capability `open_amount_lines`): a line without a product.
+ * The amount is positive (a discount or a refund is never a negative line, SPK-PAY-003,
+ * SPK-PAY-008); the reason category is one of the approved list, and gives the revenue category
+ * and the approved taxes and fees. Nothing else is accepted: who entered it is the caller, and the
+ * ceiling is the caller's under the approved policy.
+ */
+export const AddPosOpenAmountLineBody = withCommandMeta({
+  description: z.string().trim().min(1).max(200),
+  amountMinor: PositiveMinor,
+  reasonCategory: CategoryCode,
+})
+  .strict()
+  .openapi('AddPosOpenAmountLineRequest');
+export type AddPosOpenAmountLineInput = z.infer<typeof AddPosOpenAmountLineBody>;
+
+/** A product and a quantity, or (SPK-PAY-016, proposed) a description, an amount and a category. */
+export const AddPosSaleLineBody = z
+  .union([AddPosProductLineBody, AddPosOpenAmountLineBody])
   .openapi('AddPosSaleLineRequest');
 export type AddPosSaleLineInput = z.infer<typeof AddPosSaleLineBody>;
+
+/**
+ * SPK-PAY-016 (proposed): the second approval of an open-amount line above the ceiling of the
+ * person who entered it. Its reason is required; the approver is the caller and is never that
+ * person (SECOND_PERSON_REQUIRED).
+ */
+export const ApprovePosOpenAmountLineBody = withCommandMeta({})
+  .extend({ expectedRevision: Revision, reason: Reason })
+  .strict()
+  .openapi('ApprovePosOpenAmountLineRequest');
+export type ApprovePosOpenAmountLineInput = z.infer<typeof ApprovePosOpenAmountLineBody>;
+
+/**
+ * SPK-PAY-016 (proposed; the values are **Pending decision**, DEC-102): the open-amount rules in
+ * force for the caller at a facility. `basis` says whether they come from an approved policy
+ * version or from the proposed default that applies until one is approved.
+ */
+export const PosOpenAmountRulesSchema = z
+  .object({
+    basis: z.enum(['approved_policy', 'proposed_default']),
+    policyVersionId: z.uuid().nullable(),
+    /** The currency the ceilings are stated in; null: read in the currency of each sale. */
+    currency: CurrencyCode.nullable(),
+    categories: z.array(
+      z.object({
+        code: z.string(),
+        label: z.string(),
+        revenueCategory: z.string(),
+        /** Keys of the approved `tax_fee` policies applied to a line of this category. */
+        chargePolicyKeys: z.array(z.string()),
+      }),
+    ),
+    /**
+     * The caller's own ceiling at the facility: the highest of the roles through which they may
+     * enter an open-amount line there; null when they may not enter one.
+     */
+    ceilingMinor: z.number().int().nullable(),
+    /** The staff roles that may give the second approval (the action's roles). */
+    approverRoles: z.array(z.string()),
+  })
+  .openapi('PosOpenAmountRules');
+export type PosOpenAmountRules = z.infer<typeof PosOpenAmountRulesSchema>;
+
+export const PosOpenAmountRulesQuery = z.object({ facilityId: z.uuid() });
+export type PosOpenAmountRulesQuery = z.infer<typeof PosOpenAmountRulesQuery>;
+
+/** SPK-PAY-016 (proposed): one open-amount line of a register session, for review. */
+export const PosSessionOpenAmountLineSchema = z
+  .object({
+    saleId: z.uuid(),
+    saleNumber: z.string(),
+    saleStatus: PosSaleStatusSchema,
+    lineId: z.uuid(),
+    description: z.string(),
+    reasonCategory: z.string(),
+    reasonLabel: z.string(),
+    revenueCategory: z.string(),
+    currency: CurrencyCode,
+    amountMinor: z.number().int(),
+    chargesMinor: z.number().int(),
+    lineTotalMinor: z.number().int(),
+    enteredByPersonId: z.uuid(),
+    enteredAt: Instant,
+    ceilingMinor: z.number().int(),
+    approvalRequired: z.boolean(),
+    approval: PosLineApprovalSchema.nullable(),
+    /** 1 once the line was returned, else 0. */
+    returnedQuantity: z.number().int(),
+  })
+  .openapi('PosSessionOpenAmountLine');
+export type PosSessionOpenAmountLine = z.infer<typeof PosSessionOpenAmountLineSchema>;
+
+export const ListSessionOpenAmountLinesQuery = PageRequestSchema;
+export type ListSessionOpenAmountLinesQuery = z.infer<typeof ListSessionOpenAmountLinesQuery>;
 
 /**
  * §4.9: change the quantity of an open sale's line (0 removes it). The line is priced again from
@@ -437,8 +586,11 @@ export const PosReceiptSchema = z
     currency: CurrencyCode,
     lines: z.array(
       z.object({
+        /** The product's name; on an open-amount line the reason category's approved label. */
         name: z.string(),
-        kind: PosProductKindSchema,
+        kind: PosSaleLineKindSchema,
+        /** SPK-PAY-016 (proposed): what an open-amount line was for, as typed; null otherwise. */
+        description: z.string().nullable(),
         quantity: z.number().int(),
         unitPriceMinor: z.number().int(),
         baseMinor: z.number().int(),
@@ -520,7 +672,7 @@ function register(input: {
       ),
       404: errorResponse('Not found or not visible'),
       409: errorResponse(
-        'Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)',
+        'Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)',
       ),
       // §5.8, SPK-AT-028 (R2-API-CONTRACT-03): the controllers are @RefusedDuringRecovery(), so
       // every command answers 503 while the organization recovers from a restore; reads do not.
@@ -636,9 +788,52 @@ register({
 register({
   method: 'post',
   path: '/pos-sales/{id}/lines',
-  summary: 'Add a product line at its price with approved taxes and fees (SPK-PAY-002)',
+  summary:
+    'Add a product line at its price with approved taxes and fees (SPK-PAY-002), or an open-amount line with a description, an amount and a reason category (SPK-PAY-016, proposed; needs the open_amount_lines capability as well)',
   body: AddPosSaleLineBody,
   response: PosSaleSchema,
+});
+openApiRegistry.registerPath({
+  method: 'post',
+  path: '/pos-sales/{id}/lines/{lineId}/approval',
+  summary:
+    'Approve an open-amount line above the ceiling of the person who entered it (a second person; SPK-PAY-016, proposed)',
+  description:
+    'FIN-06, §3.16 POS row, SPK-PAY-016 (proposed amendment PA-08, DEC-102 pending). Needs the open_amount_lines capability (DEC-016). The sale takes no tender before every such line is approved or removed.',
+  tags: ['Finance'],
+  request: {
+    params: z.object({ id: z.uuid(), lineId: z.uuid() }),
+    body: { content: { 'application/json': { schema: ApprovePosOpenAmountLineBody } } },
+  },
+  responses: {
+    200: { description: 'Success', content: { 'application/json': { schema: PosSaleSchema } } },
+    400: errorResponse('Validation failed (LINE_NOT_ON_SALE)'),
+    401: errorResponse('Authentication required'),
+    403: errorResponse(
+      'Access denied (SECOND_PERSON_REQUIRED: the caller entered the line) or the open_amount_lines capability is disabled (CAPABILITY_DISABLED)',
+    ),
+    404: errorResponse('Not found or not visible'),
+    409: errorResponse(
+      'Conflict (APPROVAL_NOT_REQUIRED, LINE_ALREADY_APPROVED, LINE_ALREADY_CHANGED, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)',
+    ),
+    503: errorResponse('Paused while the organization recovers from a restore'),
+  },
+});
+register({
+  method: 'get',
+  path: '/pos-open-amount-rules',
+  summary:
+    'Read the open-amount categories and the caller’s ceiling at a facility (SPK-PAY-016, proposed; values pending DEC-102)',
+  query: PosOpenAmountRulesQuery,
+  response: PosOpenAmountRulesSchema,
+});
+register({
+  method: 'get',
+  path: '/pos-register-sessions/{id}/open-amount-lines',
+  summary:
+    'List the open-amount lines in effect of a register session, newest first, apart from product lines (SPK-PAY-016, proposed; POS readers of its facility)',
+  query: ListSessionOpenAmountLinesQuery,
+  response: pageSchema(PosSessionOpenAmountLineSchema),
 });
 openApiRegistry.registerPath({
   method: 'post',

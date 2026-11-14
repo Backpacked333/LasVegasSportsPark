@@ -9,6 +9,7 @@ import type {
   PosTender,
 } from '@sportspark/contracts';
 import type {
+  PosLineApprovalsTable,
   PosLineChargeRecord,
   PosProductsTable,
   PosRegisterSessionsTable,
@@ -28,8 +29,37 @@ export type PosSessionRow = Selectable<PosRegisterSessionsTable>;
 export type PosSaleLineRow = Selectable<PosSaleLinesTable>;
 export type PosTenderRow = Selectable<PosTendersTable>;
 export type PosReturnRow = Selectable<PosReturnsTable>;
+export type PosLineApprovalRow = Selectable<PosLineApprovalsTable>;
 
 export const PAID_SALE_STATES = ['paid', 'partially_returned', 'returned'] as const;
+
+/**
+ * SPK-PAY-016 (proposed amendment PA-08): the key a line's revenue is journaled under, and the
+ * memo of that journal entry: the product kind of a product line, as before, or the revenue
+ * category an open-amount line books to.
+ */
+export function revenueKeyOf(line: { kind: string; revenue_category: string | null }): {
+  key: string;
+  memo: string;
+} {
+  return line.kind === 'open_amount' && line.revenue_category
+    ? {
+        key: `open_amount:${line.revenue_category}`,
+        memo: `open amount, revenue category ${line.revenue_category}`,
+      }
+    : { key: `product:${line.kind}`, memo: `product kind ${line.kind}` };
+}
+
+/** SPK-PAY-016: the lines in effect of an open sale that still wait for their second approval. */
+export function linesAwaitingApproval(
+  lines: readonly PosSaleLineRow[],
+  approvals: readonly { sale_line_id: string }[],
+): PosSaleLineRow[] {
+  const approved = new Set(approvals.map((a) => a.sale_line_id));
+  return liveLines(lines).filter(
+    (l) => l.kind === 'open_amount' && l.approval_required === true && !approved.has(l.id),
+  );
+}
 
 export function toPosProduct(row: PosProductRow, chargeKeys: string[]): PosProduct {
   return {
@@ -172,6 +202,8 @@ export interface PosSaleParts {
   lines: PosSaleLineRow[];
   tenders: PosTenderRow[];
   returns: PosReturnRow[];
+  /** SPK-PAY-016: the second approvals of the sale's open-amount lines, by line. */
+  approvals: Map<string, PosLineApprovalRow>;
   attemptStatus: Map<string, string>;
   refundStatus: Map<string, string>;
   /** R4-PROVIDER-OUTCOMES-02: when a succeeded card refund was reported failed (reversed). */
@@ -203,6 +235,14 @@ export async function loadSaleParts(db: Reader, sale: PosSaleRow): Promise<PosSa
     .orderBy('returned_at')
     .orderBy('id')
     .execute();
+  const approvals = lines.some((l) => l.kind === 'open_amount')
+    ? await db
+        .selectFrom('pos_line_approvals')
+        .selectAll()
+        .where('organization_id', '=', organizationId)
+        .where('sale_id', '=', sale.id)
+        .execute()
+    : [];
   const attemptIds = tenders.map((t) => t.payment_attempt_id).filter((id): id is string => !!id);
   const attempts =
     attemptIds.length === 0
@@ -227,6 +267,7 @@ export async function loadSaleParts(db: Reader, sale: PosSaleRow): Promise<PosSa
     lines: liveLines(lines),
     tenders,
     returns,
+    approvals: new Map(approvals.map((a) => [a.sale_line_id, a])),
     attemptStatus: new Map(attempts.map((a) => [a.id, a.status])),
     refundStatus: new Map(refunds.map((r) => [r.id, r.status])),
     refundReversedAt: new Map(
@@ -235,7 +276,20 @@ export async function loadSaleParts(db: Reader, sale: PosSaleRow): Promise<PosSa
   };
 }
 
-function toLine(row: PosSaleLineRow, returned: number): PosSaleLine {
+export function toLineApproval(row: PosLineApprovalRow) {
+  return {
+    id: row.id,
+    approvedByPersonId: row.approved_by_person_id,
+    approvedAt: iso(row.approved_at),
+    reason: row.reason,
+  };
+}
+
+function toLine(
+  row: PosSaleLineRow,
+  returned: number,
+  approval: PosLineApprovalRow | undefined,
+): PosSaleLine {
   return {
     id: row.id,
     lineNumber: row.line_number,
@@ -243,6 +297,19 @@ function toLine(row: PosSaleLineRow, returned: number): PosSaleLine {
     sku: row.sku,
     name: row.name,
     kind: row.kind,
+    openAmount:
+      row.kind === 'open_amount'
+        ? {
+            description: row.description ?? '',
+            reasonCategory: row.reason_category ?? '',
+            revenueCategory: row.revenue_category ?? '',
+            enteredByPersonId: row.entered_by_person_id ?? '',
+            ceilingMinor: Number(row.approval_ceiling_minor ?? 0),
+            approvalRequired: row.approval_required === true,
+            approval: approval ? toLineApproval(approval) : null,
+            policyVersionId: row.policy_version_id,
+          }
+        : null,
     unitPriceMinor: Number(row.unit_price_minor),
     quantity: row.quantity,
     baseMinor: Number(row.base_minor),
@@ -323,7 +390,7 @@ export function toPosSale(sale: PosSaleRow, parts: PosSaleParts): PosSale {
     remainingMinor: sale.status === 'open' ? Math.max(total - settled - pending, 0) : 0,
     returnedMinor: returned,
     charges: chargeSummary(parts.lines),
-    lines: parts.lines.map((l) => toLine(l, units.get(l.id) ?? 0)),
+    lines: parts.lines.map((l) => toLine(l, units.get(l.id) ?? 0, parts.approvals.get(l.id))),
     tenders: parts.tenders.map((t) => toTender(t, parts.attemptStatus)),
     returns: parts.returns.map((r) => toReturn(r, parts.refundStatus, parts.refundReversedAt)),
     paidAt: isoOrNull(sale.paid_at),
@@ -345,6 +412,8 @@ export function toPosReceipt(sale: PosSaleRow, parts: PosSaleParts): PosReceipt 
     lines: parts.lines.map((l) => ({
       name: l.name,
       kind: l.kind,
+      // SPK-PAY-016: what an open-amount line was for; who entered or approved it is not shown.
+      description: l.kind === 'open_amount' ? l.description : null,
       quantity: l.quantity,
       unitPriceMinor: Number(l.unit_price_minor),
       baseMinor: Number(l.base_minor),

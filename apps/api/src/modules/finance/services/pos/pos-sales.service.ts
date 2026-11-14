@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
   newId,
-  type AddPosSaleLineInput,
+  type AddPosProductLineInput,
   type AddPosTenderInput,
   type ChangePosLineQuantityInput,
   type CreatePosReturnInput,
@@ -56,6 +56,7 @@ import {
   liveLines,
   loadSaleParts,
   returnedUnits,
+  revenueKeyOf,
   toPosReceipt,
   toPosSale,
   type PosSaleLineRow,
@@ -90,6 +91,11 @@ const TAX_FEE_KIND = 'tax_fee' as PolicyKind;
  *   the refund within the payment's refundable funds (RefundsService, SPK-PAY-008) and executes it
  *   outside the transaction. Its journal reverses the sale's revenue, taxes and fees; the sale's
  *   own entries are never edited (SPK-PAY-010).
+ * - SPK-PAY-016 (proposed amendment PA-08): open-amount lines are entered and approved through
+ *   PosOpenAmountService. Here a sale takes no tender while one of its lines in effect waits for
+ *   its second approval (OPEN_AMOUNT_APPROVAL_REQUIRED), such a line is only ever removed (never
+ *   re-priced; removing it is an unwinding step and needs no switch), and its return follows the
+ *   rules of any line, with the revenue given back under the line's revenue category.
  */
 @Injectable()
 export class PosSalesService {
@@ -123,7 +129,7 @@ export class PosSalesService {
       .executeTakeFirst();
   }
 
-  private async afterCommand(organizationId: string, id: string): Promise<PosSale> {
+  async afterCommand(organizationId: string, id: string): Promise<PosSale> {
     const sale = await this.load(this.db, organizationId, id);
     if (!sale) throw errors.notFound('pos sale', id);
     return this.view(this.db, sale);
@@ -223,7 +229,7 @@ export class PosSalesService {
   async addLine(
     principal: Principal,
     saleId: string,
-    input: AddPosSaleLineInput,
+    input: AddPosProductLineInput,
     correlationId: string | null,
   ): Promise<PosSale> {
     const organizationId = organizationOf(principal);
@@ -333,7 +339,18 @@ export class PosSalesService {
     await this.uow.run(async ({ trx }) => {
       const sale = await this.finalizer.lockSale(trx, organizationId, saleId);
       await this.requireOperator(principal, sale);
-      await this.capabilities.require(organizationId, 'point_of_sale', trx);
+      // SPK-PAY-016 (proposed): removing an open-amount line unwinds a commitment, so it needs no
+      // switch (DEC-016): a sale holding one is never stranded when a switch is turned off.
+      const named = await trx
+        .selectFrom('pos_sale_lines')
+        .select('kind')
+        .where('organization_id', '=', organizationId)
+        .where('sale_id', '=', saleId)
+        .where('id', '=', lineId)
+        .executeTakeFirst();
+      if (!(named?.kind === 'open_amount' && input.quantity === 0)) {
+        await this.capabilities.require(organizationId, 'point_of_sale', trx);
+      }
       if (sale.status !== 'open') {
         throw errors.invalidTransition('PosSale', sale.status, 'change_line');
       }
@@ -358,6 +375,10 @@ export class PosSalesService {
         });
       }
       if (line.quantity === input.quantity) return; // nothing changes
+      if (line.kind === 'open_amount' || line.product_id === null) {
+        await this.removeOpenAmountLine(trx, principal, sale, line, input, correlationId);
+        return;
+      }
       const product = await trx
         .selectFrom('pos_products')
         .selectAll()
@@ -439,6 +460,97 @@ export class PosSalesService {
   }
 
   /**
+   * SPK-PAY-016 (proposed amendment PA-08): an open-amount line is corrected in one way only, by
+   * removing it (a superseding line of quantity 0 that repeats it, migration 0695). A different
+   * amount is a new line, judged against the ceiling again.
+   */
+  private async removeOpenAmountLine(
+    trx: Trx,
+    principal: Principal,
+    sale: PosSaleRow,
+    line: PosSaleLineRow,
+    input: ChangePosLineQuantityInput,
+    correlationId: string | null,
+  ): Promise<void> {
+    if (input.quantity !== 0) {
+      throw errors.validation(
+        'An open-amount line is one unit: remove it and enter the amount again instead.',
+        { code: 'OPEN_AMOUNT_LINE_QUANTITY', saleLineId: line.id },
+      );
+    }
+    if (!principal.personId) throw errors.accessDenied('A line is removed by a named person.');
+    const organizationId = sale.organization_id;
+    const tendered = Number(sale.total_minor) - (await this.remaining(trx, sale));
+    const newTotal = Number(sale.total_minor) - Number(line.line_total_minor);
+    if (newTotal < tendered) {
+      throw errors.resourceConflict(
+        'Tenders already taken cover more than the changed sale would cost.',
+        { code: 'BELOW_TENDERED', tenderedMinor: tendered, newTotalMinor: newTotal },
+      );
+    }
+    const last = await trx
+      .selectFrom('pos_sale_lines')
+      .select((eb) => eb.fn.max('line_number').as('n'))
+      .where('organization_id', '=', organizationId)
+      .where('sale_id', '=', sale.id)
+      .executeTakeFirst();
+    const newLineId = newId();
+    await trx
+      .insertInto('pos_sale_lines')
+      .values({
+        id: newLineId,
+        organization_id: organizationId,
+        sale_id: sale.id,
+        currency: sale.currency,
+        line_number: Number(last?.n ?? 0) + 1,
+        product_id: null,
+        sku: null,
+        name: line.name,
+        kind: 'open_amount',
+        unit_price_minor: Number(line.unit_price_minor),
+        quantity: 0,
+        base_minor: 0,
+        charges: json([]),
+        charges_minor: 0,
+        line_total_minor: 0,
+        supersedes_line_id: line.id,
+        description: line.description,
+        reason_category: line.reason_category,
+        revenue_category: line.revenue_category,
+        // Who removed it: the removal is its own entry.
+        entered_by: json(snapshotActor(principal)),
+        entered_by_person_id: principal.personId,
+        approval_ceiling_minor: line.approval_ceiling_minor,
+        approval_required: line.approval_required,
+        policy_version_id: line.policy_version_id,
+      })
+      .execute();
+    await this.audit.record(trx, {
+      organizationId,
+      actor: principal,
+      action: `${FinanceActions.operateRegister.id}.change_line`,
+      targetType: 'pos_sale',
+      targetId: sale.id,
+      beforeRevision: sale.revision,
+      reason: input.reason ?? null,
+      correlationId,
+      details: {
+        supersededLineId: line.id,
+        lineId: newLineId,
+        openAmount: true,
+        reasonCategory: line.reason_category,
+        fromQuantity: line.quantity,
+        toQuantity: 0,
+        amountMinor: Number(line.unit_price_minor),
+      },
+    });
+    // A card tender taken before the line was entered may have settled since, covering what the
+    // sale holds again: the sale is then paid here, as a tender would pay it, so it is never left
+    // open with nothing to pay and nothing to void (DEC-016).
+    await this.finalizer.payIfCovered(trx, organizationId, sale.id, principal, correlationId);
+  }
+
+  /**
    * SPK-PAY-001/002, DEC-057: `quantity` units of the product at its price with the charges of the
    * approved `tax_fee` versions in effect now; a key without one refuses the line.
    */
@@ -457,9 +569,35 @@ export class PosSalesService {
       .orderBy('position')
       .execute();
     const base = Number(product.price_minor) * quantity;
+    const { charges, chargesMinor } = await this.approvedCharges(
+      trx,
+      sale,
+      keys.map((k) => k.tax_fee_policy_key),
+      base,
+      quantity,
+      { what: 'the product cannot be sold', subject: { productId: product.id } },
+    );
+    return { base, charges, chargesMinor };
+  }
+
+  /**
+   * SPK-PAY-002, DEC-057: the charges of the approved `tax_fee` versions in effect now for the
+   * policy keys of a product, or of an open-amount line's reason category (SPK-PAY-016, proposed).
+   * A key without an approved, usable version in the sale's currency refuses the line; `refusal`
+   * names what is refused and whom the error details point at.
+   */
+  async approvedCharges(
+    trx: Trx,
+    sale: PosSaleRow,
+    keys: readonly string[],
+    base: number,
+    quantity: number,
+    refusal: { what: string; subject: Record<string, string> },
+  ): Promise<{ charges: PosLineChargeRecord[]; chargesMinor: number }> {
+    const organizationId = sale.organization_id;
     const now = this.clock.now();
     const charges: PosLineChargeRecord[] = [];
-    for (const { tax_fee_policy_key: key } of keys) {
+    for (const key of keys) {
       const version = await this.policies.currentPolicyVersion(
         organizationId,
         TAX_FEE_KIND,
@@ -470,8 +608,8 @@ export class PosSalesService {
       if (!version || version.approvalStatus !== 'approved') {
         // DEC-057: only Finance-approved taxes and fees appear on a sale; none is assumed.
         throw errors.resourceConflict(
-          `No approved tax or fee policy "${key}" is in effect; the product cannot be sold.`,
-          { code: 'CHARGE_POLICY_NOT_APPROVED', policyKey: key, productId: product.id },
+          `No approved tax or fee policy "${key}" is in effect; ${refusal.what}.`,
+          { code: 'CHARGE_POLICY_NOT_APPROVED', policyKey: key, ...refusal.subject },
         );
       }
       const content = TaxFeeContent.safeParse(version.content);
@@ -490,7 +628,7 @@ export class PosSalesService {
       charges.push(chargeFor(content.data, version.id, base, quantity));
     }
     const chargesMinor = charges.reduce((sum, c) => sum + c.amountMinor, 0);
-    return { base, charges, chargesMinor };
+    return { charges, chargesMinor };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -542,6 +680,23 @@ export class PosSalesService {
       // the switch is turned off, and its session and register can then be closed.
       if (sale.status !== 'open') throw errors.invalidTransition('PosSale', sale.status, 'tender');
       assertExpectedRevision(input.expectedRevision, sale.revision);
+      // SPK-PAY-016 (proposed): no tender while an open-amount line above its ceiling waits for
+      // the second approval (the database refuses it too, pos_tenders_open_amount_approved).
+      const awaiting = await this.finalizer.awaitingApproval(trx, organizationId, sale.id);
+      if (awaiting.length > 0) {
+        throw errors.resourceConflict(
+          'An open-amount line above its ceiling waits for a second approval; the sale takes no tender before it is approved or removed.',
+          {
+            code: 'OPEN_AMOUNT_APPROVAL_REQUIRED',
+            lines: awaiting.map((l) => ({
+              saleLineId: l.id,
+              amountMinor: Number(l.unit_price_minor),
+              ceilingMinor: Number(l.approval_ceiling_minor ?? 0),
+              enteredByPersonId: l.entered_by_person_id,
+            })),
+          },
+        );
+      }
       const remaining = await this.remaining(trx, sale);
       if (input.amountMinor > remaining) {
         throw errors.validation('The tender exceeds what remains to be paid.', {
@@ -883,7 +1038,7 @@ export class PosSalesService {
         sale,
         returnId,
         returned,
-        new Map(lines.map((l) => [l.id, l.kind])),
+        new Map(lines.map((l) => [l.id, revenueKeyOf(l)])),
         input.tenderKind,
         principal,
         correlationId,

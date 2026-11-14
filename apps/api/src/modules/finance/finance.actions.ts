@@ -233,6 +233,24 @@ export const FinanceActions = defineActions({
     staffRoles: ['finance_operator', 'general_manager'],
     requirements: ['§3.16 POS', 'SPK-PAY-008', 'SPK-PAY-010'],
   },
+  // SPK-PAY-016 (proposed amendment PA-08; capability open_amount_lines, DEC-102 pending): who may
+  // enter an open-amount line and who may give the second approval are Proposed role assignments.
+  enterOpenAmountLine: {
+    id: 'finance.enter_open_amount_line',
+    description:
+      'Add an open-amount line (a typed description, an amount and a reason category) to a register sale, within the ceiling of the role or pending a second approval',
+    staffRoles: ['front_desk', 'finance_operator'],
+    capability: 'open_amount_lines',
+    requirements: ['SPK-PAY-016', '§3.16 POS'],
+  },
+  approveOpenAmountLine: {
+    id: 'finance.approve_open_amount_line',
+    description:
+      'Approve an open-amount register line above the ceiling of the person who entered it (a second person, never that person)',
+    staffRoles: ['finance_operator', 'general_manager'],
+    capability: 'open_amount_lines',
+    requirements: ['SPK-PAY-016', '§3.16 POS'],
+  },
   // Reads: desk staff read through operateRegister at their facility (services/pos/pos-access.ts),
   // so the front desk holds no finance-area read (SPK-UX-005).
   readPos: {

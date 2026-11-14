@@ -27,6 +27,8 @@ export const ATTEMPT_ID = '0192f1a0-0000-7000-8000-00000000a304';
 export const RETURN_ID = '0192f1a0-0000-7000-8000-00000000a305';
 export const REFUND_ID = '0192f1a0-0000-7000-8000-00000000a308';
 export const TAX_VERSION_ID = '0192f1a0-0000-7000-8000-00000000a401';
+export const OPEN_LINE_ID = '0192f1a0-0000-7000-8000-00000000a501';
+export const APPROVAL_ID = '0192f1a0-0000-7000-8000-00000000a502';
 
 export const DEVICE_ID = '0192f1a0-0000-7000-8000-00000000b001';
 export const DEVICE_B_ID = '0192f1a0-0000-7000-8000-00000000b002';
@@ -213,6 +215,7 @@ export function line(overrides: Partial<Model<'PosSaleLine'>> = {}): Model<'PosS
     sku: 'WATER',
     name: 'Water bottle',
     kind: 'concession',
+    openAmount: null,
     unitPriceMinor: 250,
     quantity: 2,
     baseMinor: 500,
@@ -228,6 +231,70 @@ export function line(overrides: Partial<Model<'PosSaleLine'>> = {}): Model<'PosS
     chargesMinor: 42,
     lineTotalMinor: 542,
     returnedQuantity: 0,
+    ...overrides,
+  };
+}
+
+/**
+ * SPK-PAY-016 (proposed): an open-amount line of 120.00 entered by the signed-in staff member
+ * above a ceiling of 50.00, waiting for its second approval unless `openAmount` says otherwise.
+ */
+export function openAmountLine(
+  openAmount: Partial<NonNullable<Model<'PosSaleLine'>['openAmount']>> = {},
+  overrides: Partial<Model<'PosSaleLine'>> = {},
+): Model<'PosSaleLine'> {
+  return {
+    id: OPEN_LINE_ID,
+    lineNumber: 2,
+    productId: null,
+    sku: null,
+    name: 'Field damage fee',
+    kind: 'open_amount',
+    openAmount: {
+      description: 'Goal net torn on field 3',
+      reasonCategory: 'field_damage_fee',
+      revenueCategory: 'facility_fees',
+      enteredByPersonId: ME_PERSON,
+      ceilingMinor: 5000,
+      approvalRequired: true,
+      approval: null,
+      policyVersionId: null,
+      ...openAmount,
+    },
+    unitPriceMinor: 12000,
+    quantity: 1,
+    baseMinor: 12000,
+    charges: [],
+    chargesMinor: 0,
+    lineTotalMinor: 12000,
+    returnedQuantity: 0,
+    ...overrides,
+  };
+}
+
+export function openAmountRules(
+  overrides: Partial<Model<'PosOpenAmountRules'>> = {},
+): Model<'PosOpenAmountRules'> {
+  return {
+    basis: 'proposed_default',
+    policyVersionId: null,
+    currency: null,
+    categories: [
+      {
+        code: 'field_damage_fee',
+        label: 'Field damage fee',
+        revenueCategory: 'facility_fees',
+        chargePolicyKeys: [],
+      },
+      {
+        code: 'lost_key',
+        label: 'Lost key',
+        revenueCategory: 'facility_fees',
+        chargePolicyKeys: [],
+      },
+    ],
+    ceilingMinor: 5000,
+    approverRoles: ['finance_operator', 'general_manager'],
     ...overrides,
   };
 }
@@ -314,6 +381,7 @@ export function receipt(overrides: Partial<Model<'PosReceipt'>> = {}): Model<'Po
       {
         name: 'Water bottle',
         kind: 'concession',
+        description: null,
         quantity: 2,
         unitPriceMinor: 250,
         baseMinor: 500,

@@ -66,6 +66,36 @@ describe('Package G PosReceiptsScreen (SPK-PAY-002)', () => {
     expect(screen.getByRole('header', { name: 'Point-of-sale receipts' })).toBeOnTheScreen();
   });
 
+  it('SPK-PAY-016 (proposed): an open-amount line reads by its description with its reason category, beside a product line', async () => {
+    const withOpenAmount = receipt({
+      lines: [
+        ...receipt().lines,
+        {
+          name: 'Field damage fee',
+          kind: 'open_amount',
+          description: 'Goal net torn on field 3',
+          quantity: 1,
+          unitPriceMinor: 12_000,
+          baseMinor: 12_000,
+          charges: [],
+          lineTotalMinor: 12_000,
+        },
+      ],
+      subtotalMinor: 12_600,
+      totalMinor: 12_650,
+      tenders: [{ kind: 'cash', amountMinor: 12_650 }],
+    });
+    renderScreen(routes({ 'GET /me/pos-receipts': ok(page([withOpenAmount])) }));
+    const card = await screen.findByTestId(`receipt-${G.sale}`);
+    expect(
+      within(card).getByLabelText('Goal net torn on field 3: $120.00 (Field damage fee)'),
+    ).toBeOnTheScreen();
+    // It has no quantity or unit price of its own, and the product line is as before.
+    expect(within(card).queryByLabelText(/1 × Field damage fee/)).toBeNull();
+    expect(within(card).getByLabelText('2 × Water bottle: $6.00 ($3.00 each)')).toBeOnTheScreen();
+    expect(within(card).getByLabelText('Total: $126.50')).toBeOnTheScreen();
+  });
+
   it('SPK-PAY-008: a card return is never shown as refunded; tenders are listed as recorded', async () => {
     renderScreen();
     const card = await screen.findByTestId(`receipt-${G.saleB}`);
