@@ -319,6 +319,7 @@ describe('credits (SPK-PAY-009, §4.7 invariant 7)', () => {
           discount_lines: json(line.discount_lines),
           charge_lines: json(line.charge_lines),
           policy_references: json(line.policy_references),
+          price_basis: line.price_basis ? json(line.price_basis) : null,
         })
         .execute();
     }
