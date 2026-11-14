@@ -671,6 +671,75 @@ export type ListAcknowledgmentsQuery = z.infer<typeof ListAcknowledgmentsQuery>;
 export const PricingBasisSchema = z.enum(['term', 'per_session']).openapi('PricingBasis');
 export type PricingBasis = z.infer<typeof PricingBasisSchema>;
 
+/**
+ * What a price tier lets the participant attend (SPK-PAY-014, proposed amendment PA-03):
+ * `all_sessions` is every session of the offering (a full week, or the same sessions at a
+ * half-day price); `chosen_sessions` is a number of sessions the customer picks, between
+ * `minSessions` and `maxSessions` (a single day is 1 to 1).
+ */
+export const PriceTierAttendanceSchema = z
+  .enum(['all_sessions', 'chosen_sessions'])
+  .openapi('PriceTierAttendance');
+export type PriceTierAttendance = z.infer<typeof PriceTierAttendanceSchema>;
+
+/**
+ * A price tier of a price rule (SPK-PAY-014, PA-03; capability `price_tiers_addons`). Exactly one
+ * tier applies to a line; it is selected by stored facts of the purchase: the tier the customer
+ * named, the instant of purchase against `availableUntil`, and the number of sessions chosen.
+ * `priceMinor` is on the rule's pricing basis (the price of what the tier names for a `term`
+ * rule, of one session for a `per_session` rule). Tiers are pricing content and immutable; a
+ * change is a new price rule version (SPK-PAY-002).
+ */
+export const PriceRuleTierSchema = z
+  .object({
+    id: z.uuid(),
+    code: z.string(),
+    name: z.string(),
+    sequence: z.number().int(),
+    attendance: PriceTierAttendanceSchema,
+    /** `chosen_sessions`: the fewest and the most sessions the customer may choose. */
+    minSessions: z.number().int().nullable(),
+    maxSessions: z.number().int().nullable(),
+    priceMinor: z.number().int(),
+    /** The tier's price for a holder of the rule's membership entitlement (SPK-PAY-015). */
+    memberPriceMinor: z.number().int().nullable(),
+    /** The purchase deadline of the tier (for example an early price); null when it has none. */
+    availableUntil: Instant.nullable(),
+  })
+  .openapi('PriceRuleTier');
+export type PriceRuleTier = z.infer<typeof PriceRuleTierSchema>;
+
+export const CreatePriceRuleTierSchema = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .min(1)
+      .max(50)
+      .regex(/^[a-z0-9_]+$/, 'lower-case letters, digits and underscores'),
+    name: z.string().trim().min(1).max(120),
+    attendance: PriceTierAttendanceSchema,
+    minSessions: z.number().int().min(1).max(366).optional(),
+    maxSessions: z.number().int().min(1).max(366).optional(),
+    priceMinor: z.number().int().min(0).safe(),
+    memberPriceMinor: z.number().int().min(0).safe().optional(),
+    availableUntil: Instant.optional(),
+  })
+  .refine(
+    (v) =>
+      v.attendance === 'chosen_sessions'
+        ? v.minSessions !== undefined &&
+          (v.maxSessions === undefined || v.maxSessions >= v.minSessions)
+        : v.minSessions === undefined && v.maxSessions === undefined,
+    {
+      message:
+        'A tier of chosen sessions states the fewest sessions (and at most as many as the most); a tier of all sessions states neither.',
+      path: ['minSessions'],
+    },
+  )
+  .openapi('CreatePriceRuleTier');
+export type CreatePriceRuleTierInput = z.infer<typeof CreatePriceRuleTierSchema>;
+
 export const PriceRuleSchema = z
   .object({
     id: z.uuid(),
@@ -691,6 +760,11 @@ export const PriceRuleSchema = z
     memberEntitlementDefinitionId: z.uuid().nullable(),
     /** The membership entitlement's name, for display beside the member price. */
     memberEntitlementName: z.string().nullable(),
+    /**
+     * SPK-PAY-014 (PA-03): the rule's price tiers in display order; empty when it has none. While
+     * a rule has tiers and `price_tiers_addons` is on, a line names exactly one of them.
+     */
+    tiers: z.array(PriceRuleTierSchema),
     revision: Revision,
     createdAt: Instant,
   })
@@ -714,10 +788,29 @@ export const CreatePriceRuleBody = withCommandMeta({
    */
   memberPriceMinor: z.number().int().min(0).safe().optional(),
   memberEntitlementDefinitionId: z.uuid().optional(),
+  /**
+   * SPK-PAY-014 (PA-03): price tiers, created with the rule. They need the `price_tiers_addons`
+   * capability; a request that names any while the capability is off is refused
+   * (CAPABILITY_DISABLED). A tier's member price needs the rule's membership entitlement.
+   */
+  tiers: z.array(CreatePriceRuleTierSchema).max(20).default([]),
 })
   .refine(
     (v) => v.effectiveTo === undefined || new Date(v.effectiveTo) > new Date(v.effectiveFrom),
     { message: 'effectiveTo must be after effectiveFrom', path: ['effectiveTo'] },
+  )
+  .refine((v) => new Set(v.tiers.map((tier) => tier.code)).size === v.tiers.length, {
+    message: 'Each tier of a price rule has its own code.',
+    path: ['tiers'],
+  })
+  .refine(
+    (v) =>
+      v.memberEntitlementDefinitionId !== undefined ||
+      v.tiers.every((tier) => tier.memberPriceMinor === undefined),
+    {
+      message: 'A tier member price needs the membership entitlement of the rule.',
+      path: ['tiers'],
+    },
   )
   .refine(
     (v) => (v.memberPriceMinor === undefined) === (v.memberEntitlementDefinitionId === undefined),
@@ -799,9 +892,156 @@ export const PublicPriceSchema = z
     remainingSessionsPriceMinor: z.number().int().nullable(),
     /** SPK-PAY-015 (PA-04): the member price, when the effective rule carries one. */
     memberPrice: PublicMemberPriceSchema.nullable(),
+    /**
+     * SPK-PAY-014 (PA-03): the price tiers of the effective rule, while `price_tiers_addons` is
+     * on; empty otherwise. With tiers, `basePriceMinor` is not what a line costs: its tier is.
+     */
+    tiers: z.array(PriceRuleTierSchema),
   })
   .openapi('PublicPrice');
 export type PublicPrice = z.infer<typeof PublicPriceSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Add-ons and uniforms of an offering (proposed amendments PA-03 and PA-07)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * How an add-on is selected (SPK-PAY-014, PA-03): once for the registration, or for each session
+ * (day) the participant attends that the customer picks.
+ */
+export const AddonSelectionSchema = z
+  .enum(['per_registration', 'per_session'])
+  .openapi('AddonSelection');
+export type AddonSelection = z.infer<typeof AddonSelectionSchema>;
+
+export const OfferingExtraStatusSchema = z
+  .enum(['active', 'retired'])
+  .openapi('OfferingExtraStatus');
+export type OfferingExtraStatus = z.infer<typeof OfferingExtraStatusSchema>;
+
+/**
+ * An optional add-on of an offering (SPK-PAY-014, PA-03; capability `price_tiers_addons`), for
+ * example lunch or early drop-off. It is priced separately (`priceMinor` each: per registration,
+ * or per selected session), may have its own capacity (per registration: places in all; per
+ * session: places for each session), and is its own line on the quote. Its price and selection
+ * are immutable: a change is a retirement and a new add-on, so a purchase keeps its basis.
+ */
+export const OfferingAddonSchema = z
+  .object({
+    id: z.uuid(),
+    offeringId: z.uuid(),
+    code: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    priceMinor: z.number().int(),
+    currency: CurrencyCode,
+    chargeLines: z.array(ChargeLineSchema),
+    selection: AddonSelectionSchema,
+    /** Places of the add-on's own capacity pool; null when it is not limited. */
+    capacity: z.number().int().nullable(),
+    status: OfferingExtraStatusSchema,
+    revision: Revision,
+    createdAt: Instant,
+  })
+  .openapi('OfferingAddon');
+export type OfferingAddon = z.infer<typeof OfferingAddonSchema>;
+
+export const CreateOfferingAddonBody = withCommandMeta({
+  code: z
+    .string()
+    .trim()
+    .min(1)
+    .max(50)
+    .regex(/^[a-z0-9_]+$/, 'lower-case letters, digits and underscores'),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(1000).optional(),
+  priceMinor: z.number().int().min(0).safe(),
+  currency: CurrencyCode,
+  chargeLines: z.array(ChargeLineSchema).max(20).default([]),
+  selection: AddonSelectionSchema.default('per_registration'),
+  capacity: z.number().int().min(0).max(100_000).optional(),
+}).openapi('CreateOfferingAddonRequest');
+export type CreateOfferingAddonInput = z.infer<typeof CreateOfferingAddonBody>;
+
+export const RetireOfferingExtraBody = withCommandMeta({}).openapi('RetireOfferingExtraRequest');
+export type RetireOfferingExtraInput = z.infer<typeof RetireOfferingExtraBody>;
+
+/** Whether the customer must choose the uniform or may (SPK-REG-012, PA-07). */
+export const UniformRequirementSchema = z
+  .enum(['required', 'optional'])
+  .openapi('UniformRequirement');
+export type UniformRequirement = z.infer<typeof UniformRequirementSchema>;
+
+/**
+ * The uniform (kit) an offering requires or offers (SPK-REG-012, PA-07; capability `uniforms`).
+ * `itemKey` names the kit across offerings: a participant who was handed a uniform with the same
+ * key holds the current uniform, and is not charged again where `returningHolderFree` says so
+ * (the proposed returning-participant rule, DEC-101 pending). A null price is a uniform that is
+ * not charged. Stock is not counted (DEC-101 pending).
+ */
+export const OfferingUniformSchema = z
+  .object({
+    id: z.uuid(),
+    offeringId: z.uuid(),
+    itemKey: z.string(),
+    name: z.string(),
+    sizes: z.array(z.string()),
+    requirement: UniformRequirementSchema,
+    priceMinor: z.number().int().nullable(),
+    currency: CurrencyCode.nullable(),
+    chargeLines: z.array(ChargeLineSchema),
+    returningHolderFree: z.boolean(),
+    status: OfferingExtraStatusSchema,
+    revision: Revision,
+    createdAt: Instant,
+  })
+  .openapi('OfferingUniform');
+export type OfferingUniform = z.infer<typeof OfferingUniformSchema>;
+
+export const CreateOfferingUniformBody = withCommandMeta({
+  itemKey: z
+    .string()
+    .trim()
+    .min(1)
+    .max(80)
+    .regex(/^[a-z0-9_-]+$/, 'lower-case letters, digits, hyphens and underscores'),
+  name: z.string().trim().min(1).max(120),
+  sizes: z.array(z.string().trim().min(1).max(30)).min(1).max(40),
+  requirement: UniformRequirementSchema.default('optional'),
+  priceMinor: z.number().int().min(0).safe().optional(),
+  currency: CurrencyCode.optional(),
+  chargeLines: z.array(ChargeLineSchema).max(20).default([]),
+  returningHolderFree: z.boolean().default(false),
+})
+  .refine((v) => (v.priceMinor === undefined) === (v.currency === undefined), {
+    message: 'A uniform price and its currency are given together.',
+    path: ['currency'],
+  })
+  .refine((v) => new Set(v.sizes).size === v.sizes.length, {
+    message: 'Each size is listed once.',
+    path: ['sizes'],
+  })
+  .openapi('CreateOfferingUniformRequest');
+export type CreateOfferingUniformInput = z.infer<typeof CreateOfferingUniformBody>;
+
+/**
+ * What a customer chooses when registering for an offering, beyond the place itself
+ * (SPK-PAY-014, SPK-REG-012): the tiers of the price rule effective now, the active add-ons and
+ * the active uniform. Each part is empty (or null) while its capability is off, so no client
+ * offers a choice the command would refuse.
+ */
+export const OfferingPurchaseOptionsSchema = z
+  .object({
+    offeringId: z.uuid(),
+    priceRuleId: z.uuid().nullable(),
+    pricingBasis: PricingBasisSchema.nullable(),
+    currency: CurrencyCode.nullable(),
+    tiers: z.array(PriceRuleTierSchema),
+    addons: z.array(OfferingAddonSchema),
+    uniform: OfferingUniformSchema.nullable(),
+  })
+  .openapi('OfferingPurchaseOptions');
+export type OfferingPurchaseOptions = z.infer<typeof OfferingPurchaseOptionsSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Offerings
@@ -1676,6 +1916,55 @@ query(
   'List the price rule versions of an offering',
   null,
   z.array(PriceRuleSchema),
+);
+
+command(
+  'post',
+  '/offerings/{id}/addons',
+  'Create an add-on of an offering (SPK-PAY-014, proposed amendment PA-03; capability price_tiers_addons)',
+  CreateOfferingAddonBody,
+  OfferingAddonSchema,
+);
+query(
+  '/offerings/{id}/addons',
+  'List the add-ons of an offering, retired ones included (staff)',
+  null,
+  z.array(OfferingAddonSchema),
+);
+command(
+  'post',
+  '/offering-addons/{id}/retire',
+  'Retire an add-on: it can no longer be selected; purchases keep it',
+  RetireOfferingExtraBody,
+  OfferingAddonSchema,
+  200,
+);
+command(
+  'post',
+  '/offerings/{id}/uniforms',
+  'Set the uniform an offering requires or offers (SPK-REG-012, proposed amendment PA-07; capability uniforms)',
+  CreateOfferingUniformBody,
+  OfferingUniformSchema,
+);
+query(
+  '/offerings/{id}/uniforms',
+  'List the uniforms of an offering, retired ones included (staff)',
+  null,
+  z.array(OfferingUniformSchema),
+);
+command(
+  'post',
+  '/offering-uniforms/{id}/retire',
+  'Retire a uniform: it can no longer be chosen; orders keep it',
+  RetireOfferingExtraBody,
+  OfferingUniformSchema,
+  200,
+);
+query(
+  '/offerings/{id}/purchase-options',
+  'The price tiers, add-ons and uniform a customer chooses from when registering (empty while the capability of each is off)',
+  null,
+  OfferingPurchaseOptionsSchema,
 );
 
 command(

@@ -28,7 +28,7 @@ export type RegistrationIntent =
   | 'party_request';
 
 export type CapacityPoolScopeType =
-  'offering' | 'session' | 'division' | 'team_entry' | 'camp_group' | 'rental';
+  'offering' | 'session' | 'division' | 'team_entry' | 'camp_group' | 'rental' | 'addon';
 export type CapacityPoolUnit =
   | 'team_entries'
   | 'roster_places'
@@ -44,6 +44,8 @@ export interface CapacityPoolsTable {
   offering_id: string | null;
   scope_type: CapacityPoolScopeType;
   scope_id: string;
+  /** 0522 (SPK-PAY-014): the session of an add-on pool limited per session; null otherwise. */
+  scope_session_id: Generated<string | null>;
   unit: CapacityPoolUnit;
   constraint_kind: Generated<CapacityConstraintKind>;
   capacity: number;
@@ -179,6 +181,9 @@ export interface EnrollmentsTable {
   transferred_from_enrollment_id: string | null;
   /** Migration 0501: the financial consequence accepted with the transfer (SPK-REG-010). */
   transfer_consequence: Json<Record<string, unknown>> | null;
+  /** 0521 (SPK-PAY-014): the tier bought and the sessions attended (null = every session). */
+  price_tier_id: Generated<string | null>;
+  selected_session_ids: Generated<string[] | null>;
   completed_at: NullableTimestamp;
   /** Migration 0507 (ENR-12): the membership term, set when a membership is confirmed. */
   membership_starts_at: NullableTimestamp;
@@ -220,6 +225,9 @@ export interface BasketLinesTable {
   enrollment_id: string | null;
   /** Migration 0507 (ENR-12): a renewal line names the membership it continues. */
   renewed_from_enrollment_id: string | null;
+  /** 0521 (SPK-PAY-014): the price tier of the line and its day selection (null = every session). */
+  price_tier_id: Generated<string | null>;
+  selected_session_ids: Generated<string[] | null>;
   outcome: Generated<BasketLineOutcome>;
   outcome_reason: string | null;
   revision: Generated<number>;
