@@ -778,3 +778,98 @@ Verified in `__tests__/placement-field.spec.ts` and `__tests__/team-workspace.sp
 **Pending:** communications does not subscribe to `competition.result_reminder_requested` yet, so a
 reminder is recorded and nothing is delivered (communications imports competition, so competition
 cannot call `NotificationsService` without a module cycle). Player profiles follow no person merge.
+
+## Team waiting list (SPK-COMP-006, proposed amendment PA-10) — 2026-11-14
+
+Status words follow §6.7. The requirement is **Proposed** (it is not in the master specification
+until it is accepted, `docs/package-a/proposed-specification-amendments.md`); it is built behind
+the capability `team_waitlist`, which is off unless an organization turns it on (DEC-016, DEC-104).
+
+**Verified** (implementation, by the tests named):
+
+- Migration `0467_competition_team_waiting.sql`: `team_entries.status` gains `waiting` with
+  `waiting_since` and `waiting_division_id`; a waiting entry holds no division place and has no
+  obligation recorded (checks); it is still the team's one live entry in the season (the live
+  unique index covers `applied`, `waiting`, `approved`); `team_entry_place_offers` with one open
+  offer per entry, an expiry, immutable terms and one resolution; the division capacity trigger
+  counts `applied` and `approved` entries and open offers, and never a waiting entry; an entry
+  cannot leave the list while its offer is open. Each rule is proven at the database in
+  `__tests__/team-waitlist-schema.spec.ts`.
+- Commands (`controllers/team-waitlist.controller.ts`, `services/team-waitlist.service.ts`):
+  `POST /team-entries/{id}/wait` (league staff), `POST /team-entries/{id}/place-offers` (league
+  staff choose the entry; the offer records the entry's place in the order and the audit record
+  says whether the order was followed), `POST /team-entry-place-offers/{id}/accept` and
+  `/decline` (captain or league staff), `/withdraw` (league staff). Accepting returns the entry to
+  `applied` in the offered division, for the ordinary approval path (SPK-COMP-004). A captain
+  withdraws a waiting team with the existing `POST /team-entries/{id}/withdraw`; an open offer is
+  closed with it. A placement (`approve` with a division, or a staff `POST /team-entries` with a
+  division) that meets a full division makes the entry wait when the capability is on.
+- Reads: `GET /seasons/{id}/waiting-list` (per division and for the season, in order, with the
+  places of each division), `GET /team-entries/{id}/place-offers`, and `waiting` on the team
+  workspace (`GET /team-entries/{id}`: division, position, list length, open offer).
+  `GET /me/team-entries` lists a waiting entry so its captain can open it.
+- Offer expiry: outbox event `competition.team_place_offer_expiry_due`, due at the expiry, handled
+  by `competition.expire_team_place_offer` (in the event handler manifest); idempotent under
+  replay (`__tests__/team-waitlist.spec.ts`).
+- Waiting entries are excluded from fixtures, fixture generation, standings, division counts and
+  rosters: every query that enumerates `applied`, `approved` keeps doing so
+  (`__tests__/team-waitlist.spec.ts` "excluded from schedules ...").
+- With the capability off a full division refuses a placement exactly as before
+  (`CAPACITY_UNAVAILABLE` with the capacity and the number occupied), and waiting, offering and
+  accepting answer `CAPABILITY_DISABLED`; declining, withdrawing and expiring are never gated
+  (`__tests__/team-waitlist.spec.ts`, `src/__tests__/journeys/facility-league.spec.ts`).
+- The last place under concurrent commands (two offers at once, an approval racing an offer, an
+  acceptance racing a withdrawal): `__tests__/team-waitlist-concurrency.spec.ts`, run under PGlite
+  and under PostgreSQL 16 (`TEST_DATABASE_URL`).
+
+**Proposed** (defaults this build assumes; each is the operator's to change):
+
+- Staff choose which waiting entry is offered a place; the order is shown and recorded, not
+  enforced.
+- An offer stands 48 hours: `COMPETITION_TEAM_PLACE_OFFER_HOURS` (`competition.settings.ts`),
+  default `TEAM_PLACE_OFFER_DEFAULT_HOURS`.
+- A team waits only where no place is free; an entry that holds a place or has an obligation
+  recorded does not wait; the roster of a waiting team is closed until it has a place.
+- Waiting does not carry over to another season.
+
+**Pending decision** (DEC-104): whether this is how waiting teams are tracked; whether offers
+must follow the order; how long an offer stands; whether waiting carries over to the next season.
+No notice is sent to a captain when a place is offered: the events
+`competition.team_place_offered` and `competition.team_place_offer_resolved` are published and
+no module consumes them yet.
+
+## Public competition views (SPK-SCHED-010, proposed amendment PA-06) — 2026-11-14
+
+**Proposed** requirement, behind the capability `public_schedule` (DEC-016, DEC-100); ADR-005.
+
+**Verified** (implementation, by `__tests__/public-competition.spec.ts` and the league journey):
+
+- Migration `0470_competition_public_visibility.sql`: `competitions.public_visibility`
+  (`private` by default), `public_code`, who changed it and when; `seasons.public_code`. A public
+  competition has a code and the fact of the change; codes are well formed and name one record.
+- Staff: `GET /competitions/{id}/publication`, `POST /competitions/{id}/publish` (league staff;
+  refused while the capability is off and when a division's criteria describe players under 18),
+  `POST /competitions/{id}/unpublish` (never gated).
+- Public reads (`public/public-competition.controller.ts`, no sign-in, rate limit `public_views`,
+  `Cache-Control: public, max-age=30` on success, `computedAt` in the body):
+  `GET /public/{organization}/directory`, `/competitions/{code}`, `/seasons/{code}` (fixtures,
+  results, standings and, in a tournament, the published bracket). Addressed by organization slug
+  and public codes; the shapes (`packages/contracts/src/api/competition-public.ts`) have team
+  names, scores, times and field names and no person, contact or internal id (asserted by
+  exhaustive key inspection). An unknown organization or code, a record id used as a code, a
+  private competition, one with a division for players under 18 and the capability turned off all
+  answer the same `NOT_FOUND` "This view is not available.".
+- The public facility schedule (scheduling) shows a game's team names and score only when
+  competition vouches for them (`PublicScheduleTitles` contributor `competition.public_fixtures`).
+- The staff standings route still needs sign-in (401).
+
+**Proposed** (defaults this build assumes): a competition is private until staff publish it; the
+rule for "describes players under 18" (`describesMinors`: an age band that starts under 18 or is
+open at the bottom, or a name, level or category such as "U12", "Youth", "Girls") errs towards
+private; team, division, season and competition names are shown as staff and captains entered
+them; the directory lists what an organization has made public to anyone who knows its slug.
+
+**Pending decision** (DEC-100): what is public and whether youth competitions differ; live
+tournament views. The fixture venue shown publicly is the copied venue (`fixtures.venue`), which
+follows the scheduling event through the outbox, so a field change appears after the next
+dispatch.

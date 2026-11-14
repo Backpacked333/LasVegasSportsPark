@@ -107,8 +107,10 @@ describe('status vocabulary (SPK-UX-010, SPK-UX-009)', () => {
       'official',
       'superseded',
     ]);
+    // `waiting` is the team waiting list (SPK-COMP-006, proposed amendment PA-10).
     expect(Object.keys(TEAM_ENTRY_STATUS)).toEqual([
       'applied',
+      'waiting',
       'approved',
       'rejected',
       'withdrawn',

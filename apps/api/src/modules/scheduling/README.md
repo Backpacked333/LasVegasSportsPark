@@ -441,3 +441,43 @@ Verified by `__tests__/timeline-commands.spec.ts`.
   (`__tests__/event-scheduling-port.spec.ts`).
 - A re-imported event with changed setup or cleanup minutes is not taken for the same import
   (`__tests__/event-import.spec.ts`, K-13); extended holds are stamped from the injected clock.
+
+## Public and lobby schedule (SPK-SCHED-010, proposed amendment PA-06) — 2026-11-14
+
+Status words follow §6.7. The requirement is **Proposed**
+(`docs/package-a/proposed-specification-amendments.md`); it is built behind the capability
+`public_schedule`, off unless an organization turns it on (DEC-016, DEC-100); ADR-005.
+
+**Verified** (implementation, by `__tests__/public-schedule.spec.ts`):
+
+- Migration `0305_scheduling_facility_public_views.sql`: `facility_public_views`, the switch and
+  the random public code of a facility's public schedule (one view per facility, one view per
+  code, a well-formed code, the disabled fact, never another organization's facility).
+- Staff (`public/public-schedule.controller.ts`): `GET /facilities/{id}/public-schedule-view`
+  (staff who read the schedule), `POST .../enable` (scheduler, general manager, system
+  administrator; refused while the capability is off; `newCode` issues a new code so earlier links
+  stop working), `POST .../disable` (never gated). The code is not written to the audit record.
+- Public read, no sign-in: `GET /public/{organization}/schedule/{code}?date=` answers a facility's
+  published events of one facility-local day by field and time, into `PublicDaySchedule`
+  (`packages/contracts/src/api/scheduling-public.ts`), a shape with no person, booker, contact or
+  internal id (asserted by exhaustive key inspection). A rental or a party reads "Reserved"; a
+  title stored on an event is never shown, because a person may have typed it: an event reads its
+  kind in words ("Class", "Practice", "League game", "Not available") unless the module that owns
+  its source vouches for a title through `PublicScheduleTitles` (competition does, for the games
+  of a public competition). Draft and canceled events are not part of the day.
+- Every public read counts against the rate limit `public_views` per client address
+  (`kernel/http/rate-limit.ts`, 120 a minute by default, `RATE_LIMITS=public_views=<n>/<seconds>`);
+  a successful answer carries `Cache-Control: public, max-age=30` and `computedAt`; an unknown
+  organization, an unknown, malformed or disabled code and the capability turned off all answer
+  the same `NOT_FOUND` "This view is not available." with `no-store`.
+- Exported for other modules: `PublicScheduleTitles`, `resolvePublicOrganization`,
+  `publicViewNotAvailable`, `assertPublicAddress`, `allowPublicCache`, `newPublicCode`.
+
+**Proposed** (defaults this build assumes): the wording "Reserved" for private bookings; a public
+schedule exists only where staff enabled it; the cache lifetime and the rate limit are technical
+values.
+
+**Pending decision** (DEC-100): what is public; the wording shown for private bookings; the number
+of lobby screens and what they show. Not built: offering names on the public schedule. A class
+reads "Class" until catalog registers a `PublicScheduleTitles` contributor for the events of its
+published offerings.

@@ -291,3 +291,28 @@ Router 7 is used (React Router 8 requires React 19.2.7 or later).
 
 The root `vitest` (5.0.5) runs these tests as the `staff` project; the root also gained
 `eslint-plugin-react-hooks` 7.1.1 (2026-04-17) for the React hooks lint rules.
+
+## Proposed amendments PA-10 and PA-06 at the staff screens (2026-11-14)
+
+Both requirements are **Proposed** and gated on their capability switch (off by default); their
+open values are **Pending decision** and each screen names the decision record.
+
+- **Team waiting list** (SPK-COMP-006, `team_waitlist`, DEC-104), **Verified** by
+  `src/screens/teams/__tests__/TeamWaitingList.test.tsx`: the team entry review (SCR-S-16) adds
+  an entry to the waiting list, says when a placement made the team wait, and shows the season's
+  waiting list in order with the places of each division, where league staff offer a free place
+  to the team they choose and withdraw an open offer
+  (`src/features/competition/WaitingListPanel.tsx`); the Teams home lists each season's waiting
+  list read-only.
+- **Public and lobby views** (SPK-SCHED-010, `public_schedule`, DEC-100), **Verified** by
+  `src/screens/public/__tests__/PublicScreens.test.tsx`: routes OUTSIDE the session guard
+  (`src/screens/public/routes.tsx`, registered in `App.tsx`): `/lobby/:organization/:code` (the
+  facility's public schedule code; advances by itself, shows when it was last updated, keeps the
+  last answer in this browser while its connection is down; `?seasons=<code>,<code>` adds the
+  standings of public seasons, `?rows=` and `?seconds=` change the page length and time), and
+  `/public/:organization/schedule/:code`, `/public/:organization/competitions/:code`,
+  `/public/:organization/seasons/:code/{fixtures,results,standings,bracket}`. Their stylesheet
+  (`src/screens/public/public.css`) uses theme tokens only. Staff controls: "Public pages" on the
+  competition screen and "Public schedule" in the Schedule area.
+- **Not verified**: neither feature was looked at in a browser in this change; the tests render
+  the screens in jsdom. The lobby display has not been tried on a wall screen.
