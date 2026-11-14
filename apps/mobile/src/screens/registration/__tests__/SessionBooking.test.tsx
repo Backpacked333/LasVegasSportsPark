@@ -51,6 +51,7 @@ const PRICE = {
   remainingSessionCount: null,
   remainingSessionsPriceMinor: null,
   memberPrice: null,
+  tiers: [],
 };
 const SESSION_LABEL = 'Session 1. Sat, Oct 31, 10:00 AM PDT';
 

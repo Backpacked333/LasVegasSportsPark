@@ -180,6 +180,7 @@ describe('session bookings (SPK-PLACE-004, SPK-YOUTH-003, ENR-11)', () => {
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
       memberPrice: null,
+      tiers: [],
     };
     expect(owesNothing(base)).toBe(true);
     expect(owesNothing({ ...base, basePriceMinor: 1 })).toBe(false);

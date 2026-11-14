@@ -335,11 +335,27 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
                 key={line.id}
                 style={styles.line}
                 accessible
-                accessibilityLabel={`${name}: ${offeringName}. ${lineStatus.label}`}
+                accessibilityLabel={[
+                  `${name}: ${offeringName}`,
+                  lineStatus.label,
+                  ...line.addons.map((addon) => addon.name),
+                  ...(line.uniform ? [`${line.uniform.name}, size ${line.uniform.size}`] : []),
+                ].join('. ')}
                 testID={`outcome-line-${line.id}`}
               >
                 <Body>{`${name}: ${offeringName}`}</Body>
                 <StatusBadge {...lineStatus} />
+                {/* SPK-PAY-014, SPK-REG-012: what was bought with the place. */}
+                {line.addons.map((addon) => (
+                  <Body key={addon.addonId} muted>
+                    {addon.selection === 'per_session'
+                      ? `${addon.name} × ${addon.quantity === 1 ? '1 day' : `${addon.quantity} days`}`
+                      : addon.name}
+                  </Body>
+                ))}
+                {line.uniform ? (
+                  <Body muted>{`${line.uniform.name}, size ${line.uniform.size}`}</Body>
+                ) : null}
               </View>
             );
           })}

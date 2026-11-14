@@ -80,6 +80,7 @@ export function offering(overrides: Partial<Schema<'Offering'>> = {}): Schema<'O
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
       memberPrice: null,
+      tiers: [],
     },
     eligibilityPolicyVersionId: null,
     cancellationPolicyVersionId: IDS.cancellationPolicy,
@@ -203,6 +204,10 @@ export function line(overrides: Partial<Schema<'BasketLine'>> = {}): Schema<'Bas
     enrollmentId: null,
     outcome: 'pending',
     outcomeReason: null,
+    priceTierId: null,
+    selectedSessionIds: null,
+    addons: [],
+    uniform: null,
     revision: 1,
     ...overrides,
   };
@@ -284,6 +289,10 @@ export function quoteLine(overrides: Partial<Schema<'QuoteLine'>> = {}): Schema<
     },
     enrollmentId: null,
     priceBasis: null,
+    lineKind: 'registration',
+    sourceId: null,
+    addon: null,
+    uniform: null,
     ...overrides,
   };
 }

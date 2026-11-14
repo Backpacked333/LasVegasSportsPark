@@ -34,7 +34,7 @@ import {
   hasPassed,
 } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
-import { priceBasisLines } from '../../features/registration/price-basis';
+import { lineKindLabel, quoteLineBasisLines } from '../../features/registration/price-basis';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { quoteStatus } from '../../features/registration/status';
@@ -95,15 +95,23 @@ export function discountCodeError(error: ApiError | null): string | undefined {
 function LineDetail({ line, name }: { line: QuoteLine; name: string }) {
   const styles = useStyles();
   const m = (v: number) => formatMoney(v, line.currency);
+  const kind = lineKindLabel(line);
   return (
     <View style={styles.line} testID={`quote-line-${line.id}`}>
-      <Body>{`${name}: ${line.description}`}</Body>
+      {/* SPK-PAY-014, SPK-REG-012: an add-on or uniform is its own line, named as such. */}
+      <Body>{`${name}: ${kind ? `${kind}: ` : ''}${line.description}`}</Body>
       <Detail
-        label={line.quantity > 1 ? `${line.quantity} × ${m(line.unitPriceMinor)}` : 'Base price'}
+        label={
+          line.quantity > 1
+            ? `${line.quantity} × ${m(line.unitPriceMinor)}`
+            : kind
+              ? 'Price'
+              : 'Base price'
+        }
         value={m(line.baseAmountMinor)}
       />
-      {/* SPK-PAY-013, SPK-PAY-015: the basis the quote stored, when it has one. */}
-      {priceBasisLines(line.priceBasis, line.currency).map((text) => (
+      {/* SPK-PAY-013 to SPK-PAY-015, SPK-REG-012: the basis the quote stored for the line. */}
+      {quoteLineBasisLines(line).map((text) => (
         <Body key={text} muted>
           {text}
         </Body>
@@ -125,7 +133,11 @@ function LineDetail({ line, name }: { line: QuoteLine; name: string }) {
           value={m(c.amountMinor)}
         />
       ))}
-      <Detail label={`Total for ${name}`} value={m(line.totalMinor)} emphasis />
+      <Detail
+        label={kind ? `Total for this ${kind.toLowerCase()}` : `Total for ${name}`}
+        value={m(line.totalMinor)}
+        emphasis
+      />
     </View>
   );
 }

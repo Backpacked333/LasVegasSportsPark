@@ -46,6 +46,7 @@ const camp = (overrides: Parameters<typeof offering>[0]) =>
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
       memberPrice: null,
+      tiers: [],
     },
     ...overrides,
   });

@@ -42,7 +42,15 @@ export function OrderSection({
         {order.lines.map((line) => (
           <ListRow
             key={line.id}
-            title={line.description}
+            // SPK-PAY-014, SPK-REG-012: an add-on or a uniform bought with a place is its own
+            // line on the receipt, named as such, with the days it was bought for.
+            title={`${
+              line.lineKind === 'addon'
+                ? 'Add-on: '
+                : line.lineKind === 'uniform'
+                  ? 'Uniform: '
+                  : ''
+            }${line.description}${line.quantity > 1 ? ` × ${line.quantity}` : ''}`}
             detail={`${nameOf(line.participantPersonId)}. ${formatMoney(line.totalMinor, line.currency)}`}
           />
         ))}
