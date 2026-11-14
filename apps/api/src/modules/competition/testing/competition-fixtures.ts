@@ -215,6 +215,8 @@ export async function createTeamEntryFixture(
     status?: TeamEntryStatus;
     financialStatusRef?: string | null;
     renewedFromEntryId?: string | null;
+    /** SPK-COMP-006: the division a `waiting` entry waits for (null waits for the season). */
+    waitingDivisionId?: string | null;
     organizationId?: string;
   },
 ): Promise<TeamEntryFixture> {
@@ -259,6 +261,8 @@ export async function createTeamEntryFixture(
       withdrawal_reason: status === 'withdrawn' ? 'fixture' : null,
       financial_status_ref: input.financialStatusRef ?? null,
       renewed_from_entry_id: input.renewedFromEntryId ?? null,
+      waiting_since: status === 'waiting' ? now : null,
+      waiting_division_id: status === 'waiting' ? (input.waitingDivisionId ?? null) : null,
     })
     .execute();
   const captainRoleId = await assignTeamRoleFixture(ctx, {

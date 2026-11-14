@@ -24,6 +24,7 @@ import {
   snapshotActor,
   type Trx,
 } from '../../../kernel';
+import { openOfferCount } from '../competition-waitlist.queries';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
 import {
@@ -400,11 +401,16 @@ export class SeasonsService {
           ? current.capacity_team_entries
           : input.capacityTeamEntries;
       if (capacity !== null) {
-        const occupied = await divisionEntryCount(trx, organizationId, id);
+        const placed = await divisionEntryCount(trx, organizationId, id);
+        // SPK-COMP-006: a place held by an open offer is taken until the offer is settled.
+        const held = await openOfferCount(trx, organizationId, id);
+        const occupied = placed + held;
         if (occupied > capacity) {
           throw errors.validation(
-            `Capacity ${capacity} is below the ${occupied} entries already placed in this division.`,
-            { occupied, capacity },
+            held > 0
+              ? `Capacity ${capacity} is below the ${placed} entries placed in this division and the ${held} place(s) offered to waiting teams.`
+              : `Capacity ${capacity} is below the ${occupied} entries already placed in this division.`,
+            { occupied, capacity, ...(held > 0 ? { heldByOffers: held } : {}) },
           );
         }
       }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { proposedRuleSetContent } from '../../modules/competition/competition.policy';
 import { seedResource } from '../../modules/scheduling';
-import { adult, drain, get, journeyApp, ok, patch, post, staff } from './support';
+import { adult, drain, enableCapability, get, journeyApp, ok, patch, post, staff } from './support';
 
 /**
  * Phase 0 verification of an adult league season against the way the facility's current system is
@@ -90,8 +90,9 @@ describe('Facility league scenarios (assembled application)', () => {
       const latecomers = await enter('Latecomers');
       expect((await ok<Json>(approve(comets))).status).toBe('approved');
       expect((await ok<Json>(approve(rockets))).status).toBe('approved');
-      // Recorded gap (proposed amendment PA-10): a full division refuses the third team and there
-      // is no team waiting list for it to join; the entry stays applied.
+      // Recorded gap (proposed amendment PA-10), kept while the `team_waitlist` capability is off:
+      // a full division refuses the third team and nothing waits; the entry stays applied. The
+      // waiting path with the capability on is the next scenario.
       const full = await approve(latecomers);
       expect(full.status).toBe(409);
       expect(full.body).toMatchObject({
@@ -163,6 +164,167 @@ describe('Facility league scenarios (assembled application)', () => {
       ]);
       // Recorded gap (proposed amendment PA-06): standings are not readable without signing in.
       expect((await get(t, standings)).status).toBe(401);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('SPK-COMP-006 (proposed amendment PA-10, capability team_waitlist on): the third team waits in order for the full division, owes nothing, is offered the place a withdrawal frees, and its acceptance returns it to the approval path', async () => {
+    const t = await journeyApp({ clockStart: '2026-11-02T17:00:00Z' });
+    try {
+      const admin = await staff(t, ['system_administrator']);
+      await enableCapability(t, admin, 'team_waitlist', 'DEC-104');
+      const lm = await staff(t, ['league_manager']);
+      const rules = await ok<{ id: string }>(
+        post(t, '/v1/rule-sets', lm.header, {
+          name: 'Adult indoor rules',
+          format: 'indoor_boarded',
+          content: proposedRuleSetContent('indoor_boarded'),
+        }),
+        201,
+      );
+      const competition = await ok<{ id: string }>(
+        post(t, '/v1/competitions', lm.header, {
+          name: 'Monday Men Open',
+          kind: 'league',
+          sportFormat: 'indoor_boarded',
+        }),
+        201,
+      );
+      const season = await ok<{ id: string; revision: number }>(
+        post(t, '/v1/seasons', lm.header, {
+          competitionId: competition.id,
+          name: 'Winter 2026',
+          ruleSetId: rules.id,
+          startsOn: '2026-11-16',
+          endsOn: '2027-01-25',
+        }),
+        201,
+      );
+      await ok(
+        patch(t, `/v1/seasons/${season.id}`, lm.header, {
+          status: 'open',
+          expectedRevision: season.revision,
+        }),
+      );
+      const division = await ok<{ id: string }>(
+        post(t, '/v1/divisions', lm.header, {
+          seasonId: season.id,
+          name: 'Open',
+          capacityTeamEntries: 2,
+        }),
+        201,
+      );
+      const enter = async (name: string) => {
+        const captain = await adult(t);
+        const res = await ok<{ entry: Json & { id: string; revision: number } }>(
+          post(t, '/v1/team-entries', captain.header, { seasonId: season.id, team: { name } }),
+          201,
+        );
+        return { captain, ...res.entry };
+      };
+      const place = (entry: { id: string; revision: number }) =>
+        ok<Json & { revision: number }>(
+          post(t, `/v1/team-entries/${entry.id}/approve`, lm.header, {
+            divisionId: division.id,
+            expectedRevision: entry.revision,
+          }),
+        );
+      const comets = await enter('Comets');
+      const rockets = await enter('Rockets');
+      expect((await place(comets)).status).toBe('approved');
+      const rocketsApproved = await place(rockets);
+      expect(rocketsApproved.status).toBe('approved');
+
+      // The division is full: the third and fourth teams wait, in the order they met it.
+      const latecomers = await enter('Latecomers');
+      const waiting = await place(latecomers);
+      expect(waiting).toMatchObject({
+        status: 'waiting',
+        divisionId: null,
+        waitingDivisionId: division.id,
+        financialStatusRef: null,
+      });
+      t.clock.advance(60_000);
+      const stragglers = await enter('Stragglers');
+      expect((await place(stragglers)).status).toBe('waiting');
+      const waitingList = `/v1/seasons/${season.id}/waiting-list`;
+      expect(await ok<Json>(get(t, waitingList, lm.header))).toMatchObject({
+        offerHours: 48,
+        lists: [
+          {
+            capacity: 2,
+            placed: 2,
+            freePlaces: 0,
+            entries: [
+              { position: 1, teamName: 'Latecomers' },
+              { position: 2, teamName: 'Stragglers' },
+            ],
+          },
+        ],
+      });
+      // The captain sees that the team is waiting and where it stands.
+      const workspace = `/v1/team-entries/${latecomers.id}`;
+      expect(await ok<Json>(get(t, workspace, latecomers.captain.header))).toMatchObject({
+        entry: { status: 'waiting' },
+        waiting: { position: 1, listLength: 2, openOffer: null },
+      });
+      // A waiting team counts for nothing in the season: not in the division, not in the table.
+      const divisions = await ok<Json[]>(get(t, `/v1/divisions?seasonId=${season.id}`, lm.header));
+      expect(divisions).toEqual([expect.objectContaining({ entryCount: 2 })]);
+      const standings = `/v1/seasons/${season.id}/standings?divisionId=${division.id}`;
+      const table = await ok<{ rows: Json[] }>(get(t, standings, lm.header));
+      expect(table.rows.map((row) => row['teamName']).sort()).toEqual(['Comets', 'Rockets']);
+
+      // A place opens; staff offer it to the first in the order; the offer stands 48 hours.
+      await ok(
+        post(t, `/v1/team-entries/${rockets.id}/withdraw`, lm.header, {
+          expectedRevision: rocketsApproved.revision,
+          reason: 'Team folded before the season',
+        }),
+      );
+      const offered = await ok<{ offer: Json & { id: string; revision: number } }>(
+        post(t, `/v1/team-entries/${latecomers.id}/place-offers`, lm.header, {
+          expectedRevision: waiting.revision,
+        }),
+        201,
+      );
+      expect(offered.offer).toMatchObject({
+        status: 'offered',
+        positionAtOffer: 1,
+        expiresAt: new Date(t.clock.now().getTime() + 48 * HOUR).toISOString(),
+      });
+      // The captain accepts on the phone: applied in the division, then approved as any entry.
+      const accepted = await ok<{ entry: Json & { id: string; revision: number } }>(
+        post(
+          t,
+          `/v1/team-entry-place-offers/${offered.offer.id}/accept`,
+          latecomers.captain.header,
+          { expectedRevision: offered.offer.revision },
+        ),
+      );
+      expect(accepted.entry).toMatchObject({ status: 'applied', divisionId: division.id });
+      const approved = await ok<Json>(
+        post(t, `/v1/team-entries/${latecomers.id}/approve`, lm.header, {
+          expectedRevision: accepted.entry.revision,
+        }),
+      );
+      expect(approved).toMatchObject({ status: 'approved', divisionId: division.id });
+      await drain(t);
+      expect(await ok<Json>(get(t, waitingList, lm.header))).toMatchObject({
+        lists: [{ placed: 2, freePlaces: 0, entries: [{ position: 1, teamName: 'Stragglers' }] }],
+      });
+      // The remaining captain withdraws from the list.
+      const stillWaiting = await ok<{ entry: { revision: number } }>(
+        get(t, `/v1/team-entries/${stragglers.id}`, stragglers.captain.header),
+      );
+      const out = await ok<Json>(
+        post(t, `/v1/team-entries/${stragglers.id}/withdraw`, stragglers.captain.header, {
+          expectedRevision: stillWaiting.entry.revision,
+          reason: 'Found another league',
+        }),
+      );
+      expect(out).toMatchObject({ status: 'withdrawn' });
     } finally {
       await t.close();
     }

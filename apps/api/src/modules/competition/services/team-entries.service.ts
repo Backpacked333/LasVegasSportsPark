@@ -34,6 +34,7 @@ import { sql, type Selectable } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
+  CapabilityService,
   CLOCK,
   DATABASE,
   FacilityDirectory,
@@ -52,12 +53,18 @@ import {
   type FinancialConditionsPort,
   type TeamEntryFinancialStatus,
 } from '../competition-matches.ports';
+import {
+  divisionPlaces,
+  isFull,
+  openOfferOf,
+  waitingViewOf,
+  type DivisionPlaces,
+} from '../competition-waitlist.queries';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
 import { WORKSPACE_UPCOMING_FIXTURES } from '../competition.policy';
 import {
   countRoster,
-  divisionEntryCount,
   effectiveRoles,
   loadEntryContext,
   loadSeasonRow,
@@ -82,7 +89,7 @@ import {
   toTeamRole,
   type RosterFacts,
 } from '../competition.shared';
-import { TeamEntryMachine } from '../competition.state-machines';
+import { TeamEntryMachine, TeamEntryPlaceOfferMachine } from '../competition.state-machines';
 import type {
   PersonEntryMembership,
   RecordFinancialStatusRefInput,
@@ -135,6 +142,14 @@ const WORKSPACE_ACTIONS: ReadonlyArray<{
   { action: CompetitionActions.handoverTeamRole, when: rosterOpen },
   { action: CompetitionActions.requestAvailability, when: takesPlayers },
   { action: CompetitionActions.renewTeamEntry, when: (c) => c.entry.status === 'approved' },
+  // SPK-COMP-006: the waiting list commands (the clients also gate them on `team_waitlist`).
+  {
+    action: CompetitionActions.waitTeamEntry,
+    when: (c) => TeamEntryMachine.can(c.entry.status, 'wait') && c.entry.division_id === null,
+  },
+  { action: CompetitionActions.offerTeamPlace, when: (c) => c.entry.status === 'waiting' },
+  { action: CompetitionActions.acceptTeamPlaceOffer, when: (c) => c.entry.status === 'waiting' },
+  { action: CompetitionActions.declineTeamPlaceOffer, when: (c) => c.entry.status === 'waiting' },
 ];
 
 function takesPlayers(context: EntryContext): boolean {
@@ -171,6 +186,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     private readonly teamAuthority: TeamAuthority,
     @Inject(FINANCIAL_CONDITIONS_PORT) private readonly finance: FinancialConditionsPort,
     private readonly facilities: FacilityDirectory,
+    private readonly capabilities: CapabilityService,
   ) {}
 
   private readonly logger = new Logger(TeamEntriesService.name);
@@ -341,6 +357,20 @@ export class TeamEntriesService implements TeamEntryQueryPort {
         if (!division) throw errors.notFound('division', input.divisionId);
       }
 
+      // SPK-COMP-006 (proposed amendment PA-10, capability `team_waitlist`): a staff placement
+      // that meets a full division makes the entry wait for it instead of refusing it. With the
+      // switch off nothing here runs and the capacity trigger refuses the insert exactly as before.
+      let waitingDivisionId: string | null = null;
+      if (
+        input.divisionId &&
+        (await this.capabilities.isEnabled(organizationId, 'team_waitlist', trx))
+      ) {
+        const places = await divisionPlaces(trx, organizationId, input.seasonId, input.divisionId, {
+          forUpdate: true,
+        });
+        if (places && isFull(places)) waitingDivisionId = input.divisionId;
+      }
+
       try {
         await trx
           .insertInto('team_entries')
@@ -348,12 +378,19 @@ export class TeamEntriesService implements TeamEntryQueryPort {
             id: entryId,
             organization_id: organizationId,
             season_id: input.seasonId,
-            division_id: input.divisionId ?? null,
+            division_id: waitingDivisionId ? null : (input.divisionId ?? null),
             team_id: teamId,
             applied_by: json(snapshotActor(principal)),
             applied_by_person_id: principal.personId,
             applied_at: now,
             renewed_from_entry_id: priorEntry?.id ?? null,
+            ...(waitingDivisionId
+              ? {
+                  status: 'waiting' as const,
+                  waiting_since: now,
+                  waiting_division_id: waitingDivisionId,
+                }
+              : {}),
           })
           .execute();
       } catch (error) {
@@ -439,8 +476,9 @@ export class TeamEntriesService implements TeamEntryQueryPort {
           seasonId: input.seasonId,
           teamId,
           renewedFromEntryId: priorEntry?.id ?? null,
-          divisionId: input.divisionId ?? null,
+          divisionId: waitingDivisionId ? null : (input.divisionId ?? null),
           captainRoleId: roleId,
+          ...(waitingDivisionId ? { status: 'waiting', waitingDivisionId } : {}),
         },
       });
       await this.outbox.enqueue(trx, CompetitionEvents.teamEntryCreated, {
@@ -557,7 +595,33 @@ export class TeamEntriesService implements TeamEntryQueryPort {
             { details: { code: 'ENTRY_IN_POOL', teamEntryId: id, poolId: pooled.pool_id } },
           );
         }
-        await this.assertDivisionHasRoom(trx, organizationId, entry, input.divisionId);
+        const places = await this.lockedDivisionPlaces(
+          trx,
+          organizationId,
+          entry,
+          input.divisionId,
+        );
+        if (isFull(places)) {
+          // SPK-COMP-006 (capability `team_waitlist`): a placement that meets a full division
+          // makes an unplaced entry that owes nothing wait for it. Otherwise, and always with
+          // the switch off, the placement is refused as before.
+          if (
+            entry.division_id === null &&
+            entry.financial_status_ref === null &&
+            (await this.capabilities.isEnabled(organizationId, 'team_waitlist', trx))
+          ) {
+            return this.moveToWaiting(
+              trx,
+              principal,
+              context,
+              input.divisionId,
+              input.reason ?? input.note ?? null,
+              correlationId,
+              'division_full',
+            );
+          }
+          throw divisionFull(places);
+        }
       }
       try {
         await trx
@@ -613,6 +677,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       });
       assertExpectedRevision(input.expectedRevision, entry.revision);
       const next = TeamEntryMachine.next(entry.status, 'reject');
+      await this.settleOpenOffer(trx, principal, entry, 'The entry was rejected.', correlationId);
       await trx
         .updateTable('team_entries')
         .set({
@@ -620,6 +685,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
           rejected_at: now,
           rejected_by: json(snapshotActor(principal)),
           rejection_reason: input.reason,
+          ...LEAVES_WAITING,
           revision: entry.revision + 1,
         })
         .where('organization_id', '=', organizationId)
@@ -661,6 +727,9 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       });
       assertExpectedRevision(input.expectedRevision, entry.revision);
       const next = TeamEntryMachine.next(entry.status, 'withdraw');
+      // SPK-COMP-006: a captain may withdraw a waiting team; its open offer, if any, is closed
+      // with it, which frees the place the offer held.
+      await this.settleOpenOffer(trx, principal, entry, 'The entry was withdrawn.', correlationId);
       await trx
         .updateTable('team_entries')
         .set({
@@ -668,6 +737,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
           withdrawn_at: now,
           withdrawn_by: json(snapshotActor(principal)),
           withdrawal_reason: input.reason,
+          ...LEAVES_WAITING,
           revision: entry.revision + 1,
         })
         .where('organization_id', '=', organizationId)
@@ -688,30 +758,133 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     });
   }
 
-  private async assertDivisionHasRoom(
+  /** The division's places with its row locked (the lock every placement and offer takes). */
+  private async lockedDivisionPlaces(
     trx: Trx,
     organizationId: string,
     entry: Selectable<TeamEntriesTable>,
     divisionId: string,
-  ): Promise<void> {
-    const division = await trx
-      .selectFrom('divisions')
-      .select(['id', 'capacity_team_entries'])
-      .where('organization_id', '=', organizationId)
-      .where('season_id', '=', entry.season_id)
-      .where('id', '=', divisionId)
-      .forUpdate()
-      .executeTakeFirst();
-    if (!division) throw errors.notFound('division', divisionId);
-    if (division.capacity_team_entries === null) return;
-    const occupied = await divisionEntryCount(trx, organizationId, divisionId);
-    if (occupied >= division.capacity_team_entries) {
-      throw errors.capacityUnavailable('The division is full.', {
-        divisionId,
-        capacity: division.capacity_team_entries,
-        occupied,
-      });
+  ): Promise<DivisionPlaces> {
+    const places = await divisionPlaces(trx, organizationId, entry.season_id, divisionId, {
+      forUpdate: true,
+    });
+    if (!places) throw errors.notFound('division', divisionId);
+    return places;
+  }
+
+  /**
+   * SPK-COMP-006 (proposed amendment PA-10): moves an applied entry without a place onto the
+   * waiting list of `divisionId` (null: of the season). The caller holds the entry's row lock, has
+   * authorized the actor and has checked the capability. A waiting entry keeps its order from this
+   * instant, holds no place and owes nothing (checks of migration 0467).
+   */
+  async moveToWaiting(
+    trx: Trx,
+    principal: Principal,
+    context: EntryContext,
+    divisionId: string | null,
+    reason: string | null,
+    correlationId: string | null,
+    cause: 'staff' | 'division_full',
+  ): Promise<TeamEntry> {
+    const { entry } = context;
+    const organizationId = entry.organization_id;
+    const now = this.clock.now();
+    const next = TeamEntryMachine.next(entry.status, 'wait');
+    if (entry.division_id !== null) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        'The entry holds a place in a division; a waiting entry holds none.',
+        { details: { code: 'ENTRY_HAS_PLACE', teamEntryId: entry.id } },
+      );
     }
+    if (entry.financial_status_ref !== null) {
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        'An obligation is recorded for this entry; a waiting entry owes nothing.',
+        { details: { code: 'ENTRY_HAS_OBLIGATION', teamEntryId: entry.id } },
+      );
+    }
+    await trx
+      .updateTable('team_entries')
+      .set({
+        status: next,
+        waiting_since: now,
+        waiting_division_id: divisionId,
+        revision: entry.revision + 1,
+      })
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', entry.id)
+      .where('revision', '=', entry.revision)
+      .execute();
+    await this.recordStatusChange(
+      trx,
+      principal,
+      context,
+      next,
+      null,
+      reason,
+      correlationId,
+      CompetitionActions.waitTeamEntry.id,
+      { waitingDivisionId: divisionId, cause },
+    );
+    return this.entryViewById(trx, organizationId, entry.id, now);
+  }
+
+  /**
+   * SPK-COMP-006: closes the open place offer of a waiting entry that is leaving the list by
+   * withdrawal or rejection (the database refuses the status change otherwise). No-op for an
+   * entry that is not waiting or has no open offer.
+   */
+  private async settleOpenOffer(
+    trx: Trx,
+    principal: Principal,
+    entry: Selectable<TeamEntriesTable>,
+    reason: string,
+    correlationId: string | null,
+  ): Promise<void> {
+    if (entry.status !== 'waiting') return;
+    const offer = await openOfferOf(trx, entry.organization_id, entry.id, { forUpdate: true });
+    if (!offer) return;
+    const status = TeamEntryPlaceOfferMachine.next(offer.status, 'withdraw');
+    await trx
+      .updateTable('team_entry_place_offers')
+      .set({
+        status,
+        resolved_at: this.clock.now(),
+        resolved_by: json(snapshotActor(principal)),
+        resolution_reason: reason,
+        revision: offer.revision + 1,
+      })
+      .where('organization_id', '=', entry.organization_id)
+      .where('id', '=', offer.id)
+      .where('revision', '=', offer.revision)
+      .execute();
+    await this.audit.record(trx, {
+      organizationId: entry.organization_id,
+      actor: principal,
+      action: CompetitionActions.withdrawTeamPlaceOffer.id,
+      targetType: 'team_entry_place_offer',
+      targetId: offer.id,
+      beforeRevision: offer.revision,
+      afterRevision: offer.revision + 1,
+      reason,
+      correlationId,
+      details: { status, teamEntryId: entry.id, divisionId: offer.division_id },
+    });
+    await this.outbox.enqueue(trx, CompetitionEvents.teamPlaceOfferResolved, {
+      organizationId: entry.organization_id,
+      aggregateType: 'team_entry',
+      aggregateId: entry.id,
+      payload: {
+        offerId: offer.id,
+        teamEntryId: entry.id,
+        seasonId: entry.season_id,
+        divisionId: offer.division_id,
+        status: 'withdrawn',
+      },
+      correlationId,
+    });
   }
 
   private async recordStatusChange(
@@ -723,6 +896,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     reason: string | null,
     correlationId: string | null,
     action: string,
+    extra: Record<string, unknown> = {},
   ): Promise<void> {
     const { entry } = context;
     await this.audit.record(trx, {
@@ -735,7 +909,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       afterRevision: entry.revision + 1,
       reason,
       correlationId,
-      details: { status, previousStatus: entry.status, divisionId },
+      details: { status, previousStatus: entry.status, divisionId, ...extra },
     });
     await this.outbox.enqueue(trx, CompetitionEvents.teamEntryStatusChanged, {
       organizationId: entry.organization_id,
@@ -835,7 +1009,16 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     ]);
 
     const issues: TeamEntryWorkspace['readiness']['issues'] = [];
-    if (context.entry.status !== 'approved') {
+    if (context.entry.status === 'waiting') {
+      // SPK-COMP-006: a waiting team is neither refused nor placed; staff offer it a freed place.
+      issues.push({
+        code: 'entry_waiting',
+        severity: 'blocking',
+        message: 'The team is waiting for a place.',
+        responsibleRole: 'league_manager',
+        requiredAction: 'Offer the team a place when one opens.',
+      });
+    } else if (context.entry.status !== 'approved') {
       issues.push({
         code: context.entry.status === 'applied' ? 'entry_not_approved' : 'entry_not_active',
         severity: 'blocking',
@@ -928,6 +1111,7 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       pendingInvitations: viewer.canManage ? pendingInvitations.map(toTeamInvitation) : null,
       pendingJoinRequests: viewer.canManage ? pendingJoinRequests.map(toJoinRequest) : null,
       upcomingFixtures: await this.upcomingFixtures(db, context, principal, counts.total, now),
+      waiting: await waitingViewOf(db, context.entry),
       viewer: {
         roles: viewerRoles,
         actingAsCaptain:
@@ -1246,13 +1430,21 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     const financialStatusRef = input.obligationId;
     const entry = await trx
       .selectFrom('team_entries')
-      .select(['id', 'revision', 'financial_status_ref'])
+      .select(['id', 'revision', 'financial_status_ref', 'status'])
       .where('organization_id', '=', organizationId)
       .where('id', '=', teamEntryId)
       .forUpdate()
       .executeTakeFirst();
     if (!entry) throw errors.notFound('team_entry', teamEntryId);
     if (entry.financial_status_ref === financialStatusRef) return;
+    if (entry.status === 'waiting') {
+      // SPK-COMP-006: a waiting entry owes nothing (check `team_entries_waiting_owes_nothing`).
+      throw new DomainError(
+        'INVALID_TRANSITION',
+        'The team entry is waiting for a place and owes nothing until it accepts one.',
+        { details: { code: 'ENTRY_WAITING', teamEntryId } },
+      );
+    }
     await trx
       .updateTable('team_entries')
       .set({ financial_status_ref: financialStatusRef, revision: entry.revision + 1 })
@@ -1423,6 +1615,23 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     }
     return [...byEntry.values()];
   }
+}
+
+/** Columns cleared when an entry leaves the waiting list (check `team_entries_waiting_fact`). */
+const LEAVES_WAITING = { waiting_since: null, waiting_division_id: null } as const;
+
+/**
+ * The refusal of a placement into a full division (§4.7 invariant 3). `occupied` counts the
+ * applied and approved entries and the places held by open offers (SPK-COMP-006); the latter are
+ * named only when there are any, so the answer without the waiting list is what it always was.
+ */
+export function divisionFull(places: DivisionPlaces): DomainError {
+  return errors.capacityUnavailable('The division is full.', {
+    divisionId: places.divisionId,
+    capacity: places.capacity,
+    occupied: places.placed + places.openOffers,
+    ...(places.openOffers > 0 ? { heldByOffers: places.openOffers } : {}),
+  });
 }
 
 export function rosterFactsOf(count: number, rules: RuleSetContent): RosterFacts {

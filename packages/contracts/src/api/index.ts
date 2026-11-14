@@ -5,6 +5,7 @@ export * from './catalog';
 export * from './communications';
 export * from './competition-field';
 export * from './competition-matches';
+export * from './competition-waitlist';
 export * from './competition';
 export * from './core';
 export * from './enrollment-overview';

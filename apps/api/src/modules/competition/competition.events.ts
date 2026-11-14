@@ -88,6 +88,36 @@ export const CompetitionEvents = {
     }),
   ),
   /**
+   * SPK-COMP-006 (proposed amendment PA-10): a free division place was offered to a waiting entry.
+   * Identifiers and instants only; a notice to the captain reads the rest through the ports.
+   */
+  teamPlaceOffered: defineEvent(
+    'competition.team_place_offered',
+    z.object({
+      offerId: z.uuid(),
+      teamEntryId: z.uuid(),
+      seasonId: z.uuid(),
+      divisionId: z.uuid(),
+      positionAtOffer: z.number().int(),
+      expiresAt: z.string(),
+    }),
+  ),
+  /** Timer: enqueued with availableAt = expiresAt; handled by `competition.expire_team_place_offer`. */
+  teamPlaceOfferExpiryDue: defineEvent(
+    'competition.team_place_offer_expiry_due',
+    z.object({ offerId: z.uuid(), teamEntryId: z.uuid(), expiresAt: z.string() }),
+  ),
+  teamPlaceOfferResolved: defineEvent(
+    'competition.team_place_offer_resolved',
+    z.object({
+      offerId: z.uuid(),
+      teamEntryId: z.uuid(),
+      seasonId: z.uuid(),
+      divisionId: z.uuid(),
+      status: z.enum(['accepted', 'declined', 'expired', 'withdrawn']),
+    }),
+  ),
+  /**
    * A team role was assigned, ended or handed over. A handover (CMP-13) names the new holder as
    * `personId` and carries `fromPersonId`, `toPersonId` and the one instant both rows changed.
    */

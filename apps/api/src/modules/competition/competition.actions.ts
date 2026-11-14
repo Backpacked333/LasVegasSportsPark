@@ -225,6 +225,53 @@ export const CompetitionActions = defineActions({
     teamRole: 'captain',
     requirements: ['SPK-CAP-001', 'SCR-C-24'],
   },
+  /**
+   * Team waiting list (SPK-COMP-006, proposed amendment PA-10; capability `team_waitlist`, pending
+   * DEC-104). Waiting, offering and accepting create new commitments and are refused while the
+   * switch is off; declining, withdrawing and expiring never are.
+   */
+  waitTeamEntry: {
+    id: 'competition.wait_team_entry',
+    description: 'Move an applied team entry onto the waiting list of a full division or season',
+    staffRoles: LEAGUE_ADMINS,
+    capability: 'team_waitlist',
+    requirements: ['SPK-COMP-006'],
+  },
+  offerTeamPlace: {
+    id: 'competition.offer_team_place',
+    description: 'Offer a free division place to a waiting team entry, with the list order shown',
+    staffRoles: LEAGUE_ADMINS,
+    capability: 'team_waitlist',
+    requirements: ['SPK-COMP-006'],
+  },
+  acceptTeamPlaceOffer: {
+    id: 'competition.accept_team_place_offer',
+    description: 'Accept an offered division place (captain or league staff)',
+    staffRoles: LEAGUE_ADMINS,
+    teamRole: 'captain',
+    capability: 'team_waitlist',
+    requirements: ['SPK-COMP-006', 'SPK-COMP-004'],
+  },
+  declineTeamPlaceOffer: {
+    id: 'competition.decline_team_place_offer',
+    description: 'Decline an offered division place and keep waiting (captain or league staff)',
+    staffRoles: LEAGUE_ADMINS,
+    teamRole: 'captain',
+    requirements: ['SPK-COMP-006'],
+  },
+  withdrawTeamPlaceOffer: {
+    id: 'competition.withdraw_team_place_offer',
+    description: 'Withdraw an open place offer (league staff)',
+    staffRoles: LEAGUE_ADMINS,
+    requirements: ['SPK-COMP-006'],
+  },
+  /** The expiry handler's own action; only the system principal of the handler holds it. */
+  expireTeamPlaceOffer: {
+    id: 'competition.expire_team_place_offer',
+    description: 'Expire an open place offer past its expiry (background handler only)',
+    staffRoles: [],
+    requirements: ['SPK-COMP-006', '§4.12'],
+  },
   /** CMP-09, IF-40: the migration import commands; only a batch's import principal holds it. */
   importRecords: {
     id: 'competition.import_records',

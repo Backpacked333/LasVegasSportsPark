@@ -362,6 +362,8 @@ export function toTeamEntry(
     eligibilityStatus: row.eligibility_status,
     eligibilityReasons: row.eligibility_reasons as EligibilityReason[],
     renewedFromEntryId: row.renewed_from_entry_id,
+    waitingSince: isoOrNull(row.waiting_since),
+    waitingDivisionId: row.waiting_division_id,
     // Derived, never stored (SPK-COMP-004): enough eligible players within the rule set's limits.
     rosterComplete:
       roster.rosterCount >= roster.rosterMin && roster.rosterCount <= roster.rosterMax,
