@@ -934,3 +934,99 @@ Read-only (no idempotency key), in `services/enrollment-overview.service.ts`; te
 - `GET /v1/offering-availability?offeringIds=` (at most 20): places left (capacity minus committed
   and held) of the tightest active offering-level pool; published offerings for anyone of the
   organization, unpublished ones for staff with `enrollment.read_capacity` there.
+
+## Tiers, days, add-ons and uniforms of a registration (PA-03, PA-07): implemented behind capability switches
+
+SPK-PAY-014 (price tiers and add-ons, capability `price_tiers_addons`, DEC-097) and SPK-REG-012
+(uniforms, capability `uniforms`, DEC-101) are **Proposed** requirements
+(`docs/package-a/proposed-specification-amendments.md`); each is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendments leave open are **Pending decision**.
+
+**Verified** (`__tests__/registration-extras.spec.ts`, also under PostgreSQL; the camp journey
+`apps/api/src/__tests__/journeys/facility-camp.spec.ts`; migrations
+`0521_enrollment_registration_selections.sql`, `0522_enrollment_basket_line_addons.sql`,
+`0523_enrollment_uniform_orders.sql`):
+
+- `POST /v1/baskets/{id}/lines` accepts `priceTierId`, `selectedSessionIds`, `addons`
+  (`{ addonId, sessionIds? }`) and `uniform` (`{ offeringUniformId, size }`). A field of an
+  amendment whose capability is off is refused inside the unit of work (ACCESS_DENIED
+  `CAPABILITY_DISABLED`); a line without them is added, held and completed exactly as before.
+  `services/registration-extras.ts` validates the choices against catalog's `PRICING_PORT`:
+  - exactly one tier applies: while the effective rule has tiers, a line names one of them
+    (`TIER_REQUIRED`, `TIER_NOT_OFFERED`), that can still be bought (`TIER_NOT_AVAILABLE` after its
+    deadline), with a day selection within its bounds (`TIER_SESSION_COUNT`,
+    `TIER_ATTENDS_ALL_SESSIONS`) of sessions of the offering that are scheduled and have not
+    started (`SESSION_NOT_SELECTABLE`);
+  - an add-on is an active add-on of the offering (`ADDON_NOT_OFFERED`), named once, with sessions
+    exactly when it is selected per session (`ADDON_SELECTION_SHAPE`), each a session the
+    participant attends (`ADDON_SESSION_NOT_SELECTED`);
+  - a uniform is the offering's active uniform in one of its sizes (`UNIFORM_NOT_OFFERED`,
+    `UNIFORM_SIZE_NOT_OFFERED`), and a required uniform must be chosen (`UNIFORM_REQUIRED`);
+  - a line with a tier, add-ons or a uniform is for one participant (`QUANTITY_ONE`).
+- `BasketLine` carries `priceTierId`, `selectedSessionIds` (null: every session), `addons` (name,
+  price each, sessions, quantity) and `uniform` (name, size, price, `returningHolderFree`,
+  `heldUniformOrderId`). The tier and the selection are copied to the enrollment the line becomes
+  and never change afterwards.
+- **Price estimate** (the debt Track A reported, closed here): the price snapshot of a basket line
+  and of an enrollment gains `estimate` when the line is not a plain term price. It is worked out
+  from the same facts a quote uses, in the quote's order (tier, member price, per-session
+  multiplication): the tier named on the line, the participant's membership through this module's
+  ledger (`MembershipPricing`), and the sessions still to attend through
+  `PRICING_PORT.remainingSessions`. `Basket.subtotalMinor` sums the estimate (or the base price),
+  the add-ons and the priced uniform. A plain term line stores the snapshot exactly as before (no
+  `estimate`). A basket with a priced add-on or uniform never completes without the checkout
+  (`PAYMENT_REQUIRED`). A cancellation or transfer preview passes the estimate, not the base
+  price, where the enrollment has one.
+- **Capacity**: while the effective rule lets some customers choose days, every line with a tier
+  holds the session pool of each session it attends (`ensureSessionPool`), so a full-week place
+  and a single day share that day's seats and a participant counts only on the sessions selected;
+  a line of chosen days takes no place in the offering-wide pool. Add-on capacity is its own pool
+  (`capacity_pools.scope_type = 'addon'`, `scope_session_id` for an add-on limited per session,
+  no offering, `CapacityService.ensureAddonPool`), held and committed with the line like any other
+  pool. Twelve concurrent holds for the last place of an add-on yield exactly one.
+- **Uniform orders** (`services/uniform-orders.service.ts`, `UniformOrderMachine` in
+  `packages/contracts/src/state-machines.ts`): holding a line orders its uniform (`ordered`);
+  confirming the registration makes it `paid` (a uniform that is not charged records no price);
+  canceling a registration cancels a uniform not yet handed over. `GET /v1/uniform-orders`
+  (`?offeringId=` and/or `?teamEntryId=`, staff, `enrollment.read_uniform_orders`) lists size, paid
+  state and hand-over with the participant's name. `POST /v1/uniform-orders/{id}/hand-over` and
+  `POST /v1/uniform-orders/{id}/hand-over-corrections` (`enrollment.hand_over_uniform`, capability
+  `uniforms`) record who handed it over and when, and undo that only by a correction with a
+  reason; both write the append-only `uniform_handover_events`, the audit log and
+  `enrollment.uniform_order_changed`. The list stays readable with the capability off.
+- `SESSION_ROSTER_PORT` (`services/session-roster.ts`, for the entry module):
+  `expectedAtSession(organizationId, offeringId, sessionId)` names the participants of confirmed
+  registrations whose selection includes the session, each with the add-ons bought for that day.
+  `SessionParticipants` (session notices, closure previews) applies the same selection.
+- The database refuses: a tier of another offering on a line or an enrollment; a day selection
+  without a tier, empty, with a day listed twice, or with a session of another offering; a tier or
+  selection changed after it was written; an add-on of another offering, in the wrong shape, twice,
+  or for a session outside the participant's selection; an add-on selection rewritten, or removed
+  from a decided line; an add-on pool beyond its capacity, without an add-on, or a second pool for
+  the same add-on and session; a uniform of another offering or in a size it does not come in; a
+  second live uniform order for the same participant and offering; a uniform order moved against
+  its machine, handed over without a recorded hand-over, or changed in what it ordered; a hand-over
+  event rewritten or deleted, corrected twice, or corrected without a reason; every such record
+  pointing at another organization.
+
+**Proposed** (assumed defaults): tiers and add-ons are set per offering and exactly one tier
+applies; the purchase instant a tier deadline is checked against is the instant of the command
+(and of the quote) (**Pending decision** DEC-097). No stock is counted and a returning participant
+who holds the current uniform is not charged again where the offering says so (**Pending
+decision** DEC-101).
+
+Known limits:
+
+- A line opened by another command (a waitlist acceptance, a trial conversion) names no tier, so
+  for an offering sold by tier its quote is refused with `TIER_REQUIRED`; staff register the
+  participant through a basket instead.
+- Registrations made before an offering had tiers hold the offering-wide pool only and are not
+  counted on the session pools; a session scheduled after a full-week purchase is attended but its
+  pool does not count that participant.
+- A canceled session of a day selection is not followed here (nothing re-prices a purchase; the
+  refund and credit policy, DEC-009, is not built). A transfer moves the place only: its add-ons
+  and uniform stay with the original registration and finance reviews the money.
+- The arrival checks of the entry module do not read the day selection.
+- A team season's uniform is the uniform of the league offering its teams register through; the
+  list by team reads the team entry recorded on the basket line. Nothing is stored on the season.

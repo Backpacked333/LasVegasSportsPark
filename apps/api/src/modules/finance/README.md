@@ -832,8 +832,70 @@ re-prices a purchase.
   priced that way, answers `review_required` instead of a difference of base prices. A place
   bought at a plain term price is handled exactly as before.
 
-Known limits (see `.10x/decisions/sde/track-a.md`): enrollment's price snapshot on a basket line and
-on an enrollment still records the rule's base price (for a per-session rule, the price of one
-session), and the screens that show that snapshot before the quote show that figure; a checkout
-re-prices nothing and relies on the quote's expiry (POL-013) for sessions that start between quote
-and payment.
+Known limits: a checkout re-prices nothing and relies on the quote's expiry (POL-013) for sessions
+that start between quote and payment. The limit `.10x/decisions/sde/track-a.md` reported about
+enrollment's price snapshot (the base price of a per-session rule shown as the price each) is
+closed: the snapshot now carries an estimate worked out from the same facts as the quote, and the
+screens label it as an estimate (see the enrollment module's README and
+`.10x/decisions/sde/track-d.md`).
+
+## Tier pricing and add-on and uniform lines (PA-03, PA-07): implemented behind capability switches
+
+SPK-PAY-014 (price tiers and add-ons, capability `price_tiers_addons`, DEC-097) and SPK-REG-012
+(uniforms, capability `uniforms`, DEC-101) are **Proposed** requirements
+(`docs/package-a/proposed-specification-amendments.md`); each is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendments leave open are **Pending decision**.
+
+**Verified** (`pricing/quote-calculator.spec.ts`, `__tests__/quote-extras.spec.ts`, also under
+PostgreSQL; `apps/api/src/__tests__/journeys/facility-camp.spec.ts`; migrations
+`0690_finance_quote_line_kinds.sql`, `0691_finance_order_line_kinds.sql`; ADR-003):
+
+- **Order of a unit price**: tier, then member price, then per-session multiplication. A line that
+  names a tier is priced at the tier's price (the member price is then the tier's), multiplied by
+  the sessions counted when the rule is per session; a line with a day selection counts the
+  selected sessions only. `QuoteLine.priceBasis.tier` stores the tier that applied with the facts
+  that selected it (its bounds and deadline, the purchase instant, the days chosen), and
+  `unitPriceFromBasis` reproduces the unit price from the stored document alone (SPK-PAY-002). A
+  basis without a tier is stored exactly as before.
+- **Extra lines**: each add-on and each priced uniform of a basket line is a quote line of its
+  own (`line_kind` `addon` or `uniform`, `source_id` the add-on or the offering uniform), with the
+  same basket line and enrollment as the place, priced from catalog's own records at the quote
+  instant (`PRICING_PORT.offeringExtras`), never from the basket. An add-on line is its price each
+  times the sessions selected (once for an add-on selected per registration) with the add-on's own
+  charge lines; a uniform line is its price, or zero with the reason `returning_holder` when the
+  participant already holds the current uniform (enrollment's fact) and the offering does not
+  charge it again; a uniform without a price is no line. Discounts are evaluated for the place and
+  never applied to an extra line. Each extra line stores its basis (`QuoteLine.addon`,
+  `QuoteLine.uniform`).
+- The uniqueness `(quote_id, basket_line_id)` of quote lines is deliberately widened: one place
+  line per basket line and quote, and one line per add-on or uniform. The database also refuses an
+  extra line without its source or its basis, a place line with a source, and a source that is
+  not an add-on or a uniform of the line's own offering and organization. Order lines carry the
+  same `line_kind` and `source_id`, and the database refuses an order line that relabels its quote
+  line. Both tables stay append-only.
+- The checkout compares place lines with held basket lines one to one and every extra line with
+  the add-ons and uniform of its held line (`QUOTE_STALE` otherwise), creates one order line per
+  quote line tied to the enrollment of its place, and confirms each enrollment once. The basket
+  price estimate (`GET /v1/basket-prices/{id}`) counts the extra lines.
+- **Consequences follow the lines bought** (`FinancePolicyAdapter`): a cancellation share applies
+  to the place and its add-on lines together; a uniform line is not part of that amount, is named
+  in the explanation, and a cancellation where only the uniform was charged answers
+  `review_required`. A transfer of a place bought with add-ons or a uniform, or into an offering
+  sold by tier, answers `review_required`. A plain place is handled exactly as before. Reports
+  read order lines by enrollment and offering, so an extra line is reported with its registration.
+- With a capability off: the tiers of a rule are not evaluated and a line without a tier is priced
+  at the rule's base price with no basis, exactly as before. A line that names a tier, an add-on
+  or a uniform chosen while the capability was on is not quoted once it is off (ACCESS_DENIED
+  `CAPABILITY_DISABLED`; the basket estimate is `unpriced`). With the capability on, a line
+  without a tier of a rule that has tiers is refused with RESOURCE_CONFLICT `TIER_REQUIRED`, a tier
+  past its deadline or of a superseded rule with `TIER_NOT_AVAILABLE`, and a retired add-on or
+  uniform with `ADDON_NOT_OFFERED` or `UNIFORM_NOT_OFFERED`. Quotes and orders that exist stay
+  readable.
+
+**Proposed** (assumed defaults): the purchase instant a tier deadline is checked against is the
+quote instant; discounts do not apply to add-ons or uniforms (**Pending decision** DEC-097,
+DEC-101, and DEC-007 for the tax treatment of an add-on or a uniform).
+
+**Pending decision**, not built: whether a uniform is refunded with a canceled registration, and
+what a transfer means for add-ons and a uniform (DEC-009, DEC-101); finance reviews both.

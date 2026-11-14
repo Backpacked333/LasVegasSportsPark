@@ -383,3 +383,20 @@ permission-matrix`).
 - Catalog's `SessionsService`/`OfferingsService` and scheduling's `EventsService` read through the
   root database, so `ActivityResolver` resolves activities before or after a command's transaction
   (it refuses to run inside one).
+
+## Who a session expects (PA-03): implemented behind the capability `price_tiers_addons`
+
+SPK-PAY-014 is a **Proposed** requirement (`docs/package-a/proposed-specification-amendments.md`),
+off for an organization until `price_tiers_addons` is turned on (**Pending decision** DEC-097).
+
+**Verified** (`apps/api/src/__tests__/journeys/facility-camp.spec.ts`): `GET /v1/attendance` for a
+session, read by staff or by the assigned coach for the whole activity while the capability is on,
+also answers `expected`: the participants of confirmed registrations whose day selection includes
+that session (a registration without a selection attends every session), each with the add-ons
+bought for that day, from enrollment's `SESSION_ROSTER_PORT`; names are read after the read was
+authorized. For an event, for a read of one person (a customer's read) and while the capability is
+off, `expected` is null and the answer is otherwise exactly as before. This is a read only: nothing
+about recording an observation changed.
+
+Not done here: the arrival checks do not read the day selection, so a participant arriving on a
+day they did not choose is checked as a participant of the offering.

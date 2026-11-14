@@ -167,9 +167,23 @@ their product as the API counted them ("$24.00 per class × 7 classes = $168.00"
 price with the membership it is for. SCR-C-12 shows, per line, the basis the quote stored: the
 same product, and "Member price applied: <membership>" or why the standard price applied. The app
 computes none of it. **Verified** `__tests__/OfferingDetailScreen.test.tsx`,
-`__tests__/QuoteReviewScreen.test.tsx`; not seen on a device. The basket (SCR-C-11) still shows
-the basket line's price snapshot, which for a per-class price is the price of one class (reported
-in `.10x/decisions/sde/track-a.md`).
+`__tests__/QuoteReviewScreen.test.tsx`; not seen on a device. The basket (SCR-C-11) shows the
+estimate the API states for the line ("Estimated price each", worked out by the API from the same
+facts as the quote) where the line is not a plain term price, and the base price otherwise.
+
+Price tiers, days, add-ons and uniform (SPK-PAY-014, SPK-REG-012; amendments PA-03 and PA-07,
+**Proposed**, capabilities `price_tiers_addons` and `uniforms`, **Pending decision** DEC-097 and
+DEC-101): while one of the two capabilities is on, SCR-C-09 reads
+`GET /offerings/{id}/purchase-options` and asks, per participant, for the tier, the days of a
+tier of chosen days (within the tier's bounds), the add-ons (per day where the add-on is sold per
+day, only for days the participant attends) and the uniform size (a required uniform must be
+chosen); an offering with such choices is registered alone, one offering at a time. SCR-C-11
+shows the days, add-ons and uniform of each line with their prices; SCR-C-12 shows every add-on
+and the uniform as a line of its own with the basis the quote stored (the tier that applied, the
+price each and the days, "Not charged: this uniform is already held"); SCR-C-15 names what was bought
+with each place and the receipt (SCR-C-34) labels each add-on and uniform line. With both
+capabilities off the options are not read and every screen is as before. **Verified**
+`__tests__/PurchaseChoices.test.tsx`, `__tests__/PurchaseReceipt.test.tsx`; not seen on a device.
 
 ## Configuration
 

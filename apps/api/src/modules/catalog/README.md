@@ -506,3 +506,76 @@ Not done here: that the named entitlement is a membership benefit is checked by 
 `catalog.price_rule_created` event payload is unchanged (the audit record carries the new fields);
 the promotion badge compares a minimum line amount with the rule's base price, which for a
 per-session rule is the price of one session.
+
+## Price tiers, add-ons and uniforms (PA-03, PA-07): implemented behind capability switches
+
+Both requirements are **Proposed** (`docs/package-a/proposed-specification-amendments.md`): they are
+not part of the master specification until the product owner accepts them, and each is off for an
+organization until its capability is turned on. What the code does is **Verified** by the tests
+named; every value the amendments leave open is **Pending decision**.
+
+| Amendment | Requirement | Capability           | Decision record |
+| --------- | ----------- | -------------------- | --------------- |
+| PA-03     | SPK-PAY-014 | `price_tiers_addons` | DEC-097         |
+| PA-07     | SPK-REG-012 | `uniforms`           | DEC-101         |
+
+**Verified** (`__tests__/offering-extras.spec.ts`; migrations `0215_catalog_price_rule_tiers.sql`,
+`0216_catalog_offering_addons.sql`, `0217_catalog_offering_uniforms.sql`; the camp journey
+`apps/api/src/__tests__/journeys/facility-camp.spec.ts`):
+
+- **Price tiers** (`price_rule_tiers`): a price rule may carry tiers, written with the rule by
+  `POST /v1/offerings/{id}/price-rules` (`tiers`, at most 20) and immutable like the rest of its
+  pricing content (no update, no delete: a change is a new rule version, SPK-PAY-002). A tier names
+  what the participant attends (`all_sessions`, or `chosen_sessions` with the fewest and the most
+  sessions the customer picks), its price on the rule's pricing basis, an optional member price
+  (only with the rule's membership entitlement) and an optional purchase deadline
+  (`availableUntil`). `PriceRule.tiers` lists them in order; `PublicPrice.tiers` shows them to
+  customers only while the capability is on. With tiers, the rule's base price is what a line
+  costs only while tiers are off.
+- **Add-ons** (`offering_addons`): `POST /v1/offerings/{id}/addons`, `GET /v1/offerings/{id}/addons`
+  (staff, retired ones included), `POST /v1/offering-addons/{id}/retire`. An add-on has its own
+  price, currency and charge lines, is selected once for the registration or per session, and may
+  have a capacity (enrollment sizes the add-on's own capacity pool from it). Its price, selection
+  and capacity never change: a change is a retirement and a new add-on. One live add-on per code
+  and offering.
+- **Uniforms** (`offering_uniforms`): `POST /v1/offerings/{id}/uniforms`,
+  `GET /v1/offerings/{id}/uniforms` (staff), `POST /v1/offering-uniforms/{id}/retire`. A uniform has
+  an item key (the same key on another offering is the same kit), sizes, a requirement (`required`
+  or `optional`), an optional price with its currency and charge lines, and
+  `returningHolderFree`. One live uniform per offering; its basis never changes.
+- `GET /v1/offerings/{id}/purchase-options` (any signed-in principal of the organization, for an
+  offering they can see; protected NOT_FOUND otherwise): the tiers of the rule effective now that
+  can still be bought, the active add-ons and the active uniform. Each part is empty (or null)
+  while its capability is off.
+- Actions `catalog.manage_offering_addons` and `catalog.manage_offering_uniforms` (the roles of
+  price rules: finance operator, general manager, system administrator), each declaring its
+  capability; every command requires the capability inside its unit of work (ACCESS_DENIED
+  `CAPABILITY_DISABLED` otherwise), is audited and enqueues `catalog.offering_addon_changed` or
+  `catalog.offering_uniform_changed`. Staff reads of records that exist stay available while a
+  capability is off.
+- `PRICING_PORT.offeringExtras(organizationId, offeringId)`: every add-on and uniform of the
+  offering, retired ones included, for enrollment (validating a selection) and finance (pricing it).
+- The database refuses: a tier of another organization's price rule or of another offering's rule
+  (composite foreign key over organization, rule and offering); a tier rewritten or deleted; a tier
+  member price on a rule without a membership entitlement; session bounds that disagree with the
+  attendance; a second live add-on with the same code; an add-on whose price, currency, selection,
+  capacity or charge lines change; a second live uniform of an offering; a uniform whose item key,
+  sizes, price or returning-holder rule change; a uniform price without its currency; an add-on or
+  uniform of another organization's offering; deleting an add-on or a uniform.
+
+**Proposed** (assumed defaults, each a rule the facility has not confirmed):
+
+- Tiers and add-ons are set per offering by staff and exactly one tier applies to a line. Which
+  tiers, deadlines, prices, add-ons and capacities exist is **Pending decision** DEC-097.
+- Stock is not counted, and a returning participant who holds the current uniform is not charged
+  again where the offering says so. Whether ordering moves into registration at all, whether stock
+  is counted, the prices and the returning-participant rule are **Pending decision** DEC-101.
+- Who may set add-ons and uniforms follows price rules (finance). That assignment is an
+  engineering default, not a decided rule.
+
+Not done here: a tier that names a fixed subset of sessions (a tier is every session or a number
+of chosen ones); editing an add-on's capacity after it is created (retire it and add it again, or
+adjust its pool through the capacity endpoints once a pool exists); charge lines of an add-on or a
+uniform in the staff screens (the API takes them); a jersey number chosen with the uniform (numbers
+stay on the team roster, SPK-COMP-005); the two new events in
+`docs/architecture/api-and-events.md` (a shared file, updated at integration).
