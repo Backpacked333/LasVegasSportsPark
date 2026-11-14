@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ChargeLine, DiscountEvaluation, QuoteLinePriceBasis } from '@sportspark/contracts';
 import {
+  addonQuoteLine,
   applyCharges,
   computeQuote,
   priceBasisOf,
   roundHalfUp,
+  uniformQuoteLine,
   unitPriceFromBasis,
   type LinePricingFacts,
   type QuoteLineInput,
@@ -388,5 +390,323 @@ describe('per-session and member price arithmetic (SPK-PAY-013, SPK-PAY-015)', (
     expect(plain).toMatchObject({ unitPriceMinor: 2_400, baseAmountMinor: 2_400 });
     expect(plain?.priceBasis).toBeNull();
     expect(quote([priced(null)]).lines[0]?.priceBasis).toBeNull();
+  });
+});
+
+/**
+ * Proposed amendments PA-03 and PA-07 (SPK-PAY-014, SPK-REG-012; Proposed, DEC-097 and DEC-101
+ * pending): a price tier comes first in the order (tier, member price, per-session
+ * multiplication), and add-ons and a priced uniform are lines of their own with a stored basis.
+ * Tiers, add-ons and prices are test data, not policy.
+ */
+describe('tier, add-on and uniform arithmetic (SPK-PAY-014, SPK-REG-012)', () => {
+  const AT = NOW.toISOString();
+  const session = (n: number) => `00000000-0000-7000-8000-0000000002${String(n).padStart(2, '0')}`;
+  const tier = (
+    overrides: Partial<NonNullable<LinePricingFacts['tier']>> = {},
+  ): NonNullable<LinePricingFacts['tier']> => ({
+    tierId: '00000000-0000-7000-8000-000000000020',
+    code: 'three_day',
+    name: 'Three days',
+    attendance: 'chosen_sessions',
+    priceMinor: 6_800,
+    memberPriceMinor: 6_000,
+    availableUntil: null,
+    purchasedAt: AT,
+    selectedSessionIds: [session(1), session(3), session(5)],
+    ...overrides,
+  });
+  const member = (holds: boolean, priceMinor: number): NonNullable<LinePricingFacts['member']> => ({
+    priceMinor,
+    entitlementDefinitionId: '00000000-0000-7000-8000-000000000010',
+    entitlementName: 'Annual membership',
+    holds,
+    reason: holds ? 'active_membership' : 'no_active_membership',
+    membershipEnrollmentId: holds ? '00000000-0000-7000-8000-000000000011' : null,
+    checkedAt: AT,
+  });
+  const place = (pricing: LinePricingFacts | null, basePriceMinor = 7_000): QuoteLineInput => ({
+    ...line('a', basePriceMinor, [
+      { code: 'tax', label: 'Sales tax', kind: 'tax', basisPoints: 1_000, inclusive: false },
+    ]),
+    pricing,
+  });
+  const quote = (lines: QuoteLineInput[], discountEvaluation: DiscountEvaluation | null = null) =>
+    computeQuote({
+      currency: 'USD',
+      lines,
+      discountEvaluation,
+      credits: [],
+      plan: { kind: 'full' },
+      now: NOW,
+    });
+  const LUNCH = {
+    id: '00000000-0000-7000-8000-000000000030',
+    code: 'lunch',
+    name: 'Lunch',
+    selection: 'per_session' as const,
+    priceMinor: 900,
+    chargeLines: [
+      {
+        code: 'food_tax',
+        label: 'Food tax',
+        kind: 'tax' as const,
+        basisPoints: 500,
+        inclusive: false,
+      },
+    ],
+  };
+  const SHIRT = {
+    id: '00000000-0000-7000-8000-000000000031',
+    code: 'shirt',
+    name: 'Camp shirt',
+    selection: 'per_registration' as const,
+    priceMinor: 1_500,
+    chargeLines: [],
+  };
+  const KIT = {
+    id: '00000000-0000-7000-8000-000000000040',
+    itemKey: 'club-kit-2026',
+    name: 'Club kit',
+    priceMinor: 2_500 as number | null,
+    chargeLines: [
+      {
+        code: 'kit_fee',
+        label: 'Printing',
+        kind: 'fee' as const,
+        amountMinor: 200,
+        inclusive: false,
+      },
+    ],
+    returningHolderFree: true,
+  };
+  const HELD = '00000000-0000-7000-8000-000000000050';
+
+  it('SPK-PAY-014, SPK-PAY-015, SPK-PAY-013: the order is tier, then member price, then per-session multiplication, and the basis stores every fact', () => {
+    // Tier 68.00 a day (member 60.00), a member, three of the chosen days still to attend.
+    const facts: LinePricingFacts = {
+      pricingBasis: 'per_session',
+      tier: tier(),
+      member: member(true, 6_000),
+      sessions: { sessionIds: [session(1), session(3), session(5)], countedAt: AT },
+    };
+    const basis = priceBasisOf(7_000, facts);
+    expect(basis).toEqual({
+      pricingBasis: 'per_session',
+      // The tier's price replaces the rule's base price (70.00) as the standard price.
+      standardPriceMinor: 6_800,
+      tier: tier(),
+      appliedPrice: 'member',
+      appliedPriceMinor: 6_000,
+      member: {
+        priceMinor: 6_000,
+        entitlementDefinitionId: '00000000-0000-7000-8000-000000000010',
+        entitlementName: 'Annual membership',
+        applied: true,
+        reason: 'active_membership',
+        membershipEnrollmentId: '00000000-0000-7000-8000-000000000011',
+        checkedAt: AT,
+      },
+      sessions: { count: 3, sessionIds: [session(1), session(3), session(5)], countedAt: AT },
+      unitPriceMinor: 18_000,
+    });
+    // Not the other orders: (base 70.00 x 3) or (tier 68.00 x 3) would be 21000 or 20400.
+    expect(quote([place(facts)]).lines[0]).toMatchObject({
+      unitPriceMinor: 18_000,
+      baseAmountMinor: 18_000,
+      taxMinor: 1_800,
+      totalMinor: 19_800,
+    });
+    // Without the membership the tier's standard price is multiplied.
+    expect(priceBasisOf(7_000, { ...facts, member: member(false, 6_000) }).unitPriceMinor).toBe(
+      20_400,
+    );
+    // A tier of a term rule is the price of what it names: no multiplication.
+    const term = priceBasisOf(30_000, {
+      pricingBasis: 'term',
+      tier: tier({ priceMinor: 19_000, memberPriceMinor: null }),
+      member: null,
+      sessions: null,
+    });
+    expect(term).toMatchObject({
+      standardPriceMinor: 19_000,
+      appliedPrice: 'standard',
+      sessions: null,
+      unitPriceMinor: 19_000,
+    });
+  });
+
+  it('SPK-PAY-002: a tier basis reproduces its unit price from stored facts alone, and a line without a tier stores no tier', () => {
+    const cases: LinePricingFacts[] = [
+      { pricingBasis: 'term', tier: tier({ priceMinor: 19_000 }), member: null, sessions: null },
+      {
+        pricingBasis: 'term',
+        tier: tier({ priceMinor: 19_000, memberPriceMinor: 17_000 }),
+        member: member(true, 17_000),
+        sessions: null,
+      },
+      {
+        pricingBasis: 'per_session',
+        tier: tier(),
+        member: member(false, 6_000),
+        sessions: { sessionIds: [session(1), session(3)], countedAt: AT },
+      },
+    ];
+    for (const facts of cases) {
+      const stored = JSON.parse(JSON.stringify(priceBasisOf(7_000, facts))) as QuoteLinePriceBasis;
+      expect(unitPriceFromBasis(stored)).toBe(stored.unitPriceMinor);
+      expect(stored.tier?.tierId).toBe('00000000-0000-7000-8000-000000000020');
+    }
+    expect(cases.map((facts) => priceBasisOf(7_000, facts).unitPriceMinor)).toEqual([
+      19_000, 17_000, 13_600,
+    ]);
+    // Bases written before the amendment, and lines without a tier, carry no tier key.
+    expect(
+      Object.keys(
+        priceBasisOf(7_000, { pricingBasis: 'term', member: member(true, 6_000), sessions: null }),
+      ),
+    ).not.toContain('tier');
+  });
+
+  it('SPK-PAY-014: an add-on is its own line: its price each times the days selected, its own charges and a stored basis; it never takes the discount of its place', () => {
+    const main = place({
+      pricingBasis: 'term',
+      tier: tier({ priceMinor: 19_000 }),
+      member: null,
+      sessions: null,
+    });
+    const lunch = addonQuoteLine(main, LUNCH, [session(1), session(3)]);
+    const shirt = addonQuoteLine(main, SHIRT, []);
+    const discount = {
+      currency: 'USD',
+      evaluatedAt: AT,
+      lines: [
+        { lineId: 'a', baseAmountMinor: 19_000, discountMinor: 1_900, netAmountMinor: 17_100 },
+      ],
+      discounts: [
+        {
+          discountDefinitionId: '00000000-0000-7000-8000-000000000003',
+          code: null,
+          name: 'Sibling',
+          applied: true,
+          amountMinor: 1_900,
+          allocations: [{ lineId: 'a', amountMinor: 1_900 }],
+          explanation: ['10% of 19000 minor units = 1900 (rounding half_up)'],
+        },
+      ],
+      unknownCodes: [],
+    } as unknown as DiscountEvaluation;
+    const computed = quote([main, lunch, shirt], discount);
+    expect(
+      computed.lines.map((l) => [
+        l.sequence,
+        l.lineKind,
+        l.sourceId,
+        l.unitPriceMinor,
+        l.quantity,
+        l.baseAmountMinor,
+        l.discountMinor,
+        l.taxMinor,
+        l.totalMinor,
+      ]),
+    ).toEqual([
+      [1, 'registration', null, 19_000, 1, 19_000, 1_900, 1_710, 18_810],
+      // 9.00 x 2 days, taxed at the add-on's own 5%; the place's discount and 10% do not apply.
+      [2, 'addon', LUNCH.id, 900, 2, 1_800, 0, 90, 1_890],
+      [3, 'addon', SHIRT.id, 1_500, 1, 1_500, 0, 0, 1_500],
+    ]);
+    expect(computed.lines[1]).toMatchObject({
+      basketLineId: 'a',
+      description: 'Lunch',
+      priceBasis: null,
+      discounts: [],
+      equivalenceKey: null,
+      extraBasis: {
+        addonId: LUNCH.id,
+        code: 'lunch',
+        name: 'Lunch',
+        selection: 'per_session',
+        sessionIds: [session(1), session(3)],
+        quantity: 2,
+        unitPriceMinor: 900,
+      },
+    });
+    expect(computed.lines[2]?.extraBasis).toMatchObject({
+      selection: 'per_registration',
+      sessionIds: [],
+      quantity: 1,
+    });
+    expect(computed.subtotalMinor).toBe(22_300);
+    expect(computed.discountMinor).toBe(1_900);
+    expect(computed.totalMinor).toBe(18_810 + 1_890 + 1_500);
+    // The amount of an add-on line is reproducible from its stored basis alone.
+    const stored = JSON.parse(JSON.stringify(computed.lines[1]?.extraBasis)) as {
+      unitPriceMinor: number;
+      quantity: number;
+    };
+    expect(stored.unitPriceMinor * stored.quantity).toBe(computed.lines[1]?.baseAmountMinor);
+    // An add-on selected per session without a session is a programming error, never a free line.
+    expect(() => addonQuoteLine(main, LUNCH, [])).toThrow(/needs its sessions/);
+  });
+
+  it('SPK-REG-012: a priced uniform is its own line with its size and basis; a returning holder is charged nothing where the offering says so; an unpriced uniform is no line', () => {
+    const main = place(null, 12_000);
+    const charged = uniformQuoteLine(main, KIT, 'YM', null);
+    const waived = uniformQuoteLine(main, KIT, 'YL', HELD);
+    const notWaived = uniformQuoteLine(main, { ...KIT, returningHolderFree: false }, 'YL', HELD);
+    expect(uniformQuoteLine(main, { ...KIT, priceMinor: null }, 'YM', null)).toBeNull();
+    const computed = quote([main, charged as QuoteLineInput]);
+    expect(computed.lines[1]).toMatchObject({
+      lineKind: 'uniform',
+      sourceId: KIT.id,
+      description: 'Club kit (YM)',
+      quantity: 1,
+      unitPriceMinor: 2_500,
+      feeMinor: 200,
+      totalMinor: 2_700,
+      priceBasis: null,
+      extraBasis: {
+        offeringUniformId: KIT.id,
+        itemKey: 'club-kit-2026',
+        name: 'Club kit',
+        size: 'YM',
+        priceMinor: 2_500,
+        charged: true,
+        reason: 'standard',
+        heldUniformOrderId: null,
+        unitPriceMinor: 2_500,
+      },
+    });
+    // Held and the offering waives it: the line stays at zero, with no fee, and says why.
+    expect(quote([main, waived as QuoteLineInput]).lines[1]).toMatchObject({
+      unitPriceMinor: 0,
+      feeMinor: 0,
+      totalMinor: 0,
+      extraBasis: {
+        priceMinor: 2_500,
+        charged: false,
+        reason: 'returning_holder',
+        heldUniformOrderId: HELD,
+        unitPriceMinor: 0,
+      },
+    });
+    // Held, but this offering charges it again.
+    expect(quote([main, notWaived as QuoteLineInput]).lines[1]?.extraBasis).toMatchObject({
+      charged: true,
+      reason: 'standard',
+      heldUniformOrderId: null,
+      unitPriceMinor: 2_500,
+    });
+  });
+
+  it('SPK-PAY-014, SPK-REG-012: with no tier and no extra lines the quote is exactly the quote of before', () => {
+    const before = quote([line('a', 12_000), line('b', 8_000)]);
+    expect(before.lines.map((l) => [l.lineKind, l.sourceId, l.extraBasis, l.priceBasis])).toEqual([
+      ['registration', null, null, null],
+      ['registration', null, null, null],
+    ]);
+    expect(before.totalMinor).toBe(20_000);
+    // An extra line without its price or source is refused before anything is computed.
+    expect(() => quote([{ ...line('a', 1), lineKind: 'addon' }])).toThrow(/needs its price/);
   });
 });

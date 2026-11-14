@@ -397,9 +397,10 @@ export class RegistrationExtras {
         extrasByOffering.set(line.offering_id, extras);
       }
       const addons: BasketLineAddon[] = [];
-      for (const addonId of [...new Set(lineAddons.map((row) => row.addon_id))]) {
-        const addon = extras.addons.find((a) => a.id === addonId);
-        if (!addon) continue;
+      // In the catalog's own order of the add-ons, so a line reads the same every time.
+      const chosenAddonIds = new Set(lineAddons.map((row) => row.addon_id));
+      for (const addon of extras.addons.filter((a) => chosenAddonIds.has(a.id))) {
+        const addonId = addon.id;
         // In id order, so the selection reads the same wherever it is shown or stored.
         const sessionIds = lineAddons
           .filter((row) => row.addon_id === addonId && row.session_id !== null)
@@ -591,7 +592,10 @@ export class RegistrationExtras {
       .select(['addon_id', 'session_id'])
       .where('organization_id', '=', organizationId)
       .where('basket_line_id', '=', line.id)
-      .orderBy('id')
+      // One order for every line, so two holds that create the same pools never wait on each
+      // other in opposite orders.
+      .orderBy('addon_id')
+      .orderBy('session_id')
       .execute();
     const hasUniform = await trx
       .selectFrom('basket_line_uniforms')
@@ -629,8 +633,10 @@ export class RegistrationExtras {
         );
       }
       if (rule.tiers.some((t) => t.attendance === 'chosen_sessions')) {
-        const attended =
-          line.selected_session_ids ?? sessions.filter((s) => selectable(s, now)).map((s) => s.id);
+        const attended = [
+          ...(line.selected_session_ids ??
+            sessions.filter((s) => selectable(s, now)).map((s) => s.id)),
+        ].sort();
         for (const sessionId of attended) {
           const pools = await this.capacity.ensureSessionPool(
             trx,

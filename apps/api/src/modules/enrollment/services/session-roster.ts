@@ -48,23 +48,26 @@ export class SessionRoster implements SessionRosterPort {
             .where('organization_id', '=', organizationId)
             .where('basket_line_id', 'in', lineIds)
             .where((eb) => eb.or([eb('session_id', 'is', null), eb('session_id', '=', sessionId)]))
-            .orderBy('created_at')
-            .orderBy('id')
             .execute()
         : [];
     const addons =
       addonRows.length > 0
         ? (await this.pricing.offeringExtras(organizationId, offeringId, trx)).addons
         : [];
-    return enrollments.map((enrollment) => ({
-      participantPersonId: enrollment.participant_person_id,
-      enrollmentId: enrollment.id,
-      addons: addonRows
-        .filter((row) => row.basket_line_id === enrollment.basket_line_id)
-        .flatMap((row) => {
-          const addon = addons.find((a) => a.id === row.addon_id);
-          return addon ? [{ addonId: addon.id, code: addon.code, name: addon.name }] : [];
-        }),
-    }));
+    return enrollments.map((enrollment) => {
+      const chosen = new Set(
+        addonRows
+          .filter((row) => row.basket_line_id === enrollment.basket_line_id)
+          .map((row) => row.addon_id),
+      );
+      return {
+        participantPersonId: enrollment.participant_person_id,
+        enrollmentId: enrollment.id,
+        // In the catalog's own order of the add-ons, so the list reads the same every day.
+        addons: addons
+          .filter((addon) => chosen.has(addon.id))
+          .map((addon) => ({ addonId: addon.id, code: addon.code, name: addon.name })),
+      };
+    });
   }
 }
