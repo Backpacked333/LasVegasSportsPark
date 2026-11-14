@@ -19,6 +19,7 @@
  *   and masked recipient, so a staff-entered person shows as claimable or claimed (SPK-IAM-002).
  * - Times are facility-local where the entry names a facility (`GET /v1/facilities`).
  * - Audit history of the person (`GET /v1/audit-records`) for roles that may read the audit log.
+ * - Waivers (`WaiversCard`, SPK-REG-011 proposed): only while liability waivers are turned on.
  */
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -44,6 +45,7 @@ import type { GrantPermission } from '../../features/people/people';
 import './people.css';
 import { AuditHistory } from '../today/AuditHistory';
 import { CareNotesCard } from './CareNotesCard';
+import { WaiversCard } from './WaiversCard';
 import { ActivitiesCard } from './ActivitiesCard';
 import { useFacilityDirectory } from '../today/useFacilityDirectory';
 
@@ -761,6 +763,7 @@ function PersonRecord({ personId }: { personId: string }) {
               <PersonFacts person={data} />
             </section>
             <CareNotesCard personId={personId} merged={data.status === 'merged'} />
+            <WaiversCard personId={personId} merged={data.status === 'merged'} />
             <AccountSection personId={personId} />
           </div>
           <CustomerTimelineSection personId={personId} />

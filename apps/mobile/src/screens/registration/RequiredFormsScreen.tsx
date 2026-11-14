@@ -11,6 +11,13 @@
  * the API's authorities and is checked again by the API (PARTICIPANT_AUTHORITY_REQUIRED). The
  * wording version is the policy version id; a superseded version is re-presented after reload.
  *
+ * Required waivers (SPK-REG-011, proposed amendment PA-01; DEC-095 pending), only while the
+ * organization has turned liability waivers on: each offering's required waiver families
+ * (`GET /v1/offerings/{id}/required-waivers`) are shown per participant with the API's judgement
+ * (`GET /v1/people/{id}/waivers`: accepted, lapsed, not accepted yet) and accepted here with
+ * `POST /v1/waiver-acceptances`. A waiver the front desk recorded from paper reads "Recorded from
+ * paper", never as a signature. With the switch off nothing of this is shown or asked for.
+ *
  * States: loading; empty (no forms required); ready; validation failure (agreement not ticked,
  * version no longer approved); permission restriction (no forms permission for this child);
  * stale (wording superseded: reload); offline (answers kept, signing disabled); processing
@@ -18,8 +25,9 @@
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
@@ -33,6 +41,7 @@ import { useMe, useParticipantNames } from '../../features/registration/particip
 import { useApiRecords, type RecordState } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { Body, ButtonRow, ChoiceRow, Section } from '../../features/registration/ui';
+import { WaiverCard } from '../../features/waivers/WaiverCard';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -75,6 +84,10 @@ function useRequirements(source: FormsSource) {
         participantPersonId: l.participantPersonId,
         policyVersionIds: l.policies.requiredFormPolicyVersionIds,
       })),
+      waiverTargets: (basket.data?.lines ?? []).map((l): WaiverTarget => ({
+        participantPersonId: l.participantPersonId,
+        offeringId: l.offeringId,
+      })),
     };
   }
   const requirements =
@@ -86,7 +99,110 @@ function useRequirements(source: FormsSource) {
           },
         ]
       : undefined;
-  return { query: entry.data ? offering : entry, requirements };
+  return {
+    query: entry.data ? offering : entry,
+    requirements,
+    waiverTargets: entry.data
+      ? [{ participantPersonId: entry.data.participantPersonId, offeringId: entry.data.offeringId }]
+      : [],
+  };
+}
+
+/** A participant and the offering they register for, whose required waivers are shown. */
+interface WaiverTarget {
+  participantPersonId: string;
+  offeringId: string;
+}
+
+/**
+ * The waivers the offerings require of each participant (SPK-REG-011, proposed). Rendered only
+ * while liability waivers are turned on. When no offering requires one, `whenNone` is shown.
+ */
+function RequiredWaivers({
+  targets,
+  selfId,
+  nameOf,
+  canSignFor,
+  offline,
+  whenNone = null,
+}: {
+  targets: readonly WaiverTarget[];
+  selfId: string | null;
+  nameOf: (personId: string) => string;
+  canSignFor: (personId: string) => boolean;
+  offline: boolean;
+  whenNone?: ReactNode;
+}) {
+  const offerings = useApiRecords(
+    '/offerings/{id}/required-waivers',
+    targets.map((t) => t.offeringId),
+  );
+  const keysOf = new Map<string, string[]>();
+  for (const target of targets) {
+    const keys = keysOf.get(target.participantPersonId) ?? [];
+    for (const waiver of offerings[target.offeringId]?.data?.waivers ?? []) {
+      if (!keys.includes(waiver.policyKey)) keys.push(waiver.policyKey);
+    }
+    keysOf.set(target.participantPersonId, keys);
+  }
+  const participants = [...keysOf.entries()].filter(([, keys]) => keys.length > 0);
+  const people = useApiRecords(
+    '/people/{id}/waivers',
+    participants.map(([personId]) => personId),
+  );
+  if (participants.length === 0) {
+    const loading = Object.values(offerings).some((o) => o.loading);
+    return loading ? <StateView variant="loading" label="required waivers" /> : <>{whenNone}</>;
+  }
+  return (
+    <>
+      {participants.map(([personId, keys]) => {
+        const name = nameOf(personId);
+        const read = people[personId];
+        return (
+          <Section
+            key={personId}
+            title={name === 'You' ? 'Your waivers' : `Waivers for ${name}`}
+            testID={`required-waivers-${personId}`}
+          >
+            {read?.error ? (
+              <QueryErrorView
+                error={read.error}
+                onRetry={read.refetch}
+                unavailable={{
+                  title: 'Waiver not available to you',
+                  description:
+                    'A guardian with permission to complete forms must accept it, or bring a signed paper to the front desk.',
+                }}
+              />
+            ) : !read?.data ? (
+              <Body muted>Checking the waiver…</Body>
+            ) : (
+              keys.map((policyKey) => {
+                const waiver = read.data?.waivers.find((w) => w.policyKey === policyKey);
+                if (!waiver) return null;
+                const signedBy = waiver.acceptance?.signedByPersonId ?? null;
+                return (
+                  <WaiverCard
+                    key={policyKey}
+                    personId={personId}
+                    personName={name}
+                    waiver={waiver}
+                    signerName={
+                      signedBy === selfId ? 'you' : signedBy === personId ? name : 'another adult'
+                    }
+                    canAccept={canSignFor(personId)}
+                    offline={offline}
+                    onAccepted={read.refetch}
+                  />
+                );
+              })
+            )}
+          </Section>
+        );
+      })}
+    </>
+  );
 }
 
 function FormCard({
@@ -204,12 +320,16 @@ function FormsContent({ source }: { source: FormsSource }) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const me = useMe();
-  const { query, requirements } = useRequirements(source);
+  const permissions = usePermissions();
+  // SPK-REG-011 (proposed): nothing about waivers is shown or asked for while the switch is off.
+  const waiversOn = permissions.isCapabilityEnabled('liability_waivers') === true;
+  const { query, requirements, waiverTargets } = useRequirements(source);
   const status = useFormsStatus(requirements ?? [], requirements !== undefined);
   const ids = [...new Set((requirements ?? []).flatMap((r) => r.policyVersionIds))];
   const policies = useApiRecords('/policy-versions/{id}', ids, requirements !== undefined);
   const participants = [...new Set((requirements ?? []).map((r) => r.participantPersonId))];
   const names = useParticipantNames(participants);
+  const waiverNames = useParticipantNames(waiverTargets.map((t) => t.participantPersonId));
 
   if (query.error && !query.data) {
     return <QueryErrorView error={query.error} onRetry={() => void query.refetch()} />;
@@ -231,13 +351,26 @@ function FormsContent({ source }: { source: FormsSource }) {
     byParticipant.set(r.participantPersonId, list);
   }
   const groups = [...byParticipant.entries()].filter(([, list]) => list.length > 0);
+  const requiredWaivers = (whenNone?: ReactNode) =>
+    waiversOn ? (
+      <RequiredWaivers
+        targets={waiverTargets}
+        selfId={selfId}
+        nameOf={waiverNames}
+        canSignFor={canSignFor}
+        offline={offline}
+        whenNone={whenNone}
+      />
+    ) : (
+      (whenNone ?? null)
+    );
   if (groups.length === 0) {
-    return (
+    return requiredWaivers(
       <StateView
         variant="empty"
         title="No forms required"
         description="Nothing needs to be signed for this registration."
-      />
+      />,
     );
   }
   const signed = status.total - status.outstanding;
@@ -289,6 +422,7 @@ function FormsContent({ source }: { source: FormsSource }) {
           </Section>
         );
       })}
+      {requiredWaivers()}
       <ButtonRow>
         <Button
           label={source.basketId ? 'Back to your basket' : 'Back to the waitlist offer'}
