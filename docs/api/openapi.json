@@ -7561,6 +7561,121 @@
           "per_session"
         ]
       },
+      "PriceTierAttendance": {
+        "type": "string",
+        "enum": [
+          "all_sessions",
+          "chosen_sessions"
+        ]
+      },
+      "PriceRuleTier": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "attendance": {
+            "$ref": "#/components/schemas/PriceTierAttendance"
+          },
+          "minSessions": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSessions": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "memberPriceMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "availableUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "sequence",
+          "attendance",
+          "minSessions",
+          "maxSessions",
+          "priceMinor",
+          "memberPriceMinor",
+          "availableUntil"
+        ]
+      },
+      "CreatePriceRuleTier": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50,
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "attendance": {
+            "$ref": "#/components/schemas/PriceTierAttendance"
+          },
+          "minSessions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 366
+          },
+          "maxSessions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 366
+          },
+          "priceMinor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memberPriceMinor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "availableUntil": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "attendance",
+          "priceMinor"
+        ]
+      },
       "PriceRule": {
         "type": "object",
         "properties": {
@@ -7623,6 +7738,12 @@
               "null"
             ]
           },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceRuleTier"
+            }
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -7645,6 +7766,7 @@
           "memberPriceMinor",
           "memberEntitlementDefinitionId",
           "memberEntitlementName",
+          "tiers",
           "revision",
           "createdAt"
         ]
@@ -7688,6 +7810,14 @@
           "memberEntitlementDefinitionId": {
             "type": "string",
             "format": "uuid"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreatePriceRuleTier"
+            },
+            "maxItems": 20,
+            "default": []
           },
           "expectedRevision": {
             "type": "integer",
@@ -7848,6 +7978,12 @@
                 "type": "null"
               }
             ]
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceRuleTier"
+            }
           }
         },
         "required": [
@@ -7858,7 +7994,415 @@
           "pricingBasis",
           "remainingSessionCount",
           "remainingSessionsPriceMinor",
-          "memberPrice"
+          "memberPrice",
+          "tiers"
+        ]
+      },
+      "AddonSelection": {
+        "type": "string",
+        "enum": [
+          "per_registration",
+          "per_session"
+        ]
+      },
+      "OfferingExtraStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "retired"
+        ]
+      },
+      "OfferingAddon": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "chargeLines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChargeLine"
+            }
+          },
+          "selection": {
+            "$ref": "#/components/schemas/AddonSelection"
+          },
+          "capacity": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/OfferingExtraStatus"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "offeringId",
+          "code",
+          "name",
+          "description",
+          "priceMinor",
+          "currency",
+          "chargeLines",
+          "selection",
+          "capacity",
+          "status",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "CreateOfferingAddonRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50,
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "priceMinor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "chargeLines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChargeLine"
+            },
+            "maxItems": 20,
+            "default": []
+          },
+          "selection": {
+            "$ref": "#/components/schemas/AddonSelection"
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "priceMinor",
+          "currency"
+        ]
+      },
+      "RetireOfferingExtraRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "UniformRequirement": {
+        "type": "string",
+        "enum": [
+          "required",
+          "optional"
+        ]
+      },
+      "OfferingUniform": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "itemKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/UniformRequirement"
+          },
+          "priceMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "chargeLines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChargeLine"
+            }
+          },
+          "returningHolderFree": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OfferingExtraStatus"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "offeringId",
+          "itemKey",
+          "name",
+          "sizes",
+          "requirement",
+          "priceMinor",
+          "currency",
+          "chargeLines",
+          "returningHolderFree",
+          "status",
+          "revision",
+          "createdAt"
+        ]
+      },
+      "CreateOfferingUniformRequest": {
+        "type": "object",
+        "properties": {
+          "itemKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 30
+            },
+            "minItems": 1,
+            "maxItems": 40
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/UniformRequirement"
+          },
+          "priceMinor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "chargeLines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChargeLine"
+            },
+            "maxItems": 20,
+            "default": []
+          },
+          "returningHolderFree": {
+            "type": "boolean",
+            "default": false
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "itemKey",
+          "name",
+          "sizes"
+        ]
+      },
+      "OfferingPurchaseOptions": {
+        "type": "object",
+        "properties": {
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "priceRuleId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "pricingBasis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PricingBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceRuleTier"
+            }
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OfferingAddon"
+            }
+          },
+          "uniform": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfferingUniform"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "offeringId",
+          "priceRuleId",
+          "pricingBasis",
+          "currency",
+          "tiers",
+          "addons",
+          "uniform"
         ]
       },
       "OfferingFacility": {
@@ -24624,7 +25168,8 @@
           "division",
           "team_entry",
           "camp_group",
-          "rental"
+          "rental",
+          "addon"
         ]
       },
       "CapacityConstraintKind": {
@@ -24880,6 +25425,69 @@
             "items": {
               "$ref": "#/components/schemas/ChargeLine"
             }
+          },
+          "estimate": {
+            "type": "object",
+            "properties": {
+              "pricingBasis": {
+                "$ref": "#/components/schemas/PricingBasis"
+              },
+              "tier": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "code",
+                  "name"
+                ]
+              },
+              "appliedPrice": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "member"
+                ]
+              },
+              "appliedPriceMinor": {
+                "type": "integer"
+              },
+              "sessionCount": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "unitPriceMinor": {
+                "type": "integer"
+              },
+              "estimatedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "pricingBasis",
+              "tier",
+              "appliedPrice",
+              "appliedPriceMinor",
+              "sessionCount",
+              "unitPriceMinor",
+              "estimatedAt"
+            ]
           }
         },
         "required": [
@@ -24887,6 +25495,324 @@
           "basePriceMinor",
           "currency",
           "chargeLines"
+        ]
+      },
+      "BasketLineAddon": {
+        "type": "object",
+        "properties": {
+          "addonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/AddonSelection"
+          },
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "quantity": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addonId",
+          "code",
+          "name",
+          "selection",
+          "sessionIds",
+          "priceMinor",
+          "currency",
+          "quantity"
+        ]
+      },
+      "BasketLineUniform": {
+        "type": "object",
+        "properties": {
+          "offeringUniformId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "itemKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "string"
+          },
+          "priceMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "returningHolderFree": {
+            "type": "boolean"
+          },
+          "heldUniformOrderId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "offeringUniformId",
+          "itemKey",
+          "name",
+          "size",
+          "priceMinor",
+          "currency",
+          "returningHolderFree",
+          "heldUniformOrderId"
+        ]
+      },
+      "AddBasketLineAddon": {
+        "type": "object",
+        "properties": {
+          "addonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 120
+          }
+        },
+        "required": [
+          "addonId"
+        ]
+      },
+      "AddBasketLineUniform": {
+        "type": "object",
+        "properties": {
+          "offeringUniformId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "size": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "offeringUniformId",
+          "size"
+        ]
+      },
+      "UniformOrderStatus": {
+        "type": "string",
+        "enum": [
+          "ordered",
+          "paid",
+          "handed_over",
+          "canceled"
+        ]
+      },
+      "UniformOrder": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enrollmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringUniformId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teamEntryId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "participantPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participantDisplayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "itemKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "string"
+          },
+          "priceMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UniformOrderStatus"
+          },
+          "orderedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "paidAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "handedOverAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "handedOverBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "canceledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "enrollmentId",
+          "offeringId",
+          "offeringUniformId",
+          "teamEntryId",
+          "participantPersonId",
+          "participantDisplayName",
+          "itemKey",
+          "name",
+          "size",
+          "priceMinor",
+          "currency",
+          "status",
+          "orderedAt",
+          "paidAt",
+          "handedOverAt",
+          "handedOverBy",
+          "canceledAt",
+          "revision"
+        ]
+      },
+      "HandOverUniformRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "CorrectUniformHandOverRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "PolicyReferences": {
@@ -25728,6 +26654,39 @@
               "null"
             ]
           },
+          "priceTierId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "selectedSessionIds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BasketLineAddon"
+            }
+          },
+          "uniform": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BasketLineUniform"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -25756,6 +26715,10 @@
           "enrollmentId",
           "outcome",
           "outcomeReason",
+          "priceTierId",
+          "selectedSessionIds",
+          "addons",
+          "uniform",
           "revision"
         ]
       },
@@ -25947,6 +26910,29 @@
             "minimum": 1,
             "maximum": 1000,
             "default": 1
+          },
+          "priceTierId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "selectedSessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 366
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddBasketLineAddon"
+            },
+            "maxItems": 20
+          },
+          "uniform": {
+            "$ref": "#/components/schemas/AddBasketLineUniform"
           },
           "expectedRevision": {
             "type": "integer",
@@ -31116,6 +32102,68 @@
           "history"
         ]
       },
+      "ExpectedParticipant": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "givenName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "familyName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enrollmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "addonId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addonId",
+                "code",
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "personId",
+          "givenName",
+          "familyName",
+          "displayName",
+          "enrollmentId",
+          "addons"
+        ]
+      },
       "ActivityAttendance": {
         "type": "object",
         "properties": {
@@ -31127,11 +32175,21 @@
             "items": {
               "$ref": "#/components/schemas/PersonAttendance"
             }
+          },
+          "expected": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ExpectedParticipant"
+            }
           }
         },
         "required": [
           "activity",
-          "people"
+          "people",
+          "expected"
         ]
       },
       "RecordDepartureRequest": {
@@ -35888,6 +36946,69 @@
           "standardPriceMinor": {
             "type": "integer"
           },
+          "tier": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "tierId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "code": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "attendance": {
+                "type": "string",
+                "enum": [
+                  "all_sessions",
+                  "chosen_sessions"
+                ]
+              },
+              "priceMinor": {
+                "type": "integer"
+              },
+              "memberPriceMinor": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "availableUntil": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "purchasedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "selectedSessionIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "required": [
+              "tierId",
+              "code",
+              "name",
+              "attendance",
+              "priceMinor",
+              "memberPriceMinor",
+              "availableUntil",
+              "purchasedAt",
+              "selectedSessionIds"
+            ]
+          },
           "appliedPrice": {
             "type": "string",
             "enum": [
@@ -35980,6 +37101,110 @@
           "appliedPriceMinor",
           "member",
           "sessions",
+          "unitPriceMinor"
+        ]
+      },
+      "QuoteLineKind": {
+        "type": "string",
+        "enum": [
+          "registration",
+          "addon",
+          "uniform"
+        ]
+      },
+      "QuoteLineAddonBasis": {
+        "type": "object",
+        "properties": {
+          "addonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "selection": {
+            "type": "string",
+            "enum": [
+              "per_registration",
+              "per_session"
+            ]
+          },
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "unitPriceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "addonId",
+          "code",
+          "name",
+          "selection",
+          "sessionIds",
+          "quantity",
+          "unitPriceMinor"
+        ]
+      },
+      "QuoteLineUniformBasis": {
+        "type": "object",
+        "properties": {
+          "offeringUniformId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "itemKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "string"
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "charged": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "returning_holder"
+            ]
+          },
+          "heldUniformOrderId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "unitPriceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "offeringUniformId",
+          "itemKey",
+          "name",
+          "size",
+          "priceMinor",
+          "charged",
+          "reason",
+          "heldUniformOrderId",
           "unitPriceMinor"
         ]
       },
@@ -36076,6 +37301,36 @@
                 "type": "null"
               }
             ]
+          },
+          "lineKind": {
+            "$ref": "#/components/schemas/QuoteLineKind"
+          },
+          "sourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "addon": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuoteLineAddonBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uniform": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuoteLineUniformBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -36099,7 +37354,11 @@
           "charges",
           "policies",
           "enrollmentId",
-          "priceBasis"
+          "priceBasis",
+          "lineKind",
+          "sourceId",
+          "addon",
+          "uniform"
         ]
       },
       "FutureObligation": {
@@ -37183,6 +38442,16 @@
           },
           "policies": {
             "$ref": "#/components/schemas/LinePolicyReferences"
+          },
+          "lineKind": {
+            "$ref": "#/components/schemas/QuoteLineKind"
+          },
+          "sourceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         },
         "required": [
@@ -37202,7 +38471,9 @@
           "feeMinor",
           "totalMinor",
           "currency",
-          "policies"
+          "policies",
+          "lineKind",
+          "sourceId"
         ]
       },
       "Order": {
@@ -59793,6 +61064,616 @@
         }
       }
     },
+    "/offerings/{id}/addons": {
+      "post": {
+        "summary": "Create an add-on of an offering (SPK-PAY-014, proposed amendment PA-03; capability price_tiers_addons)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOfferingAddonRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingAddon"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (publication lists the missing configuration in details)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List the add-ons of an offering, retired ones included (staff)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OfferingAddon"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offering-addons/{id}/retire": {
+      "post": {
+        "summary": "Retire an add-on: it can no longer be selected; purchases keep it",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetireOfferingExtraRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingAddon"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (publication lists the missing configuration in details)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offerings/{id}/uniforms": {
+      "post": {
+        "summary": "Set the uniform an offering requires or offers (SPK-REG-012, proposed amendment PA-07; capability uniforms)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOfferingUniformRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingUniform"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (publication lists the missing configuration in details)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List the uniforms of an offering, retired ones included (staff)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OfferingUniform"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offering-uniforms/{id}/retire": {
+      "post": {
+        "summary": "Retire a uniform: it can no longer be chosen; orders keep it",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetireOfferingExtraRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingUniform"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (publication lists the missing configuration in details)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offerings/{id}/purchase-options": {
+      "get": {
+        "summary": "The price tiers, add-ons and uniform a customer chooses from when registering (empty while the capability of each is off)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingPurchaseOptions"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/discounts": {
       "post": {
         "summary": "Create a discount definition (SPK-PAY-003)",
@@ -79873,6 +81754,310 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Basket"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Eligibility failed or acknowledgment missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uniform-orders": {
+      "get": {
+        "summary": "List the uniforms ordered for a class or a team: size, paid state and hand-over (staff; SPK-REG-012, proposed amendment PA-07)",
+        "tags": [
+          "Enrollment"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "offeringId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "teamEntryId",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UniformOrder"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uniform-orders/{id}/hand-over": {
+      "post": {
+        "summary": "Record that a paid uniform was handed over, by whom and when (capability uniforms)",
+        "tags": [
+          "Enrollment"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandOverUniformRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniformOrder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or participant authority required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (protected records never reveal existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Eligibility failed or acknowledgment missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uniform-orders/{id}/hand-over-corrections": {
+      "post": {
+        "summary": "Undo a hand-over by a recorded correction with its reason (capability uniforms)",
+        "tags": [
+          "Enrollment"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectUniformHandOverRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniformOrder"
                 }
               }
             }

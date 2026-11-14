@@ -30428,6 +30428,98 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/offering-addons/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retire an add-on: it can no longer be selected; purchases keep it */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RetireOfferingExtraRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OfferingAddon"];
+                    };
+                };
+                /** @description Validation failed (publication lists the missing configuration in details) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/offering-availability": {
         parameters: {
             query?: never;
@@ -30576,6 +30668,98 @@ export type paths = {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offering-uniforms/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retire a uniform: it can no longer be chosen; orders keep it */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RetireOfferingExtraRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OfferingUniform"];
+                    };
+                };
+                /** @description Validation failed (publication lists the missing configuration in details) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -30879,6 +31063,150 @@ export type paths = {
                 };
             };
         };
+        trace?: never;
+    };
+    "/offerings/{id}/addons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the add-ons of an offering, retired ones included (staff) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OfferingAddon"][];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create an add-on of an offering (SPK-PAY-014, proposed amendment PA-03; capability price_tiers_addons) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CreateOfferingAddonRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OfferingAddon"];
+                    };
+                };
+                /** @description Validation failed (publication lists the missing configuration in details) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/offerings/{id}/archive": {
@@ -31634,6 +31962,74 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/offerings/{id}/purchase-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The price tiers, add-ons and uniform a customer chooses from when registering (empty while the capability of each is off) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OfferingPurchaseOptions"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/offerings/{id}/registration-options": {
         parameters: {
             query?: never;
@@ -32069,6 +32465,150 @@ export type paths = {
                     };
                     content: {
                         "application/json": components["schemas"]["OfferingSession"];
+                    };
+                };
+                /** @description Validation failed (publication lists the missing configuration in details) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offerings/{id}/uniforms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the uniforms of an offering, retired ones included (staff) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OfferingUniform"][];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Set the uniform an offering requires or offers (SPK-REG-012, proposed amendment PA-07; capability uniforms) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CreateOfferingUniformRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OfferingUniform"];
                     };
                 };
                 /** @description Validation failed (publication lists the missing configuration in details) */
@@ -52759,6 +53299,277 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/uniform-orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the uniforms ordered for a class or a team: size, paid state and hand-over (staff; SPK-REG-012, proposed amendment PA-07) */
+        get: {
+            parameters: {
+                query?: {
+                    offeringId?: string;
+                    teamEntryId?: string;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UniformOrder"][];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uniform-orders/{id}/hand-over": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record that a paid uniform was handed over, by whom and when (capability uniforms) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["HandOverUniformRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UniformOrder"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible (protected records never reveal existence) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Eligibility failed or acknowledgment missing */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uniform-orders/{id}/hand-over-corrections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Undo a hand-over by a recorded correction with its reason (capability uniforms) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CorrectUniformHandOverRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UniformOrder"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or participant authority required */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible (protected records never reveal existence) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CAPACITY_UNAVAILABLE, DUPLICATE_ENTITLEMENT, RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Eligibility failed or acknowledgment missing */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/visits": {
         parameters: {
             query?: never;
@@ -54524,6 +55335,7 @@ export type components = {
         AcknowledgmentStatus: "active" | "withdrawn";
         ActivityAttendance: {
             activity: components["schemas"]["ActivityDetail"];
+            expected: components["schemas"]["ExpectedParticipant"][] | null;
             people: components["schemas"]["PersonAttendance"][];
         };
         ActivityDetail: {
@@ -54561,7 +55373,13 @@ export type components = {
             sessionId?: string | null;
             staffRoles?: string[];
         };
+        AddBasketLineAddon: {
+            /** Format: uuid */
+            addonId: string;
+            sessionIds?: string[];
+        };
         AddBasketLineRequest: {
+            addons?: components["schemas"]["AddBasketLineAddon"][];
             expectedRevision?: number;
             intent: components["schemas"]["RegistrationIntent"];
             /** Format: uuid */
@@ -54569,13 +55387,22 @@ export type components = {
             /** Format: uuid */
             participantPersonId: string;
             policyReferences?: string[];
+            /** Format: uuid */
+            priceTierId?: string;
             /** @default 1 */
             quantity?: number;
             reason?: string;
+            selectedSessionIds?: string[];
             /** Format: uuid */
             sessionId?: string;
             /** Format: uuid */
             teamEntryId?: string;
+            uniform?: components["schemas"]["AddBasketLineUniform"];
+        };
+        AddBasketLineUniform: {
+            /** Format: uuid */
+            offeringUniformId: string;
+            size: string;
         };
         AddCaseNoteRequest: {
             body: string;
@@ -54602,6 +55429,8 @@ export type components = {
             /** Format: uuid */
             personId: string;
         };
+        /** @enum {string} */
+        AddonSelection: "per_registration" | "per_session";
         AddPoolEntryRequest: {
             expectedRevision?: number;
             policyReferences?: string[];
@@ -55492,6 +56321,7 @@ export type components = {
             updatedAt: string;
         };
         BasketLine: {
+            addons: components["schemas"]["BasketLineAddon"][];
             /** Format: uuid */
             applicationId: string | null;
             applicationStatus: components["schemas"]["ApplicationStatus"] | null;
@@ -55515,9 +56345,12 @@ export type components = {
             participantPersonId: string;
             policies: components["schemas"]["PolicyReferences"];
             price: components["schemas"]["PriceSnapshot"] | null;
+            /** Format: uuid */
+            priceTierId: string | null;
             quantity: number;
             requiresApproval: boolean;
             revision: number;
+            selectedSessionIds: string[] | null;
             sequence: number;
             /** Format: uuid */
             sessionId: string | null;
@@ -55525,9 +56358,33 @@ export type components = {
             teamEntryId: string | null;
             /** Format: uuid */
             trialParticipationId: string | null;
+            uniform: components["schemas"]["BasketLineUniform"] | null;
+        };
+        BasketLineAddon: {
+            /** Format: uuid */
+            addonId: string;
+            code: string;
+            currency: string;
+            name: string;
+            priceMinor: number;
+            quantity: number;
+            selection: components["schemas"]["AddonSelection"];
+            sessionIds: string[];
         };
         /** @enum {string} */
         BasketLineOutcome: "pending" | "held" | "confirmed" | "failed" | "released";
+        BasketLineUniform: {
+            currency: string | null;
+            /** Format: uuid */
+            heldUniformOrderId: string | null;
+            itemKey: string;
+            name: string;
+            /** Format: uuid */
+            offeringUniformId: string;
+            priceMinor: number | null;
+            returningHolderFree: boolean;
+            size: string;
+        };
         BasketPrice: {
             /** Format: date-time */
             asOf: string;
@@ -55815,7 +56672,7 @@ export type components = {
             updatedAt: string;
         };
         /** @enum {string} */
-        CapacityPoolScopeType: "offering" | "session" | "division" | "team_entry" | "camp_group" | "rental";
+        CapacityPoolScopeType: "offering" | "session" | "division" | "team_entry" | "camp_group" | "rental" | "addon";
         CapacityUnit: {
             groupSize?: number;
             limit: number;
@@ -56568,6 +57425,11 @@ export type components = {
             policyReferences?: string[];
             reason: string;
         };
+        CorrectUniformHandOverRequest: {
+            expectedRevision?: number;
+            policyReferences?: string[];
+            reason: string;
+        };
         CostInput: {
             amountMinor: number;
             approvalReference: string;
@@ -57233,6 +58095,20 @@ export type components = {
                 kind: "team_fee" | "manual";
             };
         };
+        CreateOfferingAddonRequest: {
+            capacity?: number;
+            /** @default [] */
+            chargeLines?: components["schemas"]["ChargeLine"][];
+            code: string;
+            currency: string;
+            description?: string;
+            expectedRevision?: number;
+            name: string;
+            policyReferences?: string[];
+            priceMinor: number;
+            reason?: string;
+            selection?: components["schemas"]["AddonSelection"];
+        };
         CreateOfferingRequest: {
             activityType?: string;
             bookingTermsKey?: string;
@@ -57285,6 +58161,21 @@ export type components = {
             schedulingEventId?: string;
             sequence?: number;
             title?: string;
+        };
+        CreateOfferingUniformRequest: {
+            /** @default [] */
+            chargeLines?: components["schemas"]["ChargeLine"][];
+            currency?: string;
+            expectedRevision?: number;
+            itemKey: string;
+            name: string;
+            policyReferences?: string[];
+            priceMinor?: number;
+            reason?: string;
+            requirement?: components["schemas"]["UniformRequirement"];
+            /** @default false */
+            returningHolderFree?: boolean;
+            sizes: string[];
         };
         CreateOperatingHoursBody: {
             closesAt: string;
@@ -57452,6 +58343,19 @@ export type components = {
             policyReferences?: string[];
             pricingBasis?: components["schemas"]["PricingBasis"];
             reason?: string;
+            /** @default [] */
+            tiers?: components["schemas"]["CreatePriceRuleTier"][];
+        };
+        CreatePriceRuleTier: {
+            attendance: components["schemas"]["PriceTierAttendance"];
+            /** Format: date-time */
+            availableUntil?: string;
+            code: string;
+            maxSessions?: number;
+            memberPriceMinor?: number;
+            minSessions?: number;
+            name: string;
+            priceMinor: number;
         };
         CreateProgramRequest: {
             activityType: string;
@@ -58800,6 +59704,21 @@ export type components = {
         ExceptionSeverity: "info" | "warning" | "high" | "critical";
         /** @enum {string} */
         ExceptionStatus: "open" | "acknowledged" | "resolved" | "closed";
+        ExpectedParticipant: {
+            addons: {
+                /** Format: uuid */
+                addonId: string;
+                code: string;
+                name: string;
+            }[];
+            displayName: string | null;
+            /** Format: uuid */
+            enrollmentId: string;
+            familyName: string | null;
+            givenName: string | null;
+            /** Format: uuid */
+            personId: string;
+        };
         ExtendInstallmentRequest: {
             /** Format: date-time */
             dueAt: string;
@@ -59387,6 +60306,11 @@ export type components = {
             role: "captain" | "co_captain";
             /** Format: uuid */
             toPersonId: string;
+        };
+        HandOverUniformRequest: {
+            expectedRevision?: number;
+            policyReferences?: string[];
+            reason?: string;
         };
         Health: {
             /** @enum {string} */
@@ -60667,6 +61591,24 @@ export type components = {
         Offering: components["schemas"]["PublicOffering"] & {
             staff: components["schemas"]["OfferingStaffDetails"] | null;
         };
+        OfferingAddon: {
+            capacity: number | null;
+            chargeLines: components["schemas"]["ChargeLine"][];
+            code: string;
+            /** Format: date-time */
+            createdAt: string;
+            currency: string;
+            description: string | null;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            offeringId: string;
+            priceMinor: number;
+            revision: number;
+            selection: components["schemas"]["AddonSelection"];
+            status: components["schemas"]["OfferingExtraStatus"];
+        };
         OfferingAvailability: {
             capacity: number | null;
             /** Format: uuid */
@@ -60705,6 +61647,8 @@ export type components = {
                 waiting: number;
             };
         };
+        /** @enum {string} */
+        OfferingExtraStatus: "active" | "retired";
         OfferingFacility: {
             /** Format: uuid */
             id: string;
@@ -60719,6 +61663,17 @@ export type components = {
         OfferingLocation: {
             label?: string;
             resourceIds?: string[];
+        };
+        OfferingPurchaseOptions: {
+            addons: components["schemas"]["OfferingAddon"][];
+            currency: string | null;
+            /** Format: uuid */
+            offeringId: string;
+            /** Format: uuid */
+            priceRuleId: string | null;
+            pricingBasis: components["schemas"]["PricingBasis"] | null;
+            tiers: components["schemas"]["PriceRuleTier"][];
+            uniform: components["schemas"]["OfferingUniform"] | null;
         };
         OfferingSession: {
             /** Format: date-time */
@@ -60790,6 +61745,24 @@ export type components = {
             expectedRevision?: number;
             policyReferences?: string[];
             reason?: string;
+        };
+        OfferingUniform: {
+            chargeLines: components["schemas"]["ChargeLine"][];
+            /** Format: date-time */
+            createdAt: string;
+            currency: string | null;
+            /** Format: uuid */
+            id: string;
+            itemKey: string;
+            name: string;
+            /** Format: uuid */
+            offeringId: string;
+            priceMinor: number | null;
+            requirement: components["schemas"]["UniformRequirement"];
+            returningHolderFree: boolean;
+            revision: number;
+            sizes: string[];
+            status: components["schemas"]["OfferingExtraStatus"];
         };
         OfferWaitlistEntryRequest: {
             expectedRevision?: number;
@@ -61119,6 +62092,7 @@ export type components = {
             feeMinor: number;
             /** Format: uuid */
             id: string;
+            lineKind: components["schemas"]["QuoteLineKind"];
             /** Format: uuid */
             offeringId: string;
             /** Format: uuid */
@@ -61128,6 +62102,8 @@ export type components = {
             priceRuleId: string | null;
             quantity: number;
             sequence: number;
+            /** Format: uuid */
+            sourceId: string | null;
             taxMinor: number;
             totalMinor: number;
             unitPriceMinor: number;
@@ -62061,15 +63037,48 @@ export type components = {
             offeringId: string;
             pricingBasis: components["schemas"]["PricingBasis"];
             revision: number;
+            tiers: components["schemas"]["PriceRuleTier"][];
             version: number;
+        };
+        PriceRuleTier: {
+            attendance: components["schemas"]["PriceTierAttendance"];
+            /** Format: date-time */
+            availableUntil: string | null;
+            code: string;
+            /** Format: uuid */
+            id: string;
+            maxSessions: number | null;
+            memberPriceMinor: number | null;
+            minSessions: number | null;
+            name: string;
+            priceMinor: number;
+            sequence: number;
         };
         PriceSnapshot: {
             basePriceMinor: number;
             chargeLines: components["schemas"]["ChargeLine"][];
             currency: string;
+            estimate?: {
+                /** @enum {string} */
+                appliedPrice: "standard" | "member";
+                appliedPriceMinor: number;
+                /** Format: date-time */
+                estimatedAt: string;
+                pricingBasis: components["schemas"]["PricingBasis"];
+                sessionCount: number | null;
+                tier: {
+                    code: string;
+                    /** Format: uuid */
+                    id: string;
+                    name: string;
+                } | null;
+                unitPriceMinor: number;
+            };
             /** Format: uuid */
             priceRuleId: string;
         };
+        /** @enum {string} */
+        PriceTierAttendance: "all_sessions" | "chosen_sessions";
         /** @enum {string} */
         PricingBasis: "term" | "per_session";
         Program: {
@@ -62296,6 +63305,7 @@ export type components = {
             pricingBasis: components["schemas"]["PricingBasis"];
             remainingSessionCount: number | null;
             remainingSessionsPriceMinor: number | null;
+            tiers: components["schemas"]["PriceRuleTier"][];
         };
         PublicPromotion: {
             amountKind: components["schemas"]["DiscountAmountKind"];
@@ -62441,6 +63451,7 @@ export type components = {
             name: string;
         };
         QuoteLine: {
+            addon: components["schemas"]["QuoteLineAddonBasis"] | null;
             baseAmountMinor: number;
             /** Format: uuid */
             basketLineId: string;
@@ -62455,6 +63466,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             includedTaxMinor: number;
+            lineKind: components["schemas"]["QuoteLineKind"];
             /** Format: uuid */
             offeringId: string;
             /** Format: uuid */
@@ -62465,10 +63477,26 @@ export type components = {
             priceRuleId: string | null;
             quantity: number;
             sequence: number;
+            /** Format: uuid */
+            sourceId: string | null;
             taxMinor: number;
             totalMinor: number;
+            uniform: components["schemas"]["QuoteLineUniformBasis"] | null;
             unitPriceMinor: number;
         };
+        QuoteLineAddonBasis: {
+            /** Format: uuid */
+            addonId: string;
+            code: string;
+            name: string;
+            quantity: number;
+            /** @enum {string} */
+            selection: "per_registration" | "per_session";
+            sessionIds: string[];
+            unitPriceMinor: number;
+        };
+        /** @enum {string} */
+        QuoteLineKind: "registration" | "addon" | "uniform";
         QuoteLinePriceBasis: {
             /** @enum {string} */
             appliedPrice: "standard" | "member";
@@ -62494,6 +63522,35 @@ export type components = {
                 sessionIds: string[];
             } | null;
             standardPriceMinor: number;
+            tier?: {
+                /** @enum {string} */
+                attendance: "all_sessions" | "chosen_sessions";
+                /** Format: date-time */
+                availableUntil: string | null;
+                code: string;
+                memberPriceMinor: number | null;
+                name: string;
+                priceMinor: number;
+                /** Format: date-time */
+                purchasedAt: string;
+                selectedSessionIds: string[];
+                /** Format: uuid */
+                tierId: string;
+            } | null;
+            unitPriceMinor: number;
+        };
+        QuoteLineUniformBasis: {
+            charged: boolean;
+            /** Format: uuid */
+            heldUniformOrderId: string | null;
+            itemKey: string;
+            name: string;
+            /** Format: uuid */
+            offeringUniformId: string;
+            priceMinor: number;
+            /** @enum {string} */
+            reason: "standard" | "returning_holder";
+            size: string;
             unitPriceMinor: number;
         };
         QuotePolicyReferences: {
@@ -63878,6 +64935,11 @@ export type components = {
             expectedRevision?: number;
             policyReferences?: string[];
             reason: string;
+        };
+        RetireOfferingExtraRequest: {
+            expectedRevision?: number;
+            policyReferences?: string[];
+            reason?: string;
         };
         RetirePolicyVersionRequest: {
             /** Format: date-time */
@@ -65331,6 +66393,41 @@ export type components = {
             /** Format: date-time */
             startsAt: string;
         };
+        UniformOrder: {
+            /** Format: date-time */
+            canceledAt: string | null;
+            currency: string | null;
+            /** Format: uuid */
+            enrollmentId: string;
+            /** Format: date-time */
+            handedOverAt: string | null;
+            handedOverBy: string | null;
+            /** Format: uuid */
+            id: string;
+            itemKey: string;
+            name: string;
+            /** Format: uuid */
+            offeringId: string;
+            /** Format: uuid */
+            offeringUniformId: string;
+            /** Format: date-time */
+            orderedAt: string;
+            /** Format: date-time */
+            paidAt: string | null;
+            participantDisplayName: string | null;
+            /** Format: uuid */
+            participantPersonId: string;
+            priceMinor: number | null;
+            revision: number;
+            size: string;
+            status: components["schemas"]["UniformOrderStatus"];
+            /** Format: uuid */
+            teamEntryId: string | null;
+        };
+        /** @enum {string} */
+        UniformOrderStatus: "ordered" | "paid" | "handed_over" | "canceled";
+        /** @enum {string} */
+        UniformRequirement: "required" | "optional";
         UpcomingFixture: {
             availability: components["schemas"]["AvailabilitySummary"];
             fixture: components["schemas"]["Fixture"];
