@@ -9,6 +9,7 @@ import {
   type Principal,
   type PublicBracketMatch,
   type PublicCompetitionView,
+  type PublicDirectory,
   type PublicFixture,
   type PublicScore,
   type PublicSeasonView,
@@ -31,6 +32,7 @@ import {
 } from '../../../kernel';
 import {
   PUBLIC_CACHE_SECONDS,
+  PublicScheduleService,
   newPublicCode,
   publicViewNotAvailable,
   resolvePublicOrganization,
@@ -94,11 +96,46 @@ export class PublicCompetitionService {
     private readonly outbox: Outbox,
     private readonly capabilities: CapabilityService,
     private readonly standings: StandingsService,
+    private readonly schedules: PublicScheduleService,
   ) {}
 
   // -------------------------------------------------------------------------------------------
   // Public reads (no sign-in)
   // -------------------------------------------------------------------------------------------
+  /**
+   * What the organization has made public: enabled facility schedules and shown competitions,
+   * each with its public code. Nothing private is listed.
+   */
+  async directory(organizationSlug: string): Promise<PublicDirectory> {
+    const db = executorFor(this.db);
+    const organization = await resolvePublicOrganization(db, this.capabilities, organizationSlug);
+    const competitions = await db
+      .selectFrom('competitions')
+      .selectAll()
+      .where('organization_id', '=', organization.id)
+      .where('public_visibility', '=', 'public')
+      .where('status', '<>', 'archived')
+      .orderBy('name')
+      .execute();
+    const shown = [];
+    for (const competition of competitions) {
+      if (competition.public_code && (await this.isShown(db, competition))) {
+        shown.push({
+          name: competition.name,
+          kind: competition.kind,
+          code: competition.public_code,
+        });
+      }
+    }
+    return {
+      organizationName: organization.name,
+      schedules: await this.schedules.enabledViews(organization.id),
+      competitions: shown,
+      computedAt: this.clock.now().toISOString(),
+      cacheSeconds: PUBLIC_CACHE_SECONDS,
+    };
+  }
+
   async competitionView(organizationSlug: string, code: string): Promise<PublicCompetitionView> {
     const db = executorFor(this.db);
     const organization = await resolvePublicOrganization(db, this.capabilities, organizationSlug);

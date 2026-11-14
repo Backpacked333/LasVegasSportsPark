@@ -24076,6 +24076,68 @@
           "cacheSeconds"
         ]
       },
+      "PublicDirectory": {
+        "type": "object",
+        "properties": {
+          "organizationName": {
+            "type": "string"
+          },
+          "schedules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "facilityName": {
+                  "type": "string"
+                },
+                "code": {
+                  "$ref": "#/components/schemas/PublicCode"
+                }
+              },
+              "required": [
+                "facilityName",
+                "code"
+              ]
+            }
+          },
+          "competitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/components/schemas/CompetitionKind"
+                },
+                "code": {
+                  "$ref": "#/components/schemas/PublicCode"
+                }
+              },
+              "required": [
+                "name",
+                "kind",
+                "code"
+              ]
+            }
+          },
+          "computedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cacheSeconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "organizationName",
+          "schedules",
+          "competitions",
+          "computedAt",
+          "cacheSeconds"
+        ]
+      },
       "CompetitionPublication": {
         "type": "object",
         "properties": {
@@ -78616,6 +78678,72 @@
           },
           "426": {
             "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/{organization}/directory": {
+      "get": {
+        "summary": "The public schedules and public competitions of an organization, with their codes, without sign-in (SPK-SCHED-010, Proposed)",
+        "tags": [
+          "Public views"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "required": true,
+            "name": "organization",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory (cacheable for a short time)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicDirectory"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many public reads from this address (rate limit `public_views`)",
             "content": {
               "application/json": {
                 "schema": {

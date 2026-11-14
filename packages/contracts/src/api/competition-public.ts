@@ -119,6 +119,25 @@ export const PublicCompetitionViewSchema = z
   .openapi('PublicCompetitionView');
 export type PublicCompetitionView = z.infer<typeof PublicCompetitionViewSchema>;
 
+/**
+ * What an organization has made public, for an application that starts from the organization's
+ * slug alone (the customer app before sign-in): the facilities whose public schedule is enabled
+ * and the competitions that are public, each with its public code. Nothing private is listed, and
+ * a code names a public view only.
+ */
+export const PublicDirectorySchema = z
+  .object({
+    organizationName: z.string(),
+    schedules: z.array(z.object({ facilityName: z.string(), code: PublicCode })),
+    competitions: z.array(
+      z.object({ name: z.string(), kind: CompetitionKindSchema, code: PublicCode }),
+    ),
+    computedAt: Instant,
+    cacheSeconds: z.number().int(),
+  })
+  .openapi('PublicDirectory');
+export type PublicDirectory = z.infer<typeof PublicDirectorySchema>;
+
 // ---------------------------------------------------------------------------------------------
 // Staff: making a competition public or private, and its links
 // ---------------------------------------------------------------------------------------------
@@ -181,6 +200,20 @@ function publicRead(path: string, summary: string, response: z.ZodType) {
   });
 }
 
+openApiRegistry.registerPath({
+  method: 'get',
+  path: '/public/{organization}/directory',
+  summary:
+    'The public schedules and public competitions of an organization, with their codes, without sign-in (SPK-SCHED-010, Proposed)',
+  tags: [TAG],
+  security: [],
+  request: { params: z.object({ organization: PublicOrganizationSlug }) },
+  responses: {
+    200: ok('The directory (cacheable for a short time)', PublicDirectorySchema),
+    404: err(PUBLIC_NOT_AVAILABLE),
+    429: err('Too many public reads from this address (rate limit `public_views`)'),
+  },
+});
 publicRead(
   '/public/{organization}/competitions/{code}',
   'A public competition and the codes of its seasons, without sign-in (SPK-SCHED-010, Proposed)',

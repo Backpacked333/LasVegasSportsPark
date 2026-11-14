@@ -5,6 +5,7 @@ import {
   type CompetitionPublication,
   type Principal,
   type PublicCompetitionView,
+  type PublicDirectory,
   type PublicSeasonView,
 } from '@sportspark/contracts';
 import {
@@ -17,11 +18,17 @@ import {
   ZodParams,
 } from '../../../kernel';
 import type { Response } from 'express';
-import { PublicAddressParams, allowPublicCache, assertPublicAddress } from '../../scheduling';
+import {
+  PublicAddressParams,
+  allowPublicCache,
+  assertPublicAddress,
+  publicViewNotAvailable,
+} from '../../scheduling';
 import { CorrelationId } from '../competition.shared';
 import { PublicCompetitionService } from './public-competition.service';
 
 const IdParams = z.object({ id: z.uuid() });
+const OrganizationParams = z.object({ organization: z.string() });
 
 /**
  * Competition views without sign-in (SPK-SCHED-010, proposed amendment PA-06, ADR-005): addressed
@@ -34,6 +41,21 @@ const IdParams = z.object({ id: z.uuid() });
 @RateLimited('public_views')
 export class PublicCompetitionController {
   constructor(private readonly competitions: PublicCompetitionService) {}
+
+  /** The public schedules and public competitions of an organization, with their codes. */
+  @Get(':organization/directory')
+  @Public()
+  async directory(
+    @ZodParams(OrganizationParams) params: z.infer<typeof OrganizationParams>,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<PublicDirectory> {
+    if (params.organization.trim().length === 0 || params.organization.length > 100) {
+      throw publicViewNotAvailable();
+    }
+    const directory = await this.competitions.directory(params.organization);
+    allowPublicCache(response);
+    return directory;
+  }
 
   @Get(':organization/competitions/:code')
   @Public()

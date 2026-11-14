@@ -355,6 +355,51 @@ describe('public competition views (SPK-SCHED-010)', () => {
     for (const name of Object.values(people)) expect(text).not.toContain(name);
   });
 
+  it('SPK-SCHED-010: the directory of an organization lists only what it has made public, by name and public code', async () => {
+    const before = await anonymous(`${slug}/directory`);
+    expect(before.status, JSON.stringify(before.body)).toBe(200);
+    const shown = await league('Sunday', new Date('2026-11-23T03:00:00Z'));
+    const hidden = await league('Hidden', new Date('2026-11-23T05:00:00Z'));
+    const published = await publish(shown.competitionId);
+    const directory = await anonymous(`${slug}/directory`);
+    expect(directory.status).toBe(200);
+    expect(directory.headers['cache-control']).toBe('public, max-age=30');
+    expect(directory.body.organizationName).toBe('Desert Park');
+    expect(directory.body.competitions).toContainEqual({
+      name: 'Sunday',
+      kind: 'league',
+      code: published.body.publicCode,
+    });
+    const text = JSON.stringify(directory.body);
+    expect(text).not.toContain('Hidden');
+    expect(text).not.toMatch(UUID);
+    expect(text).not.toContain(hidden.competitionId);
+    expect([...keysOf(directory.body)].sort()).toEqual(
+      [
+        'cacheSeconds',
+        'code',
+        'competitions',
+        'computedAt',
+        'facilityName',
+        'kind',
+        'name',
+        'organizationName',
+        'schedules',
+      ].sort(),
+    );
+    // A facility appears once its public schedule is enabled.
+    for (const schedule of directory.body.schedules as Json[]) {
+      expect(schedule).toEqual({ facilityName: 'Main complex', code: expect.any(String) });
+    }
+    expect(answerOf(await anonymous('nowhere/directory'))).toEqual(NOT_AVAILABLE);
+    await setCapability(t.db, t.organizationId, 'public_schedule', false);
+    try {
+      expect(answerOf(await anonymous(`${slug}/directory`))).toEqual(NOT_AVAILABLE);
+    } finally {
+      await setCapability(t.db, t.organizationId, 'public_schedule', true);
+    }
+  });
+
   it('SPK-SCHED-010: an unknown organization, an unknown code, a record id used as a code, a private competition and the capability turned off all answer the same "not available"', async () => {
     const data = await league('Thursday', new Date('2026-11-21T03:00:00Z'));
     // Before the competition is published this season has no code at all.

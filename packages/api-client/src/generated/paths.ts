@@ -40707,6 +40707,74 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/public/{organization}/directory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The public schedules and public competitions of an organization, with their codes, without sign-in (SPK-SCHED-010, Proposed) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    organization: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The directory (cacheable for a short time) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PublicDirectory"];
+                    };
+                };
+                /** @description Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Too many public reads from this address (rate limit `public_views`) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/{organization}/schedule/{code}": {
         parameters: {
             query?: never;
@@ -63660,6 +63728,21 @@ export type components = {
             fields: string[];
             organizationName: string;
             timezone: string;
+        };
+        PublicDirectory: {
+            cacheSeconds: number;
+            competitions: {
+                code: components["schemas"]["PublicCode"];
+                kind: components["schemas"]["CompetitionKind"];
+                name: string;
+            }[];
+            /** Format: date-time */
+            computedAt: string;
+            organizationName: string;
+            schedules: {
+                code: components["schemas"]["PublicCode"];
+                facilityName: string;
+            }[];
         };
         PublicDivision: {
             fixtures: components["schemas"]["PublicFixture"][];

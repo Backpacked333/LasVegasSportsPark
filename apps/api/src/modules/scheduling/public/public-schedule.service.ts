@@ -173,6 +173,29 @@ export class PublicScheduleService {
     };
   }
 
+  /**
+   * The facilities of an organization whose public schedule is enabled, with their codes, for the
+   * public directory (the caller has resolved the organization and its capability).
+   */
+  async enabledViews(
+    organizationId: string,
+  ): Promise<Array<{ facilityName: string; code: string }>> {
+    const rows = await executorFor(this.db)
+      .selectFrom('facility_public_views')
+      .innerJoin('facilities', (join) =>
+        join
+          .onRef('facilities.organization_id', '=', 'facility_public_views.organization_id')
+          .onRef('facilities.id', '=', 'facility_public_views.facility_id'),
+      )
+      .select(['facilities.name', 'facility_public_views.public_code'])
+      .where('facility_public_views.organization_id', '=', organizationId)
+      .where('facility_public_views.enabled', '=', true)
+      .where('facilities.status', '=', 'active')
+      .orderBy('facilities.name')
+      .execute();
+    return rows.map((row) => ({ facilityName: row.name, code: row.public_code }));
+  }
+
   // -------------------------------------------------------------------------------------------
   // Staff: the switch of a facility's public schedule and its link
   // -------------------------------------------------------------------------------------------
