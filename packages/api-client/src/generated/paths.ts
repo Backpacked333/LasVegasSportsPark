@@ -29397,7 +29397,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38143,6 +38143,104 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/pos-open-amount-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the open-amount categories and the caller’s ceiling at a facility (SPK-PAY-016, proposed; values pending DEC-102)
+         * @description FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).
+         */
+        get: {
+            parameters: {
+                query: {
+                    facilityId: string;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PosOpenAmountRules"];
+                    };
+                };
+                /** @description Validation failed (a client price or card data is rejected) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or the point_of_sale capability is disabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pos-products": {
         parameters: {
             query?: never;
@@ -38219,7 +38317,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38307,7 +38405,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38424,7 +38522,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38533,7 +38631,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38638,7 +38736,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38744,7 +38842,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38773,6 +38871,110 @@ export type paths = {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pos-register-sessions/{id}/open-amount-lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the open-amount lines in effect of a register session, newest first, apart from product lines (SPK-PAY-016, proposed; POS readers of its facility)
+         * @description FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    cursor?: string;
+                    limit?: number;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["PosSessionOpenAmountLine"][];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+                /** @description Validation failed (a client price or card data is rejected) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied or the point_of_sale capability is disabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -38856,7 +39058,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -38960,7 +39162,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39048,7 +39250,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39161,7 +39363,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39273,7 +39475,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39363,7 +39565,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39474,7 +39676,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39579,7 +39781,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39617,7 +39819,7 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * Add a product line at its price with approved taxes and fees (SPK-PAY-002)
+         * Add a product line at its price with approved taxes and fees (SPK-PAY-002), or an open-amount line with a description, an amount and a reason category (SPK-PAY-016, proposed; needs the open_amount_lines capability as well)
          * @description FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).
          */
         post: {
@@ -39685,7 +39887,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -39704,6 +39906,120 @@ export type paths = {
                     };
                 };
                 /** @description Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pos-sales/{id}/lines/{lineId}/approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve an open-amount line above the ceiling of the person who entered it (a second person; SPK-PAY-016, proposed)
+         * @description FIN-06, §3.16 POS row, SPK-PAY-016 (proposed amendment PA-08, DEC-102 pending). Needs the open_amount_lines capability (DEC-016). The sale takes no tender before every such line is approved or removed.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                    lineId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ApprovePosOpenAmountLineRequest"];
+                };
+            };
+            responses: {
+                /** @description Success */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PosSale"];
+                    };
+                };
+                /** @description Validation failed (LINE_NOT_ON_SALE) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied (SECOND_PERSON_REQUIRED: the caller entered the line) or the open_amount_lines capability is disabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (APPROVAL_NOT_REQUIRED, LINE_ALREADY_APPROVED, LINE_ALREADY_CHANGED, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Paused while the organization recovers from a restore */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -39904,7 +40220,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -40010,7 +40326,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -40123,7 +40439,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -40236,7 +40552,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
+                /** @description Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*) */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -57158,7 +57474,15 @@ export type components = {
             /** Format: uuid */
             teamEntryId: string;
         };
-        AddPosSaleLineRequest: {
+        AddPosOpenAmountLineRequest: {
+            amountMinor: number;
+            description: string;
+            expectedRevision?: number;
+            policyReferences?: string[];
+            reason?: string;
+            reasonCategory: string;
+        };
+        AddPosProductLineRequest: {
             expectedRevision?: number;
             policyReferences?: string[];
             /** Format: uuid */
@@ -57166,6 +57490,7 @@ export type components = {
             quantity: number;
             reason?: string;
         };
+        AddPosSaleLineRequest: components["schemas"]["AddPosProductLineRequest"] | components["schemas"]["AddPosOpenAmountLineRequest"];
         AddPosTenderRequest: {
             amountMinor: number;
             expectedRevision?: number;
@@ -57418,6 +57743,11 @@ export type components = {
             expectedRevision?: number;
             policyReferences?: string[];
             reason?: string;
+        };
+        ApprovePosOpenAmountLineRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason: string;
         };
         ApproveRecommendationRequest: {
             expectedRevision: number;
@@ -64493,6 +64823,41 @@ export type components = {
             /** Format: uuid */
             policyVersionId: string;
         };
+        PosOpenAmountLine: {
+            approval: {
+                /** Format: date-time */
+                approvedAt: string;
+                /** Format: uuid */
+                approvedByPersonId: string;
+                /** Format: uuid */
+                id: string;
+                reason: string;
+            } | null;
+            approvalRequired: boolean;
+            ceilingMinor: number;
+            description: string;
+            /** Format: uuid */
+            enteredByPersonId: string;
+            /** Format: uuid */
+            policyVersionId: string | null;
+            reasonCategory: string;
+            revenueCategory: string;
+        };
+        PosOpenAmountRules: {
+            approverRoles: string[];
+            /** @enum {string} */
+            basis: "approved_policy" | "proposed_default";
+            categories: {
+                chargePolicyKeys: string[];
+                code: string;
+                label: string;
+                revenueCategory: string;
+            }[];
+            ceilingMinor: number | null;
+            currency: string | null;
+            /** Format: uuid */
+            policyVersionId: string | null;
+        };
         PosProduct: {
             chargePolicyKeys: string[];
             /** Format: date-time */
@@ -64533,7 +64898,8 @@ export type components = {
             lines: {
                 baseMinor: number;
                 charges: components["schemas"]["PosLineCharge"][];
-                kind: components["schemas"]["PosProductKind"];
+                description: string | null;
+                kind: components["schemas"]["PosSaleLineKind"];
                 lineTotalMinor: number;
                 name: string;
                 quantity: number;
@@ -64677,19 +65043,57 @@ export type components = {
             chargesMinor: number;
             /** Format: uuid */
             id: string;
-            kind: components["schemas"]["PosProductKind"];
+            kind: components["schemas"]["PosSaleLineKind"];
             lineNumber: number;
             lineTotalMinor: number;
             name: string;
+            openAmount: components["schemas"]["PosOpenAmountLine"] | null;
             /** Format: uuid */
-            productId: string;
+            productId: string | null;
             quantity: number;
             returnedQuantity: number;
-            sku: string;
+            sku: string | null;
             unitPriceMinor: number;
         };
+        /**
+         * @description What a sale line is: a product of one of the product kinds, or `open_amount`, a line without a product whose amount a permitted staff member entered (SPK-PAY-016, proposed amendment PA-08).
+         * @enum {string}
+         */
+        PosSaleLineKind: "merchandise" | "concession" | "service" | "open_amount";
         /** @enum {string} */
         PosSaleStatus: "open" | "paid" | "voided" | "partially_returned" | "returned";
+        PosSessionOpenAmountLine: {
+            amountMinor: number;
+            approval: {
+                /** Format: date-time */
+                approvedAt: string;
+                /** Format: uuid */
+                approvedByPersonId: string;
+                /** Format: uuid */
+                id: string;
+                reason: string;
+            } | null;
+            approvalRequired: boolean;
+            ceilingMinor: number;
+            chargesMinor: number;
+            currency: string;
+            description: string;
+            /** Format: date-time */
+            enteredAt: string;
+            /** Format: uuid */
+            enteredByPersonId: string;
+            /** Format: uuid */
+            lineId: string;
+            lineTotalMinor: number;
+            reasonCategory: string;
+            reasonLabel: string;
+            returnedQuantity: number;
+            revenueCategory: string;
+            /** Format: uuid */
+            saleId: string;
+            saleNumber: string;
+            saleStatus: components["schemas"]["PosSaleStatus"];
+        };
         PosTender: {
             amountMinor: number;
             currency: string;

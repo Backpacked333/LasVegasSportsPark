@@ -42425,6 +42425,16 @@
         ],
         "description": "What a point-of-sale product is. Registrations, memberships, packages and bookings are never POS products (SPK-PAY-012)."
       },
+      "PosSaleLineKind": {
+        "type": "string",
+        "enum": [
+          "merchandise",
+          "concession",
+          "service",
+          "open_amount"
+        ],
+        "description": "What a sale line is: a product of one of the product kinds, or `open_amount`, a line without a product whose amount a permitted staff member entered (SPK-PAY-016, proposed amendment PA-08)."
+      },
       "PosLifecycleStatus": {
         "type": "string",
         "enum": [
@@ -42971,6 +42981,76 @@
           "amountMinor"
         ]
       },
+      "PosOpenAmountLine": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "reasonCategory": {
+            "type": "string"
+          },
+          "revenueCategory": {
+            "type": "string"
+          },
+          "enteredByPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ceilingMinor": {
+            "type": "integer"
+          },
+          "approvalRequired": {
+            "type": "boolean"
+          },
+          "approval": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "approvedByPersonId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "approvedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "approvedByPersonId",
+              "approvedAt",
+              "reason"
+            ]
+          },
+          "policyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "description",
+          "reasonCategory",
+          "revenueCategory",
+          "enteredByPersonId",
+          "ceilingMinor",
+          "approvalRequired",
+          "approval",
+          "policyVersionId"
+        ]
+      },
       "PosSaleLine": {
         "type": "object",
         "properties": {
@@ -42982,17 +43062,33 @@
             "type": "integer"
           },
           "productId": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid"
           },
           "sku": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
           },
           "kind": {
-            "$ref": "#/components/schemas/PosProductKind"
+            "$ref": "#/components/schemas/PosSaleLineKind"
+          },
+          "openAmount": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PosOpenAmountLine"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "unitPriceMinor": {
             "type": "integer"
@@ -43026,6 +43122,7 @@
           "sku",
           "name",
           "kind",
+          "openAmount",
           "unitPriceMinor",
           "quantity",
           "baseMinor",
@@ -43451,7 +43548,7 @@
         ],
         "additionalProperties": false
       },
-      "AddPosSaleLineRequest": {
+      "AddPosProductLineRequest": {
         "type": "object",
         "properties": {
           "productId": {
@@ -43487,6 +43584,275 @@
           "quantity"
         ],
         "additionalProperties": false
+      },
+      "AddPosOpenAmountLineRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reasonCategory": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,39}$"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "description",
+          "amountMinor",
+          "reasonCategory"
+        ],
+        "additionalProperties": false
+      },
+      "AddPosSaleLineRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/AddPosProductLineRequest"
+          },
+          {
+            "$ref": "#/components/schemas/AddPosOpenAmountLineRequest"
+          }
+        ]
+      },
+      "ApprovePosOpenAmountLineRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "PosOpenAmountRules": {
+        "type": "object",
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "approved_policy",
+              "proposed_default"
+            ]
+          },
+          "policyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "revenueCategory": {
+                  "type": "string"
+                },
+                "chargePolicyKeys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "label",
+                "revenueCategory",
+                "chargePolicyKeys"
+              ]
+            }
+          },
+          "ceilingMinor": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "approverRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "basis",
+          "policyVersionId",
+          "currency",
+          "categories",
+          "ceilingMinor",
+          "approverRoles"
+        ]
+      },
+      "PosSessionOpenAmountLine": {
+        "type": "object",
+        "properties": {
+          "saleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "saleNumber": {
+            "type": "string"
+          },
+          "saleStatus": {
+            "$ref": "#/components/schemas/PosSaleStatus"
+          },
+          "lineId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string"
+          },
+          "reasonCategory": {
+            "type": "string"
+          },
+          "reasonLabel": {
+            "type": "string"
+          },
+          "revenueCategory": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3,
+            "pattern": "^[A-Z]{3}$"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "chargesMinor": {
+            "type": "integer"
+          },
+          "lineTotalMinor": {
+            "type": "integer"
+          },
+          "enteredByPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enteredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ceilingMinor": {
+            "type": "integer"
+          },
+          "approvalRequired": {
+            "type": "boolean"
+          },
+          "approval": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "approvedByPersonId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "approvedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "approvedByPersonId",
+              "approvedAt",
+              "reason"
+            ]
+          },
+          "returnedQuantity": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "saleId",
+          "saleNumber",
+          "saleStatus",
+          "lineId",
+          "description",
+          "reasonCategory",
+          "reasonLabel",
+          "revenueCategory",
+          "currency",
+          "amountMinor",
+          "chargesMinor",
+          "lineTotalMinor",
+          "enteredByPersonId",
+          "enteredAt",
+          "ceilingMinor",
+          "approvalRequired",
+          "approval",
+          "returnedQuantity"
+        ]
       },
       "ChangePosLineQuantityRequest": {
         "type": "object",
@@ -43799,7 +44165,13 @@
                   "type": "string"
                 },
                 "kind": {
-                  "$ref": "#/components/schemas/PosProductKind"
+                  "$ref": "#/components/schemas/PosSaleLineKind"
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "quantity": {
                   "type": "integer"
@@ -43823,6 +44195,7 @@
               "required": [
                 "name",
                 "kind",
+                "description",
                 "quantity",
                 "unitPriceMinor",
                 "baseMinor",
@@ -103457,7 +103830,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -103622,7 +103995,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -103737,7 +104110,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -103862,7 +104235,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -103962,7 +104335,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104127,7 +104500,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104242,7 +104615,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104367,7 +104740,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104520,7 +104893,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104615,7 +104988,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104756,7 +105129,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104871,7 +105244,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -104971,7 +105344,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105092,7 +105465,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105116,7 +105489,7 @@
     },
     "/pos-sales/{id}/lines": {
       "post": {
-        "summary": "Add a product line at its price with approved taxes and fees (SPK-PAY-002)",
+        "summary": "Add a product line at its price with approved taxes and fees (SPK-PAY-002), or an open-amount line with a description, an amount and a reason category (SPK-PAY-016, proposed; needs the open_amount_lines capability as well)",
         "description": "FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).",
         "tags": [
           "Finance"
@@ -105207,7 +105580,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105228,6 +105601,368 @@
           },
           "503": {
             "description": "Paused while the organization recovers from a restore (INTEGRATION_UNAVAILABLE, details.reason recovery_mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pos-sales/{id}/lines/{lineId}/approval": {
+      "post": {
+        "summary": "Approve an open-amount line above the ceiling of the person who entered it (a second person; SPK-PAY-016, proposed)",
+        "description": "FIN-06, §3.16 POS row, SPK-PAY-016 (proposed amendment PA-08, DEC-102 pending). Needs the open_amount_lines capability (DEC-016). The sale takes no tender before every such line is approved or removed.",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "lineId",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovePosOpenAmountLineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosSale"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (LINE_NOT_ON_SALE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied (SECOND_PERSON_REQUIRED: the caller entered the line) or the open_amount_lines capability is disabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (APPROVAL_NOT_REQUIRED, LINE_ALREADY_APPROVED, LINE_ALREADY_CHANGED, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused while the organization recovers from a restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pos-open-amount-rules": {
+      "get": {
+        "summary": "Read the open-amount categories and the caller’s ceiling at a facility (SPK-PAY-016, proposed; values pending DEC-102)",
+        "description": "FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "facilityId",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosOpenAmountRules"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (a client price or card data is rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or the point_of_sale capability is disabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pos-register-sessions/{id}/open-amount-lines": {
+      "get": {
+        "summary": "List the open-amount lines in effect of a register session, newest first, apart from product lines (SPK-PAY-016, proposed; POS readers of its facility)",
+        "description": "FIN-06, §3.16 POS row. Commands that start a new commitment need the point_of_sale capability (DEC-016, DEC-079).",
+        "tags": [
+          "Finance"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PosSessionOpenAmountLine"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (a client price or card data is rejected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied or the point_of_sale capability is disabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105466,7 +106201,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105591,7 +106326,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105716,7 +106451,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105821,7 +106556,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
@@ -105945,7 +106680,7 @@
             }
           },
           "409": {
-            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
+            "description": "Conflict (CHARGE_POLICY_NOT_APPROVED, OPEN_AMOUNT_APPROVAL_REQUIRED, OPEN_AMOUNT_POLICY_INVALID, PAYMENT_OUTCOME_UNKNOWN, REFUND_PENDING, STALE_REVISION, INVALID_TRANSITION, RESOURCE_CONFLICT, IDEMPOTENCY_*)",
             "content": {
               "application/json": {
                 "schema": {
