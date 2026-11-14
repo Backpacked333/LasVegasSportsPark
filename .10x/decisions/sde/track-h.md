@@ -33,8 +33,8 @@ Feature: `glass-demo-amendments` · ADR-001
 
 - `apps/staff/src/screens/teams/TeamsScreen.tsx` and `TeamEntryReviewScreen.tsx`: page toolbars
   to move onto `Toolbar`.
-- `apps/staff/src/screens/people/PersonRecordScreen.tsx` and `leagues/FixtureScreen.tsx`: tab
-  strips to wrap in `TabTrack`.
+- `apps/staff/src/screens/leagues/FixtureScreen.tsx`: tab strip to wrap in `TabTrack`. (The
+  list on the person record is a set of actions, not tabs, and stays as it is.)
 
 ## Dependencies added
 
