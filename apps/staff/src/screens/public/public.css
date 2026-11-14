@@ -1,0 +1,293 @@
+/*
+ * Public pages and the lobby display (SPK-SCHED-010, proposed amendment PA-06). Only theme tokens
+ * of ui/styles.css are used, so both themes (classic and Legends) apply without a rule here: no
+ * colour is written in this file. Solid surfaces throughout: these pages are read at length and
+ * from a distance.
+ */
+.public-page {
+  min-height: 100vh;
+  padding: var(--space-5) var(--space-6);
+  background: var(--color-page);
+  color: var(--color-text);
+  font-family: var(--font);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.public-header h1,
+.public-state h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.public-organization {
+  margin: 0 0 var(--space-1);
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.public-subtitle {
+  margin: var(--space-1) 0 0;
+  font-size: 1.125rem;
+}
+
+.public-updated {
+  margin: var(--space-2) 0 0;
+  color: var(--color-muted);
+}
+
+.public-updated[data-stale='true'] {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--tone-warning-line);
+  border-radius: var(--radius-sm);
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+  font-weight: 600;
+}
+
+.public-state {
+  margin: auto;
+  max-width: 36rem;
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  text-align: center;
+}
+
+.public-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.public-nav a,
+.public-links a {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-bg);
+  color: var(--link);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.public-nav a:hover,
+.public-links a:hover {
+  color: var(--link-hover);
+  border-color: var(--line-hover);
+}
+
+.public-nav a:focus-visible,
+.public-links a:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.public-nav a[aria-current='page'] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-text);
+}
+
+.public-section h2,
+.public-lobby-page h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 1.25rem;
+}
+
+.public-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-card);
+}
+
+.public-table th,
+.public-table td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.public-table thead th {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.public-table tbody tr:last-child th,
+.public-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.public-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.public-kind {
+  font-weight: 600;
+}
+
+/* The kind is always said in words; the edge only repeats it for a glance across a room. */
+.public-table tr[data-kind] td:first-child {
+  border-left: 4px solid var(--color-border-strong);
+}
+
+.public-table tr[data-kind='game'] td:first-child {
+  border-left-color: var(--kind-league);
+}
+
+.public-table tr[data-kind='class'] td:first-child,
+.public-table tr[data-kind='practice'] td:first-child {
+  border-left-color: var(--kind-program);
+}
+
+.public-table tr[data-kind='pickup'] td:first-child {
+  border-left-color: var(--kind-dropin);
+}
+
+.public-table tr[data-kind='reserved'] td:first-child {
+  border-left-color: var(--kind-rental);
+}
+
+.public-table tr[data-kind='reserved'] .public-kind,
+.public-table tr[data-kind='unavailable'] .public-kind {
+  color: var(--color-muted);
+}
+
+.public-score,
+.public-points {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.public-standings td,
+.public-standings thead th {
+  text-align: right;
+}
+
+.public-standings th[scope='row'],
+.public-standings thead th:nth-child(2) {
+  text-align: left;
+}
+
+.public-empty,
+.public-note {
+  color: var(--color-muted);
+}
+
+.public-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.public-links li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+.public-link-title {
+  flex: 1 1 100%;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.public-bracket {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+}
+
+.public-bracket h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+  color: var(--color-muted);
+}
+
+.public-bracket ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.public-match {
+  display: grid;
+  min-width: 14rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+.public-match span {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.public-match span + span {
+  border-top: 1px solid var(--color-border);
+}
+
+.public-match span[data-winner='true'] {
+  font-weight: 700;
+  color: var(--tone-success);
+}
+
+.public-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The lobby display is read from across a room. */
+.public-page[data-variant='lobby'] {
+  padding: var(--space-6);
+  font-size: 1.5rem;
+}
+
+.public-page[data-variant='lobby'] .public-header h1 {
+  font-size: 2.75rem;
+}
+
+.public-page[data-variant='lobby'] .public-subtitle,
+.public-page[data-variant='lobby'] .public-lobby-page h2 {
+  font-size: 1.75rem;
+}
+
+.public-page[data-variant='lobby'] .public-table thead th {
+  font-size: 1.125rem;
+}
+
+@media (max-width: 40rem) {
+  .public-page {
+    padding: var(--space-4);
+  }
+
+  .public-table th,
+  .public-table td {
+    padding: var(--space-2);
+  }
+}

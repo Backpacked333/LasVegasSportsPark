@@ -3,7 +3,9 @@
  * publication review, SCR-S-06 closures, SCR-S-07 resource inventory. The conditional screens
  * SCR-S-51 Rentals and SCR-S-52 Parties live in their own directories under
  * src/screens/package-g/ and are nested here, behind their capability switches (DEC-016, DEC-076,
- * DEC-077; inventory section 5: "no answer yet keeps them in the inventory").
+ * DEC-077; inventory section 5: "no answer yet keeps them in the inventory"). "Public schedule"
+ * is the switch and the links of the facility's public and lobby schedule (SPK-SCHED-010,
+ * proposed amendment PA-06; capability `public_schedule`, pending DEC-100).
  */
 import { Navigate, Route, Routes } from 'react-router';
 import { DaySummaryLine } from '../../features/schedule-facilities/DaySummary';
@@ -16,6 +18,7 @@ import { RentalsScreen } from '../package-g/rentals/RentalsScreen';
 import { ClosureDetailScreen } from './ClosureDetailScreen';
 import { ClosuresScreen } from './ClosuresScreen';
 import { PublicationReviewScreen } from './PublicationReviewScreen';
+import { PublicScheduleSettingsScreen } from './PublicScheduleSettingsScreen';
 import { ResourceInventoryScreen } from './ResourceInventoryScreen';
 import { ScheduleCalendarScreen } from './ScheduleCalendarScreen';
 import { ScheduleDraftEditorScreen } from './ScheduleDraftEditorScreen';
@@ -30,6 +33,7 @@ const SECTIONS = [
   { to: '/schedule/resources', label: 'Resource inventory' },
   { to: '/schedule/rentals', label: 'Rentals' },
   { to: '/schedule/parties', label: 'Parties' },
+  { to: '/schedule/public', label: 'Public schedule' },
 ] as const;
 
 export function ScheduleArea() {
@@ -57,6 +61,7 @@ export function ScheduleArea() {
         <Route path="resources" element={<ResourceInventoryScreen />} />
         <Route path="rentals/*" element={<RentalsScreen />} />
         <Route path="parties/*" element={<PartiesScreen />} />
+        <Route path="public" element={<PublicScheduleSettingsScreen />} />
         <Route path="*" element={<NotFoundScreen />} />
       </Routes>
     </section>
