@@ -3,7 +3,9 @@
  * entries (SCR-S-16), rosters (SCR-S-17) and placement board (SCR-S-18), or open youth group
  * placement (SCR-S-19). Lists are what the API returns for this viewer; an area the account may
  * not use shows "not available". Each season card shows where today falls between the season's
- * own first and last day; nothing else is inferred.
+ * own first and last day; nothing else is inferred. With the team waiting list turned on
+ * (SPK-COMP-006, capability `team_waitlist`) each season's waiting list follows the cards, in
+ * order, read-only; offers are made from the season's team entries.
  */
 import { useState } from 'react';
 import { Link } from 'react-router';
@@ -13,6 +15,7 @@ import { formatDateOnly } from '../../features/competition/format';
 import { SEASON_STATUS } from '../../features/competition/labels';
 import { TeamsNav } from '../../features/competition/nav';
 import { CompeteHeader, localDay, seasonProgress } from '../../features/competition/page';
+import { WaitingListPanel } from '../../features/competition/WaitingListPanel';
 import { useNow } from '../../providers/AppProviders';
 import { Icon } from '../../ui/Icon';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -66,44 +69,49 @@ export function TeamsScreen() {
           empty={{ title: 'No seasons', description: 'This competition has no seasons yet.' }}
         >
           {(data) => (
-            <ul className="comp-grid" aria-label="Seasons">
-              {data.map((season) => {
-                const badge = SEASON_STATUS[season.status];
-                const progress = seasonProgress(season, today);
-                return (
-                  <li key={season.id} className="comp-card">
-                    <span className="comp-kind">
-                      <Icon name="calendar_month" size={16} />
-                      {formatDateOnly(season.startsOn)} to {formatDateOnly(season.endsOn)}
-                    </span>
-                    <span className="row-title">{season.name}</span>
-                    <StatusBadge tone={badge.tone} label={`Season ${badge.label}`} />
-                    {progress ? (
-                      <>
-                        <span className="comp-meta">{progress.label}</span>
-                        <span className="season-bar" aria-hidden="true">
-                          <span style={{ width: `${progress.pct}%` }} />
-                        </span>
-                      </>
-                    ) : null}
-                    <div className="actions-row">
-                      <Link
-                        className="button button-secondary button-sm"
-                        to={`/teams/seasons/${season.id}/entries`}
-                      >
-                        Team entries of {season.name}
-                      </Link>
-                      <Link
-                        className="button button-primary button-sm"
-                        to={`/teams/seasons/${season.id}/placement`}
-                      >
-                        Placement board of {season.name}
-                      </Link>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+            <>
+              <ul className="comp-grid" aria-label="Seasons">
+                {data.map((season) => {
+                  const badge = SEASON_STATUS[season.status];
+                  const progress = seasonProgress(season, today);
+                  return (
+                    <li key={season.id} className="comp-card">
+                      <span className="comp-kind">
+                        <Icon name="calendar_month" size={16} />
+                        {formatDateOnly(season.startsOn)} to {formatDateOnly(season.endsOn)}
+                      </span>
+                      <span className="row-title">{season.name}</span>
+                      <StatusBadge tone={badge.tone} label={`Season ${badge.label}`} />
+                      {progress ? (
+                        <>
+                          <span className="comp-meta">{progress.label}</span>
+                          <span className="season-bar" aria-hidden="true">
+                            <span style={{ width: `${progress.pct}%` }} />
+                          </span>
+                        </>
+                      ) : null}
+                      <div className="actions-row">
+                        <Link
+                          className="button button-secondary button-sm"
+                          to={`/teams/seasons/${season.id}/entries`}
+                        >
+                          Team entries of {season.name}
+                        </Link>
+                        <Link
+                          className="button button-primary button-sm"
+                          to={`/teams/seasons/${season.id}/placement`}
+                        >
+                          Placement board of {season.name}
+                        </Link>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              {data.map((season) => (
+                <WaitingListPanel key={season.id} seasonId={season.id} seasonName={season.name} />
+              ))}
+            </>
           )}
         </QueryBoundary>
       ) : (

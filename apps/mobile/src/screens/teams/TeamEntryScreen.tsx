@@ -22,6 +22,11 @@
  * may already have been done" and is looked for among the team's open invitations. "Invite" is not
  * offered again beside either (ui/SecretWithheld) until "Start a new one".
  *
+ * Team waiting list (SPK-COMP-006, proposed amendment PA-10): a division with no free place says
+ * so, and that the league may put a team on its waiting list; an entry the league made wait reads
+ * "Team waiting for a place", holds no place and owes nothing (its order and any offer are on the
+ * team's workspace, SCR-C-22).
+ *
  * States: loading; empty (no open season; no prior team to renew); ready; validation failure
  * (team name rules, registration closed: the API's reasons); permission restriction (renewal only
  * by a prior captain: not available); stale version (division capacity or the season changed:
@@ -96,7 +101,18 @@ export function divisionCriteriaText(division: Division): string {
     division.capacityTeamEntries !== null
       ? `${division.entryCount} of ${division.capacityTeamEntries} team places taken`
       : `${division.entryCount} teams entered`;
-  return [parts.join(', '), capacity].filter(Boolean).join('. ');
+  return [parts.join(', '), capacity, divisionFullText(division)].filter(Boolean).join('. ');
+}
+
+/**
+ * SPK-COMP-006: a division with every place taken. Whether a team then waits is the league's
+ * (the waiting list is a switch of the organization), so the words promise nothing.
+ */
+export function divisionFullText(division: Division): string | null {
+  return division.capacityTeamEntries !== null &&
+    division.entryCount >= division.capacityTeamEntries
+    ? 'Full: the league may put a team that applies on its waiting list'
+    : null;
 }
 
 function registrationWindow(season: Season): string {
@@ -213,6 +229,12 @@ function CreatedEntry({ created, prior }: { created: Created; prior: Workspace |
     <View testID="entry-created">
       <Section title={created.team.name}>
         <StatusBadge {...teamEntryStatus(created.entry)} testID="created-status" />
+        {created.entry.status === 'waiting' ? (
+          <Body>
+            Your team is on the waiting list. It holds no place and owes nothing; open the team to
+            see its place in the order.
+          </Body>
+        ) : null}
         <Body>
           Nothing has been charged. Prices, eligibility, permissions and roster acceptance are
           checked again for this season.

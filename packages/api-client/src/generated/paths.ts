@@ -48080,6 +48080,76 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/seasons/{id}/waiting-list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The waiting lists of a season, per division and in order (SPK-COMP-006, Proposed) */
+        get: {
+            parameters: {
+                query?: {
+                    divisionId?: string;
+                };
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SeasonWaitingLists"];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/session-bookings": {
         parameters: {
             query?: never;
@@ -51339,6 +51409,150 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/team-entries/{id}/place-offers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The place offers made to an entry, newest first (SPK-COMP-006, Proposed) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TeamEntryPlaceOffer"][];
+                    };
+                };
+                /** @description Access denied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Offer a free division place to a waiting entry (SPK-COMP-006, Proposed) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["OfferTeamPlaceRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TeamPlaceOfferOutcome"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team-entries/{id}/reject": {
         parameters: {
             query?: never;
@@ -51697,6 +51911,98 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/team-entries/{id}/wait": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move an applied entry onto the waiting list of a full division or season (SPK-COMP-006, Proposed) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["WaitTeamEntryRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TeamEntry"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team-entries/{id}/withdraw": {
         parameters: {
             query?: never;
@@ -51774,6 +52080,282 @@ export type paths = {
                 };
                 /** @description Eligibility failed */
                 422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team-entry-place-offers/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept a place offer: the entry returns to the approval path in that division (SPK-COMP-006, Proposed) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["AcceptTeamPlaceOfferRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TeamPlaceOfferOutcome"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team-entry-place-offers/{id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decline a place offer; the entry keeps its place in the order (SPK-COMP-006, Proposed) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["DeclineTeamPlaceOfferRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TeamPlaceOfferOutcome"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team-entry-place-offers/{id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw an open place offer (staff); the entry keeps its place in the order (SPK-COMP-006, Proposed) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window. */
+                    "Idempotency-Key": string;
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["WithdrawTeamPlaceOfferRequest"];
+                };
+            };
+            responses: {
+                /** @description Command outcome */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TeamPlaceOfferOutcome"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -54168,6 +54750,11 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
             token: string;
+        };
+        AcceptTeamPlaceOfferRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
         };
         AcceptWaitlistOfferRequest: {
             expectedRevision?: number;
@@ -57975,6 +58562,11 @@ export type components = {
             policyReferences?: string[];
             reason?: string;
         };
+        DeclineTeamPlaceOfferRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
+        };
         DeclineWaitlistOfferRequest: {
             expectedRevision?: number;
             policyReferences?: string[];
@@ -60782,6 +61374,14 @@ export type components = {
         };
         OfferingTransitionRequest: {
             expectedRevision?: number;
+            policyReferences?: string[];
+            reason?: string;
+        };
+        OfferTeamPlaceRequest: {
+            /** Format: uuid */
+            divisionId?: string;
+            expectedRevision: number;
+            note?: string;
             policyReferences?: string[];
             reason?: string;
         };
@@ -64219,6 +64819,12 @@ export type components = {
         };
         /** @enum {string} */
         SeasonStatus: "draft" | "open" | "active" | "completed" | "archived";
+        SeasonWaitingLists: {
+            lists: components["schemas"]["WaitingList"][];
+            offerHours: number;
+            /** Format: uuid */
+            seasonId: string;
+        };
         SeedFromStandingsRequest: {
             expectedRevision: number;
             policyReferences?: string[];
@@ -64856,6 +65462,10 @@ export type components = {
             teamName: string;
             /** Format: date-time */
             updatedAt: string;
+            /** Format: uuid */
+            waitingDivisionId: string | null;
+            /** Format: date-time */
+            waitingSince: string | null;
             withdrawalReason: string | null;
             /** Format: date-time */
             withdrawnAt: string | null;
@@ -64871,6 +65481,30 @@ export type components = {
         };
         /** @enum {string} */
         TeamEntryEligibilityStatus: "pending" | "eligible" | "ineligible" | "review_required";
+        TeamEntryPlaceOffer: {
+            /** Format: uuid */
+            divisionId: string;
+            divisionName: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: uuid */
+            id: string;
+            note: string | null;
+            /** Format: date-time */
+            offeredAt: string;
+            positionAtOffer: number;
+            resolutionReason: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            revision: number;
+            /** Format: uuid */
+            seasonId: string;
+            status: components["schemas"]["TeamEntryPlaceOfferStatus"];
+            /** Format: uuid */
+            teamEntryId: string;
+        };
+        /** @enum {string} */
+        TeamEntryPlaceOfferStatus: "offered" | "accepted" | "declined" | "expired" | "withdrawn";
         TeamEntryReadiness: {
             approval: components["schemas"]["TeamEntryStatus"];
             eligiblePlayers: number;
@@ -64884,11 +65518,23 @@ export type components = {
             rosterMin: number;
         };
         /** @enum {string} */
-        TeamEntryStatus: "applied" | "approved" | "withdrawn" | "rejected";
+        TeamEntryStatus: "applied" | "waiting" | "approved" | "withdrawn" | "rejected";
         TeamEntryViewer: {
             actingAsCaptain: boolean;
             availableActions: string[];
             roles: components["schemas"]["TeamRole"][];
+        };
+        TeamEntryWaiting: {
+            division: {
+                /** Format: uuid */
+                id: string;
+                name: string;
+            } | null;
+            listLength: number;
+            openOffer: components["schemas"]["TeamEntryPlaceOffer"] | null;
+            position: number;
+            /** Format: date-time */
+            since: string;
         };
         TeamEntryWorkspace: {
             division: {
@@ -64921,6 +65567,7 @@ export type components = {
             team: components["schemas"]["Team"];
             upcomingFixtures: components["schemas"]["UpcomingFixture"][];
             viewer: components["schemas"]["TeamEntryViewer"];
+            waiting: components["schemas"]["TeamEntryWaiting"] | null;
         };
         TeamInvitation: {
             /** Format: date-time */
@@ -64979,6 +65626,10 @@ export type components = {
             /** Format: uuid */
             teamEntryId: string;
             teamName: string;
+        };
+        TeamPlaceOfferOutcome: {
+            entry: components["schemas"]["TeamEntry"];
+            offer: components["schemas"]["TeamEntryPlaceOffer"];
         };
         /** @enum {string} */
         TeamRole: "captain" | "co_captain" | "member";
@@ -65698,6 +66349,30 @@ export type components = {
             policyReferences?: string[];
             reason: string;
         };
+        WaitingList: {
+            capacity: number | null;
+            division: {
+                /** Format: uuid */
+                id: string;
+                name: string;
+            } | null;
+            entries: components["schemas"]["WaitingListEntry"][];
+            freePlaces: number | null;
+            openOffers: number | null;
+            placed: number | null;
+        };
+        WaitingListEntry: {
+            openOffer: components["schemas"]["TeamEntryPlaceOffer"] | null;
+            position: number;
+            revision: number;
+            /** Format: uuid */
+            teamEntryId: string;
+            /** Format: uuid */
+            teamId: string;
+            teamName: string;
+            /** Format: date-time */
+            waitingSince: string;
+        };
         WaitlistAcceptance: {
             basket: components["schemas"]["Basket"] | null;
             entry: components["schemas"]["WaitlistEntry"];
@@ -65803,6 +66478,13 @@ export type components = {
             items: components["schemas"]["WaitlistQueueItem"][];
             nextCursor: string | null;
         };
+        WaitTeamEntryRequest: {
+            /** Format: uuid */
+            divisionId?: string;
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason?: string;
+        };
         WebhookAccepted: {
             duplicate: boolean;
             /** Format: uuid */
@@ -65866,6 +66548,11 @@ export type components = {
             reason: string;
         };
         WithdrawTeamEntryRequest: {
+            expectedRevision: number;
+            policyReferences?: string[];
+            reason: string;
+        };
+        WithdrawTeamPlaceOfferRequest: {
             expectedRevision: number;
             policyReferences?: string[];
             reason: string;

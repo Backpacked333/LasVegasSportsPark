@@ -9,10 +9,16 @@
  * (R2-JOURNEYS-05): an open balance (`team_obligation_outstanding`), a status finance cannot confirm
  * (`financial_status_unknown`), or settled when neither is present. The bare obligation reference
  * is never shown as if it were a status.
+ *
+ * Team waiting list (SPK-COMP-006, proposed amendment PA-10; capability `team_waitlist`): with the
+ * switch on, an applied entry can be made to wait for a full division, a placement that meets a
+ * full division makes the entry wait, and the season's waiting list shows the order, the free
+ * places and the offers, where staff offer a place to the team they choose.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandButton } from '../../features/competition/CommandButton';
@@ -23,6 +29,7 @@ import { formatInstant, shortRef } from '../../features/competition/format';
 import { ENTRY_ELIGIBILITY, TEAM_ENTRY_STATUS } from '../../features/competition/labels';
 import { SeasonLinks } from '../../features/competition/nav';
 import { CompeteHeader } from '../../features/competition/page';
+import { WAITING_KEYS, WaitingListPanel } from '../../features/competition/WaitingListPanel';
 import { SeasonEyebrow } from '../../features/competition/season-context';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -73,14 +80,23 @@ function FinancialFacet({ entryId }: { entryId: string }) {
   );
 }
 
-const ENTRY_KEYS = keys('/team-entries', '/team-entries/{id}', '/divisions');
+const ENTRY_KEYS = keys(
+  '/team-entries',
+  '/team-entries/{id}',
+  '/divisions',
+  '/seasons/{id}/waiting-list',
+);
 
 function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: readonly Division[] }) {
   const approve = useApiCommand('post', '/team-entries/{id}/approve', { invalidate: ENTRY_KEYS });
   const reject = useApiCommand('post', '/team-entries/{id}/reject', { invalidate: ENTRY_KEYS });
   const withdraw = useApiCommand('post', '/team-entries/{id}/withdraw', { invalidate: ENTRY_KEYS });
+  // SPK-COMP-006: offered only while the organization has the team waiting list turned on.
+  const wait = useApiCommand('post', '/team-entries/{id}/wait', { invalidate: WAITING_KEYS });
+  const waitlistOn = usePermissions().isCapabilityEnabled('team_waitlist') === true;
+  const [waitDivisionId, setWaitDivisionId] = useState('');
   const reload = useRefetch(['/team-entries']);
-  type Kind = 'approve' | 'reject' | 'withdraw';
+  type Kind = 'approve' | 'reject' | 'withdraw' | 'wait';
   const [mode, setMode] = useState<Kind | null>(null);
   // The command last sent: only its error and result are shown, and "Try again" repeats it (same
   // key), whatever form is open now.
@@ -93,10 +109,10 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
     withdraw: '',
   });
   const [error, setError] = useState<string | null>(null);
-  const commands = { approve, reject, withdraw };
+  const commands = { approve, reject, withdraw, wait };
   const start = (kind: Kind) => {
     if (last !== kind) {
-      for (const other of ['approve', 'reject', 'withdraw'] as const) {
+      for (const other of ['approve', 'reject', 'withdraw', 'wait'] as const) {
         if (other !== kind) commands[other].reset();
       }
     }
@@ -133,10 +149,23 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
     const sent = kind === 'reject' ? reject.submit(options) : withdraw.submit(options);
     void sent.catch(() => undefined);
   };
+  const doWait = () => {
+    start('wait');
+    void wait
+      .submit({
+        path: { id: entry.id },
+        body: {
+          expectedRevision: entry.revision,
+          ...(waitDivisionId ? { divisionId: waitDivisionId } : {}),
+        },
+      })
+      .catch(() => undefined);
+  };
   const onReload = () => {
     approve.reset();
     reject.reset();
     withdraw.reset();
+    wait.reset();
     reload();
   };
   const success = last ? commands[last].data : undefined;
@@ -154,7 +183,17 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
             <Button variant="secondary" onClick={() => setMode('reject')}>
               Decline
             </Button>
+            {waitlistOn && entry.divisionId === null ? (
+              <Button variant="secondary" onClick={() => setMode('wait')}>
+                Add to the waiting list
+              </Button>
+            ) : null}
           </>
+        ) : null}
+        {entry.status === 'waiting' ? (
+          <Button variant="secondary" onClick={() => setMode('reject')}>
+            Decline
+          </Button>
         ) : null}
         <Button variant="secondary" onClick={() => setMode('withdraw')}>
           Withdraw
@@ -190,6 +229,35 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
           </CommandButton>
         </form>
       ) : null}
+      {mode === 'wait' ? (
+        <form
+          className="form"
+          noValidate
+          aria-label="Add the entry to the waiting list"
+          onSubmit={(event) => {
+            event.preventDefault();
+            doWait();
+          }}
+        >
+          <SelectField
+            label="Wait for division"
+            value={waitDivisionId}
+            onChange={setWaitDivisionId}
+            options={divisions.map((d) => ({
+              value: d.id,
+              label:
+                d.capacityTeamEntries !== null
+                  ? `${d.name} (${d.entryCount} of ${d.capacityTeamEntries} places used)`
+                  : d.name,
+            }))}
+            placeholder="Any division of the season"
+            hint="A team waits only where no place is free. It keeps its order, holds no place and owes nothing."
+          />
+          <CommandButton type="submit" variant="secondary" busy={wait.isProcessing}>
+            Add to the waiting list
+          </CommandButton>
+        </form>
+      ) : null}
       {mode === 'reject' || mode === 'withdraw' ? (
         <form
           className="form"
@@ -221,10 +289,21 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
           </CommandButton>
         </form>
       ) : null}
-      {success ? <SuccessNote>{`Entry ${success.status}`}</SuccessNote> : null}
+      {success ? (
+        <SuccessNote>
+          {last === 'approve' && success.status === 'waiting'
+            ? 'The division is full: the team is now waiting'
+            : `Entry ${success.status}`}
+        </SuccessNote>
+      ) : null}
       <CommandError
         error={failure}
-        onRetry={last ? () => (last === 'approve' ? doApprove() : doReasoned(last)) : undefined}
+        onRetry={
+          last
+            ? () =>
+                last === 'approve' ? doApprove() : last === 'wait' ? doWait() : doReasoned(last)
+            : undefined
+        }
         onReload={onReload}
       />
     </div>
@@ -235,6 +314,7 @@ function EntryRow({ entry, divisions }: { entry: TeamEntry; divisions: readonly 
   const approval = TEAM_ENTRY_STATUS[entry.status];
   const eligibility = ENTRY_ELIGIBILITY[entry.eligibilityStatus];
   const division = divisions.find((d) => d.id === entry.divisionId);
+  const waitingFor = divisions.find((d) => d.id === entry.waitingDivisionId);
   const missingPlayers = Math.max(0, entry.rosterMin - entry.rosterCount);
   return (
     <li aria-labelledby={`entry-${entry.id}`}>
@@ -291,6 +371,13 @@ function EntryRow({ entry, divisions }: { entry: TeamEntry; divisions: readonly 
           <span>Over the roster maximum by {entry.rosterCount - entry.rosterMax}.</span>
         ) : null}
         <ReasonList reasons={entry.eligibilityReasons} label="What is missing" />
+        {entry.status === 'waiting' ? (
+          <span>
+            Waiting since {formatInstant(entry.waitingSince)} for{' '}
+            {waitingFor ? `division ${waitingFor.name}` : 'any division of the season'}. The team
+            holds no place and owes nothing; its place in the order is in the waiting list above.
+          </span>
+        ) : null}
         {entry.rejectionReason ? <span>Declined: {entry.rejectionReason}</span> : null}
         {entry.withdrawalReason ? <span>Withdrawn: {entry.withdrawalReason}</span> : null}
         <Link to={`/teams/entries/${entry.id}/roster`}>Roster</Link>
@@ -343,6 +430,7 @@ export function TeamEntryReviewScreen() {
           placeholder="All divisions"
         />
       </div>
+      <WaitingListPanel seasonId={seasonId} actions />
       <QueryBoundary
         query={entries}
         label="team entries"

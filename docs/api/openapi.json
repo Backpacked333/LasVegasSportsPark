@@ -15284,6 +15284,7 @@
         "type": "string",
         "enum": [
           "applied",
+          "waiting",
           "approved",
           "withdrawn",
           "rejected"
@@ -16955,6 +16956,20 @@
             ],
             "format": "uuid"
           },
+          "waitingSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "waitingDivisionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "rosterComplete": {
             "type": "boolean"
           },
@@ -16999,6 +17014,8 @@
           "eligibilityStatus",
           "eligibilityReasons",
           "renewedFromEntryId",
+          "waitingSince",
+          "waitingDivisionId",
           "rosterComplete",
           "rosterCount",
           "rosterMin",
@@ -17006,6 +17023,143 @@
           "revision",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "TeamEntryPlaceOfferStatus": {
+        "type": "string",
+        "enum": [
+          "offered",
+          "accepted",
+          "declined",
+          "expired",
+          "withdrawn"
+        ]
+      },
+      "TeamEntryPlaceOffer": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teamEntryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seasonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "divisionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "divisionName": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TeamEntryPlaceOfferStatus"
+          },
+          "positionAtOffer": {
+            "type": "integer"
+          },
+          "offeredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolutionReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "teamEntryId",
+          "seasonId",
+          "divisionId",
+          "divisionName",
+          "status",
+          "positionAtOffer",
+          "offeredAt",
+          "expiresAt",
+          "note",
+          "resolvedAt",
+          "resolutionReason",
+          "revision"
+        ]
+      },
+      "TeamEntryWaiting": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "division": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "position": {
+            "type": "integer"
+          },
+          "listLength": {
+            "type": "integer"
+          },
+          "openOffer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamEntryPlaceOffer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "since",
+          "division",
+          "position",
+          "listLength",
+          "openOffer"
         ]
       },
       "CreateTeamEntryRequest": {
@@ -19077,6 +19231,16 @@
               "$ref": "#/components/schemas/UpcomingFixture"
             }
           },
+          "waiting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamEntryWaiting"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "viewer": {
             "$ref": "#/components/schemas/TeamEntryViewer"
           }
@@ -19093,6 +19257,7 @@
           "pendingInvitations",
           "pendingJoinRequests",
           "upcomingFixtures",
+          "waiting",
           "viewer"
         ]
       },
@@ -23334,6 +23499,296 @@
           "pendingFixtureIds",
           "rows",
           "tiebreakExplanations"
+        ]
+      },
+      "WaitTeamEntryRequest": {
+        "type": "object",
+        "properties": {
+          "divisionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ]
+      },
+      "OfferTeamPlaceRequest": {
+        "type": "object",
+        "properties": {
+          "divisionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ]
+      },
+      "AcceptTeamPlaceOfferRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ]
+      },
+      "DeclineTeamPlaceOfferRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision"
+        ]
+      },
+      "WithdrawTeamPlaceOfferRequest": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "reason"
+        ]
+      },
+      "TeamPlaceOfferOutcome": {
+        "type": "object",
+        "properties": {
+          "offer": {
+            "$ref": "#/components/schemas/TeamEntryPlaceOffer"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/TeamEntry"
+          }
+        },
+        "required": [
+          "offer",
+          "entry"
+        ]
+      },
+      "WaitingListEntry": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": "integer"
+          },
+          "teamEntryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teamId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teamName": {
+            "type": "string"
+          },
+          "waitingSince": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "openOffer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamEntryPlaceOffer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "position",
+          "teamEntryId",
+          "teamId",
+          "teamName",
+          "waitingSince",
+          "revision",
+          "openOffer"
+        ]
+      },
+      "WaitingList": {
+        "type": "object",
+        "properties": {
+          "division": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "capacity": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "placed": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "openOffers": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "freePlaces": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitingListEntry"
+            }
+          }
+        },
+        "required": [
+          "division",
+          "capacity",
+          "placed",
+          "openOffers",
+          "freePlaces",
+          "entries"
+        ]
+      },
+      "SeasonWaitingLists": {
+        "type": "object",
+        "properties": {
+          "seasonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerHours": {
+            "type": "integer"
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitingList"
+            }
+          }
+        },
+        "required": [
+          "seasonId",
+          "offerHours",
+          "lists"
         ]
       },
       "FacilityStatus": {
@@ -77071,6 +77526,664 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PoolStandings"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/team-entries/{id}/wait": {
+      "post": {
+        "summary": "Move an applied entry onto the waiting list of a full division or season (SPK-COMP-006, Proposed)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WaitTeamEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/team-entries/{id}/place-offers": {
+      "post": {
+        "summary": "Offer a free division place to a waiting entry (SPK-COMP-006, Proposed)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfferTeamPlaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamPlaceOfferOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "The place offers made to an entry, newest first (SPK-COMP-006, Proposed)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TeamEntryPlaceOffer"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/team-entry-place-offers/{id}/accept": {
+      "post": {
+        "summary": "Accept a place offer: the entry returns to the approval path in that division (SPK-COMP-006, Proposed)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptTeamPlaceOfferRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamPlaceOfferOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/team-entry-place-offers/{id}/decline": {
+      "post": {
+        "summary": "Decline a place offer; the entry keeps its place in the order (SPK-COMP-006, Proposed)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclineTeamPlaceOfferRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamPlaceOfferOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/team-entry-place-offers/{id}/withdraw": {
+      "post": {
+        "summary": "Withdraw an open place offer (staff); the entry keeps its place in the order (SPK-COMP-006, Proposed)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawTeamPlaceOfferRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamPlaceOfferOutcome"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, or the team waiting list is not enabled (CAPABILITY_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (CAPACITY_UNAVAILABLE, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/seasons/{id}/waiting-list": {
+      "get": {
+        "summary": "The waiting lists of a season, per division and in order (SPK-COMP-006, Proposed)",
+        "tags": [
+          "Competition"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "divisionId",
+            "in": "query"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeasonWaitingLists"
                 }
               }
             }

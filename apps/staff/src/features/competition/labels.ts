@@ -268,6 +268,8 @@ export const SUSPENSION_SOURCE: Record<Schema<'Suspension'>['sourceKind'], strin
 
 export const TEAM_ENTRY_STATUS: Labels<Schema<'TeamEntryStatus'>> = {
   applied: { tone: 'info', label: 'applied' },
+  // SPK-COMP-006: on the waiting list of a full division or season.
+  waiting: { tone: 'pending', label: 'waiting' },
   approved: { tone: 'success', label: 'approved' },
   rejected: { tone: 'neutral', label: 'rejected' },
   withdrawn: { tone: 'neutral', label: 'withdrawn' },
