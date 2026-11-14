@@ -55784,7 +55784,7 @@ export type components = {
         /** @enum {string} */
         CapabilityEnforcement: "commands" | "recorded_only";
         /** @enum {string} */
-        CapabilityId: "memberships" | "session_packages" | "rentals" | "parties" | "tournaments" | "point_of_sale" | "access_hardware" | "accounting" | "youth_progression" | "pickup_sessions" | "assistant" | "installments" | "supervised_pickup" | "advanced_fairness" | "retention_tools";
+        CapabilityId: "memberships" | "session_packages" | "rentals" | "parties" | "tournaments" | "point_of_sale" | "access_hardware" | "accounting" | "youth_progression" | "pickup_sessions" | "assistant" | "installments" | "supervised_pickup" | "advanced_fairness" | "retention_tools" | "liability_waivers" | "per_session_pricing" | "price_tiers_addons" | "member_pricing" | "message_sequences" | "public_schedule" | "uniforms" | "open_amount_lines" | "rental_rosters" | "team_waitlist";
         CapabilityList: {
             items: components["schemas"]["Capability"][];
         };

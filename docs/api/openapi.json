@@ -41,7 +41,17 @@
           "installments",
           "supervised_pickup",
           "advanced_fairness",
-          "retention_tools"
+          "retention_tools",
+          "liability_waivers",
+          "per_session_pricing",
+          "price_tiers_addons",
+          "member_pricing",
+          "message_sequences",
+          "public_schedule",
+          "uniforms",
+          "open_amount_lines",
+          "rental_rosters",
+          "team_waitlist"
         ]
       },
       "CapabilityEnforcement": {

@@ -84,6 +84,52 @@ export const CAPABILITY_PRESENTATION: Readonly<Record<CapabilityId, CapabilityPr
     owner: PRODUCT_OWNER,
   },
   retention_tools: { label: 'Retention tools', decisions: ['DEC-016'], owner: PRODUCT_OWNER },
+  liability_waivers: {
+    label: 'Liability waivers',
+    decisions: ['DEC-016', 'DEC-095'],
+    owner: PRODUCT_OWNER,
+  },
+  per_session_pricing: {
+    label: 'Per-session pricing',
+    decisions: ['DEC-016', 'DEC-096'],
+    owner: PRODUCT_OWNER,
+  },
+  price_tiers_addons: {
+    label: 'Price tiers and add-ons',
+    decisions: ['DEC-016', 'DEC-097'],
+    owner: PRODUCT_OWNER,
+  },
+  member_pricing: {
+    label: 'Member pricing',
+    decisions: ['DEC-016', 'DEC-098'],
+    owner: PRODUCT_OWNER,
+  },
+  message_sequences: {
+    label: 'Message templates and sequences',
+    decisions: ['DEC-016', 'DEC-099'],
+    owner: PRODUCT_OWNER,
+  },
+  public_schedule: {
+    label: 'Public and lobby schedule',
+    decisions: ['DEC-016', 'DEC-100'],
+    owner: PRODUCT_OWNER,
+  },
+  uniforms: { label: 'Uniforms', decisions: ['DEC-016', 'DEC-101'], owner: PRODUCT_OWNER },
+  open_amount_lines: {
+    label: 'Open-amount register lines',
+    decisions: ['DEC-016', 'DEC-102'],
+    owner: PRODUCT_OWNER,
+  },
+  rental_rosters: {
+    label: 'Rental rosters',
+    decisions: ['DEC-016', 'DEC-103'],
+    owner: PRODUCT_OWNER,
+  },
+  team_waitlist: {
+    label: 'Team waiting list',
+    decisions: ['DEC-016', 'DEC-104'],
+    owner: PRODUCT_OWNER,
+  },
 };
 
 export const CAPABILITY_IDS = Object.keys(CAPABILITY_PRESENTATION) as readonly CapabilityId[];
