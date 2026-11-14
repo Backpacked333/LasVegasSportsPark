@@ -343,8 +343,9 @@ describe('Tier, add-on and uniform lines on the basket, quote and receipt (SPK-P
     expect(screen.getByLabelText('Days chosen: 2')).toBeOnTheScreen();
     expect(screen.getByLabelText('Lunch × 2 days: $9.00 each')).toBeOnTheScreen();
     expect(screen.getByLabelText('Club kit, size YM: $25.00')).toBeOnTheScreen();
+    // The participant's name is read apart from the basket, so this sentence is awaited.
     expect(
-      screen.getByText('Ada already has this uniform: it is not charged again.'),
+      await screen.findByText('Ada already has this uniform: it is not charged again.'),
     ).toBeOnTheScreen();
   });
 
