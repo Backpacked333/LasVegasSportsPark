@@ -21,6 +21,9 @@ export const POS_ACTIONS = {
   manageRegisters: 'finance.manage_pos_registers',
   operateRegister: 'finance.operate_register',
   approveReturn: 'finance.approve_pos_return',
+  // SPK-PAY-016 (proposed amendment PA-08; capability open_amount_lines).
+  enterOpenAmount: 'finance.enter_open_amount_line',
+  approveOpenAmount: 'finance.approve_open_amount_line',
 } as const;
 
 export const ACCOUNTING_ACTIONS = {

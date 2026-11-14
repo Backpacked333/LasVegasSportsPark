@@ -286,6 +286,7 @@ export function receipt(overrides: Partial<Schema<'PosReceipt'>> = {}): Schema<'
       {
         name: 'Water bottle',
         kind: 'merchandise',
+        description: null,
         quantity: 2,
         unitPriceMinor: 300,
         baseMinor: 600,

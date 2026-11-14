@@ -12,10 +12,14 @@
  * The register's other sessions are listed too (`GET /v1/pos-registers/{id}/sessions`), most
  * recently opened first, each opening its own page. Closing still answers SESSION_HAS_OPEN_SALES
  * with how many are open.
+ *
+ * SPK-PAY-016 (proposed amendment PA-08): while `open_amount_lines` is on, the session's
+ * open-amount lines are listed apart from its sales, for review (OpenAmount.tsx).
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
+import { usePermissions } from '../../../api/permissions';
 import { useApiCommand } from '../../../api/useApiCommand';
 import { useApiPages } from '../../../api/useApiPages';
 import { useApiQuery } from '../../../api/useApiQuery';
@@ -51,6 +55,7 @@ import { Facts } from '../../../ui/FormFields';
 import { LoadMore } from '../../../ui/LoadMore';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
+import { SessionOpenAmountLines } from './OpenAmount';
 import { POS_PATHS } from './paths';
 
 type Session = Schema<'PosRegisterSession'>;
@@ -63,6 +68,8 @@ export function SessionPage() {
 
 function SessionView({ sessionId }: { sessionId: string }) {
   const directory = useFacilityDirectory();
+  // SPK-PAY-016 (proposed): nothing of open amounts is shown unless the switch is on.
+  const openAmountsOn = usePermissions().isCapabilityEnabled('open_amount_lines') === true;
   const session = useApiQuery({
     path: '/pos-register-sessions/{id}',
     request: { path: { id: sessionId } },
@@ -117,6 +124,7 @@ function SessionView({ sessionId }: { sessionId: string }) {
                 </>
               ) : null}
               <SessionSales session={data} />
+              {openAmountsOn ? <SessionOpenAmountLines sessionId={data.id} zone={zone} /> : null}
               <RegisterSessions session={data} />
             </>
           );

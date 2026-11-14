@@ -30,6 +30,12 @@ export const POS_PRODUCT_KIND: Readonly<Record<Schema<'PosProductKind'>, string>
   service: 'Service',
 };
 
+/** A sale line is a product of one of the kinds, or an open amount (SPK-PAY-016, proposed). */
+export const POS_LINE_KIND: Readonly<Record<Schema<'PosSaleLineKind'>, string>> = {
+  ...POS_PRODUCT_KIND,
+  open_amount: 'Other amount',
+};
+
 export const POS_SESSION_STATUS: Labels<'open' | 'closed'> = {
   open: { tone: 'info', label: 'session open' },
   closed: { tone: 'neutral', label: 'session closed' },

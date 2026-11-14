@@ -585,7 +585,7 @@ export function ReturnForm({ sale, onReload }: { sale: Sale; onReload: () => voi
         return (
           <TextField
             key={l.id}
-            label={`Units of ${l.name} to return`}
+            label={`Units of ${l.openAmount?.description ?? l.name} to return`}
             hint={`Up to ${left} of ${l.quantity} sold (${formatMoney(l.lineTotalMinor, sale.currency)} for the line).`}
             value={units[l.id] ?? ''}
             onChange={(v) => setUnits((u) => ({ ...u, [l.id]: v }))}

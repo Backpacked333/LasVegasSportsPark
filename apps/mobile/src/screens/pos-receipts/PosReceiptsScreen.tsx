@@ -6,7 +6,8 @@
  * Reads `GET /v1/me/pos-receipts` (paid sales that name the signed-in person, newest first, cursor
  * pages with "Load more"). Each receipt shows the sale number, where and when it was paid (the
  * facility's name and time zone from `GET /v1/facilities/{id}`, SPK-SCHED-008), every line with
- * its quantity, unit price and amount before taxes, the subtotal, the approved taxes and fees it
+ * its quantity, unit price and amount before taxes (an open-amount line, SPK-PAY-016 proposed, by
+ * its description and reason category instead), the subtotal, the approved taxes and fees it
  * applied,
  * the total, the settled tenders and any returns. Amounts are the API's minor units and currency,
  * formatted for display only; nothing is added up here. A card return never reads as refunded:
@@ -25,6 +26,7 @@ import { useApiPages } from '../../api/useApiPages';
 import { formatMoney } from '../../features/money/format';
 import { Body, Caption, Field } from '../../features/money/ui';
 import {
+  receiptLineText,
   receiptStatus,
   returnText,
   TENDER_LABELS,
@@ -69,11 +71,7 @@ function ReceiptCard({ receipt, facility }: { receipt: PosReceipt; facility: Fac
       />
       <View accessibilityRole="list" accessibilityLabel="Items">
         {receipt.lines.map((line, index) => (
-          <Field
-            key={`${index}-${line.name}`}
-            label={`${line.quantity} × ${line.name}`}
-            value={`${money(line.baseMinor)} (${money(line.unitPriceMinor)} each)`}
-          />
+          <Field key={`${index}-${line.name}`} {...receiptLineText(line, money)} />
         ))}
       </View>
       <Field label="Subtotal" value={money(receipt.subtotalMinor)} />
