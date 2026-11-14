@@ -379,6 +379,11 @@ export async function createPriceRuleFixture(
     effectiveTo?: Date | null;
     version?: number;
     organizationId?: string;
+    /** 0211 (SPK-PAY-013): default `term`. */
+    pricingBasis?: 'term' | 'per_session';
+    /** 0211 (SPK-PAY-015): a member price and the entitlement it requires, together. */
+    memberPriceMinor?: number | null;
+    memberEntitlementDefinitionId?: string | null;
   },
 ): Promise<string> {
   const id = newId();
@@ -401,6 +406,9 @@ export async function createPriceRuleFixture(
       base_price_minor: input.basePriceMinor,
       currency: input.currency ?? 'USD',
       charge_lines: json(input.chargeLines ?? []),
+      pricing_basis: input.pricingBasis ?? 'term',
+      member_price_minor: input.memberPriceMinor ?? null,
+      member_entitlement_definition_id: input.memberEntitlementDefinitionId ?? null,
       created_by: json(FIXTURE_ACTOR),
     })
     .execute();

@@ -117,7 +117,8 @@ because the kernel consults the identity port without a transaction handle (see 
 - `POLICY_PORT` → `PoliciesService.getPolicyVersion`, `currentPolicyVersion(kind, key, at)`
   (approved, effective, highest version; IF-48 with the kinds `booking_terms` and `tax_fee`),
   `hasAcknowledgment(subject, policyVersion)`.
-- `PRICING_PORT` → `PricingService.effectivePriceRule`, `evaluateDiscounts` (loads active
+- `PRICING_PORT` → `PricingService.effectivePriceRule`, `remainingSessions` (SPK-PAY-013, see
+  "Price rule amendments"), `evaluateDiscounts` (loads active
   definitions and counters, then the pure evaluator), `redeemDiscount` / `releaseDiscount` inside
   the caller's transaction (finance checkout, §4.11 step 7): replay-safe per reference, exhausted
   limits are `RESOURCE_CONFLICT` with `details.code` `DISCOUNT_REDEMPTION_LIMIT`,
@@ -450,3 +451,58 @@ Tests in `__tests__/park-ui-gaps.spec.ts`.
   currency the offering meets, with `basis` `early_registration` / `multi_line` / `automatic`.
   Promo codes, exhausted limits and drafts are never listed. Badges are informational; the
   evaluation (`POST /v1/discounts/evaluate`) and finance's quote decide what applies.
+
+## Price rule amendments (PA-02, PA-04): implemented behind capability switches
+
+The two requirements are **Proposed** (`docs/package-a/proposed-specification-amendments.md`): they
+are not part of the master specification until the product owner accepts them, and each is off for
+an organization until its capability is turned on. What the code does is **Verified** by the tests
+named; every value the amendments leave open is **Pending decision**.
+
+| Amendment | Requirement | Capability            | Decision record |
+| --------- | ----------- | --------------------- | --------------- |
+| PA-02     | SPK-PAY-013 | `per_session_pricing` | DEC-096         |
+| PA-04     | SPK-PAY-015 | `member_pricing`      | DEC-098         |
+
+**Verified** (`__tests__/price-rule-amendments.spec.ts`, migration
+`0211_catalog_price_rule_basis_and_member_price.sql`):
+
+- The price rule stays the single source of an offering's price. `price_rules` gains
+  `pricing_basis` (`term`, the default and every earlier row, or `per_session`: the base price is
+  the price of one session), `member_price_minor` and `member_entitlement_definition_id` (the price
+  for a holder of that membership entitlement, on the same basis as the base price). The exclusion
+  constraint `price_rules_one_effective_per_instant` is untouched.
+- The database refuses an unknown pricing basis, a member price without its entitlement and an
+  entitlement without a member price (`price_rules_member_price_complete`), a negative member
+  price, and an entitlement of another organization (composite foreign key
+  `price_rules_member_entitlement_fk`). The three columns are pricing content: `price_rules_guard`
+  refuses any change to them, so a correction is a new version (SPK-PAY-002).
+- `POST /v1/offerings/{id}/price-rules` accepts `pricingBasis`, `memberPriceMinor` and
+  `memberEntitlementDefinitionId`. `per_session` requires `per_session_pricing` and a member price
+  requires `member_pricing`, each checked inside the unit of work; with the capability off the
+  request is refused with ACCESS_DENIED `CAPABILITY_DISABLED` and nothing is written. A request
+  without the new fields (or with `pricingBasis: "term"`) is written exactly as before. A member
+  price names an active `membership_benefit` entitlement of the organization (VALIDATION_FAILED
+  otherwise; an unknown id and another organization's id read the same).
+- `PriceRule` carries the three fields and the entitlement's name. `PublicPrice` (the offering
+  views) carries `pricingBasis`, `remainingSessionCount` and `remainingSessionsPriceMinor` (for a
+  per-session price: the scheduled sessions that start after the view instant, and the base price
+  times that count), and `memberPrice` (price, entitlement id and name). These reads do not depend
+  on the switches: a rule that exists is shown as it is.
+- `PRICING_PORT.remainingSessions(organizationId, offeringId, at)`: the sessions with status
+  `scheduled` that start strictly after `at`, ordered by start. Finance counts them for a quote
+  and stores their ids (see the finance README).
+
+**Proposed** (assumed defaults, each a rule the facility has not confirmed):
+
+- A session counts until it starts (a start equal to the instant no longer counts); there is no
+  minimum charge. Both are **Pending decision** DEC-096, with the list of programs priced this way.
+- Whether a member price may exceed the base price is not restricted. Which offerings carry a
+  member price, what the membership costs and grants, the reference date and whose membership
+  counts for a child are **Pending decision** DEC-098.
+
+Not done here: that the named entitlement is a membership benefit is checked by the service only
+(a rule naming another kind could never apply, because only memberships are read); the
+`catalog.price_rule_created` event payload is unchanged (the audit record carries the new fields);
+the promotion badge compares a minimum line amount with the rule's base price, which for a
+per-session rule is the price of one session.

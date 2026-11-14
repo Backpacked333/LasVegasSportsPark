@@ -662,6 +662,15 @@ export type ListAcknowledgmentsQuery = z.infer<typeof ListAcknowledgmentsQuery>;
 // ---------------------------------------------------------------------------------------------
 // Price rules
 // ---------------------------------------------------------------------------------------------
+/**
+ * What a price rule's base price is the price of (SPK-PAY-013, proposed amendment PA-02): `term`
+ * is the price of joining the offering (the behaviour before the amendment); `per_session` is the
+ * price of one session, and joining costs that price times the sessions still to attend, counted
+ * when the quote is made.
+ */
+export const PricingBasisSchema = z.enum(['term', 'per_session']).openapi('PricingBasis');
+export type PricingBasis = z.infer<typeof PricingBasisSchema>;
+
 export const PriceRuleSchema = z
   .object({
     id: z.uuid(),
@@ -672,6 +681,16 @@ export const PriceRuleSchema = z
     basePriceMinor: z.number().int(),
     currency: CurrencyCode,
     chargeLines: z.array(ChargeLineSchema),
+    /** SPK-PAY-013 (PA-02): what `basePriceMinor` (and the member price) is the price of. */
+    pricingBasis: PricingBasisSchema,
+    /**
+     * SPK-PAY-015 (PA-04): the price for a participant who holds the named membership entitlement
+     * at the quote instant, on the same basis as `basePriceMinor`; null when the rule has none.
+     */
+    memberPriceMinor: z.number().int().nullable(),
+    memberEntitlementDefinitionId: z.uuid().nullable(),
+    /** The membership entitlement's name, for display beside the member price. */
+    memberEntitlementName: z.string().nullable(),
     revision: Revision,
     createdAt: Instant,
   })
@@ -684,10 +703,28 @@ export const CreatePriceRuleBody = withCommandMeta({
   basePriceMinor: z.number().int().min(0).safe(),
   currency: CurrencyCode,
   chargeLines: z.array(ChargeLineSchema).max(20).default([]),
+  /**
+   * SPK-PAY-013 (PA-02): `per_session` needs the `per_session_pricing` capability; a request that
+   * names it while the capability is off is refused (CAPABILITY_DISABLED).
+   */
+  pricingBasis: PricingBasisSchema.default('term'),
+  /**
+   * SPK-PAY-015 (PA-04): a member price and the membership entitlement it requires, both or
+   * neither. They need the `member_pricing` capability.
+   */
+  memberPriceMinor: z.number().int().min(0).safe().optional(),
+  memberEntitlementDefinitionId: z.uuid().optional(),
 })
   .refine(
     (v) => v.effectiveTo === undefined || new Date(v.effectiveTo) > new Date(v.effectiveFrom),
     { message: 'effectiveTo must be after effectiveFrom', path: ['effectiveTo'] },
+  )
+  .refine(
+    (v) => (v.memberPriceMinor === undefined) === (v.memberEntitlementDefinitionId === undefined),
+    {
+      message: 'A member price and the membership entitlement it requires are given together.',
+      path: ['memberEntitlementDefinitionId'],
+    },
   )
   .openapi('CreatePriceRuleRequest');
 export type CreatePriceRuleInput = z.infer<typeof CreatePriceRuleBody>;
@@ -726,6 +763,19 @@ export const PublicPromotionSchema = z
   .openapi('PublicPromotion');
 export type PublicPromotion = z.infer<typeof PublicPromotionSchema>;
 
+/**
+ * The member price of an offering as discovery shows it (SPK-PAY-015, PA-04). Whether it applies
+ * to a participant is decided by the quote, from their membership at the quote instant.
+ */
+export const PublicMemberPriceSchema = z
+  .object({
+    priceMinor: z.number().int(),
+    entitlementDefinitionId: z.uuid(),
+    entitlementName: z.string(),
+  })
+  .openapi('PublicMemberPrice');
+export type PublicMemberPrice = z.infer<typeof PublicMemberPriceSchema>;
+
 /** Public price summary shown in discovery: the effective base price and its charge lines. */
 export const PublicPriceSchema = z
   .object({
@@ -733,8 +783,25 @@ export const PublicPriceSchema = z
     basePriceMinor: z.number().int(),
     currency: CurrencyCode,
     chargeLines: z.array(ChargeLineSchema),
+    /** SPK-PAY-013 (PA-02): `per_session` means `basePriceMinor` is the price of one session. */
+    pricingBasis: PricingBasisSchema,
+    /**
+     * For a `per_session` price, the offering's scheduled sessions that start after the view
+     * instant (the count a quote made now would use); null for a `term` price. Informational:
+     * the quote counts again at its own instant.
+     */
+    remainingSessionCount: z.number().int().nullable(),
+    /**
+     * For a `per_session` price, `basePriceMinor` x `remainingSessionCount`: what joining at the
+     * view instant costs at the standard price, before discounts and charges (clients show the
+     * product, they do not work it out); null for a `term` price.
+     */
+    remainingSessionsPriceMinor: z.number().int().nullable(),
+    /** SPK-PAY-015 (PA-04): the member price, when the effective rule carries one. */
+    memberPrice: PublicMemberPriceSchema.nullable(),
   })
   .openapi('PublicPrice');
+export type PublicPrice = z.infer<typeof PublicPriceSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Offerings

@@ -10,9 +10,10 @@ import type {
 } from './core';
 
 /**
- * Catalog module tables (migrations 0200 to 0207, specification §3.2 SPK-CAT-001..004, §3.15
- * SPK-PAY-001..003, §4.4 Catalog + Policies). `date` columns are read through a `::text` cast by
- * the module so both drivers return `YYYY-MM-DD`.
+ * Catalog module tables (migrations 0200 to 0211, specification §3.2 SPK-CAT-001..004, §3.15
+ * SPK-PAY-001..003, §4.4 Catalog + Policies; 0211 adds the price rule columns of the proposed
+ * amendments PA-02 and PA-04). `date` columns are read through a `::text` cast by the module so
+ * both drivers return `YYYY-MM-DD`.
  */
 export type CatalogDate = ColumnType<string, string, string>;
 
@@ -215,6 +216,7 @@ export interface OfferingSessionsTable {
   updated_at: GeneratedTimestamp;
 }
 
+export type PricingBasis = 'term' | 'per_session';
 export interface PriceRulesTable {
   id: string;
   organization_id: string;
@@ -225,6 +227,11 @@ export interface PriceRulesTable {
   base_price_minor: MinorUnits;
   currency: string;
   charge_lines: GeneratedJson<unknown[]>;
+  /** 0211 (SPK-PAY-013, PA-02): what base_price_minor is the price of. */
+  pricing_basis: Generated<PricingBasis>;
+  /** 0211 (SPK-PAY-015, PA-04): the member price and the entitlement it requires, both or neither. */
+  member_price_minor: Generated<number | null>;
+  member_entitlement_definition_id: Generated<string | null>;
   created_by: Json<Record<string, unknown>>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;

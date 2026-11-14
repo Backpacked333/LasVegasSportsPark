@@ -1701,13 +1701,18 @@ export class OfferingsService implements OfferingLookupPort {
       .execute();
     const ageBands = new Map(programs.map((p) => [p.id, p.age_band as AgeBand]));
     const ids = rows.map((r) => r.id);
-    const prices = await this.priceRules.effectivePriceRules(
-      organizationId,
-      ids,
-      at,
+    const priceTrx =
       'isTransaction' in db && typeof db.isTransaction === 'boolean' && db.isTransaction
         ? (db as Trx)
-        : undefined,
+        : undefined;
+    const prices = await this.priceRules.effectivePriceRules(organizationId, ids, at, priceTrx);
+    // SPK-PAY-013 (PA-02): a per-session price is shown with the sessions still to attend.
+    const perSessionIds = ids.filter((id) => prices.get(id)?.pricingBasis === 'per_session');
+    const remainingSessions = await this.priceRules.remainingSessionCounts(
+      organizationId,
+      perSessionIds,
+      at,
+      priceTrx,
     );
     const forms = await this.requiredFormIds(db, organizationId, ids);
     // SPK-SCHED-008: the facility's IANA zone travels with every offering view (K-04).
@@ -1736,6 +1741,8 @@ export class OfferingsService implements OfferingLookupPort {
       out.set(row.id, {
         ageBand: ageBands.get(row.program_id) ?? {},
         price,
+        remainingSessionCount:
+          price?.pricingBasis === 'per_session' ? (remainingSessions.get(row.id) ?? 0) : null,
         requiredFormPolicyVersionIds: forms.get(row.id) ?? [],
         facility: { id: facility.id, name: facility.name, timezone: facility.timezone },
         bookingTermsPolicyVersionId:
