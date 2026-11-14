@@ -877,8 +877,8 @@ amendment leaves open are **Pending decision**.
   ceilings are stated in, which then refuses a sale in another currency,
   `OPEN_AMOUNT_POLICY_CURRENCY_MISMATCH`). An approved version whose content is not usable refuses
   every open-amount line (`OPEN_AMOUNT_POLICY_INVALID`). A person's ceiling at a facility is the
-  highest among the roles through which they may enter a line there. `GET
-/v1/pos-open-amount-rules?facilityId=` gives the categories and the caller's own ceiling.
+  highest among the roles through which they may enter a line there. The read
+  `/v1/pos-open-amount-rules?facilityId=` gives the categories and the caller's own ceiling.
 - Above the ceiling a second person approves: `POST /v1/pos-sales/{id}/lines/{lineId}/approval`
   (`finance.approve_open_amount_line`: finance operator, general manager; expected revision and a
   reason required) writes its own append-only record (`pos_line_approvals`: who, when, why, the
@@ -887,10 +887,12 @@ amendment leaves open are **Pending decision**.
   approval per line, and it is never rewritten or deleted. Until then the sale takes no tender
   (`OPEN_AMOUNT_APPROVAL_REQUIRED`; `pos_tenders_open_amount_approved`) and is not paid
   (`pos_sales_open_amount_approved`). The approval moves the sale's revision on (§4.9).
-- An open-amount line is corrected only by removing it (`POST
-/v1/pos-sales/{id}/lines/{lineId}/quantity` with 0; any other quantity answers
+- An open-amount line is corrected only by removing it (the quantity command of a line,
+  `/v1/pos-sales/{id}/lines/{lineId}/quantity`, with 0; any other quantity answers
   `OPEN_AMOUNT_LINE_QUANTITY`; `pos_sale_lines_open_amount_supersede` in the database). The
-  removed line is kept as history, and removing it lifts the block on tenders.
+  removed line is kept as history, and removing it lifts the block on tenders. When a card tender
+  taken earlier has settled meanwhile and covers what the sale still holds, the removal pays the
+  sale.
 - The sale's journal credits `pos_revenue` per product kind and, for open-amount lines, per revenue
   category (memo `open amount, revenue category <code>`); a return debits the same back. A return
   or a void follows the rules of any sale line (finance approves a return; a void needs no

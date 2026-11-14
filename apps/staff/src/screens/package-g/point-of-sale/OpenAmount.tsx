@@ -108,7 +108,8 @@ export function OtherAmountForm({ sale, onReload }: { sale: Sale; onReload: () =
   const amountMinor = parseMoneyInput(amount, c);
   const data = rules.data;
   const ceiling = data?.ceilingMinor ?? null;
-  const otherCurrency = data?.currency != null && data.currency !== c ? data.currency : null;
+  const otherCurrency =
+    data && data.currency !== null && data.currency !== c ? data.currency : null;
   const above = amountMinor !== null && ceiling !== null && amountMinor > ceiling;
   const descriptionError = !description.trim()
     ? 'Describe what the amount is for.'

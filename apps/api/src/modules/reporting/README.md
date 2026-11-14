@@ -281,8 +281,8 @@ DEC-102). **Verified** by `__tests__/open-amount-lines.spec.ts` (migration
   because it is what a reviewer reads.
 - `sales_by_product_line` leaves the `open_amount` kind out of the point-of-sale product lines
   and lists each open-amount line as its own row (source `point_of_sale_open_amount`) after the
-  product lines, with `revenueCategory`, `description`, `saleNumber` and `secondApproval` (`not
-needed`, `given`); its return is shown beside it. MET-109 and MET-110 add these lines up by
+  product lines, with `revenueCategory`, `description`, `saleNumber` and `secondApproval` (given, or not
+  needed); its return is shown beside it. MET-109 and MET-110 add these lines up by
   reason category under that source, with the revenue category as a dimension. Rows of the other
   sources carry null in the four new columns. With the capability off no such line exists and the
   report is as before.

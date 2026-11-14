@@ -6,8 +6,9 @@ import type { TestApp } from '../../../testing';
 import { createPolicyVersionFixture } from '../../catalog';
 import { createPersonFixture } from '../../identity';
 import { OPEN_AMOUNT_POLICY } from '../finance.policy';
+import { FakePaymentTokens } from '../providers/fake-payment.provider';
 import { approveTaxFee } from './stage3-doubles';
-import { adult, financeTestApp, post, staff, type Actor } from './support';
+import { adult, financeTestApp, post, staff, worker, type Actor } from './support';
 
 type Json = Record<string, unknown>;
 type SaleBody = Json & {
@@ -547,6 +548,60 @@ describe('point of sale: open-amount lines (SPK-PAY-016, proposed)', () => {
     // A general manager approves but does not enter a line: no ceiling of their own.
     expect((await rules(manager)).body.ceilingMinor).toBeNull();
     expect((await rules(customer)).status).toBe(403);
+  });
+
+  it('SPK-PAY-016, §4.11: a card tender that settles after a line above the ceiling was added does not pay the sale; removing the line then pays it, so it is never stranded', async () => {
+    const product = await post(t, '/v1/pos-products', manager.header, {
+      sku: `SKU-${newId().slice(-8).toUpperCase()}`,
+      name: 'Team photo',
+      kind: 'service',
+      priceMinor: 4_000,
+      currency: 'USD',
+      chargePolicyKeys: [],
+    });
+    const sale = await openSale();
+    const lined = await post(t, `/v1/pos-sales/${sale.id}/lines`, desk.header, {
+      productId: product.body.id,
+      quantity: 1,
+    });
+    // The provider does not answer: the tender stays pending and the sale open (SPK-PAY-007).
+    const unknown = await post(t, `/v1/pos-sales/${sale.id}/tenders`, desk.header, {
+      kind: 'card',
+      amountMinor: 4_000,
+      paymentMethodToken: FakePaymentTokens.timeout,
+      expectedRevision: lined.body.revision,
+    });
+    expect(unknown.status, JSON.stringify(unknown.body)).toBe(201);
+    expect(unknown.body).toMatchObject({ status: 'open', pendingMinor: 4_000 });
+    const added = await openLine(unknown.body, desk, { amountMinor: 9_000 });
+    expect(added.status, JSON.stringify(added.body)).toBe(201);
+    const lineId = added.body.lines.find((l: Json) => l.kind === 'open_amount').id as string;
+    // The reconciliation sweep finds the captured charge: the tender settles, the sale stays open.
+    t.clock.advance(20 * 60_000);
+    await worker(t).runOnce();
+    const settled = await t.http.get(`/v1/pos-sales/${sale.id}`).set(desk.header);
+    expect(settled.body).toMatchObject({
+      status: 'open',
+      totalMinor: 13_000,
+      settledMinor: 4_000,
+      pendingMinor: 0,
+    });
+    // It cannot be voided (a card was charged); the line is removed, and what was paid covers it.
+    const removed = await post(
+      t,
+      `/v1/pos-sales/${sale.id}/lines/${lineId}/quantity`,
+      desk.header,
+      { quantity: 0, expectedRevision: settled.body.revision },
+    );
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+    expect(removed.body).toMatchObject({ status: 'paid', totalMinor: 4_000, settledMinor: 4_000 });
+    const journals = await t.db
+      .selectFrom('journals')
+      .select('id')
+      .where('source_type', '=', 'pos_sale')
+      .where('source_id', '=', sale.id)
+      .execute();
+    expect(journals).toHaveLength(1);
   });
 
   it('SPK-PAY-016, §4.7: two approvals at once leave one record, and a tender racing a line above the ceiling never pays the sale with that line unapproved', async () => {

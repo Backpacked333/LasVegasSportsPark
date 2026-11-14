@@ -544,6 +544,10 @@ export class PosSalesService {
         amountMinor: Number(line.unit_price_minor),
       },
     });
+    // A card tender taken before the line was entered may have settled since, covering what the
+    // sale holds again: the sale is then paid here, as a tender would pay it, so it is never left
+    // open with nothing to pay and nothing to void (DEC-016).
+    await this.finalizer.payIfCovered(trx, organizationId, sale.id, principal, correlationId);
   }
 
   /**
