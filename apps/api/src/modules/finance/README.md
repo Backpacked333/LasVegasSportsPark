@@ -772,3 +772,60 @@ Verified by `__tests__/desk.spec.ts` and `__tests__/pos-line-quantity.spec.ts`:
 and a session's sales in keyset pages for POS readers of the facility (`finance.read_pos`); a
 customer or a role without it is refused, an unknown id is NOT_FOUND. The staff session page
 (SCR-S-55) lists both. Test: `__tests__/pos-lists.spec.ts`.
+
+## Quote pricing amendments (PA-02, PA-04): implemented behind capability switches
+
+SPK-PAY-013 (per-session price, capability `per_session_pricing`, DEC-096) and SPK-PAY-015 (member
+price, capability `member_pricing`, DEC-098) are **Proposed** requirements
+(`docs/package-a/proposed-specification-amendments.md`); each is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendments leave open are **Pending decision**.
+
+**Verified** (`pricing/quote-calculator.spec.ts`, `__tests__/quote-pricing-amendments.spec.ts`,
+`apps/api/src/__tests__/journeys/facility-class.spec.ts`; migration
+`0687_finance_quote_line_price_basis.sql`):
+
+- `LinePricing` (`pricing/line-pricing.service.ts`) gathers, before the unit of work, the facts a
+  line's unit price depends on: the sessions still to attend from catalog's
+  `PRICING_PORT.remainingSessions`, and the participant's membership from enrollment's
+  `MEMBERSHIP_PRICING_PORT` (finance reads no enrollment or catalog table). The arithmetic is the
+  pure `priceBasisOf`: the member price is chosen first, then a per-session price is multiplied by
+  the sessions counted. `quantity` stays the basket quantity and
+  `base_amount_minor = unit_price_minor * quantity` holds as before; discounts and charges are
+  worked out on the resulting amount.
+- Per session: a session counts when its status is `scheduled` and it starts strictly after the
+  quote instant; a line that names one session counts that session only. A child joining a
+  ten-session class after three sessions is quoted the per-session price times seven. When nothing
+  remains the quote is refused with RESOURCE_CONFLICT `NO_SESSIONS_REMAINING` (no minimum charge is
+  invented) and the basket estimate (`GET /v1/basket-prices/{id}`) is `unpriced`.
+- Member price: it applies only when the participant, after merged-person resolution
+  (SPK-IAM-007), holds a confirmed, unsuspended membership granting the rule's entitlement whose
+  term covers the quote instant. The line states which price applied and why (`active_membership`,
+  `no_active_membership`, `membership_suspended`) and names the membership that qualified.
+- `quote_lines.price_basis` stores that explanation (`QuoteLine.priceBasis`): the pricing basis,
+  the standard and applied price, the member decision, the session ids counted with their count
+  and the instant, and the unit price. `unitPriceFromBasis` reproduces the unit price from the
+  stored document alone (SPK-PAY-002). The database refuses a basis that is not an object, that
+  states another unit price than the line's, or that explains a line without a price rule; quote
+  lines stay append-only. The checkout copies the document to the order line's `price_basis`
+  (`pricing`), so a session canceled or added later, or a membership that lapses, is suspended or
+  is refunded after purchase, never changes a price already quoted or paid.
+- With `member_pricing` off, a member price on the rule is not evaluated and the standard price
+  applies. With both capabilities off every line is priced as before and `price_basis` is null.
+- With `per_session_pricing` off, a rule that was written per session cannot be quoted: the quote
+  is refused with ACCESS_DENIED `CAPABILITY_DISABLED` (the rule's base price is the price of one
+  session, so charging it as a term price would be wrong) and the basket estimate is `unpriced`.
+  Quotes and orders that already exist stay readable with their basis.
+
+**Proposed** (assumed defaults): a session counts until it starts and there is no minimum charge
+(**Pending decision** DEC-096); the reference date for membership is the quote instant and the
+membership follows the participant, never the paying adult (**Pending decision** DEC-098).
+
+**Pending decision**, not built: what happens to a paid per-session price when a session is
+canceled or added afterwards is left to the approved refund and credit policy (DEC-009); nothing
+re-prices a purchase.
+
+Known limits (see `.10x/decisions/sde/track-a.md`): enrollment's price snapshot on a basket line and
+on an enrollment still records the rule's base price, so the cancellation and transfer consequences
+that read it do not know the per-session product or the member price; a checkout re-prices nothing
+and relies on the quote's expiry (POL-013) for sessions that start between quote and payment.

@@ -23,6 +23,7 @@ import {
   type Quote,
   type QuoteDiscountLine,
   type QuoteLine,
+  type QuoteLinePriceBasis,
   type QuotePolicyReferences,
   type Receipt,
   type Refund,
@@ -226,6 +227,8 @@ export function toQuoteLine(row: QuoteLineRow): QuoteLine {
     charges: row.charge_lines as unknown as AppliedCharge[],
     policies: row.policy_references as unknown as LinePolicyReferences,
     enrollmentId: row.enrollment_id,
+    // 0687 (SPK-PAY-013, SPK-PAY-015): null for a plain term price and for every earlier line.
+    priceBasis: (row.price_basis as unknown as QuoteLinePriceBasis | null) ?? null,
   };
 }
 

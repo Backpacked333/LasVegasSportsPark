@@ -149,6 +149,60 @@ export const QuotePolicyReferencesSchema = z
   .openapi('QuotePolicyReferences');
 export type QuotePolicyReferences = z.infer<typeof QuotePolicyReferencesSchema>;
 
+/**
+ * Why a member price did or did not apply to a line (SPK-PAY-015, proposed amendment PA-04).
+ * `active_membership`: the participant (or a record merged into them) held the named membership
+ * entitlement at the quote instant. `no_active_membership`: no confirmed membership granting it
+ * covered the instant. `membership_suspended`: one did, and a suspension covered the instant.
+ */
+export const MemberPriceReasonSchema = z
+  .enum(['active_membership', 'no_active_membership', 'membership_suspended'])
+  .openapi('MemberPriceReason');
+export type MemberPriceReason = z.infer<typeof MemberPriceReasonSchema>;
+
+/**
+ * The stored facts a line's unit price was worked out from (SPK-PAY-002 "reproducible later from
+ * stored facts", SPK-PAY-013, SPK-PAY-015; proposed amendments PA-02 and PA-04). The order is
+ * fixed: the member price is chosen first, then a per-session price is multiplied by the sessions
+ * counted, so `unitPriceMinor` = `appliedPriceMinor` x (`sessions.count`, or 1 for a `term`
+ * price). It is written once with the quote and copied to the order line; nothing recomputes it.
+ */
+export const QuoteLinePriceBasisSchema = z
+  .object({
+    pricingBasis: z.enum(['term', 'per_session']),
+    /** The price rule's base price: of the term, or of one session. */
+    standardPriceMinor: z.number().int(),
+    appliedPrice: z.enum(['standard', 'member']),
+    /** The price chosen before any multiplication. */
+    appliedPriceMinor: z.number().int(),
+    /** Present when the price rule carried a member price and member pricing was in force. */
+    member: z
+      .object({
+        priceMinor: z.number().int(),
+        entitlementDefinitionId: z.uuid(),
+        entitlementName: z.string(),
+        applied: z.boolean(),
+        reason: MemberPriceReasonSchema,
+        /** The membership (an enrollment) that qualified; null when none did. */
+        membershipEnrollmentId: z.uuid().nullable(),
+        /** The reference instant: the instant of the quote. */
+        checkedAt: Instant,
+      })
+      .nullable(),
+    /** Present for a `per_session` price: the sessions counted and when. */
+    sessions: z
+      .object({
+        count: z.number().int(),
+        sessionIds: z.array(z.uuid()),
+        /** A session counts when it is scheduled and starts strictly after this instant. */
+        countedAt: Instant,
+      })
+      .nullable(),
+    unitPriceMinor: z.number().int(),
+  })
+  .openapi('QuoteLinePriceBasis');
+export type QuoteLinePriceBasis = z.infer<typeof QuoteLinePriceBasisSchema>;
+
 export const QuoteLineSchema = z
   .object({
     id: z.uuid(),
@@ -171,6 +225,11 @@ export const QuoteLineSchema = z
     charges: z.array(AppliedChargeSchema),
     policies: LinePolicyReferencesSchema,
     enrollmentId: z.uuid().nullable(),
+    /**
+     * How the unit price was worked out when the price rule is per session or carries a member
+     * price (SPK-PAY-013, SPK-PAY-015); null for a plain term price, as before the amendments.
+     */
+    priceBasis: QuoteLinePriceBasisSchema.nullable(),
   })
   .openapi('QuoteLine');
 export type QuoteLine = z.infer<typeof QuoteLineSchema>;
