@@ -27,6 +27,9 @@
  *   and while the options are not read the permission view (`GET /v1/me/permissions`) keeps a
  *   switched-off intent out of the choices. The API still refuses the line (CAPABILITY_DISABLED).
  * - Offline: commands are disabled and what was typed is kept.
+ * - A quote line priced per session or with a member price evaluated (SPK-PAY-013, SPK-PAY-015;
+ *   proposed amendments PA-02 and PA-04) shows the basis the quote stored: the per-class price,
+ *   the count and the product, and which price applied and why. Nothing is worked out here.
  */
 import {
   CAPABILITY_PRESENTATION,
@@ -73,6 +76,7 @@ import { OfflineCaption, useOnline } from '../../features/registration-finance/o
 import { PaymentAttemptList } from '../../features/registration-finance/PaymentAttempts';
 import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import { PENDING } from '../../features/registration-finance/pending';
+import { priceBasisLines } from '../../features/registration-finance/price-basis';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { useNow } from '../../providers/AppProviders';
 import { outcomePending, useSameRequest } from '../../features/registration-finance/sameRequest';
@@ -432,7 +436,15 @@ function QuoteView({ quote }: { quote: Quote }) {
                   <PersonName id={line.participantPersonId} fallback="Participant" />:{' '}
                   {line.description}
                 </td>
-                <td>{formatMoney(line.baseAmountMinor, line.currency)}</td>
+                <td>
+                  {formatMoney(line.baseAmountMinor, line.currency)}
+                  {/* SPK-PAY-013, SPK-PAY-015: the stored basis, when the quote has one. */}
+                  {priceBasisLines(line.priceBasis, line.currency).map((text) => (
+                    <div className="caption" key={text}>
+                      {text}
+                    </div>
+                  ))}
+                </td>
                 <td>
                   {formatMoney(line.discountMinor, line.currency)}
                   {line.discounts.map((d) => (

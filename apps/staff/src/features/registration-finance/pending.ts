@@ -76,6 +76,18 @@ export const PENDING = {
     subject: 'How long a waitlist offer holds its place',
     owner: 'Product and operations',
   },
+  perSessionPricing: {
+    ids: ['DEC-096'],
+    subject:
+      'Which programs are priced per session, when a session stops counting, and any minimum charge',
+    owner: 'Product owner; Finance for the values',
+  },
+  memberPricing: {
+    ids: ['DEC-098'],
+    subject:
+      'Which offerings carry a member price, the date membership is checked on, and whose membership counts for a child',
+    owner: 'Product owner; Finance for the values',
+  },
   overrideAuthority: {
     ids: ['DEC-066'],
     subject: 'Which roles may override an eligibility failure',

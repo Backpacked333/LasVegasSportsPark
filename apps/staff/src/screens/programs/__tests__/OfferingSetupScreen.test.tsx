@@ -4,6 +4,7 @@
  * in minor units, copy as a draft, and the staff-details restriction; the facility zone from the
  * facility directory (K-04) and the responsible manager from the staff directory (ID-04).
  */
+import type { Schema } from '@sportspark/api-client';
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -12,7 +13,7 @@ import {
   MANAGER_ID,
   facilitiesRoute,
 } from '../../../features/registration-finance/__tests__/fixtures';
-import { FACILITY_A, createTestApp, todayFeed } from '../../../testing/test-app';
+import { FACILITY_A, createTestApp, mePermissions, todayFeed } from '../../../testing/test-app';
 import {
   NOW,
   OFFERING_B_ID,
@@ -39,6 +40,28 @@ const session = {
   revision: 2,
   createdAt: NOW,
 };
+
+const MEMBERSHIP_ID = '0192f1a0-0000-7000-8000-000000002101';
+
+function priceRule(overrides: Partial<Schema<'PriceRule'>> = {}): Schema<'PriceRule'> {
+  return {
+    id: '0192f1a0-0000-7000-8000-000000002201',
+    offeringId: OFFERING_ID,
+    version: 1,
+    effectiveFrom: '2026-10-25T07:00:00.000Z',
+    effectiveTo: null,
+    basePriceMinor: 12500,
+    currency: 'USD',
+    chargeLines: [],
+    pricingBasis: 'term',
+    memberPriceMinor: null,
+    memberEntitlementDefinitionId: null,
+    memberEntitlementName: null,
+    revision: 1,
+    createdAt: NOW,
+    ...overrides,
+  };
+}
 
 function routes(extra: Record<string, FakeHandler> = {}): Record<string, FakeHandler> {
   return {
@@ -171,6 +194,127 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
         chargeLines: [
           { code: 'STATE', label: 'State tax', kind: 'tax', inclusive: false, basisPoints: 825 },
         ],
+      }),
+    );
+  });
+
+  it('SPK-PAY-013, SPK-PAY-015: with the capabilities off the price form has no per-session or member price input', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const form = await screen.findByRole('form', { name: 'New price rule version' });
+    await waitFor(() =>
+      expect(app.fake.requests.some((r) => r.route === '/me/permissions')).toBe(true),
+    );
+    expect(within(form).queryByLabelText(/^The base price is for/)).not.toBeInTheDocument();
+    expect(within(form).queryByLabelText(/^Member price/)).not.toBeInTheDocument();
+    expect(
+      within(form).queryByLabelText(/^Membership for the member price/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('SPK-PAY-013: with per-session pricing on, staff choose a price for each session and the rule is listed as per session', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': mePermissions({ enabled: ['per_session_pricing'] }),
+        'GET /offerings/{id}/price-rules': ok([
+          priceRule({ basePriceMinor: 2400, pricingBasis: 'per_session' }),
+        ]),
+        'POST /offerings/{id}/price-rules': ok({}, 201),
+      }),
+    });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const versions = await screen.findByRole('list', { name: 'Price rule versions' });
+    expect(within(versions).getByText('Version 1: $24.00 per session')).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: 'New price rule version' });
+    const f = within(form);
+    const basis = await f.findByLabelText(/^The base price is for/);
+    // The proposed rule is named with its decision record, never invented.
+    expect(f.getByText(/pending DEC-096/)).toBeInTheDocument();
+    // Member pricing is still off: its inputs are absent.
+    expect(f.queryByLabelText(/^Member price/)).not.toBeInTheDocument();
+    await user.type(f.getByLabelText(/^Base price/), '24.00');
+    await user.type(f.getByLabelText(/^Currency/), 'usd');
+    await user.type(f.getByLabelText(/^Effective from/), '2026-10-25T00:00');
+    await user.selectOptions(basis, 'per_session');
+    await user.click(f.getByRole('button', { name: 'Create price rule version' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find(
+          (r) => r.route === '/offerings/{id}/price-rules' && r.method === 'POST',
+        )?.body,
+      ).toEqual({
+        effectiveFrom: '2026-10-25T07:00:00.000Z',
+        basePriceMinor: 2400,
+        currency: 'USD',
+        chargeLines: [],
+        pricingBasis: 'per_session',
+      }),
+    );
+  });
+
+  it('SPK-PAY-015: with member pricing on, staff enter a member price with its membership; one without the other is not sent', async () => {
+    const user = userEvent.setup();
+    const membership = {
+      ...entitlement(),
+      id: MEMBERSHIP_ID,
+      name: 'Annual membership',
+      kind: 'membership_benefit' as const,
+    };
+    const app = createTestApp({
+      routes: routes({
+        'GET /me/permissions': mePermissions({ enabled: ['member_pricing'] }),
+        'GET /entitlement-definitions': ok([entitlement(), membership]),
+        'GET /offerings/{id}/price-rules': ok([
+          priceRule({
+            basePriceMinor: 30000,
+            memberPriceMinor: 25000,
+            memberEntitlementDefinitionId: MEMBERSHIP_ID,
+            memberEntitlementName: 'Annual membership',
+          }),
+        ]),
+        'POST /offerings/{id}/price-rules': ok({}, 201),
+      }),
+    });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const versions = await screen.findByRole('list', { name: 'Price rule versions' });
+    expect(
+      within(versions).getByText('Member price: $250.00 for holders of Annual membership'),
+    ).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: 'New price rule version' });
+    const f = within(form);
+    const memberPrice = await f.findByLabelText(/^Member price/);
+    expect(f.getByText(/pending DEC-098/)).toBeInTheDocument();
+    expect(f.queryByLabelText(/^The base price is for/)).not.toBeInTheDocument();
+    // Only membership entitlements are offered.
+    const select = f.getByLabelText(/^Membership for the member price/);
+    await waitFor(() =>
+      expect(within(select).getByRole('option', { name: 'Annual membership' })).toBeInTheDocument(),
+    );
+    expect(within(select).queryByRole('option', { name: 'Term seat' })).not.toBeInTheDocument();
+
+    await user.type(f.getByLabelText(/^Base price/), '300.00');
+    await user.type(f.getByLabelText(/^Currency/), 'USD');
+    await user.type(f.getByLabelText(/^Effective from/), '2026-10-25T00:00');
+    await user.type(memberPrice, '250.00');
+    await user.click(f.getByRole('button', { name: 'Create price rule version' }));
+    expect(await f.findByText('Choose the membership this price is for.')).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+
+    await user.selectOptions(select, MEMBERSHIP_ID);
+    await user.click(f.getByRole('button', { name: 'Create price rule version' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find(
+          (r) => r.route === '/offerings/{id}/price-rules' && r.method === 'POST',
+        )?.body,
+      ).toEqual({
+        effectiveFrom: '2026-10-25T07:00:00.000Z',
+        basePriceMinor: 30000,
+        currency: 'USD',
+        chargeLines: [],
+        memberPriceMinor: 25000,
+        memberEntitlementDefinitionId: MEMBERSHIP_ID,
       }),
     );
   });

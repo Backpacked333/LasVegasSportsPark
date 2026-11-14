@@ -9,11 +9,17 @@
  * viewer without it sees the offering as not available for setup. Session times and the price
  * effective dates are wall-clock time in the facility's zone when the API states it
  * (SPK-SCHED-008). Taxes and fees are whatever finance enters: approved values are pending DEC-007.
+ *
+ * Proposed amendments, each shown only while its capability is on: a price for each session
+ * instead of the whole term (SPK-PAY-013, PA-02, `per_session_pricing`, pending DEC-096) and an
+ * optional member price with the membership it requires (SPK-PAY-015, PA-04, `member_pricing`,
+ * pending DEC-098). A rule that already carries either is always listed as it is.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError, fieldErrorsOf } from '../../features/registration-finance/CommandError';
@@ -50,6 +56,7 @@ import '../../features/grow/grow.css';
 
 type Offering = Schema<'Offering'>;
 type ChargeLine = Schema<'ChargeLine'>;
+type PricingBasis = Schema<'PricingBasis'>;
 
 const OFFERING_KEY = ['api', '/offerings/{id}'] as const;
 
@@ -298,6 +305,22 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
   const [currency, setCurrency] = useState('');
   const [charges, setCharges] = useState<ChargeRow[]>([]);
   const [local, setLocal] = useState<Record<string, string>>({});
+  // SPK-PAY-013 (PA-02) and SPK-PAY-015 (PA-04): the inputs exist only while the organization
+  // has the capability turned on; with it off the request is exactly the one sent before.
+  const permissions = usePermissions();
+  const perSessionOn = permissions.isCapabilityEnabled('per_session_pricing') === true;
+  const memberOn = permissions.isCapabilityEnabled('member_pricing') === true;
+  const [basis, setBasis] = useState<PricingBasis>('term');
+  const [memberPrice, setMemberPrice] = useState('');
+  const [membershipId, setMembershipId] = useState('');
+  const definitions = useApiQuery({
+    path: '/entitlement-definitions',
+    staleTime: 60_000,
+    enabled: memberOn,
+  });
+  const membershipOptions = (definitions.data ?? [])
+    .filter((d) => d.kind === 'membership_benefit' && d.status === 'active')
+    .map((d) => ({ value: d.id, label: d.name }));
   const server = fieldErrorsOf(create.error);
   const zoneLabel = zone ? `facility time, ${zone}` : 'UTC';
   const updateCharge = (i: number, patch: Partial<ChargeRow>) =>
@@ -336,6 +359,16 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
         });
       }
     });
+    // A member price and its membership are given together or not at all.
+    const wantsMember = memberOn && (memberPrice.trim() !== '' || membershipId !== '');
+    const member =
+      wantsMember && /^[A-Z]{3}$/.test(code) ? parseMoneyInput(memberPrice, code, true) : null;
+    if (wantsMember && member === null) {
+      errors.memberPriceMinor = 'Enter the member price, for example 100.00.';
+    }
+    if (wantsMember && !membershipId) {
+      errors.memberEntitlementDefinitionId = 'Choose the membership this price is for.';
+    }
     setLocal(errors);
     if (Object.keys(errors).length > 0 || base === null || !effectiveFrom) return;
     create
@@ -347,6 +380,10 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
           basePriceMinor: base,
           currency: code,
           chargeLines,
+          ...(perSessionOn ? { pricingBasis: basis } : {}),
+          ...(wantsMember && member !== null
+            ? { memberPriceMinor: member, memberEntitlementDefinitionId: membershipId }
+            : {}),
         },
       })
       .catch(() => undefined);
@@ -380,7 +417,21 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
                   <div className="row-text">
                     <span className="row-title">
                       Version {rule.version}: {formatMoney(rule.basePriceMinor, rule.currency)}
+                      {rule.pricingBasis === 'per_session' ? ' per session' : ''}
                     </span>
+                    {rule.pricingBasis === 'per_session' ? (
+                      <span className="caption">
+                        Joining costs this price for each session still to come when the quote is
+                        made.
+                      </span>
+                    ) : null}
+                    {rule.memberPriceMinor !== null ? (
+                      <span className="caption">
+                        Member price: {formatMoney(rule.memberPriceMinor, rule.currency)}
+                        {rule.pricingBasis === 'per_session' ? ' per session' : ''} for holders of{' '}
+                        {rule.memberEntitlementName ?? 'the named membership'}
+                      </span>
+                    ) : null}
                     <span className="caption">
                       Effective {formatInstant(rule.effectiveFrom, zone)}
                       {rule.effectiveTo
@@ -442,6 +493,39 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
             onChange={setTo}
             error={local.effectiveTo ?? server.effectiveTo}
           />
+          {perSessionOn ? (
+            <SelectField
+              label="The base price is for"
+              hint={`Per session: joining costs the price for each session still to come when the quote is made. Proposed rule, pending ${PENDING.perSessionPricing.ids.join(', ')}: a session counts until it starts, with no minimum charge.`}
+              value={basis}
+              onChange={(v) => setBasis(v as PricingBasis)}
+              options={[
+                { value: 'term', label: 'The whole term' },
+                { value: 'per_session', label: 'Each session' },
+              ]}
+              error={server.pricingBasis}
+            />
+          ) : null}
+          {memberOn ? (
+            <>
+              <TextField
+                label="Member price"
+                inputMode="decimal"
+                hint={`Optional. Applies to a participant who holds the membership when the quote is made. Proposed rule, pending ${PENDING.memberPricing.ids.join(', ')}.`}
+                value={memberPrice}
+                onChange={setMemberPrice}
+                error={local.memberPriceMinor ?? server.memberPriceMinor}
+              />
+              <SelectField
+                label="Membership for the member price"
+                placeholder="None"
+                value={membershipId}
+                onChange={setMembershipId}
+                options={membershipOptions}
+                error={local.memberEntitlementDefinitionId ?? server.memberEntitlementDefinitionId}
+              />
+            </>
+          ) : null}
         </div>
         <ul className="list" aria-label="Taxes and fees">
           {charges.map((row, i) => (
