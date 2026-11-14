@@ -675,12 +675,17 @@ export class RegistrationExtras {
     return { extraPoolIds, replacesOfferingPools };
   }
 
-  /** The uniform chosen for a line, with what it is and costs now; null when it chose none. */
+  /**
+   * The uniform chosen for a line, with what it is and costs now; null when it chose none.
+   * `charged` is false for a uniform without a price, and for a participant who already holds
+   * the current uniform where the offering does not charge it again (the same facts the quote
+   * reads, SPK-REG-012).
+   */
   async uniformOfLine(
     trx: Trx,
     organizationId: string,
-    line: { id: string; offering_id: string },
-  ): Promise<{ uniform: OfferingUniform; size: string } | null> {
+    line: { id: string; offering_id: string; participant_person_id: string },
+  ): Promise<{ uniform: OfferingUniform; size: string; charged: boolean } | null> {
     const row = await trx
       .selectFrom('basket_line_uniforms')
       .select(['offering_uniform_id', 'size'])
@@ -696,7 +701,10 @@ export class RegistrationExtras {
         { code: 'UNIFORM_NOT_OFFERED', lineId: line.id },
       );
     }
-    return { uniform, size: row.size };
+    const held = uniform.returningHolderFree
+      ? await this.heldUniform(trx, organizationId, line.participant_person_id, uniform.itemKey)
+      : null;
+    return { uniform, size: row.size, charged: uniform.priceMinor !== null && held === null };
   }
 }
 

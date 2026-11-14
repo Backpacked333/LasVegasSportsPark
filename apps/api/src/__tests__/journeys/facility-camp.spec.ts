@@ -769,6 +769,18 @@ describe('Facility camp scenarios: price tiers, add-ons and uniforms (assembled 
         },
       });
       expect(secondQuote['totalMinor']).toBe(12_000);
+      // The order of that uniform records no price, so the staff list never reads it as paid for.
+      const summerOrders = await ok<Body[]>(
+        get(t, `/v1/uniform-orders?offeringId=${summer.offeringId}`, desk.header),
+      );
+      expect(summerOrders).toEqual([
+        expect.objectContaining({
+          size: 'YL',
+          status: 'ordered',
+          priceMinor: null,
+          currency: null,
+        }),
+      ]);
 
       // Cancelling the first registration: the place is refunded by the policy; the uniform, now
       // handed over, is not part of that amount and stays with the participant.

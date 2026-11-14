@@ -1063,6 +1063,7 @@ export class BasketsService implements BasketPort {
         teamEntryId: line.team_entry_id,
         uniform: chosenUniform.uniform,
         size: chosenUniform.size,
+        charged: chosenUniform.charged,
         correlationId,
       });
     }

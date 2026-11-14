@@ -83,6 +83,12 @@ export class UniformOrdersService {
       teamEntryId: string | null;
       uniform: OfferingUniform;
       size: string;
+      /**
+       * False for a uniform that is not charged: one without a price, or one a returning
+       * participant already holds where the offering says it is not charged again. The order
+       * then records no price, so the staff list never reads "paid" for what cost nothing.
+       */
+      charged: boolean;
       correlationId: string | null;
     },
   ): Promise<string> {
@@ -102,8 +108,8 @@ export class UniformOrdersService {
           item_key: input.uniform.itemKey,
           name: input.uniform.name,
           size: input.size,
-          price_minor: input.uniform.priceMinor,
-          currency: input.uniform.currency,
+          price_minor: input.charged ? input.uniform.priceMinor : null,
+          currency: input.charged ? input.uniform.currency : null,
           ordered_at: this.clock.now(),
           paid_at: null,
           handed_over_at: null,
