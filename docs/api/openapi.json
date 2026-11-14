@@ -6603,7 +6603,8 @@
           "overpayment",
           "installment",
           "booking_terms",
-          "tax_fee"
+          "tax_fee",
+          "waiver"
         ]
       },
       "PolicyApprovalStatus": {
@@ -6626,6 +6627,13 @@
         "enum": [
           "active",
           "withdrawn"
+        ]
+      },
+      "AcknowledgmentMethod": {
+        "type": "string",
+        "enum": [
+          "digital",
+          "paper"
         ]
       },
       "DiscountKind": {
@@ -7340,6 +7348,13 @@
           "reason"
         ]
       },
+      "WaiverEnforcement": {
+        "type": "string",
+        "enum": [
+          "warn",
+          "block"
+        ]
+      },
       "Approval": {
         "type": "object",
         "properties": {
@@ -7438,6 +7453,16 @@
             "type": "object",
             "additionalProperties": {}
           },
+          "method": {
+            "$ref": "#/components/schemas/AcknowledgmentMethod"
+          },
+          "paperDatedOn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
           "status": {
             "$ref": "#/components/schemas/AcknowledgmentStatus"
           },
@@ -7473,6 +7498,8 @@
           "recordedByKind",
           "signedAt",
           "evidence",
+          "method",
+          "paperDatedOn",
           "status",
           "withdrawnAt",
           "withdrawnReason",
@@ -9372,6 +9399,559 @@
           "totalDiscountMinor",
           "totalNetMinor",
           "unknownCodes"
+        ]
+      },
+      "WaiverStatusValue": {
+        "type": "string",
+        "enum": [
+          "current",
+          "lapsed",
+          "missing"
+        ]
+      },
+      "WaiverStatusReason": {
+        "type": "string",
+        "enum": [
+          "never_accepted",
+          "no_version_in_force",
+          "new_version",
+          "renewal_due"
+        ]
+      },
+      "WaiverVersionRef": {
+        "type": "object",
+        "properties": {
+          "policyVersionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "policyVersionId",
+          "version",
+          "title",
+          "effectiveFrom"
+        ]
+      },
+      "WaiverAcceptance": {
+        "type": "object",
+        "properties": {
+          "acknowledgmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "policyVersionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "subjectPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "signedByPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/AcknowledgmentBasis"
+          },
+          "method": {
+            "$ref": "#/components/schemas/AcknowledgmentMethod"
+          },
+          "signedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "paperDatedOn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "recordedByKind": {
+            "type": "string",
+            "enum": [
+              "customer",
+              "staff",
+              "system"
+            ]
+          },
+          "recordedByPersonId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "acceptedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AcknowledgmentStatus"
+          },
+          "withdrawnAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "withdrawnReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "acknowledgmentId",
+          "policyVersionId",
+          "version",
+          "subjectPersonId",
+          "signedByPersonId",
+          "basis",
+          "method",
+          "signedAt",
+          "paperDatedOn",
+          "recordedByKind",
+          "recordedByPersonId",
+          "acceptedAt",
+          "status",
+          "withdrawnAt",
+          "withdrawnReason"
+        ]
+      },
+      "WaiverRule": {
+        "type": "object",
+        "properties": {
+          "reacceptOnNewVersion": {
+            "type": "boolean"
+          },
+          "renewEveryMonths": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enforcement": {
+            "$ref": "#/components/schemas/WaiverEnforcement"
+          }
+        },
+        "required": [
+          "reacceptOnNewVersion",
+          "renewEveryMonths",
+          "enforcement"
+        ]
+      },
+      "WaiverStatus": {
+        "type": "object",
+        "properties": {
+          "policyKey": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WaiverStatusValue"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WaiverStatusReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentVersion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WaiverVersionRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "acceptance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WaiverAcceptance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lapsedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WaiverRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evaluatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "policyKey",
+          "status",
+          "reason",
+          "currentVersion",
+          "acceptance",
+          "validUntil",
+          "lapsedAt",
+          "rule",
+          "evaluatedAt"
+        ]
+      },
+      "WaiverActivityType": {
+        "type": "string",
+        "enum": [
+          "offering",
+          "offering_session",
+          "scheduling_event",
+          "booking"
+        ]
+      },
+      "WaiverActivityRef": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/WaiverActivityType"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ]
+      },
+      "WaiverOverride": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "policyKey": {
+            "type": "string"
+          },
+          "policyVersionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "waiverStatus": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "lapsed"
+            ]
+          },
+          "activity": {
+            "$ref": "#/components/schemas/WaiverActivityRef"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actorPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "personId",
+          "policyKey",
+          "policyVersionId",
+          "waiverStatus",
+          "activity",
+          "reason",
+          "actorPersonId",
+          "occurredAt"
+        ]
+      },
+      "PersonWaiver": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WaiverStatus"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "history": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/WaiverAcceptance"
+                }
+              },
+              "overrides": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/WaiverOverride"
+                }
+              }
+            },
+            "required": [
+              "title",
+              "history",
+              "overrides"
+            ]
+          }
+        ]
+      },
+      "PersonWaivers": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "evaluated": {
+            "type": "boolean"
+          },
+          "waivers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonWaiver"
+            }
+          }
+        },
+        "required": [
+          "personId",
+          "evaluated",
+          "waivers"
+        ]
+      },
+      "RecordWaiverAcceptanceRequest": {
+        "type": "object",
+        "properties": {
+          "subjectPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "policyKey": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,99}$"
+          },
+          "policyVersionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "method": {
+            "$ref": "#/components/schemas/AcknowledgmentMethod"
+          },
+          "signedByPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paperDatedOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": {},
+            "default": {}
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "subjectPersonId",
+          "policyKey"
+        ]
+      },
+      "RecordWaiverOverrideRequest": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "policyKey": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,99}$"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/WaiverActivityRef"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "personId",
+          "policyKey",
+          "activity",
+          "reason"
+        ]
+      },
+      "OfferingRequiredWaiver": {
+        "type": "object",
+        "properties": {
+          "policyKey": {
+            "type": "string"
+          },
+          "currentVersion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WaiverVersionRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enforcement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WaiverEnforcement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "policyKey",
+          "currentVersion",
+          "enforcement"
+        ]
+      },
+      "OfferingRequiredWaivers": {
+        "type": "object",
+        "properties": {
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "waivers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OfferingRequiredWaiver"
+            }
+          }
+        },
+        "required": [
+          "offeringId",
+          "waivers"
+        ]
+      },
+      "SetOfferingRequiredWaiversRequest": {
+        "type": "object",
+        "properties": {
+          "policyKeys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,99}$"
+            },
+            "maxItems": 10
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "policyReferences": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "policyKeys"
         ]
       },
       "NotificationKind": {
@@ -29695,6 +30275,8 @@
           "no_participation",
           "enrollment_not_confirmed",
           "missing_acknowledgment",
+          "waiver_missing",
+          "waiver_lapsed",
           "outstanding_balance",
           "balance_unknown",
           "activity_canceled",
@@ -60118,6 +60700,426 @@
             "$ref": "#/components/parameters/ClientInfo"
           }
         ]
+      }
+    },
+    "/people/{id}/waivers": {
+      "get": {
+        "summary": "A person's waivers: current, lapsed or missing with the facts, and the acceptance history (staff; the person; a guardian holding complete_forms) (SPK-REG-011, proposed)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonWaivers"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/waiver-acceptances": {
+      "post": {
+        "summary": "Accept a waiver digitally (the adult or a guardian), or record a signed paper as a staff entry with the date on the paper (SPK-REG-011, SPK-REG-009, proposed)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordWaiverAcceptanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Acknowledgment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, participant authority required, or the capability is turned off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/waiver-overrides": {
+      "post": {
+        "summary": "Record an override of a blocking waiver rule for one person and one activity (SPK-REG-011, proposed)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordWaiverOverrideRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaiverOverride"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, participant authority required, or the capability is turned off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offerings/{id}/required-waivers": {
+      "get": {
+        "summary": "The waiver families an offering requires, with the version in force (SPK-REG-011, proposed)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingRequiredWaivers"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Set the waiver families an offering requires (SPK-REG-011, proposed)",
+        "tags": [
+          "Catalog"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Required on this consequential command (§4.9). The same key with the same payload replays the stored outcome (`Idempotent-Replayed: true`); the same key with a different payload answers IDEMPOTENCY_CONFLICT; keys expire after the configured window.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOfferingRequiredWaiversRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferingRequiredWaivers"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied, participant authority required, or the capability is turned off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict (RESOURCE_CONFLICT, STALE_REVISION, IDEMPOTENCY_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/notifications": {
