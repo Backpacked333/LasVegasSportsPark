@@ -272,6 +272,42 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
     expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
   });
 
+  it('CMP-12 / SPK-RESULT-001: a played result before kickoff is explained, never as a changed record', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: {
+        ...routes([]),
+        'POST /fixtures/{id}/results': fail(409, 'INVALID_TRANSITION', 'reload_and_retry', {
+          message: 'The fixture has not started yet.',
+          details: {
+            code: 'FIXTURE_NOT_STARTED',
+            fixtureId: ID.fixture,
+            scheduledStart: '2026-11-14T18:00:00.000Z',
+            classification: 'completed',
+          },
+        }),
+      },
+    });
+    render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
+    await user.click(await screen.findByRole('button', { name: 'Enter the result' }));
+    const form = screen.getByRole('form', { name: 'Submit a result' });
+    await user.selectOptions(within(form).getByLabelText(/^Classification/), 'completed');
+    await user.type(within(form).getByLabelText(/^Red score/), '5');
+    await user.type(within(form).getByLabelText(/^Blue score/), '3');
+    await user.click(within(form).getByRole('button', { name: 'Submit the result for review' }));
+    expect(await within(form).findByText('The game has not started yet')).toBeInTheDocument();
+    expect(
+      within(form).getByText(
+        /once the game has kicked off \(scheduled .*2026.*\)\. Before then only/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(form).getByText('Error code: INVALID_TRANSITION (FIXTURE_NOT_STARTED)'),
+    ).toBeInTheDocument();
+    expect(within(form).queryByText('This record changed')).toBeNull();
+    expect(within(form).queryByRole('button', { name: 'Reload' })).toBeNull();
+  });
+
   it('SPK-RESULT-004: a correction starts from the official result and carries its cards unchanged', async () => {
     const user = userEvent.setup();
     const card = { personId: ID.person, teamEntryId: ID.entryRed, kind: 'yellow', minute: 34 };

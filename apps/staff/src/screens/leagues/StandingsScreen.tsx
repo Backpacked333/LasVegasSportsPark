@@ -31,6 +31,7 @@ import { humanizeCode } from '../../features/competition/labels';
 import { SeasonLinks } from '../../features/competition/nav';
 import { CompeteHeader } from '../../features/competition/page';
 import { SeasonEyebrow } from '../../features/competition/season-context';
+import { useStandingsDivision } from '../../features/competition/standings-division';
 import { CardHead } from '../../ui/Page';
 import { EntryName, useSeasonEntries, type EntryNames } from '../../features/competition/names';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -307,17 +308,21 @@ function PublishNode({ node }: { node: BracketNode }) {
   );
 }
 
+/**
+ * The season's bracket. Unlike the table, a bracket is read for the whole season by default: a
+ * node may belong to no division (a final between division winners), so the division shown here
+ * is chosen apart from the table's.
+ */
 function Bracket({
   seasonId,
-  divisionId,
   entries,
   divisions,
 }: {
   seasonId: string;
-  divisionId: string;
   entries: EntryNames;
   divisions: readonly { value: string; label: string }[];
 }) {
+  const [divisionId, setDivisionId] = useState('');
   const nodes = useApiQuery({
     path: '/seasons/{id}/bracket-nodes',
     request: { path: { id: seasonId }, query: { ...(divisionId ? { divisionId } : {}) } },
@@ -339,6 +344,17 @@ function Bracket({
   return (
     <section className="panel" aria-labelledby="bracket-title">
       <h3 id="bracket-title">Bracket</h3>
+      {divisions.length > 0 ? (
+        <div className="toolbar">
+          <SelectField
+            label="Bracket of"
+            value={divisionId}
+            onChange={setDivisionId}
+            options={divisions}
+            placeholder="Whole season"
+          />
+        </div>
+      ) : null}
       {divisionId && nodes.data && nodes.data.length === 0 ? (
         <GenerateBracket
           divisionId={divisionId}
@@ -462,13 +478,19 @@ function teamNameOf(entryId: string, entries: EntryNames): string {
 
 export function StandingsScreen() {
   const { seasonId = '' } = useParams();
-  const [divisionId, setDivisionId] = useState('');
   const divisions = useApiQuery({ path: '/divisions', request: { query: { seasonId } } });
+  const {
+    divisionId,
+    choose: setDivisionId,
+    divided,
+    ready,
+  } = useStandingsDivision(divisions.data, divisions.data !== undefined || !!divisions.error);
   const { byId } = useSeasonEntries(seasonId);
   const divisionOptions = (divisions.data ?? []).map((d) => ({ value: d.id, label: d.name }));
   const standings = useApiQuery({
     path: '/seasons/{id}/standings',
     request: { path: { id: seasonId }, query: { ...(divisionId ? { divisionId } : {}) } },
+    enabled: ready,
   });
   const form = useSeasonForm(seasonId, divisionId || undefined);
   return (
@@ -489,7 +511,7 @@ export function StandingsScreen() {
                 value={divisionId}
                 onChange={setDivisionId}
                 options={divisionOptions}
-                placeholder="Whole season"
+                {...(divided ? {} : { placeholder: 'Whole season' })}
               />
             </div>
           }
@@ -518,12 +540,7 @@ export function StandingsScreen() {
           </QueryBoundary>
         </div>
       </section>
-      <Bracket
-        seasonId={seasonId}
-        divisionId={divisionId}
-        entries={byId}
-        divisions={divisionOptions}
-      />
+      <Bracket seasonId={seasonId} entries={byId} divisions={divisionOptions} />
     </section>
   );
 }
