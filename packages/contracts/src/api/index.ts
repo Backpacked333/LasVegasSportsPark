@@ -10,6 +10,7 @@ export * from './competition';
 export * from './core';
 export * from './enrollment-overview';
 export * from './enrollment-package-g';
+export * from './enrollment-rosters';
 export * from './enrollment';
 export * from './entry-hardware';
 export * from './entry';

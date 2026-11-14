@@ -338,6 +338,44 @@ export const EnrollmentActions = defineActions({
     allowSelf: true,
     requirements: ['SPK-COND-003'],
   },
+  // SPK-COND-005 (proposed amendment PA-09, DEC-103): rental-group rosters.
+  manageBookingRoster: {
+    id: 'enrollment.manage_booking_roster',
+    description:
+      'Add or invite people to a rental booking roster (staff at the facility; the renter; a member adding themselves or someone they may register)',
+    staffRoles: ['front_desk', 'program_manager', 'scheduler', 'general_manager'],
+    allowSelf: true,
+    subjectPermission: 'register',
+    capability: 'rental_rosters',
+    requirements: ['SPK-COND-005'],
+  },
+  acceptBookingRosterInvitation: {
+    id: 'enrollment.accept_booking_roster_invitation',
+    description:
+      'Join a rental booking roster on an invitation, for yourself or someone you may register',
+    staffRoles: [],
+    allowSelf: true,
+    subjectPermission: 'register',
+    capability: 'rental_rosters',
+    requirements: ['SPK-COND-005', 'SPK-IAM-003'],
+  },
+  removeBookingRosterMember: {
+    id: 'enrollment.remove_booking_roster_member',
+    description:
+      'Remove a rental roster member or revoke an invitation (staff at the facility, the renter, the member or someone who may register them)',
+    staffRoles: ['front_desk', 'program_manager', 'scheduler', 'general_manager'],
+    allowSelf: true,
+    subjectPermission: 'register',
+    requirements: ['SPK-COND-005'],
+  },
+  readBookingRoster: {
+    id: 'enrollment.read_booking_roster',
+    description:
+      "Read a rental booking's roster with each member's waiver status (the renter, or staff in facility scope)",
+    staffRoles: READERS,
+    allowSelf: true,
+    requirements: ['SPK-COND-005', 'SPK-REG-011'],
+  },
   manageAssessmentTemplate: {
     id: 'enrollment.manage_assessment_template',
     description: 'Draft and approve youth assessment templates (ENR-14)',

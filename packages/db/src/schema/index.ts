@@ -7,6 +7,7 @@ import type { CompetitionFieldTables } from './competition-field';
 import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
 import type { EnrollmentPackageGTables } from './enrollment-package-g';
+import type { EnrollmentRostersTables } from './enrollment-rosters';
 import type { EnrollmentTables } from './enrollment';
 import type { EntryTables } from './entry';
 import type { FacilitiesTables } from './facilities';
@@ -29,6 +30,7 @@ export * from './competition-field';
 export * from './competition-matches';
 export * from './competition';
 export * from './enrollment-package-g';
+export * from './enrollment-rosters';
 export * from './enrollment';
 export * from './entry';
 export * from './facilities';
@@ -57,6 +59,7 @@ export interface Database
     CompetitionMatchesTables,
     CompetitionTables,
     EnrollmentPackageGTables,
+    EnrollmentRostersTables,
     EnrollmentTables,
     EntryTables,
     FacilitiesTables,
