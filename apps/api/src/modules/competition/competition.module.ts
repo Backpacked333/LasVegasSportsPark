@@ -15,6 +15,7 @@ import {
   ClosureImpactContributors,
   EventChanged,
   FIXTURE_OBLIGATION_IMPL,
+  PublicScheduleTitles,
   SchedulingModule,
 } from '../scheduling';
 import {
@@ -53,6 +54,11 @@ import { TeamsController } from './controllers/teams.controller';
 import { TeamWorkspaceController } from './controllers/team-workspace.controller';
 import { CompetitionEvents } from './competition.events';
 import { TEAM_INVITATION_EXPIRY_JOB } from './competition.policy';
+import {
+  CompetitionPublicationController,
+  PublicCompetitionController,
+} from './public/public-competition.controller';
+import { PublicCompetitionService } from './public/public-competition.service';
 import { CompetitionSettings } from './competition.settings';
 import {
   ELIGIBILITY_PORT,
@@ -217,6 +223,7 @@ const providers: Provider[] = [
   FixtureAttendanceService,
   ResultsAwaitingService,
   TeamWaitlistService,
+  PublicCompetitionService,
   // Scheduling publication step 4 (SPK-SCHED-006, SPK-FIX-002) resolves this lazily by token.
   { provide: FIXTURE_OBLIGATION_IMPL, useExisting: FixtureObligationsService },
   { provide: TEAM_ENTRY_QUERY_PORT, useExisting: TeamEntriesService },
@@ -245,6 +252,8 @@ const providers: Provider[] = [
     TeamsController,
     TeamEntriesController,
     TeamWaitlistController,
+    PublicCompetitionController,
+    CompetitionPublicationController,
     RosterController,
     FixturesController,
     ResultsController,
@@ -282,6 +291,7 @@ const providers: Provider[] = [
     FixtureAttendanceService,
     ResultsAwaitingService,
     TeamWaitlistService,
+    PublicCompetitionService,
     TeamAuthority,
     TEAM_AUTHORITY_IMPL,
     FIXTURE_OBLIGATION_IMPL,
@@ -305,6 +315,8 @@ export class CompetitionModule implements OnModuleInit {
     private readonly roster: RosterService,
     private readonly impactContributors: ClosureImpactContributors,
     private readonly waitlist: TeamWaitlistService,
+    private readonly publicTitles: PublicScheduleTitles,
+    private readonly publicCompetitions: PublicCompetitionService,
   ) {}
 
   onModuleInit(): void {
@@ -348,6 +360,12 @@ export class CompetitionModule implements OnModuleInit {
         }
         return { customers };
       },
+    );
+    // SPK-SCHED-010 (proposed amendment PA-06): on the public facility schedule a game reads
+    // its team names and score only when its competition is public; competition vouches for
+    // those titles, scheduling shows "League game" for every other.
+    this.publicTitles.register('competition.public_fixtures', (db, organizationId, events) =>
+      this.publicCompetitions.fixtureTitles(db, organizationId, events),
     );
     // SPK-COMP-006 (proposed amendment PA-10): the server-owned expiry of a place offered to a
     // waiting team. One terminal outcome: an offer already accepted, declined, withdrawn or

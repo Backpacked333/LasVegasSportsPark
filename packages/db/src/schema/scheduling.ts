@@ -268,6 +268,22 @@ export interface PublicationsTable {
   created_at: GeneratedTimestamp;
 }
 
+/** SPK-SCHED-010 (migration 0305): the switch and public code of a facility's public schedule. */
+export interface FacilityPublicViewsTable {
+  id: string;
+  organization_id: string;
+  facility_id: string;
+  public_code: string;
+  enabled: Generated<boolean>;
+  enabled_at: Timestamp;
+  enabled_by: Json<Record<string, unknown>>;
+  disabled_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  disabled_by: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
 export interface SchedulingTables {
   resources: ResourcesTable;
   resource_configurations: ResourceConfigurationsTable;
@@ -284,4 +300,5 @@ export interface SchedulingTables {
   schedule_drafts: ScheduleDraftsTable;
   draft_changes: DraftChangesTable;
   publications: PublicationsTable;
+  facility_public_views: FacilityPublicViewsTable;
 }

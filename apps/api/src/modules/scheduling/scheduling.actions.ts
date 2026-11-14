@@ -123,4 +123,22 @@ export const SchedulingActions = defineActions({
     staffRoles: ['scheduler', 'league_manager', 'general_manager', 'system_administrator'],
     requirements: ['SPK-SCHED-006', 'SPK-FIX-005'],
   },
+  /**
+   * Public and lobby schedule (SPK-SCHED-010, proposed amendment PA-06; capability
+   * `public_schedule`, pending DEC-100). Enabling creates a new public commitment and is refused
+   * while the switch is off; taking a public view down never is.
+   */
+  managePublicSchedule: {
+    id: 'scheduling.manage_public_schedule',
+    description: "Enable a facility's public schedule view and issue its public code",
+    staffRoles: ['scheduler', 'general_manager', 'system_administrator'],
+    capability: 'public_schedule',
+    requirements: ['SPK-SCHED-010'],
+  },
+  disablePublicSchedule: {
+    id: 'scheduling.disable_public_schedule',
+    description: "Disable a facility's public schedule view",
+    staffRoles: ['scheduler', 'general_manager', 'system_administrator'],
+    requirements: ['SPK-SCHED-010'],
+  },
 });

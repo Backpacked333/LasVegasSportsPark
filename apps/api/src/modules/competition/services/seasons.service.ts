@@ -24,6 +24,7 @@ import {
   snapshotActor,
   type Trx,
 } from '../../../kernel';
+import { newPublicCode } from '../../scheduling';
 import { openOfferCount } from '../competition-waitlist.queries';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
@@ -96,6 +97,9 @@ export class SeasonsService {
             registration_opens_at: input.registrationOpensAt ?? null,
             registration_closes_at: input.registrationClosesAt ?? null,
             created_by: json(snapshotActor(principal)),
+            // SPK-SCHED-010: the season's code in public links; it opens nothing unless the
+            // competition is public.
+            public_code: newPublicCode(),
           })
           .execute();
       } catch (error) {

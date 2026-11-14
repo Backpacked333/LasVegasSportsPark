@@ -22,6 +22,15 @@ export const CompetitionEvents = {
     'competition.competition_updated',
     z.object({ competitionId: z.uuid(), status: z.string(), revision: z.number().int() }),
   ),
+  /** SPK-SCHED-010 (proposed amendment PA-06): a competition was made public or private. */
+  competitionPublicationChanged: defineEvent(
+    'competition.competition_publication_changed',
+    z.object({
+      competitionId: z.uuid(),
+      visibility: z.enum(['private', 'public']),
+      revision: z.number().int(),
+    }),
+  ),
   ruleSetCreated: defineEvent(
     'competition.rule_set_created',
     z.object({

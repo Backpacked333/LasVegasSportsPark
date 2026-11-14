@@ -7,6 +7,12 @@ import { EventSeriesController } from './controllers/event-series.controller';
 import { EventsController } from './controllers/events.controller';
 import { ResourcesController } from './controllers/resources.controller';
 import { ScheduleDraftsController } from './controllers/schedule-drafts.controller';
+import { PublicScheduleTitles } from './public/public-access';
+import {
+  FacilityPublicViewController,
+  PublicScheduleController,
+} from './public/public-schedule.controller';
+import { PublicScheduleService } from './public/public-schedule.service';
 import {
   AVAILABILITY_PORT,
   CLOSURE_PORT,
@@ -78,6 +84,9 @@ const providers: Provider[] = [
   ClosuresService,
   ScheduleDraftsService,
   ScheduleInsightsService,
+  // SPK-SCHED-010 (proposed amendment PA-06): the public day schedule and its title registry.
+  PublicScheduleTitles,
+  PublicScheduleService,
   { provide: EVENT_SCHEDULING_PORT, useExisting: EventsService },
   { provide: AVAILABILITY_PORT, useExisting: EventsService },
   { provide: RESERVATION_QUERY_PORT, useExisting: EventsService },
@@ -99,8 +108,12 @@ const providers: Provider[] = [
     EventsController,
     EventSeriesController,
     ScheduleDraftsController,
+    PublicScheduleController,
+    FacilityPublicViewController,
   ],
   exports: [
+    PublicScheduleTitles,
+    PublicScheduleService,
     EventsService,
     ResourcesService,
     ClosuresService,

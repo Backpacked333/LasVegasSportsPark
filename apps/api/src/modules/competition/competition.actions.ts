@@ -272,6 +272,25 @@ export const CompetitionActions = defineActions({
     staffRoles: [],
     requirements: ['SPK-COMP-006', '§4.12'],
   },
+  /**
+   * Public competition views (SPK-SCHED-010, proposed amendment PA-06; capability
+   * `public_schedule`, pending DEC-100). Publishing creates a new public commitment and is
+   * refused while the switch is off; taking a competition private never is.
+   */
+  publishCompetition: {
+    id: 'competition.publish_competition',
+    description:
+      'Make a competition public: fixtures, results, standings and bracket without sign-in',
+    staffRoles: LEAGUE_ADMINS,
+    capability: 'public_schedule',
+    requirements: ['SPK-SCHED-010'],
+  },
+  unpublishCompetition: {
+    id: 'competition.unpublish_competition',
+    description: 'Make a public competition private again',
+    staffRoles: LEAGUE_ADMINS,
+    requirements: ['SPK-SCHED-010'],
+  },
   /** CMP-09, IF-40: the migration import commands; only a batch's import principal holds it. */
   importRecords: {
     id: 'competition.import_records',

@@ -162,7 +162,9 @@ describe('Facility league scenarios (assembled application)', () => {
           points: 0,
         }),
       ]);
-      // Recorded gap (proposed amendment PA-06): standings are not readable without signing in.
+      // Recorded gap (proposed amendment PA-06), kept on the staff route and while the
+      // `public_schedule` capability is off: standings are not readable without signing in. The
+      // public read of a published competition is the last scenario.
       expect((await get(t, standings)).status).toBe(401);
     } finally {
       await t.close();
@@ -325,6 +327,173 @@ describe('Facility league scenarios (assembled application)', () => {
         }),
       );
       expect(out).toMatchObject({ status: 'withdrawn' });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('SPK-SCHED-010 (proposed amendment PA-06, capability public_schedule on): once staff make the competition public its fixtures, results and standings are read without sign-in, and the facility day schedule shows the game by field; the staff route still needs sign-in', async () => {
+    const t = await journeyApp({ clockStart: '2026-11-02T17:00:00Z' });
+    try {
+      const admin = await staff(t, ['system_administrator']);
+      await enableCapability(t, admin, 'public_schedule', 'DEC-100');
+      const lm = await staff(t, ['league_manager']);
+      const field = await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId: t.facilityId,
+        name: 'Field 1',
+      });
+      const organization = await t.db
+        .selectFrom('organizations')
+        .select('slug')
+        .where('id', '=', t.organizationId)
+        .executeTakeFirstOrThrow();
+      const rules = await ok<{ id: string }>(
+        post(t, '/v1/rule-sets', lm.header, {
+          name: 'Adult indoor rules',
+          format: 'indoor_boarded',
+          content: proposedRuleSetContent('indoor_boarded'),
+        }),
+        201,
+      );
+      const competition = await ok<{ id: string }>(
+        post(t, '/v1/competitions', lm.header, {
+          name: 'Monday Men Open',
+          kind: 'league',
+          sportFormat: 'indoor_boarded',
+        }),
+        201,
+      );
+      const season = await ok<{ id: string; revision: number }>(
+        post(t, '/v1/seasons', lm.header, {
+          competitionId: competition.id,
+          name: 'Winter 2026',
+          ruleSetId: rules.id,
+          startsOn: '2026-11-16',
+          endsOn: '2027-01-25',
+        }),
+        201,
+      );
+      await ok(
+        patch(t, `/v1/seasons/${season.id}`, lm.header, {
+          status: 'open',
+          expectedRevision: season.revision,
+        }),
+      );
+      const division = await ok<{ id: string }>(
+        post(t, '/v1/divisions', lm.header, {
+          seasonId: season.id,
+          name: 'Open',
+          criteria: { ageBand: { minAge: 18, maxAge: null } },
+        }),
+        201,
+      );
+      const enter = async (name: string) => {
+        const captain = await adult(t);
+        const created = await ok<{ entry: { id: string; revision: number } }>(
+          post(t, '/v1/team-entries', captain.header, { seasonId: season.id, team: { name } }),
+          201,
+        );
+        await ok(
+          post(t, `/v1/team-entries/${created.entry.id}/approve`, lm.header, {
+            divisionId: division.id,
+            expectedRevision: created.entry.revision,
+          }),
+        );
+        return created.entry.id;
+      };
+      const comets = await enter('Comets');
+      const rockets = await enter('Rockets');
+      const start = Date.parse('2026-11-17T03:00:00Z');
+      const game = await ok<{ fixture: { id: string } }>(
+        post(t, '/v1/fixtures', lm.header, {
+          seasonId: season.id,
+          divisionId: division.id,
+          round: 1,
+          homeEntryId: comets,
+          awayEntryId: rockets,
+          schedule: {
+            facilityId: t.facilityId,
+            resourceIds: [field.resourceId],
+            scheduledStart: new Date(start).toISOString(),
+            scheduledEnd: new Date(start + HOUR).toISOString(),
+          },
+        }),
+        201,
+      );
+      t.clock.set(new Date(start + HOUR + 300_000));
+      const result = await ok<{ id: string; revision: number }>(
+        post(t, `/v1/fixtures/${game.fixture.id}/results`, lm.header, {
+          classification: 'completed',
+          homeScore: 5,
+          awayScore: 3,
+        }),
+        201,
+      );
+      await ok(
+        post(t, `/v1/results/${result.id}/publish`, lm.header, {
+          expectedRevision: result.revision,
+        }),
+      );
+      await drain(t);
+
+      // Private until staff publish it: nothing public exists yet, and the staff route needs
+      // sign-in whatever the competition's visibility.
+      const standings = `/v1/seasons/${season.id}/standings?divisionId=${division.id}`;
+      expect((await get(t, standings)).status).toBe(401);
+      const publication = `/v1/competitions/${competition.id}/publication`;
+      const before = await ok<Json & { revision: number }>(get(t, publication, lm.header));
+      expect(before).toMatchObject({ visibility: 'private', publicCode: null });
+      const published = await ok<{ publicCode: string; seasons: Array<{ publicCode: string }> }>(
+        post(t, `/v1/competitions/${competition.id}/publish`, lm.header, {
+          expectedRevision: before.revision,
+        }),
+      );
+      const seasonCode = published.seasons[0]?.publicCode as string;
+
+      // No sign-in: the season's fixtures, results and standings by public code.
+      const view = await ok<{ divisions: Array<{ fixtures: Json[]; standings: Json[] }> }>(
+        get(t, `/v1/public/${organization.slug}/seasons/${seasonCode}`),
+      );
+      expect(view).toMatchObject({ competitionName: 'Monday Men Open', seasonName: 'Winter 2026' });
+      expect(view.divisions[0]?.fixtures).toEqual([
+        expect.objectContaining({
+          home: 'Comets',
+          away: 'Rockets',
+          status: 'played',
+          score: { home: 5, away: 3 },
+          fields: ['Field 1'],
+        }),
+      ]);
+      expect(view.divisions[0]?.standings).toEqual([
+        expect.objectContaining({ position: 1, team: 'Comets', played: 1, won: 1, points: 3 }),
+        expect.objectContaining({ position: 2, team: 'Rockets', played: 1, lost: 1, points: 0 }),
+      ]);
+      // The record ids open nothing publicly, and the staff route still answers 401.
+      expect((await get(t, `/v1/public/${organization.slug}/seasons/${season.id}`)).status).toBe(
+        404,
+      );
+      expect((await get(t, standings)).status).toBe(401);
+
+      // The lobby schedule of the day, by field: the scheduler enables the facility's view.
+      const scheduler = await staff(t, ['scheduler']);
+      const lobby = await ok<{ publicCode: string }>(
+        post(t, `/v1/facilities/${t.facilityId}/public-schedule-view/enable`, scheduler.header),
+      );
+      const day = await ok<{ entries: Json[]; fields: string[] }>(
+        get(t, `/v1/public/${organization.slug}/schedule/${lobby.publicCode}?date=2026-11-16`),
+      );
+      expect(day.fields).toEqual(['Field 1']);
+      expect(day.entries).toEqual([
+        {
+          startsAt: new Date(start).toISOString(),
+          endsAt: new Date(start + HOUR).toISOString(),
+          fields: ['Field 1'],
+          kind: 'game',
+          title: 'Comets vs Rockets',
+          score: { home: 5, away: 3 },
+        },
+      ]);
     } finally {
       await t.close();
     }

@@ -29,10 +29,25 @@ export interface CompetitionsTable {
   description: string | null;
   status: Generated<CompetitionStatus>;
   created_by: Json<Record<string, unknown>>;
+  /** SPK-SCHED-010 (migration 0470): private until a permitted staff member publishes it. */
+  public_visibility: Generated<CompetitionPublicVisibility>;
+  /** Issued when first made public and kept afterwards. */
+  public_code: Generated<string | null>;
+  public_changed_at: ColumnType<
+    Date | null,
+    Date | string | null | undefined,
+    Date | string | null
+  >;
+  public_changed_by: ColumnType<
+    Record<string, unknown> | null,
+    string | null | undefined,
+    string | null
+  >;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
 }
+export type CompetitionPublicVisibility = 'private' | 'public';
 
 export interface RuleSetsTable {
   id: string;
@@ -62,6 +77,8 @@ export interface SeasonsTable {
   /** CMP-09 (migration 0456). */
   source: Generated<CompetitionRecordSource>;
   created_by: Json<Record<string, unknown>>;
+  /** SPK-SCHED-010 (migration 0470): the season's code in public links; null until issued. */
+  public_code: Generated<string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
