@@ -76,6 +76,10 @@ export function offering(overrides: Partial<Schema<'Offering'>> = {}): Schema<'O
           inclusive: false,
         },
       ],
+      pricingBasis: 'term',
+      remainingSessionCount: null,
+      remainingSessionsPriceMinor: null,
+      memberPrice: null,
     },
     eligibilityPolicyVersionId: null,
     cancellationPolicyVersionId: IDS.cancellationPolicy,
@@ -279,6 +283,7 @@ export function quoteLine(overrides: Partial<Schema<'QuoteLine'>> = {}): Schema<
       approvalPolicyVersionId: null,
     },
     enrollmentId: null,
+    priceBasis: null,
     ...overrides,
   };
 }

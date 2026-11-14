@@ -11,6 +11,7 @@ import {
   inMinutes,
   policyVersion,
   quote,
+  quoteLine,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { QuoteReviewScreen } from '../QuoteReviewScreen';
@@ -83,6 +84,84 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
     ).toBeOnTheScreen();
     expect(await screen.findByText('Cancellation: Program cancellation')).toBeOnTheScreen();
     expect(screen.getByText('• refund/compensation: refund (POL-009, DEC-009)')).toBeOnTheScreen();
+  });
+
+  it('SPK-PAY-013, SPK-PAY-015: shows the per-class price, the count and the product, and which price applied and why', async () => {
+    const member = {
+      priceMinor: 2000,
+      entitlementDefinitionId: '0192f1a0-0000-7000-8000-0000000000f1',
+      entitlementName: 'Annual membership',
+      membershipEnrollmentId: null,
+      checkedAt: '2026-11-02T15:00:00.000Z',
+    };
+    const sessionIds = Array.from(
+      { length: 7 },
+      (_, i) => `0192f1a0-0000-7000-8000-0000000000e${i}`,
+    );
+    const body = quote({
+      lines: [
+        quoteLine({
+          unitPriceMinor: 16800,
+          baseAmountMinor: 16800,
+          discountMinor: 0,
+          feeMinor: 0,
+          totalMinor: 16800,
+          discounts: [],
+          charges: [],
+          priceBasis: {
+            pricingBasis: 'per_session',
+            standardPriceMinor: 2400,
+            appliedPrice: 'standard',
+            appliedPriceMinor: 2400,
+            member: { ...member, applied: false, reason: 'no_active_membership' },
+            sessions: { count: 7, sessionIds, countedAt: '2026-11-02T15:00:00.000Z' },
+            unitPriceMinor: 16800,
+          },
+        }),
+        quoteLine({
+          id: '0192f1a0-0000-7000-8000-0000000000a2',
+          sequence: 2,
+          basketLineId: IDS.lineB,
+          participantPersonId: IDS.childB,
+          unitPriceMinor: 25000,
+          baseAmountMinor: 25000,
+          discountMinor: 0,
+          feeMinor: 0,
+          totalMinor: 25000,
+          discounts: [],
+          charges: [],
+          priceBasis: {
+            pricingBasis: 'term',
+            standardPriceMinor: 30000,
+            appliedPrice: 'member',
+            appliedPriceMinor: 25000,
+            member: { ...member, priceMinor: 25000, applied: true, reason: 'active_membership' },
+            sessions: null,
+            unitPriceMinor: 25000,
+          },
+        }),
+      ],
+    });
+    renderQuote({
+      routes: routes({ 'GET /registration-quotes/{id}': { status: 200, body } }),
+    });
+    expect(await screen.findByText('Ada: Autumn Youth Program')).toBeOnTheScreen();
+    expect(screen.getByText('$24.00 per class × 7 classes = $168.00')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Standard price applied: Annual membership was not held when this price was made.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByText('Member price applied: Annual membership')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Total for Ada: $168.00')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Total for Ben: $250.00')).toBeOnTheScreen();
+  });
+
+  it('SPK-PAY-002: a plain term price has no extra explanation', async () => {
+    renderQuote({ routes: routes() });
+    expect(await screen.findByText('Ada: Autumn Youth Program')).toBeOnTheScreen();
+    expect(screen.queryByText(/per class/)).not.toBeOnTheScreen();
+    expect(screen.queryByText(/price applied/)).not.toBeOnTheScreen();
   });
 
   it('continues to checkout (SCR-C-14)', async () => {
