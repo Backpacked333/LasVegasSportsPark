@@ -69,6 +69,11 @@ export function quotableLines(basket: Basket): BasketLine[] {
  * capability on, a per-session rule is priced for the sessions still to attend and a member price
  * applies to a participant who holds the membership at the quote instant; the facts used are
  * stored on the line (`price_basis`). With both capabilities off every line is priced as before.
+ *
+ * Proposed amendments PA-03 and PA-07 (SPK-PAY-014, SPK-REG-012; ADR-003): a line that names a
+ * price tier is priced by it (tier, then member price, then per-session multiplication), and the
+ * add-ons and priced uniform a basket line chose are quote lines of their own (`line_kind`,
+ * `source_id`, migration 0690), each with its stored basis.
  */
 @Injectable()
 export class QuotesService {
@@ -266,11 +271,13 @@ export class QuotesService {
         requiredFormPolicyVersionIds: line.policies.requiredFormPolicyVersionIds,
         approvalPolicyVersionId: line.policies.approvalPolicyVersionId ?? null,
       };
-      lineInputs.push({
+      const place: QuoteLineInput = {
         basketLineId: line.id,
         participantPersonId: line.participantPersonId,
         offeringId: line.offeringId,
-        description: snapshot.offering.name,
+        description: pricing?.tier
+          ? `${snapshot.offering.name}: ${pricing.tier.name}`
+          : snapshot.offering.name,
         quantity: line.quantity,
         priceRule: rule
           ? {
@@ -284,7 +291,14 @@ export class QuotesService {
         policies,
         equivalenceKey: line.equivalenceKey,
         enrollmentId: line.enrollmentId,
-      });
+      };
+      lineInputs.push(place);
+      // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): each add-on and the priced uniform of the
+      // basket line is a line of its own, priced from catalog now. None for most lines.
+      currency ??= line.addons[0]?.currency ?? line.uniform?.currency ?? null;
+      lineInputs.push(
+        ...(await this.linePricing.extraLines(organizationId, switches, line, place, currency)),
+      );
       evaluationLines.push({
         lineId: line.id,
         offeringId: line.offeringId,
@@ -452,8 +466,15 @@ export class QuotesService {
             policy_references: json(line.policies),
             equivalence_key: line.equivalenceKey,
             enrollment_id: line.enrollmentId,
-            // SPK-PAY-002: the facts the unit price came from, written once with the line.
-            price_basis: line.priceBasis ? json(line.priceBasis) : null,
+            // SPK-PAY-002: the facts the unit price came from, written once with the line: the
+            // pricing basis of the place, or the basis of an add-on or uniform line.
+            price_basis: line.extraBasis
+              ? json(line.extraBasis)
+              : line.priceBasis
+                ? json(line.priceBasis)
+                : null,
+            line_kind: line.lineKind,
+            source_id: line.sourceId,
           })),
         )
         .execute();

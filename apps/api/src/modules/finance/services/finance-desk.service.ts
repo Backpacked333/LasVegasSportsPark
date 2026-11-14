@@ -460,7 +460,7 @@ export class FinanceDeskService {
         requiredFormPolicyVersionIds: line.policies.requiredFormPolicyVersionIds,
         approvalPolicyVersionId: line.policies.approvalPolicyVersionId ?? null,
       };
-      inputs.push({
+      const place: QuoteLineInput = {
         basketLineId: line.id,
         participantPersonId: line.participantPersonId,
         offeringId: line.offeringId,
@@ -476,7 +476,23 @@ export class FinanceDeskService {
         policies,
         equivalenceKey: line.equivalenceKey,
         enrollmentId: line.enrollmentId,
-      });
+      };
+      inputs.push(place);
+      // SPK-PAY-014, SPK-REG-012: the estimate counts the add-on and uniform lines the quote
+      // would have; a line the quote would refuse has no estimate.
+      try {
+        inputs.push(
+          ...(await this.linePricing.extraLines(organizationId, switches, line, place, currency)),
+        );
+      } catch (error) {
+        if (
+          DomainError.is(error) &&
+          ['RESOURCE_CONFLICT', 'ACCESS_DENIED', 'VALIDATION_FAILED'].includes(error.code)
+        ) {
+          return unpriced();
+        }
+        throw error;
+      }
     }
     try {
       const computed = computeQuote({

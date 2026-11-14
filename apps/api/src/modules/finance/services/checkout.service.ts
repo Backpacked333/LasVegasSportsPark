@@ -485,13 +485,38 @@ export class CheckoutService {
     }
     const held = basket.lines.filter((l) => l.outcome === 'held');
     const quoted = new Set(lines.map((l) => l.basket_line_id));
+    // SPK-PAY-014, SPK-REG-012: a basket line has one quote line for its place and one for each
+    // add-on and for its priced uniform; the place lines are compared one to one, and every extra
+    // must still be an add-on or the uniform of its held line.
+    const places = lines.filter((q) => q.line_kind === 'registration');
     const mismatch =
-      held.length !== lines.length ||
+      held.length !== places.length ||
       held.some((l) => !quoted.has(l.id) || !l.enrollmentId) ||
-      lines.some((q) => {
+      places.some((q) => {
         const line = held.find((l) => l.id === q.basket_line_id);
         return !line || line.quantity !== q.quantity || line.offeringId !== q.offering_id;
-      });
+      }) ||
+      lines.some((q) => {
+        if (q.line_kind === 'registration') return false;
+        const line = held.find((l) => l.id === q.basket_line_id);
+        if (!line) return true;
+        return q.line_kind === 'addon'
+          ? !line.addons.some((a) => a.addonId === q.source_id && a.quantity === q.quantity)
+          : line.uniform?.offeringUniformId !== q.source_id;
+      }) ||
+      held.some(
+        (l) =>
+          l.addons.some(
+            (a) =>
+              !lines.some(
+                (q) =>
+                  q.basket_line_id === l.id && q.line_kind === 'addon' && q.source_id === a.addonId,
+              ),
+          ) ||
+          (l.uniform !== null &&
+            l.uniform.priceMinor !== null &&
+            !lines.some((q) => q.basket_line_id === l.id && q.line_kind === 'uniform')),
+      );
     if (mismatch) {
       throw errors.resourceConflict(
         'The basket changed since it was quoted; request a new quote.',
@@ -607,10 +632,18 @@ export class CheckoutService {
             charges: line.charge_lines,
             // SPK-PAY-013, SPK-PAY-015: the sessions counted and the member price decision the
             // quote recorded travel with the purchase; a later change of sessions or membership
-            // never re-prices it. Absent for a plain term price, as before.
-            ...(line.price_basis ? { pricing: line.price_basis } : {}),
+            // never re-prices it. Absent for a plain term price, as before. SPK-PAY-014,
+            // SPK-REG-012: an add-on or uniform line keeps its own basis under its kind.
+            ...(line.price_basis
+              ? {
+                  [line.line_kind === 'registration' ? 'pricing' : line.line_kind]:
+                    line.price_basis,
+                }
+              : {}),
           }),
           policy_references: json(line.policy_references),
+          line_kind: line.line_kind,
+          source_id: line.source_id,
         })),
       )
       .execute();
