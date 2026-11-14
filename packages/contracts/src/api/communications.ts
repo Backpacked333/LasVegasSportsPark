@@ -174,6 +174,12 @@ function withRequestMeta<T extends z.ZodRawShape>(shape: T) {
   return withCommandMeta(shape).extend(RequestMeta);
 }
 
+/**
+ * The request-text checks above, for this module's other contract file
+ * (`communications-sequences.ts`, SPK-COMMS-009): one definition of what request text may hold.
+ */
+export const CommunicationsRequestText = { singleLine, multiLine, withRequestMeta };
+
 /** Practical details shown old/new on schedule notices (SPK-COMMS-005); shape owned by the source module. */
 export const PracticalDetailsSchema = z.record(z.string(), z.unknown()).openapi('PracticalDetails');
 export type PracticalDetails = z.infer<typeof PracticalDetailsSchema>;
