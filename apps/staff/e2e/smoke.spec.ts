@@ -96,19 +96,29 @@ test('SPK-UX-010: the chrome is liquid glass in Chromium (every glass body carri
   await signIn(page, 'dev-admin');
   await expect(page).toHaveURL(/\/today$/);
   await expect(page.getByRole('link', { name: 'Administration' })).toBeVisible();
-  const bodies = await page.evaluate(() =>
-    [...document.querySelectorAll('.glass__optic')]
-      .filter((optic) => optic.getClientRects().length > 0)
-      .map((optic) => /url\(/.test(getComputedStyle(optic).backdropFilter)),
-  );
-  expect(bodies.length).toBeGreaterThanOrEqual(4);
+  // The screen's own glass (its stat tiles) arrives with its data: wait for it, then read the
+  // bodies and their filters in one pass, so both describe the same moment.
+  await expect(page.locator('.kpi-glass').first()).toBeVisible();
+  const read = () =>
+    page.evaluate(() => ({
+      bodies: [...document.querySelectorAll('.glass__optic')]
+        .filter((optic) => optic.getClientRects().length > 0)
+        .map((optic) => /url\(/.test(getComputedStyle(optic).backdropFilter)),
+      // SVG filter elements (an HTML element named "filter" would bend nothing).
+      filters: [...document.querySelectorAll('.glass__defs filter')].map(
+        (filter) => filter instanceof SVGFilterElement,
+      ),
+    }));
+  await expect
+    .poll(async () => {
+      const { bodies, filters } = await read();
+      return bodies.length >= 5 && bodies.length === filters.length;
+    })
+    .toBe(true);
+  const { bodies, filters } = await read();
+  // Chrome (sidebar and three header groups) and at least one stat tile.
+  expect(bodies.length).toBeGreaterThanOrEqual(5);
   expect(bodies.every(Boolean)).toBe(true);
-  // The filters are SVG filter elements (an HTML element named "filter" would bend nothing).
-  const filters = await page.evaluate(() =>
-    [...document.querySelectorAll('.glass__defs filter')].map(
-      (filter) => filter instanceof SVGFilterElement,
-    ),
-  );
   expect(filters.length).toBe(bodies.length);
   expect(filters.every(Boolean)).toBe(true);
 });
