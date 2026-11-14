@@ -1,4 +1,5 @@
 import type { DeliveryChannelValue, NotificationCategoryValue } from '@sportspark/contracts';
+import type { Db } from '@sportspark/db';
 import type { Trx } from '../../kernel';
 
 /**
@@ -87,10 +88,21 @@ export interface SessionAudiencePort {
     organizationId: string,
     eventId: string,
   ): Promise<string[]>;
+  /**
+   * SPK-COMMS-009 (proposed amendment PA-05): the participants of the offering's live enrollments
+   * right now, for the audience of an offering's scheduled message (resolved when it is previewed
+   * and again when it is sent, never stored).
+   */
+  participantsOfOffering(
+    db: Db | Trx,
+    organizationId: string,
+    offeringId: string,
+  ): Promise<string[]>;
 }
 export const SESSION_AUDIENCE_PORT = Symbol('SESSION_AUDIENCE_PORT');
 export const SESSION_AUDIENCE_IMPL = Symbol('SESSION_AUDIENCE_IMPL');
 
 export const noSessionAudience: SessionAudiencePort = {
   participantsOfSchedulingEvent: async () => [],
+  participantsOfOffering: async () => [],
 };
