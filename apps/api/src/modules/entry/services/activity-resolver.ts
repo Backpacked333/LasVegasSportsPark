@@ -8,7 +8,7 @@ import {
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { currentTransaction, DATABASE, type Trx } from '../../../kernel';
-import { OfferingsService, SessionsService } from '../../catalog';
+import { OfferingsService, SessionsService, WaiversService } from '../../catalog';
 import { EventsService } from '../../scheduling';
 
 /** What entry needs to know about the activity a record concerns, read from its owning module. */
@@ -33,6 +33,11 @@ export interface ResolvedActivity {
   schedulingEventId: string | null;
   /** Forms the participant must have acknowledged (catalog required form policy versions). */
   requiredFormPolicyVersionIds: string[];
+  /**
+   * SPK-REG-011 (proposed): the waiver families the activity's offering requires, by policy key
+   * (empty for an activity that is not an offering session).
+   */
+  requiredWaiverKeys: string[];
   /** For an event that schedules a competition fixture: the fixture id (event source). */
   fixtureId: string | null;
   /** People committed to the event by scheduling (officials, named participants). */
@@ -64,7 +69,8 @@ export function refOf(detail: ActivityDetail): ActivityRef {
 
 /**
  * Resolves activities through the owning modules' exported services (§4.2): catalog offering
- * sessions (OfferingsService, SessionsService) and scheduling events (EventsService). It never
+ * sessions (OfferingsService, SessionsService, and WaiversService for the waiver families an
+ * offering requires) and scheduling events (EventsService). It never
  * reads their tables. Those services read through the root database, so resolution must happen
  * before or after a command's transaction, never inside it (under PGlite a root read inside an
  * open transaction would wait for the only connection); the guard turns that mistake into an
@@ -78,6 +84,7 @@ export class ActivityResolver {
     private readonly offerings: OfferingsService,
     private readonly sessions: SessionsService,
     private readonly events: EventsService,
+    private readonly waivers: WaiversService,
   ) {}
 
   async facility(organizationId: string, facilityId: string, trx?: Trx): Promise<FacilityFacts> {
@@ -143,6 +150,7 @@ export class ActivityResolver {
     if (offering.facilityId !== facilityId) return [];
     const facility = await this.facility(organizationId, facilityId);
     const sessions = await this.sessions.list(system, offeringId);
+    const requiredWaiverKeys = await this.waivers.requiredKeys(organizationId, offeringId);
     return sessions
       .filter(
         (s) =>
@@ -169,6 +177,7 @@ export class ActivityResolver {
         offeringId,
         schedulingEventId: session.schedulingEventId,
         requiredFormPolicyVersionIds: [...offering.requiredFormPolicyVersionIds],
+        requiredWaiverKeys,
         fixtureId: null,
         personCommitments: [],
       }));
@@ -208,6 +217,7 @@ export class ActivityResolver {
       offeringId,
       schedulingEventId: session.schedulingEventId,
       requiredFormPolicyVersionIds: [...offering.requiredFormPolicyVersionIds],
+      requiredWaiverKeys: await this.waivers.requiredKeys(organizationId, offeringId),
       fixtureId: null,
       personCommitments: [],
     };
@@ -235,6 +245,7 @@ export class ActivityResolver {
       offeringId: null,
       schedulingEventId: event.id,
       requiredFormPolicyVersionIds: [],
+      requiredWaiverKeys: [],
       fixtureId: event.sourceType === 'fixture' && event.sourceId ? event.sourceId : null,
       personCommitments: event.commitments
         .filter((c) => c.partyType === 'person')

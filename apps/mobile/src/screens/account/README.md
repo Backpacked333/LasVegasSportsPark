@@ -81,3 +81,14 @@ the six permissions and date wording; `PersonAccess`, `ClaimForm`, `CommandError
   give up a grant comes from the role view of `GET /v1/me/permissions` only.
 - A checkout in `/v1/me/registration-checkouts` names no offering or participant, so the pinned
   Account row cannot say which registration it is; the outcome screen does.
+
+## Liability waivers under Forms (SPK-REG-011, proposed amendment PA-01)
+
+**Proposed**, behind the capability `liability_waivers` (DEC-095 pending). While it is on, the
+Forms screen lists, for the person and for each person they hold `complete_forms` over, every
+waiver as accepted, needing acceptance again or not accepted yet (`GET /v1/people/{id}/waivers`),
+with the wording and "Accept" (`POST /v1/waiver-acceptances`, as themselves, digitally). A waiver
+the front desk recorded from a signed paper reads "Recorded from paper by the front desk (paper
+dated ...)", never "Signed", in the waiver list and in the list of forms alike (SPK-REG-009). With
+the capability off nothing about waivers is shown or asked for. **Verified**
+`__tests__/FormsWaivers.test.tsx`. The shared card is `src/features/waivers/WaiverCard.tsx`.

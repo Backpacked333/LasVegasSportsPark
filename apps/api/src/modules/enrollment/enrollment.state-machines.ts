@@ -156,3 +156,45 @@ export const ProgressionRecommendationMachine = defineStateMachine<
     withdrawn: {},
   },
 });
+
+// ---------------------------------------------------------------------------------------------
+// Rental-group roster (SPK-COND-005, proposed amendment PA-09; migration 0530). A roster row is
+// invited (it has an open invitation), joined, or removed; an invitation is pending until it is
+// accepted, declined, revoked or expires. The transition guards of 0530 list the same moves.
+// ---------------------------------------------------------------------------------------------
+export type BookingRosterMemberState = 'invited' | 'joined' | 'removed';
+export type BookingRosterMemberEvent = 'join' | 'remove';
+export const BookingRosterMemberMachine = defineStateMachine<
+  BookingRosterMemberState,
+  BookingRosterMemberEvent
+>({
+  name: 'BookingRosterMember',
+  initial: 'invited',
+  states: ['invited', 'joined', 'removed'],
+  terminal: ['removed'],
+  transitions: {
+    invited: { join: 'joined', remove: 'removed' },
+    joined: { remove: 'removed' },
+    removed: {},
+  },
+});
+
+export type BookingRosterInvitationState =
+  'pending' | 'accepted' | 'declined' | 'revoked' | 'expired';
+export type BookingRosterInvitationEvent = 'accept' | 'decline' | 'revoke' | 'expire';
+export const BookingRosterInvitationMachine = defineStateMachine<
+  BookingRosterInvitationState,
+  BookingRosterInvitationEvent
+>({
+  name: 'BookingRosterInvitation',
+  initial: 'pending',
+  states: ['pending', 'accepted', 'declined', 'revoked', 'expired'],
+  terminal: ['accepted', 'declined', 'revoked', 'expired'],
+  transitions: {
+    pending: { accept: 'accepted', decline: 'declined', revoke: 'revoked', expire: 'expired' },
+    accepted: {},
+    declined: {},
+    revoked: {},
+    expired: {},
+  },
+});

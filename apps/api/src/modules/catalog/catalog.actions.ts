@@ -43,6 +43,18 @@ const ACKNOWLEDGMENT_STAFF: readonly StaffRole[] = [
   'system_administrator',
   'support_operator',
 ];
+/**
+ * Staff who may ever record a waiver override (SPK-REG-011, proposed). The approved waiver version
+ * narrows this to the roles it names (`overrideRoles`); a role outside this list never overrides.
+ */
+const WAIVER_OVERRIDE_STAFF: readonly StaffRole[] = [
+  'front_desk',
+  'program_manager',
+  'league_manager',
+  'general_manager',
+  'system_administrator',
+  'support_operator',
+];
 
 /**
  * Catalog actions (specification §3.2, §3.15, §4.4, §4.14). Customer-side authority appears only
@@ -100,7 +112,8 @@ export const CatalogActions = defineActions({
   },
   approveParticipationPolicy: {
     id: 'catalog.approve_participation_policy',
-    description: 'Approve or retire eligibility, waitlist, hold, approval and form policies',
+    description:
+      'Approve or retire eligibility, waitlist, hold, approval, form and waiver policies',
     staffRoles: ['program_manager', 'league_manager'],
     requirements: ['SPK-REG-002', '§4.4', '§6.6'],
   },
@@ -134,6 +147,41 @@ export const CatalogActions = defineActions({
     allowSelf: true,
     subjectPermission: 'view',
     requirements: ['SPK-IAM-003', '§4.14'],
+  },
+  // SPK-REG-011 (proposed amendment PA-01, DEC-095); every one behind `liability_waivers`.
+  acceptWaiver: {
+    id: 'catalog.accept_waiver',
+    description:
+      'Accept a liability waiver: the adult themselves, a guardian holding complete_forms, or staff recording a named signer (digitally at the desk, or from a signed paper with its date)',
+    staffRoles: ACKNOWLEDGMENT_STAFF,
+    allowSelf: true,
+    subjectPermission: 'complete_forms',
+    capability: 'liability_waivers',
+    requirements: ['SPK-REG-011', 'SPK-REG-009', 'SPK-IAM-003'],
+  },
+  readPersonWaivers: {
+    id: 'catalog.read_person_waivers',
+    description:
+      "Read a person's waivers: current, lapsed or missing, with the acceptance history (staff, the person, or a guardian holding complete_forms)",
+    staffRoles: CATALOG_READERS,
+    allowSelf: true,
+    subjectPermission: 'complete_forms',
+    requirements: ['SPK-REG-011', 'SPK-IAM-003', '§4.14'],
+  },
+  overrideWaiver: {
+    id: 'catalog.override_waiver',
+    description:
+      'Record an override of a blocking waiver rule for one person and one activity (only the roles the approved waiver version names)',
+    staffRoles: WAIVER_OVERRIDE_STAFF,
+    capability: 'liability_waivers',
+    requirements: ['SPK-REG-011'],
+  },
+  manageRequiredWaivers: {
+    id: 'catalog.manage_required_waivers',
+    description: 'Set the waiver families an offering requires',
+    staffRoles: CATALOG_MANAGERS,
+    capability: 'liability_waivers',
+    requirements: ['SPK-REG-011', 'SPK-CAT-001'],
   },
   managePriceRules: {
     id: 'catalog.manage_price_rules',

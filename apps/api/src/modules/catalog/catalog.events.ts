@@ -178,6 +178,22 @@ export const CatalogEvents = {
       reason: z.string(),
     }),
   ),
+  /** SPK-REG-011 (proposed): a staff override of a blocking waiver rule; identifiers only. */
+  waiverOverrideRecorded: defineEvent(
+    'catalog.waiver_override_recorded',
+    z.object({
+      waiverOverrideId: z.uuid(),
+      personId: z.uuid(),
+      policyKey: z.string(),
+      activityType: z.enum(['offering', 'offering_session', 'scheduling_event', 'booking']),
+      activityId: z.uuid(),
+    }),
+  ),
+  /** SPK-REG-011 (proposed): the waiver families an offering requires were replaced. */
+  offeringRequiredWaiversChanged: defineEvent(
+    'catalog.offering_required_waivers_changed',
+    z.object({ offeringId: z.uuid(), policyKeys: z.array(z.string()) }),
+  ),
   priceRuleCreated: defineEvent(
     'catalog.price_rule_created',
     z.object({

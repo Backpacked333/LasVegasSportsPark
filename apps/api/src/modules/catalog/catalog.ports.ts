@@ -14,6 +14,9 @@ import type {
   Principal,
   RentalResourceScope,
   TypedEntitlementKind,
+  WaiverActivityRef,
+  WaiverOverride,
+  WaiverStatus,
 } from '@sportspark/contracts';
 import type { Trx } from '../../kernel';
 
@@ -63,6 +66,11 @@ export interface OfferingSnapshot {
   eligibilityPolicy: PolicyVersion | null;
   cancellationPolicy: PolicyVersion | null;
   requiredForms: PolicyVersion[];
+  /**
+   * SPK-REG-011 (proposed amendment PA-01): the waiver families the offering requires, by policy
+   * key. Whether a participant's waiver is current is asked of `PolicyPort.waiverFindings`.
+   */
+  requiredWaiverKeys: string[];
   /** Whether registration intents are accepted right now (publication state and window). */
   registrationOpen: boolean;
   /**
@@ -100,7 +108,64 @@ export interface OfferingLookupPort {
   ): Promise<string[]>;
 }
 
+/**
+ * SPK-REG-011 (proposed amendment PA-01): one person whose required waiver is missing or lapsed
+ * for an activity. `severity` is what the rule of the version in force makes of it: `warning`
+ * when the rule warns, `blocking` when it blocks; a recorded override of a block (`override`)
+ * turns it into a warning. A caller never treats `lapsed` as current: there is no finding at all
+ * for a current waiver.
+ */
+export interface WaiverFinding {
+  personId: string;
+  policyKey: string;
+  title: string;
+  status: 'missing' | 'lapsed';
+  severity: 'warning' | 'blocking';
+  override: WaiverOverride | null;
+  waiver: WaiverStatus;
+}
+
+export interface WaiverFindingsRequest {
+  personIds: readonly string[];
+  /** The waiver families the activity requires (`OfferingSnapshot.requiredWaiverKeys`). */
+  policyKeys: readonly string[];
+  at: Date;
+  /** The activity references an override may have been recorded against. */
+  activities: readonly WaiverActivityRef[];
+}
+
 export interface PolicyPort {
+  /**
+   * SPK-REG-011 (proposed amendment PA-01, ADR-004): whether the person holds an acceptance of
+   * the waiver family that is current under the rule of the version in force at the instant:
+   * `current`, `lapsed` or `missing`, with the accepted version, time, method and the rule
+   * applied. A pure evaluation: it does not look at the capability switch.
+   */
+  waiverStatus(
+    organizationId: string,
+    personId: string,
+    policyKey: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<WaiverStatus>;
+  /** `waiverStatus` for many people in two reads (a roster). Every id asked about is answered. */
+  waiverStatuses(
+    organizationId: string,
+    personIds: readonly string[],
+    policyKey: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<Map<string, WaiverStatus>>;
+  /**
+   * The missing or lapsed required waivers of the people for one activity, with the severity the
+   * rule gives them and any recorded override. Empty while the organization has not turned
+   * liability waivers on (capability `liability_waivers`): nothing is evaluated then.
+   */
+  waiverFindings(
+    organizationId: string,
+    request: WaiverFindingsRequest,
+    trx?: Trx,
+  ): Promise<WaiverFinding[]>;
   getPolicyVersion(
     organizationId: string,
     policyVersionId: string,

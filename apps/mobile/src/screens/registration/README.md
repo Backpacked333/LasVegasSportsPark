@@ -196,3 +196,11 @@ in `.10x/decisions/sde/track-a.md`).
 - The responsible manager on SCR-C-08: the API gives it to staff only (`Offering.staff`).
 - Requested teammates on SCR-C-10: other players' identities are never exposed (SPK-PLACE-005).
   A preferred division is not collected: DEC-051 names the preferred competition only.
+
+## Required waivers within a registration (SPK-REG-011, proposed amendment PA-01)
+
+**Proposed**, behind `liability_waivers` (DEC-095 pending). Required forms (SCR-C-13) also shows
+the waiver families each offering requires (`GET /v1/offerings/{id}/required-waivers`) per
+participant with the API's judgement and lets the person or guardian accept. With the capability
+off, or for an offering that requires no waiver, the screen is exactly as before. **Verified**
+`__tests__/RequiredWaivers.test.tsx`.

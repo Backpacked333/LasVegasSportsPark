@@ -16,6 +16,8 @@
  * discounts and credits (the quote at checkout is binding, SPK-PAY-002), or that no price is set;
  * protected NOT_FOUND reads "not available".
  * Cancellation (`CancelBooking`) is never gated by the capability switch (DEC-016).
+ * A rental also shows its group roster (`BookingRosterSection`; SPK-COND-005, proposed) while the
+ * organization has turned rental rosters on.
  *
  * States: signed out (sign in, nothing read); loading; ready; error with the code and "Try
  * again"; not available (protected NOT_FOUND or ACCESS_DENIED); offline or stale (cached with its
@@ -51,6 +53,7 @@ import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { makeStyles, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
+import { BookingRosterSection } from './BookingRosterSection';
 import { CancelBooking } from './CancelBooking';
 
 /**
@@ -289,6 +292,7 @@ function BookingView({ booking, reload }: { booking: Booking; reload: () => void
         </Section>
       ) : null}
 
+      <BookingRosterSection booking={booking} />
       <CancelBooking booking={booking} onReload={reload} />
     </View>
   );

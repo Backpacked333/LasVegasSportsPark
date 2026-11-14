@@ -383,3 +383,21 @@ permission-matrix`).
 - Catalog's `SessionsService`/`OfferingsService` and scheduling's `EventsService` read through the
   root database, so `ActivityResolver` resolves activities before or after a command's transaction
   (it refuses to run inside one).
+
+## Required waivers at check-in (SPK-REG-011, proposed amendment PA-01): proposed
+
+**Proposed**, behind the capability `liability_waivers` (DEC-095; off by default). With it on
+(**Verified**, `__tests__/arrival-waivers.spec.ts`): the arrival checks ask the catalog policy port
+for the missing or lapsed waivers of the participant among the waiver families the session's
+offering requires (`ResolvedActivity.requiredWaiverKeys`, read through catalog's `WaiversService`)
+and add the issue codes `waiver_missing` and `waiver_lapsed` (`ArrivalIssueCodeSchema`). The
+severity is the approved waiver rule: a warning admits, a block holds the check-in until the waiver
+is accepted (a recheck admits) or a permitted override is recorded for the session, its offering or
+its scheduling event, after which the issue stays visible as a warning. A current waiver produces
+no issue. With the capability off nothing is evaluated or shown and the form check is unchanged.
+
+No entry migration was needed (`0881` stays unused): arrival issues are stored as JSON on the
+check-in and no database check lists their codes.
+
+**Pending decision** (DEC-095): whether a missing waiver blocks at the door or only alerts. The
+facility's current system only alerts; that is the assumed default and lives in the waiver version.

@@ -159,4 +159,52 @@ describe('SPK-REG-002 registration eligibility (pure evaluation)', () => {
       ),
     ).toEqual([]);
   });
+
+  it('SPK-REG-011: a missing or lapsed waiver is a reason whose severity is the approved rule; a block fails the evaluation, a warning or an overridden block does not', () => {
+    const finding = {
+      policyKey: 'liability',
+      title: 'Liability waiver',
+      policyVersionId: '01a16c09-0000-7000-8000-000000000003',
+      overridden: false,
+    };
+    const warned = evaluateRegistrationEligibility(
+      input({ waiverFindings: [{ ...finding, status: 'missing', severity: 'warning' }] }),
+    );
+    expect(warned.eligible).toBe(true);
+    expect(warned.reasons).toEqual([
+      {
+        code: 'waiver_missing',
+        severity: 'warning',
+        message:
+          '"Liability waiver" has not been accepted for the participant; the participant or a guardian should accept it.',
+        source: { type: 'waiver', id: finding.policyVersionId },
+        requiredAction: 'accept_waiver',
+      },
+    ]);
+    expect(warned.alternatives.map((a) => a.kind)).toEqual(['complete_acknowledgment']);
+    const blocked = evaluateRegistrationEligibility(
+      input({ waiverFindings: [{ ...finding, status: 'lapsed', severity: 'blocking' }] }),
+    );
+    expect(blocked.eligible).toBe(false);
+    expect(blocked.reasons).toEqual([
+      expect.objectContaining({
+        code: 'waiver_lapsed',
+        severity: 'blocking',
+        message:
+          '"Liability waiver" has lapsed for the participant and must be accepted before registering.',
+      }),
+    ]);
+    const overridden = evaluateRegistrationEligibility(
+      input({
+        waiverFindings: [{ ...finding, status: 'missing', severity: 'warning', overridden: true }],
+      }),
+    );
+    expect(overridden.eligible).toBe(true);
+    expect(overridden.reasons[0]?.message).toContain('staff recorded an override');
+    // no finding (a current waiver, none required, or the capability off): nothing is added
+    expect(evaluateRegistrationEligibility(input({ waiverFindings: [] })).reasons).toEqual([]);
+    expect(evaluateRegistrationEligibility(input()).reasons).toEqual([]);
+    // a waiver reason is not an unacknowledged form
+    expect(missingAcknowledgments(warned)).toEqual([]);
+  });
 });

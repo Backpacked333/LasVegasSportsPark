@@ -48,7 +48,9 @@ export type PolicyKind =
   | 'overpayment'
   | 'installment'
   | 'booking_terms'
-  | 'tax_fee';
+  | 'tax_fee'
+  // 0220 (SPK-REG-011, proposed): a liability waiver family.
+  | 'waiver';
 export type PolicyApprovalStatus = 'draft' | 'approved' | 'retired';
 export interface PolicyVersionsTable {
   id: string;
@@ -90,6 +92,8 @@ export interface ApprovalsTable {
 export type AcknowledgmentBasis = 'self' | 'guardian';
 export type AcknowledgmentStatus = 'active' | 'withdrawn';
 export type RecordedByKind = 'customer' | 'staff' | 'system';
+/** 0220 (SPK-REG-011, SPK-REG-009): given digitally, or recorded by staff from a signed paper. */
+export type AcknowledgmentMethod = 'digital' | 'paper';
 export interface AcknowledgmentsTable {
   id: string;
   organization_id: string;
@@ -102,6 +106,9 @@ export interface AcknowledgmentsTable {
   recorded_by_person_id: string | null;
   signed_at: Timestamp;
   evidence: GeneratedJson<Record<string, unknown>>;
+  method: Generated<AcknowledgmentMethod>;
+  /** The date written on the paper; null when digital. Read it with `dateOnlyOrNull`. */
+  paper_dated_on: ColumnType<string | Date | null, string | null | undefined, never>;
   status: Generated<AcknowledgmentStatus>;
   withdrawn_at: NullableTimestamp;
   withdrawn_reason: string | null;

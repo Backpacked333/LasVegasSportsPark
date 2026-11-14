@@ -21,6 +21,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * - An offering that cannot be resolved: `unknown`, never a pass (SPK-READY-002).
  * - A form some participant has not acknowledged: `unsatisfied` (blocking), with the count only, so
  *   readers do not learn which teammate has not signed (§4.14 minimized child information).
+ * - A required waiver (SPK-REG-011, proposed) some participant has not accepted, or whose
+ *   acceptance has lapsed: `unsatisfied` with the severity the approved waiver rule gives it
+ *   (`warning` when it warns, `blocking` when it blocks), again with the count only.
  */
 @Injectable()
 export class CompetitionFormsCheck implements FormsCheckPort {
@@ -75,6 +78,46 @@ export class CompetitionFormsCheck implements FormsCheckPort {
           'Ask the players (or their guardians) to complete the required form before the game.',
         deadline: null,
       });
+    }
+    // SPK-REG-011 (proposed amendment PA-01): the registration offering's required waivers, judged
+    // for the whole roster by the catalog rule. Empty while liability waivers are turned off. A
+    // rule that warns is reported as a warning; one that blocks (with no override recorded for
+    // the fixture's season offering) blocks readiness. Counts only, as for forms (§4.14).
+    const waivers =
+      snapshot.requiredWaiverKeys.length > 0
+        ? await this.policies.waiverFindings(
+            organizationId,
+            {
+              personIds: persons,
+              policyKeys: snapshot.requiredWaiverKeys,
+              at: context.at,
+              activities: [{ type: 'offering', id: snapshot.offering.id }],
+            },
+            trx,
+          )
+        : [];
+    for (const policyKey of snapshot.requiredWaiverKeys) {
+      const ofKey = waivers.filter((w) => w.policyKey === policyKey);
+      for (const status of ['missing', 'lapsed'] as const) {
+        const matching = ofKey.filter((w) => w.status === status);
+        const first = matching[0];
+        if (!first) continue;
+        const blocking = matching.some((w) => w.severity === 'blocking');
+        findings.push({
+          status: 'unsatisfied',
+          severity: blocking ? 'blocking' : 'warning',
+          code: status === 'missing' ? 'waiver_missing' : 'waiver_lapsed',
+          message:
+            status === 'missing'
+              ? `${matching.length} rostered participant(s) have not accepted "${first.title}".`
+              : `The acceptance of "${first.title}" has lapsed for ${matching.length} rostered participant(s).`,
+          source: { type: 'waiver', id: first.waiver.currentVersion?.policyVersionId ?? null },
+          responsibleRole: 'captain',
+          requiredAction:
+            'Ask the players (or their guardians) to accept the waiver before the game.',
+          deadline: null,
+        });
+      }
     }
     return findings;
   }

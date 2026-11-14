@@ -121,6 +121,24 @@ function FindNew() {
   );
 }
 
+/** The way to the roster invitations, only while rental rosters are on (SPK-COND-005, proposed). */
+function RosterInvitationsLink() {
+  const styles = useStyles();
+  const router = useRouter();
+  const permissions = usePermissions();
+  if (permissions.isCapabilityEnabled('rental_rosters') !== true) return null;
+  return (
+    <View style={styles.footer}>
+      <Button
+        label="Roster invitations"
+        variant="secondary"
+        onPress={() => router.push('/booking-roster-invitations')}
+        accessibilityHint="Join a rental as one of the people the renter brings"
+      />
+    </View>
+  );
+}
+
 export function MyBookingsScreen() {
   const styles = useStyles();
   return (
@@ -145,6 +163,7 @@ export function MyBookingsScreen() {
             <BookingsList />
             <FindNew />
           </CapabilityGate>
+          <RosterInvitationsLink />
         </RequireSession>
       </View>
     </Screen>

@@ -10,6 +10,7 @@ import { EntitlementDefinitionsController } from './controllers/entitlement-defi
 import { OfferingsController } from './controllers/offerings.controller';
 import { PoliciesController } from './controllers/policies.controller';
 import { ProgramsController } from './controllers/programs.controller';
+import { WaiversController } from './controllers/waivers.controller';
 import { PricingService } from './pricing/pricing.service';
 import { AcknowledgmentsService } from './services/acknowledgments.service';
 import { DiscountsService } from './services/discounts.service';
@@ -19,12 +20,15 @@ import { PoliciesService } from './services/policies.service';
 import { PriceRulesService } from './services/price-rules.service';
 import { ProgramsService } from './services/programs.service';
 import { SessionsService } from './services/sessions.service';
+import { WaiverStatusReader } from './services/waiver-status.reader';
+import { WaiversService } from './services/waivers.service';
 
 /**
  * CatalogModule (specification §3.2 SPK-CAT-001..004, §3.15 SPK-PAY-001..003 price rules and
  * discount definitions, §4.4 Catalog + Policies, SPK-REG-002, SPK-REG-009, SPK-YOUTH-001/002).
  * Owns programs, offerings, sessions, entitlement definitions, policy versions, approvals,
- * acknowledgments, price rules, discount definitions and redemption counters. Depends on identity
+ * acknowledgments, price rules, discount definitions and redemption counters, and (proposed,
+ * SPK-REG-011) the waiver keys an offering requires and the overrides of a blocking waiver rule. Depends on identity
  * for person lookups and guardian authority. Consumes `scheduling.event_changed`: a canceled
  * scheduling event cancels the catalog sessions linked to it, any other change gives them the
  * event's current published times (SPK-AT-009, R2-JOURNEYS-03); a session canceled here cancels
@@ -41,6 +45,7 @@ import { SessionsService } from './services/sessions.service';
     PoliciesController,
     OfferingsController,
     DiscountsController,
+    WaiversController,
   ],
   providers: [
     ProgramsService,
@@ -52,6 +57,8 @@ import { SessionsService } from './services/sessions.service';
     OfferingsService,
     SessionsService,
     PricingService,
+    WaiverStatusReader,
+    WaiversService,
     { provide: OFFERING_LOOKUP_PORT, useExisting: OfferingsService },
     { provide: POLICY_PORT, useExisting: PoliciesService },
     { provide: PRICING_PORT, useExisting: PricingService },
@@ -66,6 +73,7 @@ import { SessionsService } from './services/sessions.service';
     OfferingsService,
     SessionsService,
     PricingService,
+    WaiversService,
     OFFERING_LOOKUP_PORT,
     POLICY_PORT,
     PRICING_PORT,

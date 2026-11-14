@@ -364,6 +364,34 @@ export const EnrollmentPackageGEvents = {
   ),
 };
 
+/**
+ * Rental-group roster events (SPK-COND-005, proposed amendment PA-09). Identifiers only. No
+ * module subscribes: being on a roster grants nothing, so nothing follows from these.
+ */
+export const EnrollmentRosterEvents = {
+  bookingRosterChanged: defineEvent(
+    'enrollment.booking_roster_changed',
+    z.object({
+      bookingId: z.uuid(),
+      memberId: z.uuid(),
+      personId: z.uuid().nullable(),
+      change: z.enum(['invited', 'joined', 'removed']),
+      revision: z.number().int().min(1),
+    }),
+  ),
+  bookingRosterInvitationCreated: defineEvent(
+    'enrollment.booking_roster_invitation_created',
+    z.object({
+      invitationId: z.uuid(),
+      bookingId: z.uuid(),
+      memberId: z.uuid(),
+      recipientPersonId: z.uuid().nullable(),
+      recipientContactKind: z.enum(['email', 'phone']).nullable(),
+      expiresAt: z.string(),
+    }),
+  ),
+};
+
 export const HoldExpiryDue = EnrollmentEvents.holdExpiryDue;
 export const CapacityReleased = EnrollmentEvents.capacityReleased;
 export const EnrollmentConfirmed = EnrollmentEvents.enrollmentConfirmed;

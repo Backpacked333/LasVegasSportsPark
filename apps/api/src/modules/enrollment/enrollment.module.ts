@@ -17,6 +17,7 @@ import { ClosureImpactContributors, EventChanged, SchedulingModule } from '../sc
 import { WorkforceEvents, WorkforceModule } from '../workforce';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
+import { BookingRostersController } from './controllers/booking-rosters.controller';
 import { BookingsController } from './controllers/bookings.controller';
 import { CapacityController } from './controllers/capacity.controller';
 import { EnrollmentsController } from './controllers/enrollments.controller';
@@ -56,6 +57,7 @@ import {
 import { enrollmentSystem } from './enrollment.shared';
 import { ApplicationsService } from './services/applications.service';
 import { BasketsService } from './services/baskets.service';
+import { BookingRostersService } from './services/booking-rosters.service';
 import { BookingsService } from './services/bookings.service';
 import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
@@ -120,6 +122,8 @@ const providers: Provider[] = [
   MembershipsService,
   BookingsService,
   { provide: BOOKING_QUERY_IMPL, useExisting: BookingsService },
+  // SPK-COND-005 (proposed): rental-group rosters beside the bookings they belong to.
+  BookingRostersService,
   YouthProgressionService,
   CatalogSessions,
   EnrollmentFacilityScope,
@@ -193,6 +197,7 @@ const providers: Provider[] = [
     EnrollmentOverviewController,
     PackagesMembershipsController,
     BookingsController,
+    BookingRostersController,
     YouthProgressionController,
   ],
   exports: [

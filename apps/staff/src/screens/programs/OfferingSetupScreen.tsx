@@ -51,7 +51,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { OfferingForm } from './OfferingForm';
+import { OfferingForm, RequiredWaivers } from './OfferingForm';
 import '../../features/grow/grow.css';
 
 type Offering = Schema<'Offering'>;
@@ -106,6 +106,7 @@ function EditOffering({ offering }: { offering: Offering }) {
         <p role="status">Offering saved (revision {update.data?.staff?.revision}).</p>
       ) : null}
       <CommandError error={update.error} onReload={reload} />
+      {editable ? <RequiredWaivers offeringId={offering.id} disabled={!online} /> : null}
     </section>
   );
 }

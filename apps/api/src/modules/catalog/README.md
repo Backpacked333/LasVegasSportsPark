@@ -506,3 +506,92 @@ Not done here: that the named entitlement is a membership benefit is checked by 
 `catalog.price_rule_created` event payload is unchanged (the audit record carries the new fields);
 the promotion badge compares a minimum line amount with the rule's base price, which for a
 per-session rule is the price of one session.
+
+## Liability waivers (SPK-REG-011, proposed amendment PA-01): proposed, behind `liability_waivers`
+
+**Proposed.** The requirement is not part of the master specification until the product owner
+accepts it (`docs/package-a/proposed-specification-amendments.md`, DEC-095). It is built ahead of
+that decision and is off for every organization until a system administrator turns the capability
+`liability_waivers` on. What the code does with the capability on is **Verified** by the tests
+named below; the rule values are **Pending decision** (DEC-095) and are therefore content of an
+approved waiver version, never constants.
+
+Design (ADR-004, `.10x/adrs/004-waiver-currency-by-policy-key.md`):
+
+- **A waiver is a policy family of kind `waiver`** (migration `0220_catalog_waivers.sql` widens the
+  kind check). Its versions are drafted, approved (program or league manager, as for a form) and
+  retired through the policy version routes; approved wording is immutable; earlier versions stay.
+  Drafting a waiver version needs the capability. Its content (`WaiverContentSchema`) states every
+  value: `text`, `renewal: { reacceptOnNewVersion, renewEveryMonths }`, `enforcement: 'warn' |
+'block'` and `overrideRoles`. A version that states no complete rule is not judged against.
+- **An acceptance is an acknowledgment of a waiver version**, recorded by the one signing path of
+  `services/acknowledgments.service.ts`, so every SPK-REG-009 rule holds for it (a staff actor
+  names the signer and is never the signer; a child cannot self-sign; a guardian needs
+  `complete_forms`). It adds `acknowledgments.method` (`digital` | `paper`) and `paper_dated_on`.
+  A paper acceptance is only ever a staff entry: the database check
+  `acknowledgments_paper_is_staff_entry` refuses one not recorded by a named staff member or
+  without the paper's date, and refuses a paper date on a digital one. Its `signed_at` is the
+  server time of the staff entry, never a signature time. Rows written before the migration are
+  `digital` with no paper date through the column defaults. Method and paper date are immutable
+  (the 0202 guard now covers them).
+- **A requirement names the waiver by policy key**: `offering_required_waivers (organization_id,
+offering_id, policy_key)`. A copied offering keeps its required waivers.
+- **One evaluation**: `judgeWaiver` (`waivers/waiver-rule.ts`, pure) answers `current`, `lapsed` or
+  `missing` for one person, one family and one instant, with the version in force, the acceptance
+  judged, the rule applied and when it lapses. A paper acceptance counts from the date on the
+  paper. Acceptances recorded under a merged person record still count.
+- **An override of a block** is its own append-only record (`waiver_overrides`): one person, one
+  waiver family, one activity (an offering, an offering session, a scheduling event or a booking),
+  a reason and the staff member. It is permitted only where the version in force blocks and names
+  one of the actor's roles; never for a waiver that is current or only warns, never for oneself.
+
+Routes (contracts in `packages/contracts/src/api/catalog-waivers.ts`):
+
+| Route                                      | Who                                                                           |
+| ------------------------------------------ | ----------------------------------------------------------------------------- |
+| `GET /v1/people/{id}/waivers`              | staff; the person; a guardian holding `complete_forms`; else 404              |
+| `POST /v1/waiver-acceptances`              | digital: the adult, a guardian, or staff naming the signer; paper: staff only |
+| `POST /v1/waiver-overrides`                | staff whose role the approved waiver names                                    |
+| `GET /v1/offerings/{id}/required-waivers`  | any signed-in person once the offering is published; staff before             |
+| `POST /v1/offerings/{id}/required-waivers` | `catalog.manage_required_waivers`                                             |
+
+`POST /v1/acknowledgments` refuses a waiver version (`USE_WAIVER_ACCEPTANCE`), so a waiver
+acceptance always carries its method and always checks the capability.
+
+Port (`PolicyPort`, `catalog.ports.ts`): `waiverStatus`, `waiverStatuses` (a roster in two reads)
+and `waiverFindings` (the missing or lapsed required waivers of some people for one activity, with
+the severity the rule gives them and any recorded override). `OfferingSnapshot.requiredWaiverKeys`
+carries the keys. Enrollment (registration, roster readiness, rental rosters) and entry (check-in)
+read only through this port.
+
+Capability off: the four commands and drafting a waiver version answer ACCESS_DENIED
+`CAPABILITY_DISABLED`; `waiverFindings` returns nothing, so no caller evaluates or shows anything;
+`GET /people/{id}/waivers` answers `evaluated: false`; an offering shows no required waiver.
+Acknowledgments of forms behave exactly as before.
+
+Tests (**Verified**): `__tests__/waivers.spec.ts` (requirement tests named SPK-REG-011 and
+SPK-REG-009, the three states under both renewal rules, the override, the read's authorization,
+capability off, and the database refusing each integrity rule), `waivers/waiver-rule.spec.ts`.
+
+**Assumed defaults (Proposed, DEC-095 open):** warn and do not block; a new version does not
+require re-acceptance; no periodic renewal; paper is still collected. They exist only as the
+content of the waiver version an organization approves (the test fixture `fixtureWaiverContent`
+uses them); answering DEC-095 is approving a version, not a release.
+
+**Known gaps:**
+
+- A renewal of the same version closes the lapsed acknowledgment as `withdrawn` with the reason
+  "Superseded by a renewed acceptance of the same waiver version." (one active acknowledgment per
+  person and version is a database rule). The row is kept; a distinct `superseded` status would say
+  it better and is **Proposed**.
+- The date on a paper has no zone: it is refused only when it is in the future everywhere on earth
+  or its day had ended everywhere before the waiver version existed. The renewal clock of a paper
+  acceptance starts at midnight UTC of that date. **Pending decision** whether the facility's zone
+  should decide (DEC-095, J4).
+- An override recorded against a scheduling event or a booking stores the id as a reference; the
+  catalog cannot check that another module's record exists.
+- `overrideRoles` can only narrow `catalog.override_waiver` (front desk, program and league
+  manager, general manager, system administrator, support operator); a role outside that list
+  never overrides.
+- Legacy paper-waiver dates cannot be imported as paper acceptances by the migration principal:
+  the database requires a named staff member. **Pending decision** (DEC-095, J4).

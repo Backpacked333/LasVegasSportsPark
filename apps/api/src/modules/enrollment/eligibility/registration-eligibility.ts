@@ -44,6 +44,12 @@ export interface EligibilityInput {
   requiredForms: PolicyVersion[];
   /** Policy version ids of the required forms the participant has acknowledged. */
   acknowledgedFormIds: readonly string[];
+  /**
+   * SPK-REG-011 (proposed amendment PA-01): the offering's required waivers that are missing or
+   * lapsed for the participant, as the catalog judged them (`PolicyPort.waiverFindings`). Absent or
+   * empty when every waiver is current, none is required, or liability waivers are turned off.
+   */
+  waiverFindings?: readonly EligibilityWaiverFinding[];
   person: EligibilityPerson;
   /** join_team: the entry applied to. */
   teamEntry?: { id: string; status: string } | null;
@@ -62,6 +68,18 @@ export interface EligibilityInput {
   } | null;
   /** Session-scoped intents: the session booked. */
   session?: { id: string; status: string; scheduledStart: Date } | null;
+}
+
+/** One missing or lapsed required waiver, already judged by the catalog rule. */
+export interface EligibilityWaiverFinding {
+  policyKey: string;
+  title: string;
+  status: 'missing' | 'lapsed';
+  /** `blocking` when the approved rule blocks and no override is recorded; else `warning`. */
+  severity: 'warning' | 'blocking';
+  overridden: boolean;
+  /** The version in force that would be accepted; null when the family has none. */
+  policyVersionId: string | null;
 }
 
 export interface EligibilityPolicyContent {
@@ -308,6 +326,32 @@ export function evaluateRegistrationEligibility(input: EligibilityInput): Eligib
     alternatives.push({
       kind: 'complete_acknowledgment',
       message: 'Complete the required acknowledgments.',
+      offeringId: null,
+    });
+  }
+
+  // SPK-REG-011 (proposed): a missing or lapsed waiver is shown at registration; whether it
+  // warns or blocks is the approved waiver rule, and a recorded staff override turns a block into
+  // a warning.
+  const waiverFindings = input.waiverFindings ?? [];
+  for (const finding of waiverFindings) {
+    const what = finding.status === 'missing' ? 'has not been accepted' : 'has lapsed';
+    reasons.push({
+      code: finding.status === 'missing' ? 'waiver_missing' : 'waiver_lapsed',
+      severity: finding.severity,
+      message: finding.overridden
+        ? `"${finding.title}" ${what} for the participant; staff recorded an override for this registration.`
+        : finding.severity === 'blocking'
+          ? `"${finding.title}" ${what} for the participant and must be accepted before registering.`
+          : `"${finding.title}" ${what} for the participant; the participant or a guardian should accept it.`,
+      source: { type: 'waiver', id: finding.policyVersionId },
+      requiredAction: 'accept_waiver',
+    });
+  }
+  if (waiverFindings.length > 0) {
+    alternatives.push({
+      kind: 'complete_acknowledgment',
+      message: 'Accept the required waiver.',
       offeringId: null,
     });
   }

@@ -50,6 +50,22 @@ export const iso = (value: Date | string): string => new Date(value).toISOString
 export const isoOrNull = (value: Date | string | null | undefined): string | null =>
   value === null || value === undefined ? null : iso(value);
 
+/**
+ * A `date` column as `YYYY-MM-DD` whichever driver read it: a string is already the date; a Date is
+ * midnight of that date in UTC (PGlite) or in the process zone (node-postgres), so the date is
+ * read from whichever of the two is at midnight.
+ */
+export function dateOnlyOrNull(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value.slice(0, 10);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const utcMidnight =
+    value.getUTCHours() === 0 && value.getUTCMinutes() === 0 && value.getUTCSeconds() === 0;
+  return utcMidnight
+    ? `${value.getUTCFullYear()}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}`
+    : `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
 /** Whether [from, to) contains the instant (to = null means open-ended). */
 export function isEffectiveAt(
   row: { effective_from: Date | string; effective_to: Date | string | null },
@@ -315,6 +331,8 @@ export function toAcknowledgment(row: Selectable<AcknowledgmentsTable>): Acknowl
     recordedByKind: row.recorded_by_kind,
     signedAt: iso(row.signed_at),
     evidence: row.evidence,
+    method: row.method,
+    paperDatedOn: dateOnlyOrNull(row.paper_dated_on),
     status: row.status,
     withdrawnAt: isoOrNull(row.withdrawn_at),
     withdrawnReason: row.withdrawn_reason,

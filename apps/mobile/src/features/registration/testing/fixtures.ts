@@ -503,6 +503,8 @@ export function acknowledgment(
     recordedByKind: 'customer',
     signedAt: T,
     evidence: {},
+    method: 'digital',
+    paperDatedOn: null,
     status: 'active',
     withdrawnAt: null,
     withdrawnReason: null,

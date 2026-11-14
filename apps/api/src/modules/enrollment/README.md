@@ -934,3 +934,93 @@ Read-only (no idempotency key), in `services/enrollment-overview.service.ts`; te
 - `GET /v1/offering-availability?offeringIds=` (at most 20): places left (capacity minus committed
   and held) of the tightest active offering-level pool; published offerings for anyone of the
   organization, unpublished ones for staff with `enrollment.read_capacity` there.
+
+## Required waivers at registration and on rosters (SPK-REG-011, proposed amendment PA-01)
+
+**Proposed**, behind the capability `liability_waivers` (DEC-095; off by default). Enrollment owns
+no waiver data: it asks the catalog policy port (`PolicyPort.waiverFindings`) and maps the answer.
+
+- **Registration** (`services/registration-evaluator.ts`,
+  `eligibility/registration-eligibility.ts`): for each waiver family the offering requires
+  (`OfferingSnapshot.requiredWaiverKeys`) a missing or lapsed waiver becomes a reason
+  `waiver_missing` or `waiver_lapsed` whose severity is the approved waiver rule: a warning leaves
+  the application eligible; a block makes it ineligible until the waiver is accepted or a permitted
+  override is recorded for the offering (then it is a warning that says so). **Verified**
+  `__tests__/registration-waivers.spec.ts`, `eligibility/registration-eligibility.spec.ts`.
+- **Roster readiness** (`services/competition-forms-check.ts`, competition's FORMS_CHECK_IMPL): the
+  season's registration offering's required waivers are judged for the whole roster in one port
+  call; findings carry the count only and the severity of the rule (`warning` or `blocking`).
+  **Verified** `__tests__/registration-waivers.spec.ts`,
+  `services/competition-forms-check.spec.ts`.
+- With the capability off the port returns nothing, so neither caller evaluates or shows anything
+  and the form behaviour is unchanged (**Verified**, same files).
+
+A rental's booker is the participant of the booking's registration, so a waiver the rental
+offering requires and whose rule blocks must be accepted by the booker before booking. That is this
+section's rule, not the roster's.
+
+## Rental-group rosters (SPK-COND-005, proposed amendment PA-09): proposed, behind `rental_rosters`
+
+**Proposed.** Not part of the master specification until accepted
+(`docs/package-a/proposed-specification-amendments.md`, DEC-103). Built ahead of the decision and
+off until a system administrator turns the capability `rental_rosters` on. What the code does with
+it on is **Verified** by `__tests__/booking-rosters.spec.ts`.
+
+A rental booking (one booking row also covers a standing weekly series) may have a group roster:
+the people the renter brings. `services/booking-rosters.service.ts`, beside
+`services/bookings.service.ts`; tables in migration `0530_enrollment_booking_rosters.sql`:
+
+- `booking_roster_members`: a person, or an invited contact with no record yet; `invited`,
+  `joined` or `removed`. One live row per booking and person, and one open row per booking and
+  contact, are partial unique indexes. A row's booking never changes and its person is named once;
+  the lifecycle only moves forward (transition guard); rows are never deleted.
+- `booking_roster_invitations`: the invitation behind an invited row (token hash, expiry;
+  `pending` then `accepted`, `declined`, `revoked` or `expired`), modelled on `team_invitations`.
+  One pending invitation per roster row; nothing about who was invited can be rewritten.
+- Lifecycles: `BookingRosterMemberMachine` and `BookingRosterInvitationMachine`
+  (`enrollment.state-machines.ts`).
+
+| Route                                                     | Who                                                                                             | Needs the capability |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------- |
+| `GET /v1/bookings/{id}/roster`                            | the renter; staff at the facility; anyone else 404                                              | no                   |
+| `POST /v1/bookings/{id}/roster`                           | staff (anyone); the renter or a joined member, for themselves or someone they may register      | yes                  |
+| `POST /v1/bookings/{id}/roster/invitations`               | the renter; staff                                                                               | yes                  |
+| `POST /v1/bookings/{id}/roster/members/{memberId}/remove` | the renter; staff; the member or someone who may register them                                  | no                   |
+| `GET /v1/me/booking-roster-invitations`                   | the open invitations that name the signed-in person                                             | no                   |
+| `GET /v1/booking-roster-invitations/{id}`                 | the person it names; the token holder; the renter; staff                                        | no                   |
+| `POST /v1/booking-roster-invitations/{id}/accept`         | the person it names (no token), or the token holder for themselves or someone they may register | yes                  |
+| `POST /v1/booking-roster-invitations/{id}/decline`        | the person it names, or the token holder                                                        | no                   |
+| `POST /v1/booking-roster-invitations/{id}/revoke`         | the renter; staff                                                                               | no                   |
+
+- Only a live rental has a roster that can be added to (`ROSTER_RENTAL_ONLY`, `BOOKING_NOT_LIVE`);
+  an ended booking's roster stays readable.
+- The roster read carries each member's waiver status for the rental offering's required waiver
+  families, from `PolicyPort.waiverStatuses` (the worst when several are required): `current`,
+  `lapsed`, `missing`, or `not_evaluated` when liability waivers are off, the offering requires no
+  waiver, the row has no person yet, or the row is removed. `waiver.state` says which.
+- **A missing waiver is shown and never blocks the booking** (the assumed default; **Pending
+  decision** DEC-103). Nothing in this service reads or changes the booking's state.
+- **Being on a roster grants nothing else.** The service writes only its two tables: no
+  enrollment, entitlement, hold, team entry or roster membership, and no module subscribes to its
+  events (`enrollment.booking_roster_changed`, `enrollment.booking_roster_invitation_created`).
+  **Verified**: the requirement test counts the other records and the event handlers.
+- Capability off: adding, inviting and accepting answer ACCESS_DENIED `CAPABILITY_DISABLED`;
+  every read, and declining, revoking and removing, keep working.
+
+**Deviations from the team invitation model, and known gaps:**
+
+- An invitation that names a person is accepted by that person signed in, without the token
+  (signing in proves who they are). The token is required only for an invitation to a contact. No
+  messaging channel delivers tokens (DEC-012, DEC-062), so the inviter is shown the token once and
+  passes it on.
+- A contact invitation is accepted by whoever holds its token; the contact is **not** matched
+  against a verified contact point of the acceptor (a team invitation is). A roster grants nothing,
+  so the exposure is a name on a list the renter can remove. **Proposed** to match the contact
+  once delivery exists.
+- Invitations expire lazily: an attempt to accept past the expiry records it; reads show `expired`
+  meanwhile. There is no periodic job, so an unanswered expired invitation keeps its roster row
+  `invited` until somebody removes it.
+- The invitation expiry default (14 days) is an engineering default, **Proposed**.
+- The renter and staff see members' display names, children included. **Pending decision**
+  (DEC-103, with J1 and D18) whether a renter should see a child's name or only "a child of ...".
+- How regular renters are billed (I2) is not touched by this amendment.

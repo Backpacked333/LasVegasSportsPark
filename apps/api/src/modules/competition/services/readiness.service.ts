@@ -711,7 +711,7 @@ export class ReadinessService {
     if (finding.status === 'satisfied') return;
     add(check, {
       code: finding.code,
-      severity: finding.status === 'unknown' ? 'unknown' : 'blocking',
+      severity: finding.status === 'unknown' ? 'unknown' : (finding.severity ?? 'blocking'),
       message: finding.message,
       source: finding.source,
       responsibleRole: finding.responsibleRole,
