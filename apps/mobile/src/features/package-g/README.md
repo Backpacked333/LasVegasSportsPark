@@ -101,3 +101,23 @@ any screen still a placeholder.
 | Booking a session with a session package credit (`packageEntitlementId`)                 | Built by the money screen group on `/session-packages` (`screens/payments/README.md`), not here                      |
 | Cancel of a held booking whose basket checkout completed                                 | The API refuses it (409 `BOOKING_CONFIRMATION_PENDING`, stage-4 fix); the app offers no release then either          |
 | Cancel of a held booking while its basket is in checkout                                 | The API refuses it (409 `CHECKOUT_IN_PROGRESS`, stage-4 fix); the app offers none until the payment outcome is known |
+
+## Rental group roster (SPK-COND-005, proposed amendment PA-09)
+
+**Proposed**, behind the capability `rental_rosters` (DEC-103 pending). While it is on:
+
+- The booking detail of a rental shows "Who is coming" (`src/screens/bookings/BookingRosterSection.tsx`):
+  the renter's roster from `GET /v1/bookings/{id}/roster` with each member's waiver, adding
+  themselves or someone they register for, inviting somebody by email (the invitation code is
+  shown once; nothing is sent, DEC-012 and DEC-062) and removing somebody. It says that a waiver
+  that is not accepted does not block the booking.
+- "Rentals and parties" links to the roster invitations (`/booking-roster-invitations`, route
+  files under `app/booking-roster-invitations/`; `src/screens/bookings/RosterInvitationScreen.tsx`):
+  the invitations that name the person, a field for an invitation code, joining for oneself or a
+  child, declining, and then the waiver the rental asks for (SPK-REG-011) to accept.
+- An invitation code stays in the screen's memory and is never part of a route (§4.13, §4.14).
+
+With the capability off the roster is absent and nothing is asked of the API; the invitation
+screens say rental rosters are not in use. **Verified** in jest:
+`src/screens/bookings/__tests__/BookingRoster.test.tsx`, `roster-invitation-routes.test.tsx`.
+**Not verified:** on a device.
