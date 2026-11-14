@@ -21,6 +21,7 @@ import {
   type IntegrationRegistryPort,
   type ProviderSelector,
 } from '../../kernel';
+import { CatalogEvents, CatalogModule } from '../catalog';
 import {
   CHANGE_NOTICE_CHECK_IMPL,
   CompetitionEvents,
@@ -44,6 +45,7 @@ import {
   AudienceCountsController,
   NotificationsController,
 } from './controllers/notifications.controller';
+import { MessageSequencesController } from './controllers/message-sequences.controller';
 import { MessagingWebhooksController } from './controllers/webhooks.controller';
 import {
   CHANNEL_PROVIDERS,
@@ -78,6 +80,15 @@ import { PreferencesService } from './services/preferences.service';
 import { PushDevicesService } from './services/push-devices.service';
 import { RecipientAddresses } from './services/recipient-addresses';
 import { ScheduleNotices } from './services/schedule-notices';
+import { MessageScheduleService } from './sequences/message-schedule.service';
+import {
+  DEFAULT_MESSAGE_SEQUENCE_POLICY,
+  MESSAGE_SEQUENCE_POLICY,
+} from './sequences/message-sequences.policy';
+import { MessageSequencesService } from './sequences/message-sequences.service';
+import { MessageTemplatesService } from './sequences/message-templates.service';
+import { ScheduledMessageSender } from './sequences/scheduled-message-sender';
+import { SubjectFactsReader } from './sequences/subject-facts';
 
 /** The selector that chooses each external channel's adapter (§5.2). */
 const CHANNEL_SELECTORS: Record<'push' | 'email' | 'sms', ProviderSelector> = {
@@ -133,6 +144,15 @@ const providers: Provider[] = [
   // evidence for the schedule-change notice.
   ChangeNoticeCheck,
   { provide: CHANGE_NOTICE_CHECK_IMPL, useExisting: ChangeNoticeCheck },
+  // SPK-COMMS-009 (proposed amendment PA-05, capability message_sequences): templates, sequences
+  // and the message schedule of a season or an offering. The assumed defaults are policy content
+  // (DEC-099 pending).
+  { provide: MESSAGE_SEQUENCE_POLICY, useValue: DEFAULT_MESSAGE_SEQUENCE_POLICY },
+  SubjectFactsReader,
+  MessageScheduleService,
+  MessageTemplatesService,
+  MessageSequencesService,
+  ScheduledMessageSender,
 ];
 
 /**
@@ -144,7 +164,7 @@ const providers: Provider[] = [
  * contact points are read through identity's exported service. See README.md.
  */
 @Module({
-  imports: [IdentityModule, SchedulingModule, CompetitionModule],
+  imports: [IdentityModule, SchedulingModule, CompetitionModule, CatalogModule],
   providers,
   controllers: [
     NotificationsController,
@@ -153,6 +173,7 @@ const providers: Provider[] = [
     MeCommunicationsController,
     CalendarFeedController,
     MessagingWebhooksController,
+    MessageSequencesController,
   ],
   exports: [
     NotificationsService,
@@ -167,6 +188,11 @@ const providers: Provider[] = [
     DeliveryRetryService,
     DeliveryReconciliationService,
     ActivityReminders,
+    MessageScheduleService,
+    MessageTemplatesService,
+    MessageSequencesService,
+    ScheduledMessageSender,
+    MESSAGE_SEQUENCE_POLICY,
     CHANNEL_PROVIDERS,
     TEAM_MEMBERSHIP_PORT,
     COMMUNICATIONS_POLICY,
@@ -188,6 +214,8 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
     private readonly competitionNotices: CompetitionNotices,
     private readonly mergeFollowUp: PersonMergeFollowUp,
     private readonly reminders: ActivityReminders,
+    private readonly messageSchedule: MessageScheduleService,
+    private readonly scheduledMessageSender: ScheduledMessageSender,
     private readonly periodicJobs: PeriodicJobRegistry,
     @Inject(INTEGRATION_REGISTRY) private readonly integrations: IntegrationRegistryPort,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
@@ -212,6 +240,9 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
     }
     // COM-06 (SPK-CAP-001 "remind", K-06): composes nothing until the lead time is configured.
     this.periodicJobs.register(this.reminders.job());
+    // SPK-COMMS-009 (proposed amendment PA-05): sends confirmed messages of sequences that are
+    // due; nothing unconfirmed, and nothing while message sequences are turned off.
+    this.periodicJobs.register(this.scheduledMessageSender.job());
     // SPK-SCHED-009 "messages": a closure preview names the unsent notices about affected events.
     this.impactContributors.register(
       'communications.pending_notices',
@@ -341,6 +372,90 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
       'communications.notify_result_reminder',
       (event, ctx) => this.competitionNotices.onResultReminderRequested(ctx.trx, event),
       { failureOwner: 'league_manager' },
+    );
+    // SPK-COMMS-009 (proposed amendment PA-05, capability message_sequences). A new season or a
+    // published offering gets its message schedule from the sequences that apply (nothing while
+    // the switch is off; one message per step and record, so a replay creates nothing twice).
+    // The other four keep existing messages truthful: a moved date moves the due time and asks
+    // for confirmation again, an archived record cancels what was not sent. None of them sends.
+    this.registry.on<EventPayload<typeof CompetitionEvents.seasonCreated>>(
+      CompetitionEvents.seasonCreated.type,
+      'communications.schedule_season_messages',
+      (event, ctx) =>
+        this.messageSchedule.onSubjectEvent(
+          ctx.trx,
+          event.organizationId,
+          { type: 'season', id: event.payload.seasonId },
+          'materialize',
+          event.correlationId,
+        ),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof CompetitionEvents.seasonUpdated>>(
+      CompetitionEvents.seasonUpdated.type,
+      'communications.follow_season_messages',
+      (event, ctx) =>
+        this.messageSchedule.onSubjectEvent(
+          ctx.trx,
+          event.organizationId,
+          { type: 'season', id: event.payload.seasonId },
+          'follow',
+          event.correlationId,
+        ),
+      { failureOwner: 'league_manager' },
+    );
+    // The first game of a season is one of its anchor dates and placeholders.
+    this.registry.on<EventPayload<typeof CompetitionEvents.fixtureChanged>>(
+      CompetitionEvents.fixtureChanged.type,
+      'communications.follow_season_first_game',
+      (event, ctx) =>
+        this.messageSchedule.onSubjectEvent(
+          ctx.trx,
+          event.organizationId,
+          { type: 'season', id: event.payload.seasonId },
+          'follow',
+          event.correlationId,
+        ),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof CatalogEvents.offeringPublished>>(
+      CatalogEvents.offeringPublished.type,
+      'communications.schedule_offering_messages',
+      (event, ctx) =>
+        this.messageSchedule.onSubjectEvent(
+          ctx.trx,
+          event.organizationId,
+          { type: 'offering', id: event.payload.offeringId },
+          'materialize',
+          event.correlationId,
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof CatalogEvents.offeringUpdated>>(
+      CatalogEvents.offeringUpdated.type,
+      'communications.follow_offering_messages',
+      (event, ctx) =>
+        this.messageSchedule.onSubjectEvent(
+          ctx.trx,
+          event.organizationId,
+          { type: 'offering', id: event.payload.offeringId },
+          'follow',
+          event.correlationId,
+        ),
+      { failureOwner: 'program_manager' },
+    );
+    this.registry.on<EventPayload<typeof CatalogEvents.offeringArchived>>(
+      CatalogEvents.offeringArchived.type,
+      'communications.cancel_archived_offering_messages',
+      (event, ctx) =>
+        this.messageSchedule.onSubjectEvent(
+          ctx.trx,
+          event.organizationId,
+          { type: 'offering', id: event.payload.offeringId },
+          'follow',
+          event.correlationId,
+        ),
+      { failureOwner: 'program_manager' },
     );
     // Provider receipts resolve accepted/unknown attempts; duplicates are ignored (SPK-COMMS-004).
     this.inbox.on(

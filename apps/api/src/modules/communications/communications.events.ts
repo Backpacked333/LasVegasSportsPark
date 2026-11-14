@@ -2,9 +2,12 @@ import {
   defineEvent,
   DeliveryChannelSchema,
   DeliveryFailureCodeSchema,
+  MessageSubjectTypeSchema,
   NotificationCategorySchema,
   NotificationKindSchema,
   PushPlatformSchema,
+  ScheduledMessageAttentionSchema,
+  ScheduledMessageStatusSchema,
   SuppressionReasonSchema,
   z,
 } from '@sportspark/contracts';
@@ -146,6 +149,55 @@ export const PushDeviceRevoked = defineEvent(
   }),
 );
 
+/**
+ * SPK-COMMS-009 (proposed amendment PA-05): a sequence produced scheduled messages for a season
+ * or an offering (from the record's own event, or because staff asked for the schedule).
+ */
+export const MessageScheduleGenerated = defineEvent(
+  'communications.message_schedule_generated',
+  z.object({
+    subjectType: MessageSubjectTypeSchema,
+    subjectId: z.uuid(),
+    sequenceId: z.uuid(),
+    scheduledMessageIds: z.array(z.uuid()),
+  }),
+);
+/**
+ * SPK-COMMS-009: a scheduled message was confirmed, edited, skipped, restored, canceled, moved
+ * with its anchor date, or returned to needing confirmation. Never the text itself.
+ */
+export const ScheduledMessageChanged = defineEvent(
+  'communications.scheduled_message_changed',
+  z.object({
+    scheduledMessageId: z.uuid(),
+    subjectType: MessageSubjectTypeSchema,
+    subjectId: z.uuid(),
+    change: z.enum([
+      'confirmed',
+      'edited',
+      'skipped',
+      'restored',
+      'canceled',
+      'rescheduled',
+      'reopened',
+    ]),
+    status: ScheduledMessageStatusSchema,
+    previousStatus: ScheduledMessageStatusSchema,
+    attention: ScheduledMessageAttentionSchema.nullable(),
+    dueAt: z.iso.datetime().nullable(),
+  }),
+);
+/** SPK-COMMS-009: a confirmed message was sent when it was due, as the notification named. */
+export const ScheduledMessageSent = defineEvent(
+  'communications.scheduled_message_sent',
+  z.object({
+    scheduledMessageId: z.uuid(),
+    notificationId: z.uuid(),
+    subjectType: MessageSubjectTypeSchema,
+    subjectId: z.uuid(),
+  }),
+);
+
 export const CommunicationsEvents = {
   NotificationComposed,
   NotificationQueued,
@@ -164,4 +216,7 @@ export const CommunicationsEvents = {
   DeliveryRetryQueued,
   PushDeviceRegistered,
   PushDeviceRevoked,
+  MessageScheduleGenerated,
+  ScheduledMessageChanged,
+  ScheduledMessageSent,
 } as const;
