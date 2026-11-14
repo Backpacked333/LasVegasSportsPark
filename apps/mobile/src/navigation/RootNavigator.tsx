@@ -9,6 +9,7 @@
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { useMemo } from 'react';
 import { ConnectivityAnnouncer } from '../connectivity/ConnectivityBanner';
+import { DemoOverlay } from '../demo';
 import { fonts, useTheme, type Theme } from '../ui/theme';
 import { UpdateGate } from './UpdateGate';
 
@@ -81,6 +82,7 @@ export function RootNavigator() {
           <Stack.Screen name="pos-receipts/index" options={{ title: 'Point-of-sale receipts' }} />
           <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
         </Stack>
+        {DemoOverlay ? <DemoOverlay /> : null}
       </UpdateGate>
     </ThemeProvider>
   );

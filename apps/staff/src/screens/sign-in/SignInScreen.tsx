@@ -11,6 +11,7 @@
  */
 import { Suspense } from 'react';
 import { useLocation } from 'react-router';
+import { DemoRolePicker } from '../../demo';
 import { DevSignIn } from '../../dev';
 import { LegendsToggle } from '../../theme/LegendsToggle';
 import { Glass } from '../../ui/glass/Glass';
@@ -128,7 +129,11 @@ export function SignInScreen() {
               Your session ended. Sign in again.
             </p>
           ) : null}
-          {DevSignIn ? (
+          {DemoRolePicker ? (
+            <Suspense fallback={<StateView variant="loading" label="demo roles" />}>
+              <DemoRolePicker />
+            </Suspense>
+          ) : DevSignIn ? (
             <Suspense fallback={<StateView variant="loading" label="sign-in" />}>
               <DevSignIn />
             </Suspense>

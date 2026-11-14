@@ -17,10 +17,11 @@
  * starts at its top, and the browser tab is titled with the screen it shows.
  */
 import { useIsFetching } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { useApiQuery } from '../api/useApiQuery';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
+import { DemoBar, TourPanel } from '../demo';
 import { OfflineQueueProvider } from '../features/operations/offline/OfflineQueueProvider';
 import { WORKSPACE_PATH } from '../navigation/areas';
 import { destinationFor } from '../navigation/destinations';
@@ -354,6 +355,11 @@ export function Shell() {
           </Glass>
         </aside>
         <div className="shell-body" inert={menuOpen || paletteOpen}>
+          {DemoBar ? (
+            <Suspense fallback={null}>
+              <DemoBar />
+            </Suspense>
+          ) : null}
           <header className="shell-header">
             <h1 className="visually-hidden">Sportspark staff</h1>
             <Glass className="header-group header-group-main" radius={23} blur={5}>
@@ -402,6 +408,11 @@ export function Shell() {
         </div>
         {paletteOpen ? (
           <CommandPalette onClose={closePalette} rail={rail} onToggleRail={toggleRail} />
+        ) : null}
+        {TourPanel ? (
+          <Suspense fallback={null}>
+            <TourPanel />
+          </Suspense>
         ) : null}
       </div>
     </OfflineQueueProvider>

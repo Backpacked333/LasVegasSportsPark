@@ -1,0 +1,159 @@
+/*
+ * Demo mode (src/demo): the sample-data banner, the role picker and the guided tour. Loaded only
+ * with the demo chunks, so a real build carries none of it. The banner and the tour float on
+ * glass like the rest of the chrome (ui/glass); their content is flat.
+ */
+.glass.demo-bar {
+  margin: 10px 28px 0 18px;
+}
+.demo-bar > .glass__content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 8px 10px 8px 16px;
+  font-size: 13.5px;
+}
+.demo-bar p {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
+}
+/* The mark of sample data: the pending tone, with words beside it (never colour alone). */
+.demo-bar p::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--tone-pending);
+  box-shadow: 0 0 0 4px var(--tone-pending-bg);
+}
+.demo-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.demo-bar-actions .button {
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.demo-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.demo-picker h2,
+.demo-picker p {
+  margin: 0;
+}
+.demo-roles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.demo-role {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--glass-child);
+}
+.demo-role h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.demo-role p {
+  margin: 0;
+  grid-column: 1;
+  font-size: 13px;
+  color: var(--glass-ink-2);
+}
+.demo-role .button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  white-space: nowrap;
+}
+.demo-role .demo-elsewhere {
+  grid-column: 1 / -1;
+}
+@media (max-width: 560px) {
+  .demo-role {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .demo-role .button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+}
+
+/* A sheet over whatever screen the tour is on: a fuller frost, so no row beneath reads through. */
+.glass.demo-tour {
+  --glass-amount: 2.6;
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  width: min(380px, calc(100vw - 36px));
+}
+.demo-tour > .glass__content {
+  max-height: calc(100vh - 36px);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 18px;
+}
+.demo-tour h2,
+.demo-tour h3,
+.demo-tour p,
+.demo-tour ul {
+  margin: 0;
+}
+.demo-tour h2 {
+  font-size: 18px;
+}
+.demo-tour h3 {
+  font-size: 13.5px;
+}
+.demo-tour ul {
+  padding-left: 20px;
+}
+.demo-tour-count {
+  color: var(--glass-ink-2);
+  font-size: 13px;
+}
+.demo-tour-actions {
+  display: flex;
+  gap: 8px;
+  align-self: stretch;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+/* The phone tab bar of the workspace sits at the bottom: the tour clears it. */
+@media (max-width: 900px) {
+  .glass.demo-bar {
+    margin: 8px 12px 0;
+  }
+  .glass.demo-tour {
+    right: 12px;
+    bottom: 84px;
+    width: calc(100vw - 24px);
+  }
+  .demo-tour > .glass__content {
+    max-height: min(60vh, calc(100dvh - 180px));
+  }
+}
