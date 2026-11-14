@@ -431,7 +431,8 @@ export interface ReportingTeamEntriesView {
   division_id: V<string>;
   team_id: V<string>;
   facility_id: V<string | null>;
-  status: V<'applied' | 'approved' | 'withdrawn' | 'rejected'>;
+  /** `waiting` holds no place (SPK-COMP-006); the reports count approved entries only. */
+  status: V<'applied' | 'approved' | 'waiting' | 'withdrawn' | 'rejected'>;
   approved_at: V<Date | null>;
   season_status: V<string>;
   season_starts_on: V<string>;

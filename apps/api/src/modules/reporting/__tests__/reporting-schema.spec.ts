@@ -574,6 +574,7 @@ describe('reporting schema invariants (migration 1300)', () => {
       passThrough('reporting_team_entries_v', 'status', 'team_entries', 'status', {
         applied: true,
         approved: true,
+        waiting: true,
         withdrawn: true,
         rejected: true,
       }),
