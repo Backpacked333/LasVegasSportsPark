@@ -19,8 +19,8 @@ type State = (typeof STATES)[number];
 
 /**
  * SPK-COMMS-009 (proposed amendment PA-05), migration 1013: integrity that matters is enforced by
- * the database (CLAUDE.md, §4.7). Each test proves PostgreSQL refuses the violation whatever a
- * service does.
+ * the database (engineering conventions, §4.7). Each test proves PostgreSQL refuses the violation
+ * whatever a service does.
  */
 describe('message templates and sequences: schema invariants (migration 1013, SPK-COMMS-009)', () => {
   let t: TestApp;

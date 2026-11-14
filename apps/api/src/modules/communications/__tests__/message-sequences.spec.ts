@@ -1,4 +1,4 @@
-import { newId } from '@sportspark/contracts';
+import { newId, systemPrincipal } from '@sportspark/contracts';
 import { json, seedOrganization } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Outbox, UnitOfWork } from '../../../kernel';
@@ -32,7 +32,10 @@ import {
   DEFAULT_MESSAGE_SEQUENCE_POLICY,
   MESSAGE_SEQUENCE_POLICY,
 } from '../sequences/message-sequences.policy';
-import { SEND_SCHEDULED_MESSAGES_JOB } from '../sequences/message-schedule.service';
+import {
+  MessageScheduleService,
+  SEND_SCHEDULED_MESSAGES_JOB,
+} from '../sequences/message-schedule.service';
 import {
   SCHEDULED_MESSAGE_SEND_FAILED,
   ScheduledMessageSender,
@@ -1472,6 +1475,59 @@ describe('message templates and sequences (SPK-COMMS-009, proposed amendment PA-
       .set(manager)
       .send({ expectedRevision: message!.revision });
     expect(missingKey.status).toBe(400);
+  });
+
+  it('SPK-COMMS-009: two workers on one due message send it once, and two requests producing one schedule create each message once', async () => {
+    t.clock.set(CLOCK_START);
+    const template = await makeTemplate({ title: 'Kick-off for {{season_name}}', body: 'Soon.' });
+    const in_ = await league();
+    const sequence = await makeSequence({
+      subjectType: 'season',
+      scopeId: in_.competitionId,
+      steps: [{ templateId: template.id, anchor: 'starts', offsetDays: -7 }],
+      active: false,
+    });
+    const season = await createSeason(in_);
+    await team(season.id);
+    expect(await rowsOf(season.id)).toEqual([]);
+    await ok(
+      patch(`/message-sequences/${sequence.id}`, {
+        active: true,
+        expectedRevision: sequence.revision,
+      }),
+    );
+    // Two requests at once (PostgreSQL runs them concurrently; PGlite one after the other): the
+    // unique index on step and record answers the second insert with nothing.
+    const schedule = t.app.get(MessageScheduleService);
+    const subject = { type: 'season' as const, id: season.id };
+    const produced = await Promise.all([
+      schedule.generate(systemPrincipal(org, 'test.one'), subject, {}, null),
+      schedule.generate(systemPrincipal(org, 'test.two'), subject, {}, null),
+    ]);
+    expect(produced.map((p) => p.messages.length)).toEqual([1, 1]);
+    const rows = await rowsOf(season.id);
+    expect(rows).toHaveLength(1);
+    expect(
+      (await auditOf(season.id, 'communications.manage_message_sequences')).map(
+        (a) => (a.details as Json).operation,
+      ),
+    ).toEqual(['generate_schedule']);
+
+    const confirmed = await confirm(await messageOf(rows[0]!.id));
+    t.clock.set(confirmed.dueAt);
+    const now = t.clock.now();
+    // Two workers claim the same due message: one sends it, the other finds it locked or sent.
+    const handled = await Promise.all([
+      schedule.sendDue(org, confirmed.id, now),
+      schedule.sendDue(org, confirmed.id, now),
+    ]);
+    expect(handled.filter(Boolean)).toHaveLength(1);
+    await drainOutboxChecked(t);
+    expect((await messageOf(confirmed.id)).status).toBe('sent');
+    expect(await noticesAbout(season.id)).toHaveLength(1);
+    expect(await schedule.sendDue(org, confirmed.id, now)).toBe(false);
+    expect(await noticesAbout(season.id)).toHaveLength(1);
+    t.clock.set(CLOCK_START);
   });
 
   it('SPK-COMMS-009: messages the job cannot send now (another organization with the switch off, a message that fails) never hold back the rest; a failure is owned by support and tried again', async () => {
