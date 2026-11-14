@@ -189,6 +189,22 @@ export const CatalogActions = defineActions({
     staffRoles: FINANCE,
     requirements: ['SPK-PAY-001', 'SPK-PAY-002', '§4.5'],
   },
+  manageOfferingAddons: {
+    id: 'catalog.manage_offering_addons',
+    description:
+      'Create and retire the priced add-ons of an offering (proposed amendment PA-03; the roles are those of price rules, pending DEC-097)',
+    staffRoles: FINANCE,
+    capability: 'price_tiers_addons',
+    requirements: ['SPK-PAY-014', 'SPK-PAY-002'],
+  },
+  manageOfferingUniforms: {
+    id: 'catalog.manage_offering_uniforms',
+    description:
+      'Set and retire the uniform an offering requires or offers, with its sizes and price (proposed amendment PA-07; the roles are those of price rules, pending DEC-101)',
+    staffRoles: FINANCE,
+    capability: 'uniforms',
+    requirements: ['SPK-REG-012', 'SPK-PAY-002'],
+  },
   manageDiscounts: {
     id: 'catalog.manage_discounts',
     description: 'Create, update and retire discount definitions',

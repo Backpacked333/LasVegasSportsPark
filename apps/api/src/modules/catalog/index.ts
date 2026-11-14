@@ -40,6 +40,7 @@ export {
   parseWaiverContent,
 } from './waivers/waiver-rule';
 export { PriceRulesService } from './services/price-rules.service';
+export { OfferingExtrasService } from './services/offering-extras.service';
 export { DiscountsService } from './services/discounts.service';
 export {
   OfferingsService,

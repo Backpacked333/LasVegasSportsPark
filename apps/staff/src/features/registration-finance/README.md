@@ -79,3 +79,34 @@ state and never invents the value. jsdom tests are not staff acceptance on real 
 - The OpenAPI document marks some components nullable (`PaymentAttempt`, `FinancialConsequence`,
   `Receipt`, `Person`, ...) and encodes nullable references as `allOf` with a null type, which the
   generated types read as non-nullable; screens guard both at runtime.
+
+## Price tiers, add-ons and uniforms (PA-03, PA-07)
+
+SPK-PAY-014 (capability `price_tiers_addons`) and SPK-REG-012 (capability `uniforms`) are
+**Proposed** requirements (`docs/package-a/proposed-specification-amendments.md`); which tiers,
+add-ons, sizes, prices and rules a facility uses is **Pending decision** DEC-097 and DEC-101, and
+each screen says so beside the section (`pending.ts`). With a capability off its sections are not
+shown and nothing new is read.
+
+**Verified** (`screens/programs/__tests__/OfferingExtras.test.tsx`,
+`screens/programs/__tests__/OfferingUniformsScreen.test.tsx`,
+`screens/registrations/__tests__/AssistedRegistrationExtras.test.tsx`; not seen in a browser):
+
+- SCR-S-14 (`screens/programs/OfferingExtras.tsx`, shown by `OfferingSetupScreen`): tiers entered
+  with a new price rule version (what is attended, fewest and most days, price, member price,
+  purchase deadline in facility time) and listed per rule; add-ons with price, selection (once or
+  per session) and capacity, and "Retire"; the uniform with item key, sizes, requirement, price and
+  the returning-participant rule, "Retire", and a link to the uniform list.
+- SCR-S-25 (`PurchaseChoices.tsx`, shown by `AssistedRegistrationScreen`): per participant, the
+  tier, the days of a tier of chosen days, the add-ons and the uniform size, from
+  `GET /offerings/{id}/purchase-options`; the basket shows them with the API's estimate and the
+  quote shows every add-on and the uniform as a line of its own with its stored basis.
+- Uniform list (`screens/programs/OfferingUniformsScreen.tsx`): the uniform orders of an offering
+  (or of a team with `?team=<teamEntryId>`) with size, paid state and hand-over; "Hand over" and
+  "Undo…" (recorded as a correction, a reason is required) while the capability is on.
+  **Its route is not registered here**: integration adds
+  `/programs/offerings/:offeringId/uniforms` to this feature's `routes.tsx` (see
+  `.10x/decisions/sde/track-d.md`).
+
+Not built: charge lines of an add-on or a uniform (the API takes them; the forms send none); a
+link to the uniform list from the team screens.

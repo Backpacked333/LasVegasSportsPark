@@ -432,6 +432,21 @@ export const EnrollmentActions = defineActions({
     staffRoles: ['program_manager', 'coach'],
     requirements: ['SPK-YOUTH-006'],
   },
+  readUniformOrders: {
+    id: 'enrollment.read_uniform_orders',
+    description:
+      'List the uniforms ordered for a class or a team: size, paid state and hand-over (proposed amendment PA-07; readable while the capability is off)',
+    staffRoles: READERS,
+    requirements: ['SPK-REG-012', '§4.14'],
+  },
+  handOverUniform: {
+    id: 'enrollment.hand_over_uniform',
+    description:
+      'Record that a paid uniform was handed over, or undo a hand-over by a recorded correction (proposed amendment PA-07)',
+    staffRoles: REGISTRATION_STAFF,
+    capability: 'uniforms',
+    requirements: ['SPK-REG-012'],
+  },
   readYouthFeedback: {
     id: 'enrollment.read_youth_feedback',
     description:

@@ -252,6 +252,30 @@ export interface MembershipPricingPort {
 }
 export const MEMBERSHIP_PRICING_PORT = Symbol('MEMBERSHIP_PRICING_PORT');
 
+/** A participant a session expects, with the add-ons bought for that day (SPK-PAY-014). */
+export interface ExpectedAtSession {
+  participantPersonId: string;
+  enrollmentId: string;
+  addons: Array<{ addonId: string; code: string; name: string }>;
+}
+
+/**
+ * Who a session of an offering expects (SPK-PAY-014, proposed amendment PA-03), for the entry
+ * module's attendance read: the participants of confirmed registrations whose day selection
+ * includes the session (a registration without a selection attends every session), each with the
+ * add-ons for that day. Organization-scoped; unknown ids answer []. The caller decides whether
+ * `price_tiers_addons` is on and who may read the answer.
+ */
+export interface SessionRosterPort {
+  expectedAtSession(
+    organizationId: string,
+    offeringId: string,
+    sessionId: string,
+    trx?: Trx,
+  ): Promise<ExpectedAtSession[]>;
+}
+export const SESSION_ROSTER_PORT = Symbol('SESSION_ROSTER_PORT');
+
 /** One booking in a period (ENR-10, IF-36), for reporting. */
 export interface BookingOfPeriod {
   bookingId: string;

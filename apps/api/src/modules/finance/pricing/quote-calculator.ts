@@ -10,7 +10,10 @@ import {
   type LinePolicyReferences,
   type MemberPriceReason,
   type QuoteDiscountLine,
+  type QuoteLineAddonBasis,
+  type QuoteLineKind,
   type QuoteLinePriceBasis,
+  type QuoteLineUniformBasis,
 } from '@sportspark/contracts';
 
 /**
@@ -30,6 +33,13 @@ import {
  * per-session price is multiplied by the sessions counted. `quantity` stays the basket quantity
  * and base = unit x quantity holds as before; the result is explained by a stored price basis
  * from which the unit price can be worked out again (`unitPriceFromBasis`, SPK-PAY-002).
+ *
+ * Proposed amendments PA-03 and PA-07 (SPK-PAY-014, SPK-REG-012; ADR-003): a price tier comes
+ * first in that order (tier, member price, per-session multiplication): the tier's price replaces
+ * the rule's base price and the tier's member price the rule's. Add-ons and a priced uniform are
+ * lines of their own (`addonQuoteLine`, `uniformQuoteLine`): each carries its own unit price,
+ * quantity, charge lines and stored basis, belongs to the same basket line as the place, and
+ * takes no part in discounts (which are evaluated for the place).
  */
 
 /**
@@ -51,6 +61,30 @@ export interface LinePricingFacts {
   } | null;
   /** Required for `per_session`: the sessions counted and the instant they were counted at. */
   sessions: { sessionIds: string[]; countedAt: string } | null;
+  /**
+   * SPK-PAY-014 (PA-03): the one tier that applies to the line, with the facts that selected it;
+   * absent or null for a line without a tier. When present, `member.priceMinor` is the tier's
+   * member price.
+   */
+  tier?: {
+    tierId: string;
+    code: string;
+    name: string;
+    attendance: 'all_sessions' | 'chosen_sessions';
+    priceMinor: number;
+    memberPriceMinor: number | null;
+    availableUntil: string | null;
+    /** ISO instant of purchase the deadline was checked against (the quote instant). */
+    purchasedAt: string;
+    selectedSessionIds: string[];
+  } | null;
+}
+
+/** An add-on or uniform line: its own price, charges and stored basis (SPK-PAY-014, SPK-REG-012). */
+export interface ExtraLinePricing {
+  unitPriceMinor: number;
+  chargeLines: ChargeLine[];
+  basis: QuoteLineAddonBasis | QuoteLineUniformBasis;
 }
 
 export interface QuoteLineInput {
@@ -70,19 +104,129 @@ export interface QuoteLineInput {
   policies: LinePolicyReferences;
   equivalenceKey: string | null;
   enrollmentId: string | null;
+  /** SPK-PAY-014, SPK-REG-012: what the line charges for; omitted for the place itself. */
+  lineKind?: QuoteLineKind;
+  /** The add-on or offering uniform of an extra line. */
+  sourceId?: string | null;
+  /** The price of an extra line; it replaces the price rule for that line. */
+  extra?: ExtraLinePricing | null;
 }
 
 /**
- * The price basis of a line (SPK-PAY-013, SPK-PAY-015), in the fixed order: member price, then
- * per-session multiplication. A member price applies only when the participant holds the
+ * The quote line of an add-on selected for a basket line (SPK-PAY-014): the add-on's price each,
+ * times the sessions it was selected for (once for an add-on selected per registration).
+ */
+export function addonQuoteLine(
+  place: QuoteLineInput,
+  addon: {
+    id: string;
+    code: string;
+    name: string;
+    selection: 'per_registration' | 'per_session';
+    priceMinor: number;
+    chargeLines: ChargeLine[];
+  },
+  sessionIds: readonly string[],
+): QuoteLineInput {
+  const quantity = addon.selection === 'per_session' ? sessionIds.length : 1;
+  if (quantity < 1) throw new Error('an add-on selected per session needs its sessions');
+  return {
+    basketLineId: place.basketLineId,
+    participantPersonId: place.participantPersonId,
+    offeringId: place.offeringId,
+    description: addon.name,
+    quantity,
+    priceRule: null,
+    pricing: null,
+    policies: place.policies,
+    // The duplicate check of a purchase is the place's; an extra never repeats it.
+    equivalenceKey: null,
+    enrollmentId: place.enrollmentId,
+    lineKind: 'addon',
+    sourceId: addon.id,
+    extra: {
+      unitPriceMinor: addon.priceMinor,
+      chargeLines: addon.chargeLines,
+      basis: {
+        addonId: addon.id,
+        code: addon.code,
+        name: addon.name,
+        selection: addon.selection,
+        sessionIds: addon.selection === 'per_session' ? [...sessionIds] : [],
+        quantity,
+        unitPriceMinor: addon.priceMinor,
+      },
+    },
+  };
+}
+
+/**
+ * The quote line of the uniform chosen for a basket line (SPK-REG-012), or null for a uniform
+ * that carries no price (it is ordered and handed over, never charged, and so is no line). A
+ * participant who already holds the current uniform is charged nothing where the offering says
+ * so; the line stays, at zero, so the quote says why.
+ */
+export function uniformQuoteLine(
+  place: QuoteLineInput,
+  uniform: {
+    id: string;
+    itemKey: string;
+    name: string;
+    priceMinor: number | null;
+    chargeLines: ChargeLine[];
+    returningHolderFree: boolean;
+  },
+  size: string,
+  heldUniformOrderId: string | null,
+): QuoteLineInput | null {
+  if (uniform.priceMinor === null) return null;
+  const waived = uniform.returningHolderFree && heldUniformOrderId !== null;
+  const unitPriceMinor = waived ? 0 : uniform.priceMinor;
+  return {
+    basketLineId: place.basketLineId,
+    participantPersonId: place.participantPersonId,
+    offeringId: place.offeringId,
+    description: `${uniform.name} (${size})`,
+    quantity: 1,
+    priceRule: null,
+    pricing: null,
+    policies: place.policies,
+    equivalenceKey: null,
+    enrollmentId: place.enrollmentId,
+    lineKind: 'uniform',
+    sourceId: uniform.id,
+    extra: {
+      unitPriceMinor,
+      // Nothing is charged, so no fee or tax of the uniform is either.
+      chargeLines: waived ? [] : uniform.chargeLines,
+      basis: {
+        offeringUniformId: uniform.id,
+        itemKey: uniform.itemKey,
+        name: uniform.name,
+        size,
+        priceMinor: uniform.priceMinor,
+        charged: !waived,
+        reason: waived ? 'returning_holder' : 'standard',
+        heldUniformOrderId: waived ? heldUniformOrderId : null,
+        unitPriceMinor,
+      },
+    },
+  };
+}
+
+/**
+ * The price basis of a line (SPK-PAY-013, SPK-PAY-014, SPK-PAY-015), in the fixed order: tier,
+ * member price, then per-session multiplication. A tier's price replaces `standardPriceMinor`
+ * (the rule's base price). A member price applies only when the participant holds the
  * membership (`member.holds`); a per-session price is multiplied by the number of sessions
  * counted, and a line with no session left has no price (the caller refuses it with a reason
  * before it gets here).
  */
 export function priceBasisOf(
-  standardPriceMinor: number,
+  ruleBasePriceMinor: number,
   facts: LinePricingFacts,
 ): QuoteLinePriceBasis {
+  const standardPriceMinor = facts.tier ? facts.tier.priceMinor : ruleBasePriceMinor;
   const memberApplies = facts.member?.holds === true;
   const appliedPriceMinor = memberApplies
     ? (facts.member as { priceMinor: number }).priceMinor
@@ -110,6 +254,10 @@ export function priceBasisOf(
   return {
     pricingBasis: facts.pricingBasis,
     standardPriceMinor,
+    // SPK-PAY-014: the tier, only on a line that has one (other bases are stored as before).
+    ...(facts.tier
+      ? { tier: { ...facts.tier, selectedSessionIds: [...facts.tier.selectedSessionIds] } }
+      : {}),
     appliedPrice: memberApplies ? 'member' : 'standard',
     appliedPriceMinor,
     member: facts.member
@@ -151,8 +299,12 @@ export type PlanInput =
 
 export interface ComputedQuoteLine extends QuoteLineInput {
   sequence: number;
+  lineKind: QuoteLineKind;
+  sourceId: string | null;
   /** SPK-PAY-013, SPK-PAY-015: how the unit price was worked out; null for a plain term price. */
   priceBasis: QuoteLinePriceBasis | null;
+  /** SPK-PAY-014, SPK-REG-012: the stored basis of an add-on or uniform line; null otherwise. */
+  extraBasis: QuoteLineAddonBasis | QuoteLineUniformBasis | null;
   unitPriceMinor: number;
   baseAmountMinor: number;
   discountMinor: number;
@@ -307,11 +459,18 @@ export function computeQuote(input: {
   const lines: ComputedQuoteLine[] = input.lines.map((line, index) => {
     // SPK-PAY-013, SPK-PAY-015: member price first, then per-session multiplication; a line
     // without pricing facts is priced at the rule's base price exactly as before.
+    const lineKind: QuoteLineKind = line.lineKind ?? 'registration';
+    const extra = lineKind === 'registration' ? null : (line.extra ?? null);
+    if (lineKind !== 'registration' && (!extra || !line.sourceId)) {
+      throw new Error('an add-on or uniform line needs its price and its source');
+    }
     const priceBasis =
-      line.priceRule && line.pricing
+      !extra && line.priceRule && line.pricing
         ? priceBasisOf(line.priceRule.basePriceMinor, line.pricing)
         : null;
-    const unitPriceMinor = priceBasis?.unitPriceMinor ?? line.priceRule?.basePriceMinor ?? 0;
+    const unitPriceMinor = extra
+      ? extra.unitPriceMinor
+      : (priceBasis?.unitPriceMinor ?? line.priceRule?.basePriceMinor ?? 0);
     if (line.priceRule && line.priceRule.currency !== input.currency) {
       throw errors.validation('Every line of a quote must be priced in the same currency.', {
         basketLineId: line.basketLineId,
@@ -319,12 +478,26 @@ export function computeQuote(input: {
     }
     money(unitPriceMinor, input.currency);
     const baseAmountMinor = unitPriceMinor * line.quantity;
-    const discountMinor = Math.min(discountByLine.get(line.basketLineId) ?? 0, baseAmountMinor);
+    if (!Number.isSafeInteger(baseAmountMinor)) {
+      throw errors.validation('The amount of this line is too large to be represented.');
+    }
+    // Discounts are evaluated for the place (they are keyed by the basket line); an add-on or a
+    // uniform of the same basket line never takes the place's discount a second time.
+    const discountMinor = extra
+      ? 0
+      : Math.min(discountByLine.get(line.basketLineId) ?? 0, baseAmountMinor);
     const net = baseAmountMinor - discountMinor;
-    const charges = applyCharges(net, line.quantity, line.priceRule?.chargeLines ?? []);
+    const charges = applyCharges(
+      net,
+      line.quantity,
+      extra ? extra.chargeLines : (line.priceRule?.chargeLines ?? []),
+    );
     return {
       ...line,
       sequence: index + 1,
+      lineKind,
+      sourceId: extra ? (line.sourceId as string) : null,
+      extraBasis: extra ? extra.basis : null,
       priceBasis,
       unitPriceMinor,
       baseAmountMinor,
@@ -333,7 +506,7 @@ export function computeQuote(input: {
       feeMinor: charges.feeMinor,
       includedTaxMinor: charges.includedMinor,
       totalMinor: net + charges.taxMinor + charges.feeMinor,
-      discounts: discountLinesByLine.get(line.basketLineId) ?? [],
+      discounts: extra ? [] : (discountLinesByLine.get(line.basketLineId) ?? []),
       charges: charges.charges,
     };
   });

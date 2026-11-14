@@ -211,7 +211,11 @@ export class CheckoutFinalizer {
       .where('order_id', '=', order.id)
       .orderBy('sequence')
       .execute();
-    const enrollmentIds = lines.map((l) => l.enrollment_id).filter((id): id is string => !!id);
+    // SPK-PAY-014, SPK-REG-012: the add-on and uniform lines of a place name the same
+    // enrollment; it is confirmed once.
+    const enrollmentIds = [
+      ...new Set(lines.map((l) => l.enrollment_id).filter((id): id is string => !!id)),
+    ];
     for (const enrollmentId of enrollmentIds) {
       // Replay-safe on the enrollment side: a confirmed enrollment returns as it is.
       await this.enrollments.confirmEnrollment(trx, organizationId, enrollmentId, {

@@ -170,8 +170,33 @@ export type MemberPriceReason = z.infer<typeof MemberPriceReasonSchema>;
 export const QuoteLinePriceBasisSchema = z
   .object({
     pricingBasis: z.enum(['term', 'per_session']),
-    /** The price rule's base price: of the term, or of one session. */
+    /**
+     * The standard price before the member price and any multiplication: the tier's price where
+     * a tier applies, else the price rule's base price (of the term, or of one session).
+     */
     standardPriceMinor: z.number().int(),
+    /**
+     * SPK-PAY-014 (PA-03): the one price tier that applied, with the facts that selected it (the
+     * tier named on the line, the purchase instant against its deadline, the sessions chosen).
+     * The tier comes first in the order: tier, member price, per-session multiplication. Absent
+     * or null on a line without a tier, and on every basis written before the amendment.
+     */
+    tier: z
+      .object({
+        tierId: z.uuid(),
+        code: z.string(),
+        name: z.string(),
+        attendance: z.enum(['all_sessions', 'chosen_sessions']),
+        priceMinor: z.number().int(),
+        memberPriceMinor: z.number().int().nullable(),
+        availableUntil: Instant.nullable(),
+        /** The instant of purchase the deadline was checked against (the quote instant). */
+        purchasedAt: Instant,
+        /** The sessions the line attends under the tier, as the basket line recorded them. */
+        selectedSessionIds: z.array(z.uuid()),
+      })
+      .nullable()
+      .optional(),
     appliedPrice: z.enum(['standard', 'member']),
     /** The price chosen before any multiplication. */
     appliedPriceMinor: z.number().int(),
@@ -203,6 +228,54 @@ export const QuoteLinePriceBasisSchema = z
   .openapi('QuoteLinePriceBasis');
 export type QuoteLinePriceBasis = z.infer<typeof QuoteLinePriceBasisSchema>;
 
+/**
+ * What a quote line charges for (SPK-PAY-014, SPK-REG-012; ADR-003): the place itself
+ * (`registration`, every line before the amendments), an add-on of that place, or its uniform.
+ * Extra lines belong to the same basket line and the same enrollment as the place.
+ */
+export const QuoteLineKindSchema = z
+  .enum(['registration', 'addon', 'uniform'])
+  .openapi('QuoteLineKind');
+export type QuoteLineKind = z.infer<typeof QuoteLineKindSchema>;
+
+/**
+ * The stored basis of an add-on line (SPK-PAY-014, SPK-PAY-002): the add-on, its price each and
+ * the sessions it was selected for. `unitPriceMinor` is the add-on's price; the line's quantity
+ * is the number of sessions selected (1 for an add-on selected once for the registration).
+ */
+export const QuoteLineAddonBasisSchema = z
+  .object({
+    addonId: z.uuid(),
+    code: z.string(),
+    name: z.string(),
+    selection: z.enum(['per_registration', 'per_session']),
+    sessionIds: z.array(z.uuid()),
+    quantity: z.number().int(),
+    unitPriceMinor: z.number().int(),
+  })
+  .openapi('QuoteLineAddonBasis');
+export type QuoteLineAddonBasis = z.infer<typeof QuoteLineAddonBasisSchema>;
+
+/**
+ * The stored basis of a uniform line (SPK-REG-012, SPK-PAY-002): the uniform, the size, its
+ * price, and whether it was charged. `returning_holder` means the participant already holds the
+ * current uniform (`heldUniformOrderId`) and the offering does not charge it again.
+ */
+export const QuoteLineUniformBasisSchema = z
+  .object({
+    offeringUniformId: z.uuid(),
+    itemKey: z.string(),
+    name: z.string(),
+    size: z.string(),
+    priceMinor: z.number().int(),
+    charged: z.boolean(),
+    reason: z.enum(['standard', 'returning_holder']),
+    heldUniformOrderId: z.uuid().nullable(),
+    unitPriceMinor: z.number().int(),
+  })
+  .openapi('QuoteLineUniformBasis');
+export type QuoteLineUniformBasis = z.infer<typeof QuoteLineUniformBasisSchema>;
+
 export const QuoteLineSchema = z
   .object({
     id: z.uuid(),
@@ -230,6 +303,14 @@ export const QuoteLineSchema = z
      * price (SPK-PAY-013, SPK-PAY-015); null for a plain term price, as before the amendments.
      */
     priceBasis: QuoteLinePriceBasisSchema.nullable(),
+    /** SPK-PAY-014, SPK-REG-012: what the line charges for; `registration` is the place. */
+    lineKind: QuoteLineKindSchema,
+    /** The add-on or the offering uniform of an extra line; null for the place. */
+    sourceId: z.uuid().nullable(),
+    /** The basis of an `addon` line; null otherwise. */
+    addon: QuoteLineAddonBasisSchema.nullable(),
+    /** The basis of a `uniform` line; null otherwise. */
+    uniform: QuoteLineUniformBasisSchema.nullable(),
   })
   .openapi('QuoteLine');
 export type QuoteLine = z.infer<typeof QuoteLineSchema>;
@@ -521,6 +602,9 @@ export const OrderLineSchema = z
     totalMinor: z.number().int(),
     currency: CurrencyCode,
     policies: LinePolicyReferencesSchema,
+    /** SPK-PAY-014, SPK-REG-012: the place, an add-on of it, or its uniform. */
+    lineKind: QuoteLineKindSchema,
+    sourceId: z.uuid().nullable(),
   })
   .openapi('OrderLine');
 

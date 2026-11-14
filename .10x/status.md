@@ -21,9 +21,9 @@ Feature: `glass-demo-amendments` · Branch: `claude/jolly-johnson-gd61vv` · Pul
 | 1    | B     | PA-01 waivers, PA-09 rental rosters         | Merged  |
 | 1    | C     | PA-10 team waiting list, PA-06 public views | Merged  |
 | 1    | H     | Glass-forward staff interface               | Done    |
-| 2    | D     | PA-03 tiers and add-ons, PA-07 uniforms     | Running |
-| 2    | E     | PA-05 message templates and sequences       | Running |
-| 2    | F     | PA-08 open-amount register line             | Pending |
+| 2    | D     | PA-03 tiers and add-ons, PA-07 uniforms     | Merged  |
+| 2    | E     | PA-05 message templates and sequences       | Merged  |
+| 2    | F     | PA-08 open-amount register line             | Merged  |
 | 2    | H     | Mobile glass (not device-tested)            | Done    |
 | 3    | G     | Demo mode (base merged), dataset, tours     | Partly  |
 | 4    | —     | Verification and delivery                   | Pending |

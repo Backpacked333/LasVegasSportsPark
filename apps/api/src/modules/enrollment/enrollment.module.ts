@@ -20,6 +20,7 @@ import { BasketsController } from './controllers/baskets.controller';
 import { BookingRostersController } from './controllers/booking-rosters.controller';
 import { BookingsController } from './controllers/bookings.controller';
 import { CapacityController } from './controllers/capacity.controller';
+import { UniformOrdersController } from './controllers/uniform-orders.controller';
 import { EnrollmentsController } from './controllers/enrollments.controller';
 import { MeRegistrationsController } from './controllers/me.controller';
 import { PackagesMembershipsController } from './controllers/packages-memberships.controller';
@@ -48,6 +49,7 @@ import {
   FINANCE_POLICY_IMPL,
   FINANCE_POLICY_PORT,
   MEMBERSHIP_PRICING_PORT,
+  SESSION_ROSTER_PORT,
   WAITLIST_PORT,
   noBookings,
   noFinancialConsequence,
@@ -68,6 +70,9 @@ import { EnrollmentNotices } from './services/enrollment-notices';
 import { EnrollmentViews } from './services/enrollment-views';
 import { MembershipLedger } from './services/membership-ledger';
 import { MembershipPricing } from './services/membership-pricing';
+import { RegistrationExtras } from './services/registration-extras';
+import { SessionRoster } from './services/session-roster';
+import { UniformOrdersService } from './services/uniform-orders.service';
 import { MembershipsService } from './services/memberships.service';
 import { MergeFollowUp } from './services/merge-follow-up';
 import { MyRegistrationsService } from './services/my-registrations.service';
@@ -118,6 +123,12 @@ const providers: Provider[] = [
   // SPK-PAY-015 (PA-04): finance asks whether a participant holds a membership entitlement.
   MembershipPricing,
   { provide: MEMBERSHIP_PRICING_PORT, useExisting: MembershipPricing },
+  // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): tier, day, add-on and uniform choices of a line,
+  // the uniform orders that follow a registration, and who a session expects (for entry).
+  RegistrationExtras,
+  UniformOrdersService,
+  SessionRoster,
+  { provide: SESSION_ROSTER_PORT, useExisting: SessionRoster },
   PackageEntitlementsService,
   MembershipsService,
   BookingsService,
@@ -192,6 +203,7 @@ const providers: Provider[] = [
     SessionBookingsController,
     YouthController,
     CapacityController,
+    UniformOrdersController,
     MeRegistrationsController,
     RegistrationOptionsController,
     EnrollmentOverviewController,
@@ -223,6 +235,7 @@ const providers: Provider[] = [
     WAITLIST_PORT,
     BOOKING_QUERY_PORT,
     MEMBERSHIP_PRICING_PORT,
+    SESSION_ROSTER_PORT,
   ],
 })
 export class EnrollmentModule implements OnModuleInit {

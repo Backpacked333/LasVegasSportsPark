@@ -1719,6 +1719,10 @@ export class OfferingsService implements OfferingLookupPort {
       at,
       priceTrx,
     );
+    // SPK-PAY-014 (PA-03): price tiers are shown only while `price_tiers_addons` is on.
+    const priceTiersVisible =
+      [...prices.values()].some((price) => price.tiers.length > 0) &&
+      (await this.capabilities.isEnabled(organizationId, 'price_tiers_addons', db));
     const forms = await this.requiredFormIds(db, organizationId, ids);
     // SPK-SCHED-008: the facility's IANA zone travels with every offering view (K-04).
     const facilities = await this.facilities.describe(
@@ -1748,6 +1752,7 @@ export class OfferingsService implements OfferingLookupPort {
         price,
         remainingSessionCount:
           price?.pricingBasis === 'per_session' ? (remainingSessions.get(row.id) ?? 0) : null,
+        priceTiersVisible,
         requiredFormPolicyVersionIds: forms.get(row.id) ?? [],
         facility: { id: facility.id, name: facility.name, timezone: facility.timezone },
         bookingTermsPolicyVersionId:

@@ -33,6 +33,13 @@
  * informational total from `POST /v1/discounts/evaluate`; the binding price stays the quote
  * (SCR-C-12). Nothing else about the flow changes, and an offering of another kind shows no weeks.
  *
+ * Tier, days, add-ons and uniform (SPK-PAY-014, SPK-REG-012; proposed amendments PA-03 and PA-07,
+ * features/registration/PurchaseChoices.tsx): when the offering's purchase options list any, each
+ * chosen person gets their own options (a tier, the days it allows, add-ons, a uniform size) and
+ * the line is sent with them. Such an offering is registered on its own: other camp weeks are
+ * chosen from their own pages, because each week has its own options. With both capabilities off
+ * the options are empty and nothing here changes.
+ *
  * The API checks again on every line (PARTICIPANT_AUTHORITY_REQUIRED, eligibility reasons on the
  * line, DUPLICATE_ENTITLEMENT without revealing who else registered, SPK-AT-004).
  *
@@ -84,6 +91,15 @@ import {
   useRegistrationOptions,
 } from '../../features/registration/options';
 import { useParticipants } from '../../features/registration/participants';
+import {
+  EMPTY_SELECTION,
+  PurchaseChoices,
+  hasPurchaseChoices,
+  missingChoices,
+  purchaseLineFields,
+  usePurchaseOptions,
+  type PurchaseSelection,
+} from '../../features/registration/PurchaseChoices';
 import { SessionBookingFlow } from '../../features/registration/SessionBooking';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { registrationWindowStatus } from '../../features/registration/status';
@@ -167,6 +183,15 @@ function IntentChooser({ offering }: { offering: Offering }) {
     invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
   const camp = useCampWeeks(offering, isCamp);
+  // SPK-PAY-014, SPK-REG-012: what this offering asks each participant to choose. Read only
+  // while one of the two capabilities is on; with both off nothing is asked, as before.
+  const purchase = usePurchaseOptions(
+    offering.id,
+    permissions.isCapabilityEnabled('price_tiers_addons') === true ||
+      permissions.isCapabilityEnabled('uniforms') === true,
+  );
+  const [choices, setChoices] = useState<Readonly<Record<string, PurchaseSelection>>>({});
+  const [choicesAsked, setChoicesAsked] = useState(false);
 
   if (me.isPending || namesLoading) {
     return <StateView variant="loading" label="your family" />;
@@ -209,10 +234,16 @@ function IntentChooser({ offering }: { offering: Offering }) {
   // meantime (that would orphan the open one).
   const basketUnknown = openBasket === undefined && lastBasket === null;
   const addedHere = intent ? (added[intent] ?? []) : [];
-  /** The offerings each chosen person gets a line for: the chosen camp weeks, or this one. */
-  const weekIds = isCamp
-    ? camp.weeks.filter((w) => chosenWeeks.includes(w.id) && weekChoosable(w)).map((w) => w.id)
-    : [offering.id];
+  const purchaseOptions = purchase.options.data;
+  const withChoices = hasPurchaseChoices(purchaseOptions);
+  /**
+   * The offerings each chosen person gets a line for: the chosen camp weeks, or this one. An
+   * offering with its own options is registered alone (each week has its own tiers and add-ons).
+   */
+  const weekIds =
+    isCamp && !withChoices
+      ? camp.weeks.filter((w) => chosenWeeks.includes(w.id) && weekChoosable(w)).map((w) => w.id)
+      : [offering.id];
   const lineKey = (offeringId: string, personId: string) => `${offeringId}:${personId}`;
   /** Every line of this person under the current intent is in the basket already. */
   const isAdded = (personId: string) =>
@@ -240,6 +271,17 @@ function IntentChooser({ offering }: { offering: Offering }) {
     // Only people who can be added under this intent are ever sent (never a blocked one).
     const toAdd = selected.filter(selectable);
     if (toAdd.length === 0) return;
+    // SPK-PAY-014, SPK-REG-012: nothing is sent while a participant's options are incomplete.
+    if (
+      withChoices &&
+      toAdd.some(
+        (personId) =>
+          missingChoices(choices[personId] ?? EMPTY_SELECTION, purchaseOptions).length > 0,
+      )
+    ) {
+      setChoicesAsked(true);
+      return;
+    }
     setWorking(true);
     setFailure(null);
     try {
@@ -265,6 +307,9 @@ function IntentChooser({ offering }: { offering: Offering }) {
               intent,
               quantity: 1,
               expectedRevision: basket.revision,
+              ...(withChoices
+                ? purchaseLineFields(choices[personId] ?? EMPTY_SELECTION, purchaseOptions)
+                : {}),
             },
           });
           setLastBasket(basket);
@@ -365,7 +410,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
         />
       ) : null}
 
-      {basketIntent && isCamp ? (
+      {basketIntent && isCamp && !withChoices ? (
         <CampWeekPicker
           camp={camp}
           chosen={chosenWeeks}
@@ -408,6 +453,36 @@ function IntentChooser({ offering }: { offering: Offering }) {
           })}
         </Section>
       ) : null}
+      {basketIntent && withChoices
+        ? participants
+            .filter((p) => pending.includes(p.personId))
+            .map((p) => (
+              <PurchaseChoices
+                key={p.personId}
+                personId={p.personId}
+                personName={p.self ? 'you' : p.displayName}
+                options={purchaseOptions}
+                sessions={purchase.sessions.data ?? []}
+                timeZone={offering.facility.timezone}
+                value={choices[p.personId] ?? EMPTY_SELECTION}
+                onChange={(value) => setChoices((all) => ({ ...all, [p.personId]: value }))}
+                showMissing={choicesAsked}
+              />
+            ))
+        : null}
+      {basketIntent && purchase.options.error && purchaseOptions === undefined ? (
+        // The options could not be read: the API still refuses a line that needs one.
+        <QueryErrorView
+          error={purchase.options.error}
+          onRetry={() => void purchase.options.refetch()}
+        />
+      ) : null}
+      {basketIntent && purchase.perDay && purchase.sessions.error ? (
+        <QueryErrorView
+          error={purchase.sessions.error}
+          onRetry={() => void purchase.sessions.refetch()}
+        />
+      ) : null}
       {basketIntent && openBasket === undefined && baskets.error ? (
         <QueryErrorView error={baskets.error} onRetry={() => void baskets.refetch()} />
       ) : null}
@@ -426,7 +501,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
           }}
         />
       ) : null}
-      {basketIntent && isCamp ? (
+      {basketIntent && isCamp && !withChoices ? (
         <CampPriceBar
           weeks={camp.weeks}
           chosenWeekIds={weekIds}

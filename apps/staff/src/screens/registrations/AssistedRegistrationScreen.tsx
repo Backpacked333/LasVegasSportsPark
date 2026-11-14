@@ -30,6 +30,11 @@
  * - A quote line priced per session or with a member price evaluated (SPK-PAY-013, SPK-PAY-015;
  *   proposed amendments PA-02 and PA-04) shows the basis the quote stored: the per-class price,
  *   the count and the product, and which price applied and why. Nothing is worked out here.
+ * - A line of an offering sold by tier or with add-ons (SPK-PAY-014, proposed amendment PA-03) or
+ *   with a uniform (SPK-REG-012, proposed amendment PA-07) chooses its tier, days, add-ons and
+ *   size from the offering's purchase options, which are empty while the capability is off. Each
+ *   add-on and the uniform is its own quote line, shown with the basis the quote stored, and the
+ *   basket line shows the estimate the API worked out, never the price of one session.
  */
 import {
   CAPABILITY_PRESENTATION,
@@ -76,7 +81,19 @@ import { OfflineCaption, useOnline } from '../../features/registration-finance/o
 import { PaymentAttemptList } from '../../features/registration-finance/PaymentAttempts';
 import { PersonReferenceField } from '../../features/registration-finance/PersonSearch';
 import { PENDING } from '../../features/registration-finance/pending';
-import { priceBasisLines } from '../../features/registration-finance/price-basis';
+import {
+  basketLinePrice,
+  lineKindLabel,
+  quoteLineBasisLines,
+} from '../../features/registration-finance/price-basis';
+import {
+  EMPTY_SELECTION,
+  PurchaseChoices,
+  purchaseLineFields,
+  purchaseSelectionErrors,
+  usePurchaseOptions,
+  type PurchaseSelection,
+} from '../../features/registration-finance/PurchaseChoices';
 import { REGISTRATION_LINKS, SectionNav } from '../../features/registration-finance/SectionNav';
 import { useNow } from '../../providers/AppProviders';
 import { outcomePending, useSameRequest } from '../../features/registration-finance/sameRequest';
@@ -206,6 +223,8 @@ function LineItem({ basket, line }: { basket: Basket; line: Basket['lines'][numb
   });
   const reloadAfterRemove = useBasketReload(remove.reset);
   const forms = line.policies.requiredFormPolicyVersionIds.length;
+  // SPK-PAY-013, SPK-PAY-014, SPK-PAY-015: the API's estimate where the line has one.
+  const price = basketLinePrice(line.price);
   return (
     <li aria-labelledby={`line-${line.id}`}>
       <div className="row-text">
@@ -214,10 +233,36 @@ function LineItem({ basket, line }: { basket: Basket; line: Basket['lines'][numb
           <OfferingName id={line.offeringId} />
         </span>
         <span className="caption">
-          {REGISTRATION_INTENT[line.intent]} · quantity {line.quantity} · price{' '}
-          {line.price ? formatMoney(line.price.basePriceMinor, line.price.currency) : 'not priced'}
+          {REGISTRATION_INTENT[line.intent]} · quantity {line.quantity} · price {price.amount}
           {line.requiresApproval ? ' · needs approval before payment' : ''}
         </span>
+        {price.notes.length > 0 ? <span className="caption">{price.notes.join(' · ')}</span> : null}
+        {line.selectedSessionIds ? (
+          <span className="caption">
+            {line.selectedSessionIds.length === 1
+              ? '1 day chosen'
+              : `${line.selectedSessionIds.length} days chosen`}
+          </span>
+        ) : null}
+        {line.addons.map((addon) => (
+          <span className="caption" key={addon.addonId}>
+            Add-on {addon.name}: {formatMoney(addon.priceMinor, addon.currency)}
+            {addon.selection === 'per_session'
+              ? ` each × ${addon.quantity === 1 ? '1 day' : `${addon.quantity} days`}`
+              : ''}
+          </span>
+        ))}
+        {line.uniform ? (
+          <span className="caption">
+            Uniform {line.uniform.name}, size {line.uniform.size}
+            {line.uniform.priceMinor !== null && line.uniform.currency
+              ? `: ${formatMoney(line.uniform.priceMinor, line.uniform.currency)}`
+              : ': not charged'}
+            {line.uniform.returningHolderFree && line.uniform.heldUniformOrderId
+              ? ' (already held: the quote will not charge it again)'
+              : ''}
+          </span>
+        ) : null}
         <StatusBadge {...LINE_OUTCOME[line.outcome]} />
         {line.outcomeReason ? <span className="caption">{line.outcomeReason}</span> : null}
         <EligibilityView result={line.eligibility} label="Line eligibility" />
@@ -260,6 +305,9 @@ function AddLine({ basket }: { basket: Basket }) {
   const [offeringId, setOfferingId] = useState('');
   const [intent, setIntent] = useState<Intent | ''>('');
   const [local, setLocal] = useState<Record<string, string>>({});
+  // SPK-PAY-014, SPK-REG-012: the tier, days, add-ons and uniform size, when the offering has any.
+  const [choices, setChoices] = useState<PurchaseSelection>(EMPTY_SELECTION);
+  const purchase = usePurchaseOptions(offeringId);
   const add = useApiCommand('post', '/baskets/{id}/lines', { invalidate: [BASKET_KEY] });
   const reloadAfterAdd = useBasketReload(add.reset);
   const server = fieldErrorsOf(add.error);
@@ -333,6 +381,7 @@ function AddLine({ basket }: { basket: Basket }) {
         if (!offeringId) errors.offeringId = 'Choose an offering.';
         if (!intent) errors.intent = 'Choose the registration intent.';
         else if (intentError) errors.intent = intentError;
+        Object.assign(errors, purchaseSelectionErrors(choices, purchase.data));
         setLocal(errors);
         if (Object.keys(errors).length > 0 || !intent) return;
         add
@@ -344,11 +393,13 @@ function AddLine({ basket }: { basket: Basket }) {
               intent,
               quantity: 1,
               expectedRevision: basket.revision,
+              ...purchaseLineFields(choices, purchase.data),
             },
           })
           .then(() => {
             setParticipant('');
             setOfferingId('');
+            setChoices(EMPTY_SELECTION);
           })
           .catch(() => undefined);
       }}
@@ -372,8 +423,27 @@ function AddLine({ basket }: { basket: Basket }) {
           error={local.intent ?? server.intent ?? intentError}
         />
       </div>
-      <OfferingPicker label="Offering" value={offeringId} onChange={setOfferingId} />
+      <OfferingPicker
+        label="Offering"
+        value={offeringId}
+        onChange={(id) => {
+          setOfferingId(id);
+          setChoices(EMPTY_SELECTION);
+        }}
+      />
       {local.offeringId ? <p className="rf-error">{local.offeringId}</p> : null}
+      <PurchaseChoices
+        offeringId={offeringId}
+        options={purchase.data}
+        value={choices}
+        onChange={setChoices}
+        errors={{
+          priceTierId: local.priceTierId ?? server.priceTierId,
+          selectedSessionIds: local.selectedSessionIds ?? server.selectedSessionIds,
+          addons: server.addons,
+          uniform: local.uniform ?? server.uniform,
+        }}
+      />
       {offeringId && options.error ? (
         <p className="caption">
           The intents this offering accepts could not be read ({options.error.code}); the API checks
@@ -434,12 +504,14 @@ function QuoteView({ quote }: { quote: Quote }) {
               <tr key={line.id}>
                 <td>
                   <PersonName id={line.participantPersonId} fallback="Participant" />:{' '}
+                  {/* SPK-PAY-014, SPK-REG-012: an add-on or uniform is its own line. */}
+                  {lineKindLabel(line) ? `${lineKindLabel(line)}: ` : ''}
                   {line.description}
                 </td>
                 <td>
                   {formatMoney(line.baseAmountMinor, line.currency)}
-                  {/* SPK-PAY-013, SPK-PAY-015: the stored basis, when the quote has one. */}
-                  {priceBasisLines(line.priceBasis, line.currency).map((text) => (
+                  {/* SPK-PAY-013 to SPK-PAY-015, SPK-REG-012: the stored basis of the line. */}
+                  {quoteLineBasisLines(line).map((text) => (
                     <div className="caption" key={text}>
                       {text}
                     </div>

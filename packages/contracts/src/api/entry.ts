@@ -461,8 +461,35 @@ export const PersonAttendanceSchema = z
   .openapi('PersonAttendance');
 export type PersonAttendance = z.infer<typeof PersonAttendanceSchema>;
 
+/**
+ * A participant a session expects (SPK-PAY-014, proposed amendment PA-03): someone registered for
+ * the offering whose selection includes this session (a registration without a day selection
+ * attends every session), with the add-ons they bought for this day.
+ */
+export const ExpectedParticipantSchema = z
+  .object({
+    personId: z.uuid(),
+    givenName: z.string().nullable(),
+    familyName: z.string().nullable(),
+    displayName: z.string().nullable(),
+    enrollmentId: z.uuid(),
+    addons: z.array(z.object({ addonId: z.uuid(), code: z.string(), name: z.string() })),
+  })
+  .openapi('ExpectedParticipant');
+export type ExpectedParticipant = z.infer<typeof ExpectedParticipantSchema>;
+
 export const ActivityAttendanceSchema = z
-  .object({ activity: ActivityDetailSchema, people: z.array(PersonAttendanceSchema) })
+  .object({
+    activity: ActivityDetailSchema,
+    people: z.array(PersonAttendanceSchema),
+    /**
+     * SPK-PAY-014 (PA-03): for a session read by staff (or its assigned coach) while
+     * `price_tiers_addons` is on, the participants the session expects, only those whose
+     * selection includes it, with their add-ons for the day. Null otherwise (an event, a
+     * customer's read of one person, or the capability off).
+     */
+    expected: z.array(ExpectedParticipantSchema).nullable(),
+  })
   .openapi('ActivityAttendance');
 export type ActivityAttendance = z.infer<typeof ActivityAttendanceSchema>;
 

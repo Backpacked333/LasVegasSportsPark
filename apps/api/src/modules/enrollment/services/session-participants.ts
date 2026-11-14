@@ -75,7 +75,7 @@ export class SessionParticipants {
     const offeringIds = [...new Set(sessions.map((s) => s.offeringId))];
     const enrollments = await db
       .selectFrom('enrollments')
-      .select(['offering_id', 'participant_person_id', 'order_ref'])
+      .select(['offering_id', 'participant_person_id', 'order_ref', 'selected_session_ids'])
       .where('organization_id', '=', organizationId)
       .where('offering_id', 'in', offeringIds)
       .where('status', 'in', ['pending', 'confirmed'])
@@ -102,7 +102,13 @@ export class SessionParticipants {
       .execute();
     const out: SessionParticipant[] = [...booked];
     for (const session of sessions) {
-      for (const e of enrollments.filter((x) => x.offering_id === session.offeringId)) {
+      // SPK-PAY-014 (PA-03): a registration with a day selection takes part only in the
+      // sessions selected; one without (every registration before the amendment) in all.
+      for (const e of enrollments.filter(
+        (x) =>
+          x.offering_id === session.offeringId &&
+          (x.selected_session_ids === null || x.selected_session_ids.includes(session.id)),
+      )) {
         out.push({
           schedulingEventId: session.schedulingEventId,
           sessionId: session.id,

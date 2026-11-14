@@ -7,6 +7,7 @@ import { EventChanged, SchedulingModule } from '../scheduling';
 import { OFFERING_LOOKUP_PORT, POLICY_PORT, PRICING_PORT } from './catalog.ports';
 import { DiscountsController } from './controllers/discounts.controller';
 import { EntitlementDefinitionsController } from './controllers/entitlement-definitions.controller';
+import { OfferingExtrasController } from './controllers/offering-extras.controller';
 import { OfferingsController } from './controllers/offerings.controller';
 import { PoliciesController } from './controllers/policies.controller';
 import { ProgramsController } from './controllers/programs.controller';
@@ -15,6 +16,7 @@ import { PricingService } from './pricing/pricing.service';
 import { AcknowledgmentsService } from './services/acknowledgments.service';
 import { DiscountsService } from './services/discounts.service';
 import { EntitlementDefinitionsService } from './services/entitlement-definitions.service';
+import { OfferingExtrasService } from './services/offering-extras.service';
 import { OfferingsService } from './services/offerings.service';
 import { PoliciesService } from './services/policies.service';
 import { PriceRulesService } from './services/price-rules.service';
@@ -44,6 +46,7 @@ import { WaiversService } from './services/waivers.service';
     EntitlementDefinitionsController,
     PoliciesController,
     OfferingsController,
+    OfferingExtrasController,
     DiscountsController,
     WaiversController,
   ],
@@ -53,6 +56,7 @@ import { WaiversService } from './services/waivers.service';
     PoliciesService,
     AcknowledgmentsService,
     PriceRulesService,
+    OfferingExtrasService,
     DiscountsService,
     OfferingsService,
     SessionsService,
@@ -69,6 +73,7 @@ import { WaiversService } from './services/waivers.service';
     PoliciesService,
     AcknowledgmentsService,
     PriceRulesService,
+    OfferingExtrasService,
     DiscountsService,
     OfferingsService,
     SessionsService,

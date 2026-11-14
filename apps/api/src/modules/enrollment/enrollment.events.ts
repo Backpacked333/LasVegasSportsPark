@@ -304,6 +304,16 @@ export const EnrollmentEvents = {
       convertedBasketId: z.uuid().nullable(),
     }),
   ),
+  /** SPK-REG-012 (PA-07): a uniform order was placed, paid, handed over, corrected or canceled. */
+  uniformOrderChanged: defineEvent(
+    'enrollment.uniform_order_changed',
+    z.object({
+      ...Ref,
+      uniformOrderId: z.uuid(),
+      enrollmentId: z.uuid(),
+      status: z.enum(['ordered', 'paid', 'handed_over', 'canceled']),
+    }),
+  ),
 };
 
 /**

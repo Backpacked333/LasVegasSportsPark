@@ -576,7 +576,6 @@ describe('reporting schema invariants (migration 1300)', () => {
         // Competition migration 0467 (SPK-COMP-006, proposed): an entry waiting for a place.
         waiting: true,
         approved: true,
-        waiting: true,
         withdrawn: true,
         rejected: true,
       }),
