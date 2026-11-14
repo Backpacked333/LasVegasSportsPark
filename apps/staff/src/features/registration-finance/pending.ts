@@ -88,6 +88,17 @@ export const PENDING = {
       'Which offerings carry a member price, the date membership is checked on, and whose membership counts for a child',
     owner: 'Product owner; Finance for the values',
   },
+  priceTiersAddons: {
+    ids: ['DEC-097'],
+    subject: 'The price tiers, their deadlines and prices, which add-ons exist and their capacity',
+    owner: 'Product owner; Finance for the values',
+  },
+  uniforms: {
+    ids: ['DEC-101'],
+    subject:
+      'Whether uniforms are ordered during registration, whether stock is counted, prices and the returning-participant rule',
+    owner: 'Product owner; Finance for the values',
+  },
   overrideAuthority: {
     ids: ['DEC-066'],
     subject: 'Which roles may override an eligibility failure',

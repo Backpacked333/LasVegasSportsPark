@@ -410,6 +410,7 @@ export function membershipOffering(
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
       memberPrice: null,
+      tiers: [],
     },
     ...overrides,
   });

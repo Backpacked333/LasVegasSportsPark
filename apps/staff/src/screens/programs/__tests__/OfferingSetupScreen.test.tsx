@@ -57,6 +57,7 @@ function priceRule(overrides: Partial<Schema<'PriceRule'>> = {}): Schema<'PriceR
     memberPriceMinor: null,
     memberEntitlementDefinitionId: null,
     memberEntitlementName: null,
+    tiers: [],
     revision: 1,
     createdAt: NOW,
     ...overrides,

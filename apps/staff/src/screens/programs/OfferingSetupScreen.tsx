@@ -14,6 +14,11 @@
  * instead of the whole term (SPK-PAY-013, PA-02, `per_session_pricing`, pending DEC-096) and an
  * optional member price with the membership it requires (SPK-PAY-015, PA-04, `member_pricing`,
  * pending DEC-098). A rule that already carries either is always listed as it is.
+ *
+ * Price tiers and add-ons (SPK-PAY-014, PA-03, `price_tiers_addons`, pending DEC-097) and the
+ * uniform (SPK-REG-012, PA-07, `uniforms`, pending DEC-101) are in `OfferingExtras.tsx`: tier
+ * rows in the price form and the add-on and uniform sections appear only while their capability
+ * is on; the tiers a rule already carries are always listed.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -51,6 +56,15 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import {
+  EMPTY_TIER,
+  OfferingAddons,
+  OfferingUniform,
+  RuleTiers,
+  TierEditor,
+  tiersOf,
+  type TierRow,
+} from './OfferingExtras';
 import { OfferingForm } from './OfferingForm';
 import '../../features/grow/grow.css';
 
@@ -310,6 +324,9 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
   const permissions = usePermissions();
   const perSessionOn = permissions.isCapabilityEnabled('per_session_pricing') === true;
   const memberOn = permissions.isCapabilityEnabled('member_pricing') === true;
+  // SPK-PAY-014 (PA-03): tier rows exist only while `price_tiers_addons` is on.
+  const tiersOn = permissions.isCapabilityEnabled('price_tiers_addons') === true;
+  const [tierRows, setTierRows] = useState<TierRow[]>([]);
   const [basis, setBasis] = useState<PricingBasis>('term');
   const [memberPrice, setMemberPrice] = useState('');
   const [membershipId, setMembershipId] = useState('');
@@ -369,6 +386,9 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
     if (wantsMember && !membershipId) {
       errors.memberEntitlementDefinitionId = 'Choose the membership this price is for.';
     }
+    // A tier member price needs the membership of the rule, so it is offered only with one.
+    const tiers = tiersOf(tiersOn ? tierRows : [], code, zone, wantsMember);
+    Object.assign(errors, tiers.errors);
     setLocal(errors);
     if (Object.keys(errors).length > 0 || base === null || !effectiveFrom) return;
     create
@@ -384,8 +404,10 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
           ...(wantsMember && member !== null
             ? { memberPriceMinor: member, memberEntitlementDefinitionId: membershipId }
             : {}),
+          ...(tiers.tiers.length > 0 ? { tiers: tiers.tiers } : {}),
         },
       })
+      .then(() => setTierRows([]))
       .catch(() => undefined);
   };
 
@@ -432,6 +454,7 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
                         {rule.memberEntitlementName ?? 'the named membership'}
                       </span>
                     ) : null}
+                    <RuleTiers rule={rule} zone={zone} />
                     <span className="caption">
                       Effective {formatInstant(rule.effectiveFrom, zone)}
                       {rule.effectiveTo
@@ -527,6 +550,15 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
             </>
           ) : null}
         </div>
+        {tiersOn ? (
+          <TierEditor
+            rows={tierRows}
+            onChange={setTierRows}
+            errors={local}
+            memberAllowed={memberOn && membershipId !== ''}
+            zoneLabel={zoneLabel}
+          />
+        ) : null}
         <ul className="list" aria-label="Taxes and fees">
           {charges.map((row, i) => (
             <li key={i}>
@@ -600,6 +632,14 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
           >
             Add a tax or fee
           </Button>
+          {tiersOn ? (
+            <Button
+              variant="secondary"
+              onClick={() => setTierRows((rows) => [...rows, EMPTY_TIER])}
+            >
+              Add a price tier
+            </Button>
+          ) : null}
           <Button type="submit" busy={create.isProcessing} disabled={!online}>
             Create price rule version
           </Button>
@@ -679,6 +719,21 @@ function CopyOffering({ offering }: { offering: Offering }) {
         <CommandError error={copy.error} />
       </form>
     </details>
+  );
+}
+
+/** The add-on and uniform sections, each only while its capability is on. */
+function OfferingExtrasSections({ offering }: { offering: Offering }) {
+  const permissions = usePermissions();
+  return (
+    <>
+      {permissions.isCapabilityEnabled('price_tiers_addons') === true ? (
+        <OfferingAddons offering={offering} />
+      ) : null}
+      {permissions.isCapabilityEnabled('uniforms') === true ? (
+        <OfferingUniform offering={offering} />
+      ) : null}
+    </>
   );
 }
 
@@ -769,6 +824,7 @@ export function OfferingSetupScreen() {
               <EditOffering offering={data} />
               <Sessions offering={data} zone={timeZoneOf(data.facilityId)} />
               <PriceRules offering={data} zone={timeZoneOf(data.facilityId)} />
+              <OfferingExtrasSections offering={data} />
               <CopyOffering offering={data} />
             </>
           )
