@@ -49,3 +49,19 @@ export { ScheduleNotices, noticeKindFor } from './services/schedule-notices';
 export * from './providers/fake-messaging.provider';
 export { renderIcs, type IcsEvent } from './calendar/ics';
 export * from './testing/communications-fixtures';
+export {
+  MessageScheduleService,
+  MESSAGE_SCHEDULE_ACTOR,
+  SEND_SCHEDULED_MESSAGES_JOB,
+} from './sequences/message-schedule.service';
+export { MessageTemplatesService } from './sequences/message-templates.service';
+export { MessageSequencesService } from './sequences/message-sequences.service';
+export {
+  ScheduledMessageSender,
+  SCHEDULED_MESSAGE_SEND_FAILED,
+} from './sequences/scheduled-message-sender';
+export {
+  DEFAULT_MESSAGE_SEQUENCE_POLICY,
+  MESSAGE_SEQUENCE_POLICY,
+  type MessageSequencePolicy,
+} from './sequences/message-sequences.policy';

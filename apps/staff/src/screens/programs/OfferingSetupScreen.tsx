@@ -51,6 +51,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { MessageScheduleLink } from '../communications/sequences/MessageScheduleLink';
 import { OfferingForm, RequiredWaivers } from './OfferingForm';
 import '../../features/grow/grow.css';
 
@@ -732,6 +733,7 @@ export function OfferingSetupScreen() {
                   Publication and registration (SCR-S-15)
                 </Link>
                 <Link to={`/registrations/waitlists/${data.id}`}>Waitlist (SCR-S-26)</Link>
+                <MessageScheduleLink subject="offering" id={data.id} />
                 <Link to={`/registrations/enrollments?offering=${data.id}`}>
                   Enrollments (SCR-S-27)
                 </Link>

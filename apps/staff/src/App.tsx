@@ -11,6 +11,7 @@ import { operationsRoutes } from './features/operations/routes';
 import { registrationFinanceRoutes } from './features/registration-finance/routes';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS } from './navigation/areas';
+import { messageSequenceRoutes } from './screens/communications/sequences/routes';
 import { packageGRoutes } from './screens/package-g/routes';
 import { AreaScreen } from './screens/area/AreaScreen';
 import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
@@ -55,6 +56,7 @@ export function AppRoutes() {
         {operationsRoutes()}
         {insightAdminRoutes()}
         {packageGRoutes()}
+        {messageSequenceRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />

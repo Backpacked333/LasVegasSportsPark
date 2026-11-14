@@ -44,6 +44,19 @@ const RECONCILE_ROLES: readonly StaffRole[] = [
 ];
 
 /**
+ * Staff who keep message templates and sequences and who confirm, edit and skip scheduled
+ * messages (SPK-COMMS-009, proposed amendment PA-05). Proposed roles: the review observed that
+ * managers hold the template and broadcast permissions; who sends is a pending decision
+ * (DEC-099, K2).
+ */
+const SEQUENCE_MANAGER_ROLES: readonly StaffRole[] = [
+  'league_manager',
+  'program_manager',
+  'general_manager',
+  'system_administrator',
+];
+
+/**
  * Communications actions (specification §3.18). Customer-facing actions are self-only: a person
  * reads their own inbox, chooses their own channels and manages their own calendar feeds. Including
  * another person in a calendar feed requires `view` over that person (SPK-IAM-003, SPK-COMMS-008).
@@ -120,6 +133,51 @@ export const CommunicationsActions = defineActions({
       'Record the outcome established for a push, email or SMS delivery whose outcome is unknown',
     staffRoles: RECONCILE_ROLES,
     requirements: ['SPK-COMMS-004', '§4.11', '§5.11', 'SPK-UX-006'],
+  },
+  // SPK-COMMS-009 (proposed amendment PA-05, DEC-099): message templates and sequences. The
+  // commands that create something new name the capability; reads and skipping never do.
+  readMessageSchedule: {
+    id: 'communications.read_message_schedule',
+    description:
+      'Read message templates, sequences and the message schedule of a season or an offering',
+    staffRoles: READER_ROLES,
+    requirements: ['SPK-COMMS-009'],
+  },
+  manageMessageTemplates: {
+    id: 'communications.manage_message_templates',
+    description: 'Create, change and archive reusable message templates',
+    staffRoles: SEQUENCE_MANAGER_ROLES,
+    capability: 'message_sequences',
+    requirements: ['SPK-COMMS-009', 'SPK-COMMS-007'],
+  },
+  manageMessageSequences: {
+    id: 'communications.manage_message_sequences',
+    description:
+      'Create and change message sequences and their steps, and produce a schedule from them',
+    staffRoles: SEQUENCE_MANAGER_ROLES,
+    capability: 'message_sequences',
+    requirements: ['SPK-COMMS-009'],
+  },
+  previewScheduledMessage: {
+    id: 'communications.preview_scheduled_message',
+    description:
+      'Preview a scheduled message: the text with real details and the recipients it resolves to now (names and count only)',
+    staffRoles: SEQUENCE_MANAGER_ROLES,
+    requirements: ['SPK-COMMS-009', 'SPK-COMMS-003', 'SPK-COMMS-006'],
+  },
+  confirmScheduledMessage: {
+    id: 'communications.confirm_scheduled_message',
+    description:
+      'Edit, confirm or restore a scheduled message; a confirmed message is sent when it is due',
+    staffRoles: SEQUENCE_MANAGER_ROLES,
+    capability: 'message_sequences',
+    requirements: ['SPK-COMMS-009', 'SPK-COMMS-006', 'SPK-COMMS-007'],
+  },
+  skipScheduledMessage: {
+    id: 'communications.skip_scheduled_message',
+    description: 'Skip a scheduled message so it is not sent',
+    staffRoles: SEQUENCE_MANAGER_ROLES,
+    requirements: ['SPK-COMMS-009'],
   },
   includeInCalendarFeed: {
     id: 'communications.include_in_calendar_feed',

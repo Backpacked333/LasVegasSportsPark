@@ -93,6 +93,7 @@ import { TeamEntryMachine, TeamEntryPlaceOfferMachine } from '../competition.sta
 import type {
   PersonEntryMembership,
   RecordFinancialStatusRefInput,
+  SeasonSummary,
   TeamEntryQueryPort,
   TeamEntrySummary,
 } from '../ports';
@@ -1489,6 +1490,56 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       .limit(1)
       .executeTakeFirst();
     return row ? { seasonId: row.id, competitionId: row.competition_id } : null;
+  }
+
+  /**
+   * SPK-COMMS-009 (proposed amendment PA-05): the season's own facts with its competition's name,
+   * or null for an unknown or cross-organization id. A read for modules that authorized their own
+   * command (communications fills message placeholders and counts due times from it).
+   */
+  async findSeason(
+    organizationId: string,
+    seasonId: string,
+    trx?: Trx,
+  ): Promise<SeasonSummary | null> {
+    const row = await (trx ?? executorFor(this.db))
+      .selectFrom('seasons')
+      .innerJoin('competitions', (join) =>
+        join
+          .onRef('competitions.organization_id', '=', 'seasons.organization_id')
+          .onRef('competitions.id', '=', 'seasons.competition_id'),
+      )
+      .select([
+        'seasons.id',
+        'seasons.competition_id',
+        'competitions.name as competition_name',
+        'seasons.name',
+        sql<string>`seasons.starts_on::text`.as('starts_on'),
+        sql<string>`seasons.ends_on::text`.as('ends_on'),
+        'seasons.registration_opens_at',
+        'seasons.registration_closes_at',
+        'seasons.status',
+        'seasons.revision',
+      ])
+      .where('seasons.organization_id', '=', organizationId)
+      .where('seasons.id', '=', seasonId)
+      .executeTakeFirst();
+    if (!row) return null;
+    return {
+      id: row.id,
+      organizationId,
+      competitionId: row.competition_id,
+      competitionName: row.competition_name,
+      name: row.name,
+      startsOn: row.starts_on,
+      endsOn: row.ends_on,
+      registrationOpensAt: row.registration_opens_at ? new Date(row.registration_opens_at) : null,
+      registrationClosesAt: row.registration_closes_at
+        ? new Date(row.registration_closes_at)
+        : null,
+      status: row.status,
+      revision: row.revision,
+    };
   }
 
   /**

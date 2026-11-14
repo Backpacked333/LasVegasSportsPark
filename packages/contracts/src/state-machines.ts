@@ -325,6 +325,38 @@ export const InboxEventMachine = defineStateMachine<InboxEventState, InboxEventE
   },
 });
 
+// ---------------------------------------------------------------------------------------------
+// Scheduled message (communications, SPK-COMMS-009, proposed amendment PA-05): needs confirmation,
+// confirmed, skipped, sent, canceled. A message of a sequence is sent only from `confirmed`; a
+// confirmed message returns to `needs_confirmation` when its anchor date moves or the text staff
+// confirmed no longer stands (`reopen`); a skipped one can be restored. `sent` and `canceled` are
+// final. Migration 1013 lists the same states and guards the same moves.
+// ---------------------------------------------------------------------------------------------
+export type ScheduledMessageState =
+  'needs_confirmation' | 'confirmed' | 'skipped' | 'sent' | 'canceled';
+export type ScheduledMessageEvent = 'confirm' | 'reopen' | 'skip' | 'restore' | 'send' | 'cancel';
+export const ScheduledMessageMachine = defineStateMachine<
+  ScheduledMessageState,
+  ScheduledMessageEvent
+>({
+  name: 'ScheduledMessage',
+  initial: 'needs_confirmation',
+  states: ['needs_confirmation', 'confirmed', 'skipped', 'sent', 'canceled'],
+  terminal: ['sent', 'canceled'],
+  transitions: {
+    needs_confirmation: { confirm: 'confirmed', skip: 'skipped', cancel: 'canceled' },
+    confirmed: {
+      send: 'sent',
+      reopen: 'needs_confirmation',
+      skip: 'skipped',
+      cancel: 'canceled',
+    },
+    skipped: { restore: 'needs_confirmation', cancel: 'canceled' },
+    sent: {},
+    canceled: {},
+  },
+});
+
 export const ALL_STATE_MACHINES = [
   ApplicationMachine,
   EnrollmentMachine,
@@ -338,4 +370,5 @@ export const ALL_STATE_MACHINES = [
   AssignmentMachine,
   OutboxEventMachine,
   InboxEventMachine,
+  ScheduledMessageMachine,
 ] as const;

@@ -41,6 +41,7 @@ import { Icon } from '../../ui/Icon';
 import { CardHead } from '../../ui/Page';
 import { useNow } from '../../providers/AppProviders';
 import { NeedsYourCall } from './NeedsYourCall';
+import { MessageScheduleLink } from '../communications/sequences/MessageScheduleLink';
 import { GameReadinessCard, SeasonStandingsCard } from './SeasonHome';
 
 type Season = Schema<'Season'>;
@@ -401,6 +402,7 @@ export function SeasonScreen() {
         }
       />
       <SeasonLinks seasonId={seasonId} />
+      <MessageScheduleLink subject="season" id={seasonId} />
       <QueryBoundary
         query={season}
         label="the season"

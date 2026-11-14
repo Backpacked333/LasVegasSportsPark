@@ -2,16 +2,21 @@
 
 **Owns:** notifications, notification recipients, delivery attempts, communication preferences
 (and their import records), notification acknowledgments, calendar feeds, push device registrations,
-activity reminder marks, person-merge follow-ups, and its own calendar-entry projection of scheduled
-events.
+activity reminder marks, person-merge follow-ups, its own calendar-entry projection of scheduled
+events, and (proposed amendment PA-05) message templates, message sequences with their steps, and
+scheduled messages.
 
 **Specification:** §3.18 (SPK-COMMS-001..008), §4.4 Communications (Notification, DeliveryAttempt,
 Preference, Acknowledgment), §4.5 "Messages must represent actual delivery states", §4.7 invariant
 10 ("No protected message dispatched using revoked authority"), SPK-IAM-006, SPK-AT-017,
-SPK-UX-003/006 (inbox, failed urgent communications).
+SPK-UX-003/006 (inbox, failed urgent communications). **Proposed:** SPK-COMMS-009 (amendment
+PA-05, message templates and sequences), see
+[Message templates and sequences](#message-templates-and-sequences-spk-comms-009-proposed-amendment-pa-05).
 
 **Migration range:** `packages/db/migrations/1000_communications_*.sql` … `1099` (this module uses
-`1000` to `1011`; stage 3 added `1004` to `1008`, review rounds `1009` to `1011`).
+`1000` to `1013`; stage 3 added `1004` to `1008`, review rounds `1009` to `1011`, the result
+reminder kind `1012`, message templates and sequences `1013`; `1014` to `1019` are reserved for
+that amendment and unused).
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` incl. `displayNames` and `personIdsResolvingTo`
 (IF-09), `AUTHORITY_LOOKUP_PORT`, `STAFF_DIRECTORY_PORT`, `PeopleService` for contact points;
@@ -22,7 +27,14 @@ events `identity.access_grant_revoked`, `identity.access_restricted`, `identity.
 `competition.team_invitation_created`, `competition.result_published`,
 `competition.availability_requested` (IF-45)), kernel (`INTEGRATION_REGISTRY` (IF-04),
 `PeriodicJobRegistry` (IF-24), module settings (IF-43), import provenance (IF-40),
-`FacilityDirectory`). It never writes another module's tables (§4.2).
+`FacilityDirectory`, `CapabilityService`). For message sequences (PA-05): competition
+(`TEAM_ENTRY_QUERY_PORT.findSeason` and `listSeasonEntries`, `FIXTURE_PORT.listSeasonFixtures`;
+events `competition.season_created`, `competition.season_updated`, `competition.fixture_changed`),
+catalog (`OFFERING_LOOKUP_PORT.getOffering`; events `catalog.offering_published`,
+`catalog.offering_updated`, `catalog.offering_archived`; the module now imports `CatalogModule`)
+and enrollment through this module's own `SESSION_AUDIENCE_PORT.participantsOfOffering`
+(implemented by enrollment, resolved lazily). It never reads or writes another module's tables
+(§4.2).
 
 **Status: implemented** — verified by `apps/api/src/modules/communications/__tests__` and the unit
 specs next to the code (`communications.machines.spec.ts`, `calendar/ics.spec.ts`,
@@ -350,7 +362,7 @@ Handlers registered: `communications.dispatch_notification` (`communications.del
 `communications.notify_availability_request` (`competition.availability_requested`) (the last three
 with failure owner league manager), inbox handler `communications.delivery_receipt` (provider
 `fake-messaging`). Periodic job `communications.compose_activity_reminders` (300 s, failure owner
-support).
+support). The events, handlers and job of message sequences are listed in their own section below.
 
 ## Policy defaults (proposed, pending operator decisions DEC-012, DEC-020, DEC-062)
 
@@ -369,10 +381,192 @@ support).
   the app's push registration (bundle identifiers, permission prompts) waits for DEC-061; the device
   registry and addressing are built against the port.
 
+## Message templates and sequences (SPK-COMMS-009, proposed amendment PA-05)
+
+**Status.** The requirement is **Proposed** (`docs/package-a/proposed-specification-amendments.md`,
+PA-05) and its open values are **Pending decision** (DEC-099: the set of messages per program, K1;
+who sends and on which days, K2; which reminders are automatic, K3). What the code does while an
+organization has the capability `message_sequences` turned on is **Verified** by
+`__tests__/message-sequences.spec.ts`, `__tests__/message-sequences-schema.spec.ts`,
+`sequences/due-time.spec.ts`, `communications.machines.spec.ts` and, in the contracts,
+`packages/contracts/src/communications-sequences.spec.ts`. The switch is off unless an
+organization turns it on (ADR-002).
+
+**What it is.** Staff keep reusable **templates** (a title and a text with named placeholders,
+essential or promotional) and **sequences** (ordered steps: a template and a number of days before
+or after an anchor date, at a facility-local time). When a season is created or an offering is
+published, every active sequence that applies produces that record's **message schedule**: one
+scheduled message per step. Nothing is sent until a staff member confirms a message. A confirmed
+message is sent when it is due through `NotificationsService.composeAndQueueIn`, with its audience
+as a definition, so recipients, consent and preferences are resolved at send time (SPK-COMMS-003,
+SPK-COMMS-006, SPK-COMMS-007).
+
+### Tables (migration `1013`)
+
+| Table                    | Purpose                                                                                                                                                                                                                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `message_templates`      | name (one active template per name), category `operational/promotional` (fixed for good, SPK-COMMS-007), title, body, status `active/archived`, versioned by `revision`                                                                                                                                          |
+| `message_sequences`      | name, facility (whose zone its times are read in; fixed), `subject_type` `season/offering` (fixed), `scope_id` (a competition or a program; null: every one; a reference without a cross-module key), `active`                                                                                                   |
+| `message_sequence_steps` | sequence, template, `position`, `anchor` (`registration_opens`, `registration_closes`, `starts`, `ends`, `first_game`), `offset_days` (-365..365), `send_time_local` (`HH:MM`, or null for the policy's time), `retired_at` (a removed step; never brought back)                                                 |
+| `scheduled_messages`     | one per step and season or offering: facility, sequence, step, subject, `anchor_at`, `due_at`, status, `attention`, the edited copy (`edited_title/body/by/at`), the exact confirmed text (`confirmed_title/body/by/at`), skip and cancel facts, `notification_id` and `sent_at` of what it produced, `revision` |
+
+Lifecycle: `ScheduledMessageMachine` in `packages/contracts/src/state-machines.ts`
+(`needs_confirmation → confirmed | skipped | canceled`; `confirmed → sent | needs_confirmation |
+skipped | canceled`; `skipped → needs_confirmation | canceled`; `sent` and `canceled` final).
+
+Database-enforced invariants (each proved by a test in `__tests__/message-sequences-schema.spec.ts`):
+
+- one scheduled message per step and record (`scheduled_messages_step_subject_idx`), so a
+  replayed event, a second worker or a repeated request creates nothing twice;
+- the status check lists exactly the machine states; a row is inserted only as
+  `needs_confirmation`; the trigger `scheduled_messages_guard` allows exactly the machine's moves
+  (`scheduled_messages_machine`);
+- a `sent` or `canceled` row is never changed and no scheduled message is deleted;
+- a message never changes its step, sequence or record;
+- `confirmed` and `sent` carry the confirmed text, who confirmed and when, and a due time; no
+  other state keeps them; a due time comes with its anchor date;
+- a confirmed text holds no placeholder marks (`scheduled_messages_no_raw_placeholder`);
+- `sent` names the notification it produced and when; one notification belongs to one message;
+- an edited copy is a title and a body together with who edited and when;
+- organization-scoped composite foreign keys everywhere (facility, sequence, step of that
+  sequence, template, notification);
+- a template never changes its category; a sequence never changes its facility or kind of record;
+  a step stays in its sequence, with a known anchor, offset and time of day.
+
+### Endpoints
+
+| Method | Path                                                    | Who (action)                                                                                                                      |
+| ------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/message-placeholders`                                 | readers (`communications.read_message_schedule`): the placeholder vocabulary                                                      |
+| GET    | `/message-templates`, `/message-templates/{id}`         | readers                                                                                                                           |
+| POST   | `/message-templates`                                    | managers (`communications.manage_message_templates`)                                                                              |
+| PATCH  | `/message-templates/{id}`                               | managers: name, title, body, archive or reactivate; never the category                                                            |
+| GET    | `/message-sequences`, `/message-sequences/{id}`         | readers, within their facilities                                                                                                  |
+| POST   | `/message-sequences`                                    | managers of the facility (`communications.manage_message_sequences`); created switched off                                        |
+| PATCH  | `/message-sequences/{id}`                               | managers: name, scope, switch on or off                                                                                           |
+| POST   | `/message-sequences/{id}/steps`                         | managers: add a step                                                                                                              |
+| PATCH  | `/message-sequences/{id}/steps/{stepId}`                | managers: change a step; its unsent messages follow                                                                               |
+| POST   | `/message-sequences/{id}/steps/{stepId}/remove`         | managers: retire a step; its unsent messages are canceled. **Not gated** (it creates nothing)                                     |
+| GET    | `/message-schedules/{subjectType}/{subjectId}`          | readers: the schedule, each message with its text as it stands and what it produced                                               |
+| POST   | `/message-schedules/{subjectType}/{subjectId}/generate` | managers: produce the missing messages for a record that existed before its sequence; existing ones are kept                      |
+| GET    | `/scheduled-messages/{id}`                              | readers                                                                                                                           |
+| GET    | `/scheduled-messages/{id}/preview`                      | managers (`communications.preview_scheduled_message`): the text, what is missing, and the recipients now by name and count only   |
+| POST   | `/scheduled-messages/{id}/edit`                         | managers (`communications.confirm_scheduled_message`): an edited copy for this message, or back to the template                   |
+| POST   | `/scheduled-messages/{id}/confirm`                      | managers: stores the exact text; refused for a missing placeholder (`UNFILLED_PLACEHOLDER`), no date (`NO_DUE_TIME`), a long text |
+| POST   | `/scheduled-messages/{id}/skip`                         | managers (`communications.skip_scheduled_message`). **Not gated**                                                                 |
+| POST   | `/scheduled-messages/{id}/restore`                      | managers: a skipped message needs confirmation again                                                                              |
+
+Readers are the staff who read notifications; managers are league manager, program manager,
+general manager and system administrator (**Proposed** roles; the review observed that managers
+hold the template and broadcast permissions; who sends is K2 of DEC-099). Every write is
+`@Idempotent()`, zod-validated, classified `@NoRecordAuthority`, and runs in `UnitOfWork.run` with
+an audit record and an outbox event.
+
+### Behaviour of message sequences: verified
+
+- **Producing a schedule.** `competition.season_created` and `catalog.offering_published` produce
+  one message per live step of every active sequence whose kind of record matches, whose
+  `scope_id` is null or the record's competition or program, and (for an offering) whose facility
+  is the offering's. A season belongs to no facility: the sequence's facility gives the zone.
+  Idempotent under replay.
+- **Due time** (`sequences/due-time.ts`, SPK-SCHED-008): the anchor's date in the facility zone,
+  plus the step's days, at the step's local time (or the policy's). Daylight-saving changes follow
+  the scheduling module's rule. A record without the anchor date (no game scheduled yet, no
+  registration window) leaves the message without a due time, and it cannot be confirmed.
+- **Placeholders** (vocabulary in `packages/contracts/src/api/communications-sequences.ts`):
+  `season_name`, `competition_name`, `offering_name`, `start_date`, `end_date`,
+  `registration_opens_date`, `registration_closes_date`, `first_game_date`, `first_game_time`,
+  `field`, `facility_name`, filled from the owning module's port every time
+  (`sequences/subject-facts.ts`); the field of a season's first game comes from this module's own
+  calendar projection of the scheduling event behind the fixture. A name outside the vocabulary,
+  or a stray `{{`, is refused when a template or an edited copy is saved. A placeholder the record
+  cannot fill is named by the preview and blocks confirmation; the database refuses a confirmed
+  text with placeholder marks, so a raw placeholder is never sent.
+- **Confirmation.** Confirming stores the text with the record's details as they are then, and
+  that exact text is what is sent.
+- **Following the record.** `competition.season_updated`, `competition.fixture_changed`,
+  `catalog.offering_updated` and `catalog.offering_archived`, a changed step and a changed template
+  review every message that can still change: a moved anchor date moves the due time and a
+  confirmed message returns to `needs_confirmation` (`attention: anchor_moved`); a confirmed
+  message whose text would now differ from what was confirmed returns too (`text_changed`); an
+  archived record or a removed step cancels what was not sent. The same review runs again
+  immediately before a message is sent, so a date that moved without its event having been handled
+  yet sends nothing.
+- **Sending** (`communications.send_scheduled_messages`, K-06 periodic job, 300 s, failure owner
+  support): confirmed messages that are due, each in its own transaction, claimed with
+  `FOR UPDATE SKIP LOCKED`. The audience is a definition read then: the season's team entries
+  (statuses of the policy) or the participants of the offering's live enrollments. The notice is a
+  `staff_broadcast` in the template's category, `protected` for an offering (who is enrolled is
+  customer-private). Someone who opted out between confirmation and sending receives nothing;
+  someone who joined receives it. With nobody to address, or more teams or people than one notice
+  holds (100 team entries, 500 people), nothing is sent and the message returns to
+  `needs_confirmation` (`no_audience`, `audience_too_large`). A message that fails raises one
+  `communications.scheduled_message_send_failed` exception for support and is tried again on the
+  next run. The job reads the due messages page by page and passes over the ones it cannot send
+  now (an organization with the switch off, a failing message), so they never hold back the
+  messages behind them. The exception is not closed by a later success: closing it stays a staff
+  step.
+- **Capability off.** The two producing handlers create nothing, the job sends nothing (a message
+  confirmed earlier waits), and creating or changing a template or a sequence, producing a
+  schedule, and editing, confirming or restoring a message answer ACCESS_DENIED
+  `CAPABILITY_DISABLED`. Reads, skipping a message and removing a step stay available, and the
+  following handlers keep existing messages truthful (they send nothing). Ordinary notices are
+  untouched.
+- **Scope** (§4.14): a facility-scoped manager manages the sequences and messages of their
+  facilities only, and a facility-scoped reader lists only those.
+
+Events: `communications.message_schedule_generated`, `communications.scheduled_message_changed`
+(`confirmed`, `edited`, `skipped`, `restored`, `canceled`, `rescheduled`, `reopened`),
+`communications.scheduled_message_sent`. Payloads carry identifiers only, never the text.
+
+Handlers registered (all in `apps/api/src/__tests__/event-handler-manifest.json`):
+`communications.schedule_season_messages` (`competition.season_created`),
+`communications.follow_season_messages` (`competition.season_updated`),
+`communications.follow_season_first_game` (`competition.fixture_changed`) with failure owner league
+manager; `communications.schedule_offering_messages` (`catalog.offering_published`),
+`communications.follow_offering_messages` (`catalog.offering_updated`),
+`communications.cancel_archived_offering_messages` (`catalog.offering_archived`) with failure owner
+program manager.
+
+### Assumed defaults of message sequences (proposed; open values pending decision, DEC-099)
+
+Policy content in `sequences/message-sequences.policy.ts` (`MESSAGE_SEQUENCE_POLICY`), not
+constants in the services. Each value is **Proposed**; what it stands in for is **Pending
+decision**.
+
+| Value                         | Assumed default   | Open value                                                                  |
+| ----------------------------- | ----------------- | --------------------------------------------------------------------------- |
+| `automaticSending`            | `false`           | K3, which reminders are automatic: none; nothing is sent without confirming |
+| `defaultSendTimeLocal`        | `09:00`           | K2, who sends and on which days; a step may name its own time               |
+| `seasonAudienceEntryStatuses` | `approved`        | K1, the set of messages per program and who they reach                      |
+| `noticeKind`                  | `staff_broadcast` | the essential or promotional split is DEC-062                               |
+| `sendIntervalSeconds`         | `300`             | technical                                                                   |
+
+The set of messages per program (K1) is not code at all: it is the templates and sequences staff
+write. No template or sequence ships with the module.
+
+### Known gaps of message sequences
+
+- `scope_id` is stored unverified: competitions and programs belong to other modules and there is
+  no cross-module key.
+- A season's audience is its team entries; a season with more than 100 entries, or an offering
+  with more than 500 participants, cannot be addressed by one notice, so such a message is not
+  sent (`audience_too_large`). Splitting one message over several notices is not built.
+- An offering's anchors are its own dates; its first session is not an anchor.
+- Placeholder values are written in English (`en-US`) in the facility's zone.
+- A switched-off sequence produces nothing more; messages it already produced stay and can be
+  skipped.
+- Nothing recalls a notice once it was sent; a sent message is final.
+- Not verified here: PostgreSQL (`TEST_DATABASE_URL`); every test ran on PGlite. The sending job
+  claims rows with `FOR UPDATE SKIP LOCKED` and the unique index answers a second insert, but two
+  truly concurrent workers were not exercised.
+
 ## Stage 3 (COM-01 … COM-06)
 
-No communications behaviour is a Package G capability: none of the K-12 capability switches
-(DEC-016) applies to this module, so nothing here is behind a capability switch. What stays
+No communications behaviour of stage 3 is a Package G capability: none of the K-12 capability
+switches of that stage (DEC-016) applies to this module. The one switch this module has is
+`message_sequences` of the proposed amendment PA-05 (above); nothing else here is behind a
+capability switch. What stays
 undecided is policy and provider choice, kept as configuration without defaults or as fakes:
 channel approval and the essential/promotional split (DEC-012, DEC-062), the reminder lead time
 (DEC-012), the messaging provider (DEC-020) and app push registration (DEC-061).

@@ -2,6 +2,7 @@ import type { CoreTables } from './core';
 import type { AutomationTables } from './automation';
 import type { CatalogWaiversTables } from './catalog-waivers';
 import type { CatalogTables } from './catalog';
+import type { CommunicationsSequencesTables } from './communications-sequences';
 import type { CommunicationsTables } from './communications';
 import type { CompetitionFieldTables } from './competition-field';
 import type { CompetitionMatchesTables } from './competition-matches';
@@ -25,6 +26,7 @@ export * from './core';
 export * from './automation';
 export * from './catalog-waivers';
 export * from './catalog';
+export * from './communications-sequences';
 export * from './communications';
 export * from './competition-field';
 export * from './competition-matches';
@@ -54,6 +56,7 @@ export interface Database
     AutomationTables,
     CatalogWaiversTables,
     CatalogTables,
+    CommunicationsSequencesTables,
     CommunicationsTables,
     CompetitionFieldTables,
     CompetitionMatchesTables,

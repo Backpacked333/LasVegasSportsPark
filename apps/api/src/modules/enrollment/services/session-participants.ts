@@ -193,6 +193,27 @@ export class SessionParticipants {
     return [...new Set(rows.map((r) => r.personId))].sort();
   }
 
+  /**
+   * SPK-COMMS-009 (proposed amendment PA-05; SESSION_AUDIENCE_PORT for communications): person
+   * ids of the participants of the offering's live enrollments (pending or confirmed) right now.
+   * A read: a message of the offering's schedule is addressed to them (their guardians through
+   * `receive_messages`) when it is sent, never from a stored list.
+   */
+  async participantsOfOffering(
+    db: Db | Trx,
+    organizationId: string,
+    offeringId: string,
+  ): Promise<string[]> {
+    const rows = await db
+      .selectFrom('enrollments')
+      .select('participant_person_id')
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .where('status', 'in', ['pending', 'confirmed'])
+      .execute();
+    return [...new Set(rows.map((r) => r.participant_person_id))].sort();
+  }
+
   /** SPK-SCHED-009: affected customers and the orders their participation was paid through. */
   async closureImpact(
     db: Db | Trx,

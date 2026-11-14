@@ -47,6 +47,8 @@ export const STAFF_TABS: readonly AreaTab[] = [
 export const COMMUNICATIONS_TABS: readonly AreaTab[] = [
   { path: '/communications', title: 'Delivery status', end: true },
   { path: '/communications/compose', title: 'Compose a message' },
+  { path: '/communications/templates', title: 'Message templates' },
+  { path: '/communications/sequences', title: 'Message sequences' },
 ];
 
 export const WORKSPACE_TABS: readonly AreaTab[] = [
