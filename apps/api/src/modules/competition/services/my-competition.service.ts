@@ -23,7 +23,12 @@ import { countsOf, ReadinessService } from './readiness.service';
 import { TeamEntriesService } from './team-entries.service';
 
 const DAY_MS = 86_400_000;
-const LIVE_STATUSES: readonly TeamEntryStatus[] = ['applied', 'approved'];
+/**
+ * The entries "my teams" lists by default. A waiting entry (SPK-COMP-006) is listed so that its
+ * captain can see the wait, the order and an offer; it has no fixtures, so "my fixtures" and the
+ * next fixture stay empty for it.
+ */
+const LIVE_STATUSES: readonly TeamEntryStatus[] = ['applied', 'approved', 'waiting'];
 
 interface Membership {
   /** The subject as the caller knows them (the surviving person after a merge). */

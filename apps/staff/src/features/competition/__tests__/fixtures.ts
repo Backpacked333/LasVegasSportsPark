@@ -259,6 +259,8 @@ export function teamEntry(overrides: Record<string, unknown> = {}) {
     eligibilityStatus: 'review_required',
     eligibilityReasons: [eligibilityReason()],
     renewedFromEntryId: null,
+    waitingSince: null,
+    waitingDivisionId: null,
     rosterComplete: false,
     rosterCount: 5,
     rosterMin: 8,

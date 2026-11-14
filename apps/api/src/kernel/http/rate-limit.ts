@@ -105,6 +105,13 @@ export const DEFAULT_RATE_LIMITS = {
   invitations: { limit: 30, windowSeconds: 600 },
   /** Account relink, the staff-assisted recovery path (§4.14 rate-limited recovery). */
   account_recovery: { limit: 10, windowSeconds: 600 },
+  /**
+   * Public and lobby views read without sign-in (SPK-SCHED-010, proposed amendment PA-06): every
+   * read under `/v1/public` counts here per client address, against scraping and code guessing.
+   * A lobby display re-reads a few views a minute; the default leaves room for several displays
+   * behind one address.
+   */
+  public_views: { limit: 120, windowSeconds: 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitName = keyof typeof DEFAULT_RATE_LIMITS;
 

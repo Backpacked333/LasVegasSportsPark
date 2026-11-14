@@ -104,6 +104,8 @@ export function teamEntry(overrides: Partial<Schema<'TeamEntry'>> = {}): Schema<
     eligibilityStatus: 'eligible',
     eligibilityReasons: [],
     renewedFromEntryId: null,
+    waitingSince: null,
+    waitingDivisionId: null,
     rosterComplete: false,
     rosterCount: 3,
     rosterMin: 7,
@@ -286,6 +288,7 @@ export function workspace(
     pendingInvitations: [invitation()],
     pendingJoinRequests: [joinRequest()],
     upcomingFixtures: [upcoming()],
+    waiting: null,
     viewer: { roles: ['captain'], actingAsCaptain: true, availableActions: CAPTAIN_ACTIONS },
     ...overrides,
   };

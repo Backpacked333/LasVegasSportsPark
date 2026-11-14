@@ -30,8 +30,9 @@ export const SeasonStatusSchema = z
 export type SeasonStatus = z.infer<typeof SeasonStatusSchema>;
 export const TeamStatusSchema = z.enum(['active', 'inactive', 'archived']).openapi('TeamStatus');
 export type TeamStatus = z.infer<typeof TeamStatusSchema>;
+/** `waiting` is the team waiting list (SPK-COMP-006, proposed amendment PA-10). */
 export const TeamEntryStatusSchema = z
-  .enum(['applied', 'approved', 'withdrawn', 'rejected'])
+  .enum(['applied', 'waiting', 'approved', 'withdrawn', 'rejected'])
   .openapi('TeamEntryStatus');
 export type TeamEntryStatus = z.infer<typeof TeamEntryStatusSchema>;
 export const TeamEntryEligibilityStatusSchema = z
@@ -663,6 +664,10 @@ export const TeamEntrySchema = z
     eligibilityStatus: TeamEntryEligibilityStatusSchema,
     eligibilityReasons: z.array(EligibilityReasonSchema),
     renewedFromEntryId: z.uuid().nullable(),
+    /** SPK-COMP-006: when the wait began (the list order); null unless the entry is waiting. */
+    waitingSince: Instant.nullable(),
+    /** SPK-COMP-006: the division whose list the entry waits on; null waits for the season. */
+    waitingDivisionId: z.uuid().nullable(),
     /** Derived from the effective roster against the rule set (never stored, SPK-COMP-004). */
     rosterComplete: z.boolean(),
     rosterCount: z.number().int(),
@@ -674,6 +679,53 @@ export const TeamEntrySchema = z
   })
   .openapi('TeamEntry');
 export type TeamEntry = z.infer<typeof TeamEntrySchema>;
+
+/** SPK-COMP-006 (proposed amendment PA-10): the lifecycle of a place offered to a waiting entry. */
+export const TeamEntryPlaceOfferStatusSchema = z
+  .enum(['offered', 'accepted', 'declined', 'expired', 'withdrawn'])
+  .openapi('TeamEntryPlaceOfferStatus');
+export type TeamEntryPlaceOfferStatus = z.infer<typeof TeamEntryPlaceOfferStatusSchema>;
+
+/**
+ * SPK-COMP-006: a freed division place offered to a waiting entry. While it is `offered` it holds
+ * the place; it stands until `expiresAt` (48 hours by proposed default, DEC-104).
+ */
+export const TeamEntryPlaceOfferSchema = z
+  .object({
+    id: z.uuid(),
+    teamEntryId: z.uuid(),
+    seasonId: z.uuid(),
+    divisionId: z.uuid(),
+    divisionName: z.string(),
+    status: TeamEntryPlaceOfferStatusSchema,
+    /** The entry's place in the list when staff chose it (1 waited longest). */
+    positionAtOffer: z.number().int(),
+    offeredAt: Instant,
+    expiresAt: Instant,
+    note: z.string().nullable(),
+    resolvedAt: Instant.nullable(),
+    resolutionReason: z.string().nullable(),
+    revision: Revision,
+  })
+  .openapi('TeamEntryPlaceOffer');
+export type TeamEntryPlaceOffer = z.infer<typeof TeamEntryPlaceOfferSchema>;
+
+/**
+ * SPK-COMP-006: what a waiting team's workspace shows: since when it waits, for which division,
+ * its place in the order and any open offer. Null on an entry that is not waiting.
+ */
+export const TeamEntryWaitingSchema = z
+  .object({
+    since: Instant,
+    division: z.object({ id: z.uuid(), name: z.string() }).nullable(),
+    /** 1 is the entry that has waited longest on this list. */
+    position: z.number().int(),
+    /** Entries waiting on the same list, this one included. */
+    listLength: z.number().int(),
+    openOffer: TeamEntryPlaceOfferSchema.nullable(),
+  })
+  .openapi('TeamEntryWaiting');
+export type TeamEntryWaiting = z.infer<typeof TeamEntryWaitingSchema>;
 
 /**
  * Create (new team) or renew (prior entry) a season entry. Exactly one of `team`, `teamId` or
@@ -1296,6 +1348,8 @@ export const TeamEntryWorkspaceSchema = z
     /** CMP-02: null when the viewer may not see them; [] when there are none. */
     pendingJoinRequests: z.array(JoinRequestSchema).nullable(),
     upcomingFixtures: z.array(UpcomingFixtureSchema),
+    /** SPK-COMP-006: the wait, its order and any open offer; null unless the entry is waiting. */
+    waiting: TeamEntryWaitingSchema.nullable(),
     viewer: TeamEntryViewerSchema,
   })
   .openapi('TeamEntryWorkspace');

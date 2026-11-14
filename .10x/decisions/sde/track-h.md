@@ -29,12 +29,11 @@ Feature: `glass-demo-amendments` · ADR-001
   experimental blur both change screen layout in ways that cannot be checked without devices.
   **Pending decision** for the owner after trying the build on phones.
 
-## Left for integration (files other tracks are editing)
+## Done at integration
 
-- `apps/staff/src/screens/teams/TeamsScreen.tsx` and `TeamEntryReviewScreen.tsx`: page toolbars
-  to move onto `Toolbar`.
-- `apps/staff/src/screens/leagues/FixtureScreen.tsx`: tab strip to wrap in `TabTrack`. (The
-  list on the person record is a set of actions, not tabs, and stays as it is.)
+- The page toolbars of `teams/TeamsScreen.tsx` and `teams/TeamEntryReviewScreen.tsx` are on
+  `Toolbar`. The link lists on the person record and on a fixture are actions inside a card, not
+  tabs, and stay as they are.
 
 ## Dependencies added
 

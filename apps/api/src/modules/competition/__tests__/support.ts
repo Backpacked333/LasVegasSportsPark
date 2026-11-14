@@ -1,5 +1,5 @@
 import type { Provider } from '@nestjs/common';
-import { newId, type StaffRole } from '@sportspark/contracts';
+import { newId, type CapabilityId, type StaffRole } from '@sportspark/contracts';
 import { pgErrorCode } from '@sportspark/db';
 import { createTestApp, type TestApp } from '../../../testing';
 import {
@@ -17,13 +17,20 @@ export const CLOCK_START = '2026-10-23T12:00:00Z';
 export const key = (): string => `k-${newId()}`;
 
 export function competitionTestApp(
-  options: { providers?: Provider[]; clockStart?: string } = {},
+  options: {
+    providers?: Provider[];
+    clockStart?: string;
+    capabilities?: readonly CapabilityId[];
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<TestApp> {
   return createTestApp({
     imports: [CompetitionModule],
     principalResolver: 'module',
     clockStart: options.clockStart ?? CLOCK_START,
     providers: options.providers,
+    capabilities: options.capabilities,
+    env: options.env,
   });
 }
 

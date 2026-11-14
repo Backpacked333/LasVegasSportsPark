@@ -23,6 +23,7 @@ import { InvitationsScreen } from './screens/people/InvitationsScreen';
 import { OpenAccessReviewScreen } from './screens/people/OpenAccessReviewScreen';
 import { PeopleScreen } from './screens/people/PeopleScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
+import { publicRoutes } from './screens/public/routes';
 import { RelationshipsScreen } from './screens/people/RelationshipsScreen';
 import { ScheduleArea } from './screens/schedule/ScheduleArea';
 import { SignInScreen } from './screens/sign-in/SignInScreen';
@@ -37,6 +38,8 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/sign-in" element={<SignInScreen />} />
+      {/* SPK-SCHED-010: the lobby display and the public pages need no sign-in. */}
+      {publicRoutes()}
       <Route
         element={
           <RequireSession>

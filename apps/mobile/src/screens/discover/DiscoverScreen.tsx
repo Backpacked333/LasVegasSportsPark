@@ -14,6 +14,9 @@
  * (DEC-016, DEC-072 to DEC-082, Product owner): a signed-in customer gets their filter only while
  * the organization's switch is on (`GET /v1/me/permissions`).
  *
+ * A signed-out visitor is also offered today's schedule and the public league standings when the
+ * organization has made them public (SPK-SCHED-010, proposed amendment PA-06; PublicViews.tsx).
+ *
  * States: loading; empty (nothing published for the filter); ready; validation failure (filter
  * input); offline (cached list with its age); unavailable (catalog not reachable, retry); paged
  * with "Load more activities". A signed-out visitor browses the organization configured for this
@@ -43,6 +46,7 @@ import { registrationRoutes } from '../../features/registration/routes';
 import { promotionBadges } from '../../features/registration/promotions';
 import { registrationWindowStatus } from '../../features/registration/status';
 import { Body, ButtonRow, TextField } from '../../features/registration/ui';
+import { PublicLinks } from '../public/PublicViews';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -324,6 +328,8 @@ export function DiscoverScreen() {
   return (
     <Screen>
       {signedIn ? <InProgressCard /> : null}
+      {/* SPK-SCHED-010: today's schedule and public standings need no sign-in. */}
+      {!signedIn ? <PublicLinks /> : null}
       {/* Keyed like the filters below: the field always shows the search that is applied. */}
       <SearchBox key={`q:${q}`} applied={q} onApply={setQ} />
       {signedIn && !filtered ? <PickedFor /> : null}

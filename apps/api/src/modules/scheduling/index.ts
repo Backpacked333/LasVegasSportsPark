@@ -29,3 +29,5 @@ export {
 export * from './time/local-time';
 export * from './time/recurrence';
 export * from './testing/scheduling-fixtures';
+export * from './public/public-access';
+export { PublicScheduleService } from './public/public-schedule.service';

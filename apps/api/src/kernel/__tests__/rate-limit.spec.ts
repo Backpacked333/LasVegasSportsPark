@@ -3,7 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, TEST_CONFIG_ENV, type TestApp } from '../../testing/test-app';
 import { Public } from '../auth/public.decorator';
 import { loadConfig } from '../config';
-import { MemoryRateLimiter, PostgresRateLimiter, RateLimited } from '../http/rate-limit';
+import {
+  DEFAULT_RATE_LIMITS,
+  MemoryRateLimiter,
+  PostgresRateLimiter,
+  RateLimited,
+} from '../http/rate-limit';
 
 @Controller('ratetest')
 class RateLimitedTestController {
@@ -43,6 +48,13 @@ describe('rate-limited recovery (§4.14)', () => {
       t.clock.advance(60_000);
       expect((await t.http.post('/v1/ratetest')).status).toBe(200);
     });
+  });
+
+  it('SPK-SCHED-010: `public_views` is one of the named limits, with a default and a RATE_LIMITS override', () => {
+    expect(DEFAULT_RATE_LIMITS.public_views).toEqual({ limit: 120, windowSeconds: 60 });
+    expect(
+      loadConfig({ ...TEST_CONFIG_ENV, RATE_LIMITS: 'public_views=30/60' }).RATE_LIMITS,
+    ).toEqual({ public_views: { limit: 30, windowSeconds: 60 } });
   });
 
   it('§4.14: counts are per key and per window', async () => {

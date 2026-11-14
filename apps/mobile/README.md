@@ -471,3 +471,20 @@ basket. Nothing here has passed native acceptance (§6.2).
 Teams, captain workspace, roster, availability, contributions, roster changes, team entries,
 standings and disputes (SCR-C-21 to SCR-C-29) are described, with their status, pending decisions
 and API gaps, in [`src/screens/teams/README.md`](src/screens/teams/README.md).
+
+## Proposed amendments PA-10 and PA-06 in the customer app (2026-11-14)
+
+Both requirements are **Proposed**; their open values are **Pending decision** (DEC-104, DEC-100).
+
+- **Team waiting list** (SPK-COMP-006), **Verified** by
+  `src/screens/teams/__tests__/TeamWaiting.test.tsx`: a waiting team's workspace (SCR-C-22) shows
+  the division, the place in the order and an open offer the captain accepts or declines, and
+  lets the captain withdraw (`src/features/teams/TeamWaiting.tsx`); the entry screen (SCR-C-27)
+  says when a division is full. The accept, decline and withdraw results are announced to screen
+  readers through `LiveRegion`.
+- **Public views** (SPK-SCHED-010), **Verified** by
+  `src/screens/public/__tests__/PublicViews.test.tsx`: the signed-out Discover screen links to
+  `app/public/schedule.tsx` (today's schedule by field and time) and `app/public/standings.tsx`
+  (standings of a public competition) when the organization configured for the build
+  (`organizationSlug`) has made something public (`GET /v1/public/{organization}/directory`).
+- **Not verified**: on a device (§6.2), as the rest of the app.

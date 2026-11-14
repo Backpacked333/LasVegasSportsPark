@@ -6,6 +6,8 @@ import {
   PeriodicJobRegistry,
   TEAM_AUTHORITY_IMPL,
   lazyPort,
+  moduleSettings,
+  runWithTransaction,
   type Trx,
 } from '../../kernel';
 import { IdentityEvents, IdentityModule } from '../identity';
@@ -13,6 +15,7 @@ import {
   ClosureImpactContributors,
   EventChanged,
   FIXTURE_OBLIGATION_IMPL,
+  PublicScheduleTitles,
   SchedulingModule,
 } from '../scheduling';
 import {
@@ -46,9 +49,17 @@ import { ResultsController } from './controllers/results.controller';
 import { RosterController } from './controllers/roster.controller';
 import { SeasonsController } from './controllers/seasons.controller';
 import { TeamEntriesController } from './controllers/team-entries.controller';
+import { TeamWaitlistController } from './controllers/team-waitlist.controller';
 import { TeamsController } from './controllers/teams.controller';
 import { TeamWorkspaceController } from './controllers/team-workspace.controller';
+import { CompetitionEvents } from './competition.events';
 import { TEAM_INVITATION_EXPIRY_JOB } from './competition.policy';
+import {
+  CompetitionPublicationController,
+  PublicCompetitionController,
+} from './public/public-competition.controller';
+import { PublicCompetitionService } from './public/public-competition.service';
+import { CompetitionSettings } from './competition.settings';
 import {
   ELIGIBILITY_PORT,
   FIXTURE_PORT,
@@ -84,6 +95,10 @@ import { SeasonsService } from './services/seasons.service';
 import { StandingsService } from './services/standings.service';
 import { TeamAuthority } from './services/team-authority.service';
 import { TeamEntriesService } from './services/team-entries.service';
+import {
+  EXPIRE_TEAM_PLACE_OFFER_HANDLER,
+  TeamWaitlistService,
+} from './services/team-waitlist.service';
 import { TeamsService } from './services/teams.service';
 
 /**
@@ -123,6 +138,8 @@ function suspensionAuthority(moduleRef: ModuleRef): SuspensionCheckPort {
 }
 
 const providers: Provider[] = [
+  // K-15: COMPETITION_* settings (competition.settings.ts).
+  moduleSettings(CompetitionSettings.module),
   TeamAuthority,
   // Kernel registration: the authorization step "team role" reads effective team_roles rows.
   { provide: TEAM_AUTHORITY_IMPL, useExisting: TeamAuthority },
@@ -205,6 +222,8 @@ const providers: Provider[] = [
   PlayerProfilesService,
   FixtureAttendanceService,
   ResultsAwaitingService,
+  TeamWaitlistService,
+  PublicCompetitionService,
   // Scheduling publication step 4 (SPK-SCHED-006, SPK-FIX-002) resolves this lazily by token.
   { provide: FIXTURE_OBLIGATION_IMPL, useExisting: FixtureObligationsService },
   { provide: TEAM_ENTRY_QUERY_PORT, useExisting: TeamEntriesService },
@@ -232,6 +251,9 @@ const providers: Provider[] = [
     SeasonsController,
     TeamsController,
     TeamEntriesController,
+    TeamWaitlistController,
+    PublicCompetitionController,
+    CompetitionPublicationController,
     RosterController,
     FixturesController,
     ResultsController,
@@ -268,6 +290,8 @@ const providers: Provider[] = [
     PlayerProfilesService,
     FixtureAttendanceService,
     ResultsAwaitingService,
+    TeamWaitlistService,
+    PublicCompetitionService,
     TeamAuthority,
     TEAM_AUTHORITY_IMPL,
     FIXTURE_OBLIGATION_IMPL,
@@ -290,6 +314,9 @@ export class CompetitionModule implements OnModuleInit {
     private readonly fixtures: FixturesService,
     private readonly roster: RosterService,
     private readonly impactContributors: ClosureImpactContributors,
+    private readonly waitlist: TeamWaitlistService,
+    private readonly publicTitles: PublicScheduleTitles,
+    private readonly publicCompetitions: PublicCompetitionService,
   ) {}
 
   onModuleInit(): void {
@@ -333,6 +360,29 @@ export class CompetitionModule implements OnModuleInit {
         }
         return { customers };
       },
+    );
+    // SPK-SCHED-010 (proposed amendment PA-06): on the public facility schedule a game reads
+    // its team names and score only when its competition is public; competition vouches for
+    // those titles, scheduling shows "League game" for every other.
+    this.publicTitles.register('competition.public_fixtures', (db, organizationId, events) =>
+      this.publicCompetitions.fixtureTitles(db, organizationId, events),
+    );
+    // SPK-COMP-006 (proposed amendment PA-10): the server-owned expiry of a place offered to a
+    // waiting team. One terminal outcome: an offer already accepted, declined, withdrawn or
+    // expired is left alone (idempotent under replay).
+    this.registry.on<EventPayload<typeof CompetitionEvents.teamPlaceOfferExpiryDue>>(
+      CompetitionEvents.teamPlaceOfferExpiryDue.type,
+      EXPIRE_TEAM_PLACE_OFFER_HANDLER,
+      (event, ctx) =>
+        runWithTransaction(ctx.trx, async () => {
+          await this.waitlist.expireIfDue(
+            ctx.trx,
+            event.organizationId,
+            event.payload.offerId,
+            event.correlationId,
+          );
+        }),
+      { failureOwner: 'league_manager' },
     );
     // The scheduling module owns time and space; a fixture keeps a copy of its event's instants and
     // follows moves and cancellations made directly in scheduling (idempotent under replay).
