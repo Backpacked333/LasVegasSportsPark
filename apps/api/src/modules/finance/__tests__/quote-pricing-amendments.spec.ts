@@ -6,10 +6,15 @@ import {
   createDiscountFixture,
   createEntitlementDefinitionFixture,
   createOfferingSessionFixture,
+  createPolicyVersionFixture,
   createPriceRuleFixture,
   type OfferingFixture,
 } from '../../catalog';
-import { createEnrollmentFixture } from '../../enrollment';
+import {
+  createEnrollmentFixture,
+  FINANCE_POLICY_IMPL,
+  type FinancePolicyPort,
+} from '../../enrollment';
 import { createPersonFixture } from '../../identity';
 import { unitPriceFromBasis } from '../pricing/quote-calculator';
 import { FakePaymentTokens } from '../providers/fake-payment.provider';
@@ -451,6 +456,99 @@ describe('quote pricing amendments (SPK-PAY-013, SPK-PAY-015; migration 0687)', 
       .set({ status: 'retired' })
       .where('id', '=', discountId)
       .execute();
+  });
+
+  it('SPK-PAY-013, SPK-PAY-015: a cancellation is worked out on the price that was quoted, and a transfer involving such a place goes to finance review', async () => {
+    await switches(true, true);
+    const port = t.app.get<FinancePolicyPort>(FINANCE_POLICY_IMPL);
+    const halfBack = await createPolicyVersionFixture(t, {
+      kind: 'cancellation',
+      content: { refundBasisPoints: 5_000 },
+    });
+    /** Buys one place and answers the enrollment the order line names. */
+    const buy = async (setup: OfferingFixture, participant: string): Promise<string> => {
+      const { basketId } = await basketFor(t, parent, [setup], {
+        hold: false,
+        participants: [participant],
+      });
+      const quote = await quoteFor(t, parent, basketId);
+      const checkout = await post(t, '/v1/registration-checkouts', parent.header, {
+        quoteId: quote.id,
+        payment: { method: 'provider', paymentMethodToken: FakePaymentTokens.succeed },
+      });
+      expect(checkout.status, JSON.stringify(checkout.body)).toBe(201);
+      await drain(t);
+      const line = await t.db
+        .selectFrom('order_lines')
+        .select('enrollment_id')
+        .where('quote_line_id', '=', linesOf(quote)[0]?.['id'] as string)
+        .executeTakeFirstOrThrow();
+      return line.enrollment_id as string;
+    };
+    const at = new Date(NOW);
+    const { klass } = await perSessionClass({ memberPriceMinor: 2_000 });
+    const member = await child(t, [parent]);
+    await membership(member);
+    const perSessionEnrollment = await buy(klass, member);
+    const term = await offering(t, { basePriceMinor: 20_000 });
+    const termEnrollment = await buy(term, await child(t, [parent]));
+
+    // Enrollment passes the rule's base price (24.00, the price of one session). The place cost
+    // 20.00 x 7 = 140.00 (member price, seven sessions), and half of that is refunded.
+    const cancellation = (enrollmentId: string, offeringId: string, amountMinor: number) =>
+      port.cancellationConsequence(t.organizationId, {
+        enrollmentId,
+        participantPersonId: member,
+        offeringId,
+        cancellationPolicyVersionId: halfBack,
+        price: { amountMinor, currency: 'USD' },
+        at,
+      });
+    expect(await cancellation(perSessionEnrollment, klass.offeringId, 2_400)).toMatchObject({
+      kind: 'refund',
+      amountMinor: 7_000,
+      currency: 'USD',
+    });
+    // A plain term price is worked out on the price enrollment passes, as before.
+    expect(await cancellation(termEnrollment, term.offeringId, 20_000)).toMatchObject({
+      kind: 'refund',
+      amountMinor: 10_000,
+    });
+
+    const transfer = (enrollmentId: string, fromOfferingId: string, toOfferingId: string) =>
+      port.transferConsequence(t.organizationId, {
+        enrollmentId,
+        participantPersonId: member,
+        fromOfferingId,
+        toOfferingId,
+        fromPrice: { amountMinor: 20_000, currency: 'USD' },
+        toPrice: { amountMinor: 2_400, currency: 'USD' },
+        at,
+      });
+    const review = {
+      kind: 'review_required',
+      amountMinor: null,
+      explanation:
+        'One of the places is priced per session or at a member price; finance reviews the transfer.',
+    };
+    // Out of a per-session place, and into a per-session offering: never a difference of base prices.
+    expect(await transfer(perSessionEnrollment, klass.offeringId, term.offeringId)).toMatchObject(
+      review,
+    );
+    expect(await transfer(termEnrollment, term.offeringId, klass.offeringId)).toMatchObject(review);
+    // Between two plain term prices the difference is a credit, as before.
+    const other = await offering(t, { basePriceMinor: 2_400 });
+    expect(await transfer(termEnrollment, term.offeringId, other.offeringId)).toMatchObject({
+      kind: 'credit',
+      amountMinor: 17_600,
+    });
+    // A member price on the target matters only while member pricing is on.
+    const camp = await memberPricedCamp();
+    expect(await transfer(termEnrollment, term.offeringId, camp.offeringId)).toMatchObject(review);
+    await switches(true, false);
+    expect(await transfer(termEnrollment, term.offeringId, camp.offeringId)).toMatchObject({
+      kind: 'credit',
+    });
   });
 
   it('SPK-PAY-002: the database refuses a stored basis that disagrees with the unit price or explains an unpriced line, and never lets a basis change', async () => {

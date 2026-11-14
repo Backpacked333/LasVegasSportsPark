@@ -825,7 +825,15 @@ membership follows the participant, never the paying adult (**Pending decision**
 canceled or added afterwards is left to the approved refund and credit policy (DEC-009); nothing
 re-prices a purchase.
 
+- Cancellation and transfer consequences (`FinancePolicyAdapter`, **Verified** in the same finance
+  test): enrollment passes the rule's base price, which is not what a place priced per session or
+  at a member price cost. For a place whose order line carries a price basis, a cancellation is
+  worked out on the unit price that was quoted; a transfer out of such a place, or into an offering
+  priced that way, answers `review_required` instead of a difference of base prices. A place
+  bought at a plain term price is handled exactly as before.
+
 Known limits (see `.10x/decisions/sde/track-a.md`): enrollment's price snapshot on a basket line and
-on an enrollment still records the rule's base price, so the cancellation and transfer consequences
-that read it do not know the per-session product or the member price; a checkout re-prices nothing
-and relies on the quote's expiry (POL-013) for sessions that start between quote and payment.
+on an enrollment still records the rule's base price (for a per-session rule, the price of one
+session), and the screens that show that snapshot before the quote show that figure; a checkout
+re-prices nothing and relies on the quote's expiry (POL-013) for sessions that start between quote
+and payment.
