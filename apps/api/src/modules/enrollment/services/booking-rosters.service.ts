@@ -241,12 +241,12 @@ export class BookingRostersService {
     if (!access.staff) {
       const member = access.booker || (await this.isJoinedMember(organizationId, found.id, access));
       if (!member) throw errors.protectedNotFound('booking');
-      const decision = await this.authorization.decide(
-        principal,
-        EnrollmentActions.manageBookingRoster,
-        { type: 'booking_roster', organizationId, subjectPersonIds: [body.personId] },
-      );
-      if (!decision.allowed) {
+      // Themselves or someone they may register, as a person: a staff role held elsewhere never
+      // widens this (the customer subjects of the action ignore staff roles).
+      const mayAdd = (
+        await this.customers.subjectIds(principal, EnrollmentActions.manageBookingRoster)
+      ).includes(body.personId);
+      if (!mayAdd) {
         throw errors.validation(
           'You can add yourself or someone you register for. Invite anyone else, so they answer for themselves.',
           { path: 'personId', code: 'ROSTER_INVITATION_REQUIRED' },
@@ -600,15 +600,12 @@ export class BookingRostersService {
       EnrollmentActions.removeBookingRosterMember,
     );
     if (!access.staff && !access.booker) {
+      // The member themselves, or someone who may register them (never through a staff role).
       const own =
         found.person_id !== null &&
         (
-          await this.authorization.decide(principal, EnrollmentActions.removeBookingRosterMember, {
-            type: 'booking_roster_member',
-            organizationId,
-            subjectPersonIds: [found.person_id],
-          })
-        ).allowed;
+          await this.customers.subjectIds(principal, EnrollmentActions.removeBookingRosterMember)
+        ).includes(found.person_id);
       if (!own) throw errors.protectedNotFound('booking');
     }
     const now = this.clock.now();
