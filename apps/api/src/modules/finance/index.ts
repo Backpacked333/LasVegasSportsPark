@@ -45,6 +45,7 @@ export { FinanceDeskService, localYearStart } from './services/finance-desk.serv
 export { FinanceNotices } from './services/finance-notices.service';
 export { PosSetupService } from './services/pos/pos-setup.service';
 export { PosSalesService } from './services/pos/pos-sales.service';
+export { PosOpenAmountService } from './services/pos/pos-open-amount.service';
 export { PosSaleFinalizer } from './services/pos/pos-sale-finalizer.service';
 export { applyRate, chargeFor, returnedShare, TaxFeeContent } from './services/pos/pos-charges';
 export {

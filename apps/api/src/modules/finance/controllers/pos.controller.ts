@@ -2,6 +2,7 @@ import { Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
 import {
   AddPosSaleLineBody,
   AddPosTenderBody,
+  ApprovePosOpenAmountLineBody,
   ChangePosLineQuantityBody,
   CloseRegisterSessionBody,
   CreatePosProductBody,
@@ -12,18 +13,22 @@ import {
   ListPosProductsQuery,
   ListPosRegistersQuery,
   ListRegisterSessionsQuery,
+  ListSessionOpenAmountLinesQuery,
   ListSessionSalesQuery,
   OpenRegisterSessionBody,
+  PosOpenAmountRulesQuery,
   RetirePosRecordBody,
   UpdatePosProductBody,
   VoidPosSaleBody,
   z,
   type Page,
+  type PosOpenAmountRules,
   type PosProduct,
   type PosReceipt,
   type PosRegister,
   type PosRegisterSession,
   type PosSale,
+  type PosSessionOpenAmountLine,
   type Principal,
 } from '@sportspark/contracts';
 import {
@@ -37,6 +42,7 @@ import {
   ZodQuery,
 } from '../../../kernel';
 import { CorrelationId } from '../finance.shared';
+import { PosOpenAmountService } from '../services/pos/pos-open-amount.service';
 import { PosSalesService } from '../services/pos/pos-sales.service';
 import { PosSetupService } from '../services/pos/pos-setup.service';
 
@@ -171,7 +177,10 @@ export class PosSetupController {
 @RefusedDuringRecovery()
 @Controller()
 export class PosSalesController {
-  constructor(private readonly sales: PosSalesService) {}
+  constructor(
+    private readonly sales: PosSalesService,
+    private readonly openAmounts: PosOpenAmountService,
+  ) {}
 
   @Post('pos-sales')
   @Idempotent()
@@ -211,7 +220,43 @@ export class PosSalesController {
     @ZodBody(AddPosSaleLineBody) body: z.infer<typeof AddPosSaleLineBody>,
     @CorrelationId() correlationId: string | null,
   ): Promise<PosSale> {
-    return this.sales.addLine(principal, params.id, body, correlationId);
+    // SPK-PAY-016 (proposed): a body without a product is an open-amount line.
+    return 'productId' in body
+      ? this.sales.addLine(principal, params.id, body, correlationId)
+      : this.openAmounts.addLine(principal, params.id, body, correlationId);
+  }
+
+  /** SPK-PAY-016 (proposed): the second approval of an open-amount line above the ceiling. */
+  @Post('pos-sales/:id/lines/:lineId/approval')
+  @HttpCode(200)
+  @Idempotent()
+  @RecordAuthority('order')
+  approveOpenAmountLine(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(LineParams) params: z.infer<typeof LineParams>,
+    @ZodBody(ApprovePosOpenAmountLineBody) body: z.infer<typeof ApprovePosOpenAmountLineBody>,
+    @CorrelationId() correlationId: string | null,
+  ): Promise<PosSale> {
+    return this.openAmounts.approve(principal, params.id, params.lineId, body, correlationId);
+  }
+
+  /** SPK-PAY-016 (proposed): the categories and the caller's ceiling at a facility. */
+  @Get('pos-open-amount-rules')
+  openAmountRules(
+    @CurrentPrincipal() principal: Principal,
+    @ZodQuery(PosOpenAmountRulesQuery) query: PosOpenAmountRulesQuery,
+  ): Promise<PosOpenAmountRules> {
+    return this.openAmounts.rules(principal, query.facilityId);
+  }
+
+  /** SPK-PAY-016 (proposed): a register session's open-amount lines, apart, for review. */
+  @Get('pos-register-sessions/:id/open-amount-lines')
+  listOpenAmountLines(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodQuery(ListSessionOpenAmountLinesQuery) query: ListSessionOpenAmountLinesQuery,
+  ): Promise<Page<PosSessionOpenAmountLine>> {
+    return this.openAmounts.listForSession(principal, params.id, query);
   }
 
   @Post('pos-sales/:id/lines/:lineId/quantity')

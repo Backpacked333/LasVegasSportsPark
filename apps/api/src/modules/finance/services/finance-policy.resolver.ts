@@ -5,13 +5,26 @@ import { POLICY_PORT, type PolicyPort } from '../../catalog';
 import {
   FINANCE_POLICY_CONFIG,
   FINANCE_POLICY_KEY,
+  OPEN_AMOUNT_POLICY,
+  OpenAmountPolicyContent,
   type CompensationMethod,
   type FinancePolicyConfig,
+  type OpenAmountLinePolicy,
 } from '../finance.policy';
 
 export interface ResolvedFinancePolicy {
   config: FinancePolicyConfig;
   references: QuotePolicyReferences;
+}
+
+/**
+ * SPK-PAY-016 (proposed amendment PA-08): the open-amount rules in force and where they came from:
+ * an approved policy version, or the proposed default while none is approved (DEC-102 pending).
+ */
+export interface ResolvedOpenAmountRules {
+  basis: 'approved_policy' | 'proposed_default';
+  policyVersionId: string | null;
+  rules: OpenAmountLinePolicy;
 }
 
 function positiveInt(value: unknown): number | undefined {
@@ -215,6 +228,54 @@ export class FinancePolicyResolver {
         'retryIntervalHours',
         'noticeDaysBefore',
       ]),
+    };
+  }
+
+  /**
+   * SPK-PAY-016 (proposed amendment PA-08, DEC-102 pending): the reason categories and the
+   * ceilings of open-amount register lines at the instant: the approved version of
+   * `OPEN_AMOUNT_POLICY` in effect, else the proposed default of the finance configuration. An
+   * approved version whose content is not usable refuses the line (no default stands in for a
+   * rule the operator approved in another shape).
+   */
+  async openAmountRules(
+    organizationId: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<ResolvedOpenAmountRules> {
+    const version = await this.policies.currentPolicyVersion(
+      organizationId,
+      OPEN_AMOUNT_POLICY.kind,
+      OPEN_AMOUNT_POLICY.key,
+      at,
+      trx,
+    );
+    if (!version || version.approvalStatus !== 'approved') {
+      return {
+        basis: 'proposed_default',
+        policyVersionId: null,
+        rules: this.defaults.openAmountLines,
+      };
+    }
+    const content = OpenAmountPolicyContent.safeParse(version.content);
+    if (!content.success) {
+      throw errors.resourceConflict(
+        'The approved open-amount policy has no usable categories or ceilings.',
+        {
+          code: 'OPEN_AMOUNT_POLICY_INVALID',
+          policyKey: OPEN_AMOUNT_POLICY.key,
+          policyVersionId: version.id,
+        },
+      );
+    }
+    return {
+      basis: 'approved_policy',
+      policyVersionId: version.id,
+      rules: {
+        currency: content.data.currency ?? null,
+        categories: content.data.categories,
+        ceilings: content.data.ceilings,
+      },
     };
   }
 
