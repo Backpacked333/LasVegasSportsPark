@@ -389,6 +389,34 @@ describe('SCR-S-27 EnrollmentChangeScreen', () => {
     );
   });
 
+  it('SPK-PAY-013 (QA m-1, M-8): a place priced per session shows what it costs, not the price of one session', async () => {
+    const base = enrollment();
+    const app = createTestApp({
+      routes: routes({
+        'GET /enrollments/{id}': ok(
+          enrollment({
+            price: {
+              ...(base.price as NonNullable<typeof base.price>),
+              basePriceMinor: 2400,
+              estimate: {
+                pricingBasis: 'per_session',
+                tier: null,
+                appliedPrice: 'standard',
+                appliedPriceMinor: 2400,
+                sessionCount: 7,
+                unitPriceMinor: 16800,
+                estimatedAt: '2026-10-24T12:00:00.000Z',
+              },
+            },
+          }),
+        ),
+      }),
+    });
+    render(app.at(`/registrations/enrollments/${ENROLLMENT_ID}`));
+    expect(await screen.findByText('$168.00')).toBeInTheDocument();
+    expect(screen.queryByText('$24.00')).not.toBeInTheDocument();
+  });
+
   it('does not offer a cancellation the policy does not permit', async () => {
     const app = createTestApp({
       routes: routes({
