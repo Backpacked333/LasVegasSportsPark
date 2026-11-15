@@ -388,6 +388,16 @@ const RETIREMENT_NOTICES = new Map<string, (offeringName: string) => string>([
       `The session of ${name} you were waiting for was canceled by the facility, so you are no longer on its waitlist.`,
   ],
   [
+    'tier_required',
+    (name) =>
+      `${name} is now sold by price option (for example by the week or by the day), and your place on its waitlist did not say which one, so you are no longer on its waitlist. Join again and choose the option you want.`,
+  ],
+  [
+    'selection_not_available',
+    (name) =>
+      `What you were waiting for in ${name} can no longer be bought as you chose it (a price option ended, a day has passed or was canceled, or an extra is no longer offered), so you are no longer on its waitlist. Join again with what is offered now.`,
+  ],
+  [
     'makeup_redemption_required',
     (name) =>
       `A makeup seat in ${name} is taken by redeeming the makeup for a session with a free seat, not from a waitlist, so you are no longer on its waitlist.`,

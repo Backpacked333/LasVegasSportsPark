@@ -53,6 +53,7 @@ import { BasketsService } from './baskets.service';
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { RegistrationEvaluator } from './registration-evaluator';
+import { RegistrationExtras } from './registration-extras';
 import { SessionBookingsService } from './session-bookings.service';
 import { EnrollmentFacilityScope } from './facility-scope';
 
@@ -98,6 +99,7 @@ export class TrialsService {
     private readonly sessions: CatalogSessions,
     private readonly scope: EnrollmentFacilityScope,
     private readonly capabilities: CapabilityService,
+    private readonly extras: RegistrationExtras,
   ) {}
 
   async load(
@@ -431,6 +433,12 @@ export class TrialsService {
     correlationId: string | null,
   ): Promise<TrialConversion> {
     const organizationId = organizationOf(principal);
+    // SPK-PAY-014: the target's sessions, for a day selection and per-session add-ons; read
+    // before the transaction and only while `price_tiers_addons` is on.
+    const offeringSessions = await this.extras.sessionsBefore(
+      organizationId,
+      input.targetOfferingId,
+    );
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, true);
       if (!row) throw errors.protectedNotFound('trial_participation');
@@ -564,6 +572,24 @@ export class TrialsService {
           correlationId,
         });
       }
+      // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07), quality review M-2 and M-4: the follow-up line
+      // carries its tier, days, add-ons and uniform, with the rules of a basket line. Where the
+      // target is sold by tier or requires a uniform the conversion asks for it (TIER_REQUIRED
+      // with the tiers, UNIFORM_REQUIRED with the sizes) instead of opening a line no quote
+      // would price.
+      const selection = await this.extras.resolve(
+        trx,
+        organizationId,
+        {
+          offeringId: input.targetOfferingId,
+          priceTierId: input.priceTierId,
+          selectedSessionIds: input.selectedSessionIds,
+          addons: input.addons,
+          uniform: input.uniform,
+          quantity: 1,
+        },
+        offeringSessions,
+      );
       const opened = await this.baskets.openForLine(trx, organizationId, {
         owner,
         payerPersonId,
@@ -576,6 +602,7 @@ export class TrialsService {
         evaluation,
         applicationId: application.id,
         trialParticipationId: row.id,
+        selection,
         correlationId,
       });
       await trx

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DomainError,
   errors,
   newId,
   type AddBasketLineInput,
@@ -12,7 +13,9 @@ import {
   type PriceRuleTier,
   type PriceSnapshot,
   type Principal,
+  type RegistrationIntent,
 } from '@sportspark/contracts';
+import type { WaitlistRequestedExtras } from '@sportspark/db';
 import { CapabilityService, CLOCK, type Clock, type Trx } from '../../../kernel';
 import {
   PRICING_PORT,
@@ -20,8 +23,9 @@ import {
   type OfferingSnapshot,
   type PricingPort,
 } from '../../catalog';
+import { BOOKING_INTENTS } from '../enrollment.policy';
 import type { Reader } from '../enrollment.shared';
-import { CapacityService } from './capacity.service';
+import { CapacityService, type PoolRow } from './capacity.service';
 import { CatalogSessions } from './catalog-sessions';
 import { MembershipPricing } from './membership-pricing';
 
@@ -42,6 +46,50 @@ export interface LineSelection {
   session_id: string | null;
   price_tier_id: string | null;
   selected_session_ids: string[] | null;
+}
+
+/**
+ * The choices a command names for a registration: the fields of a basket line, which a waitlist
+ * entry, a trial conversion and a transfer name in the same way.
+ */
+export type ChoiceInput = Pick<
+  AddBasketLineInput,
+  'offeringId' | 'priceTierId' | 'selectedSessionIds' | 'addons' | 'uniform' | 'quantity'
+>;
+
+/** A stored selection and the add-ons chosen with it, as the pools it needs are worked out. */
+export interface SelectionForPools {
+  /** The basket line, when there is one (named in refusals). */
+  id: string | null;
+  offering_id: string;
+  price_tier_id: string | null;
+  selected_session_ids: string[] | null;
+  addons: ReadonlyArray<{ addon_id: string; session_id: string | null }>;
+}
+
+/** What a waitlist entry waits for (migration 0524), as offer generation reads it. */
+export interface WaitingRequest {
+  offering_id: string;
+  intent: RegistrationIntent;
+  price_tier_id: string | null;
+  selected_session_ids: string[] | null;
+  requested_extras: WaitlistRequestedExtras | null;
+}
+
+/**
+ * Why a waiting request cannot be offered a place now: its capability is off (the entry waits
+ * until it is on again), the offering is sold by tier and the entry names none, or what it asked
+ * for can no longer be bought (the tier's deadline passed or the price changed, a chosen day
+ * started or was canceled, an add-on was retired).
+ */
+export type RequestRefusal = 'capability_off' | 'tier_required' | 'selection_not_available';
+
+/** Whether a waitlist entry asked for more than a place of the offering. */
+export function hasRequest(entry: {
+  price_tier_id: string | null;
+  requested_extras: WaitlistRequestedExtras | null;
+}): boolean {
+  return entry.price_tier_id !== null || entry.requested_extras !== null;
 }
 
 export const EMPTY_SELECTION: ResolvedSelection = {
@@ -85,7 +133,7 @@ export class RegistrationExtras {
   ) {}
 
   /** Whether a request names any tier, day or add-on field (SPK-PAY-014). */
-  namesTierOrAddons(input: AddBasketLineInput): boolean {
+  namesTierOrAddons(input: ChoiceInput): boolean {
     return (
       input.priceTierId !== undefined ||
       input.selectedSessionIds !== undefined ||
@@ -107,12 +155,19 @@ export class RegistrationExtras {
    * Validates what a new line chose (inside the command's unit of work). Throws ACCESS_DENIED
    * (CAPABILITY_DISABLED) for a field whose capability is off, VALIDATION_FAILED with a
    * `details.code` for a choice the catalog does not offer.
+   *
+   * Every command that opens a registration with choices validates them here, with the rules of
+   * a basket line: POST /baskets/{id}/lines, joining a waitlist and accepting its offer, a trial
+   * conversion and a transfer (quality review M-2, M-4). `requireUniform: false` and
+   * `forTransfer` are for a transfer only: it orders no uniform (`assertComplete` decides
+   * there), and its answer to a missing tier says what to do on a screen that cannot name one.
    */
   async resolve(
     trx: Trx,
     organizationId: string,
-    input: AddBasketLineInput,
+    input: ChoiceInput,
     sessions: readonly OfferingSession[],
+    options: { requireUniform?: boolean; forTransfer?: boolean } = {},
   ): Promise<ResolvedSelection> {
     const now = this.clock.now();
     // DEC-016: a field of an amendment is a commitment of its capability, checked in the unit of
@@ -133,7 +188,9 @@ export class RegistrationExtras {
       input.offeringId,
       trx,
     );
-    const tier = tiersOn ? this.resolveTier(rule, input, now) : null;
+    const tier = tiersOn
+      ? this.resolveTier(rule, input, now, options.forTransfer ? 'name_tier' : 'choose_price_tier')
+      : null;
     const selectedSessionIds =
       tier?.attendance === 'chosen_sessions'
         ? this.resolveDays(tier, input.selectedSessionIds ?? [], sessions, now)
@@ -218,16 +275,8 @@ export class RegistrationExtras {
           });
         }
         uniform = { uniform: active, size: input.uniform.size };
-      } else if (active?.requirement === 'required') {
-        throw errors.validation(
-          `This offering requires the uniform "${active.name}": choose a size.`,
-          {
-            code: 'UNIFORM_REQUIRED',
-            path: 'uniform',
-            offeringUniformId: active.id,
-            sizes: active.sizes,
-          },
-        );
+      } else if (active?.requirement === 'required' && options.requireUniform !== false) {
+        throw uniformRequired(active, 'choose_uniform_size');
       }
     }
 
@@ -243,17 +292,14 @@ export class RegistrationExtras {
   /** SPK-PAY-014: exactly one tier applies; it is the one named, if it can still be bought. */
   private resolveTier(
     rule: PriceRule | null,
-    input: AddBasketLineInput,
+    input: ChoiceInput,
     now: Date,
+    nextAction: TierNextAction,
   ): PriceRuleTier | null {
     const tiers = rule?.tiers ?? [];
     if (input.priceTierId === undefined) {
       if (tiers.length === 0) return null;
-      throw errors.validation('This offering is priced by tier: choose one.', {
-        code: 'TIER_REQUIRED',
-        path: 'priceTierId',
-        tiers: tiers.map((tier) => ({ id: tier.id, code: tier.code, name: tier.name })),
-      });
+      throw tierRequired(tiers, nextAction);
     }
     const tier = tiers.find((t) => t.id === input.priceTierId);
     if (!tier) {
@@ -322,6 +368,74 @@ export class RegistrationExtras {
           ? -1
           : 1;
     });
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // The one check every path into an enrollment passes (quality review M-2, M-4)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): what a registration must have chosen before an
+   * enrollment exists for it, whatever command creates it. Called by
+   * `EnrollmentsService.createPending`, the one place an enrollment row is written, so a basket
+   * hold, a waitlist acceptance, a trial conversion's line and a transfer all pass it, at the
+   * instant the place is taken (an open basket never expires, and an offering may gain tiers or
+   * a required uniform after a line was added):
+   *
+   * - while `price_tiers_addons` is on and the price rule in effect has tiers, the registration
+   *   names one (VALIDATION_FAILED `TIER_REQUIRED`, with the tiers): no enrollment exists whose
+   *   quote would answer `TIER_REQUIRED`, and none attends days nobody chose;
+   * - while `uniforms` is on and the offering requires a uniform, one was chosen with a size
+   *   (VALIDATION_FAILED `UNIFORM_REQUIRED`, with the uniform and its sizes). A transfer orders
+   *   nothing (it has no basket line a quote could charge the uniform on), so a transfer into
+   *   such an offering is refused and the answer says to register through a basket.
+   *
+   * `details.nextAction` says exactly what to do on the path that was refused. A rental or party
+   * booking is not a participant's registration (`BOOKING_INTENTS`) and is not checked. With
+   * both capabilities off nothing is read and nothing is refused, as before.
+   */
+  async assertComplete(
+    trx: Trx,
+    organizationId: string,
+    facts: {
+      offeringId: string;
+      intent: RegistrationIntent;
+      priceTierId: string | null;
+      /** The basket line the enrollment is created for; null for a transfer. */
+      basketLineId: string | null;
+    },
+  ): Promise<void> {
+    if (BOOKING_INTENTS.includes(facts.intent)) return;
+    const tiersOn = await this.capabilities.isEnabled(organizationId, 'price_tiers_addons', trx);
+    const uniformsOn = await this.capabilities.isEnabled(organizationId, 'uniforms', trx);
+    if (!tiersOn && !uniformsOn) return;
+    const viaBasket = facts.basketLineId !== null;
+    if (tiersOn && !facts.priceTierId) {
+      const rule = await this.pricing.effectivePriceRule(
+        organizationId,
+        facts.offeringId,
+        this.clock.now(),
+        trx,
+      );
+      if (rule && rule.tiers.length > 0) {
+        throw tierRequired(rule.tiers, viaBasket ? 'remove_line_and_choose_tier' : 'name_tier');
+      }
+    }
+    if (!uniformsOn) return;
+    const extras = await this.pricing.offeringExtras(organizationId, facts.offeringId, trx);
+    const required = extras.uniforms.find(
+      (u) => u.status === 'active' && u.requirement === 'required',
+    );
+    if (!required) return;
+    // A transfer has no basket line a uniform could be chosen and charged on.
+    if (!viaBasket) throw uniformRequired(required, 'register_in_basket');
+    const chosen = await trx
+      .selectFrom('basket_line_uniforms')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('basket_line_id', '=', facts.basketLineId as string)
+      .executeTakeFirst();
+    if (!chosen) throw uniformRequired(required, 'remove_line_and_choose_uniform_size');
   }
 
   /** Writes the add-ons and the uniform of a line just inserted (the database guards them too). */
@@ -568,16 +682,8 @@ export class RegistrationExtras {
   /**
    * What holding a line with a tier, a day selection or add-ons needs beyond its place
    * (SPK-PAY-014): the checks again at the hold instant (an open basket never expires), and the
-   * capacity pools of the selection, created where missing:
-   *
-   * - `sessionPools`: when the rule lets some customers choose days, every line counts on the
-   *   session pool of each session it attends, so a full-week place and a single day share that
-   *   day's seats, and a participant counts only on the sessions selected;
-   * - `replacesOfferingPools`: a line of chosen days takes no place in the offering-wide pool;
-   * - `addonPools`: one place in the add-on's own pool, per session for an add-on limited per
-   *   session.
-   *
-   * A line without tier and add-ons returns nothing and reads nothing, as before.
+   * capacity pools of the selection (`selectionPools`). A line without tier and add-ons returns
+   * nothing and reads nothing, as before.
    */
   async poolsForHold(
     trx: Trx,
@@ -604,39 +710,84 @@ export class RegistrationExtras {
       .where('basket_line_id', '=', line.id)
       .executeTakeFirst();
     if (hasUniform) await this.capabilities.require(organizationId, 'uniforms', trx);
-    if (!line.price_tier_id && addonRows.length === 0) {
+    return this.selectionPools(
+      trx,
+      organizationId,
+      {
+        id: line.id,
+        offering_id: line.offering_id,
+        price_tier_id: line.price_tier_id,
+        selected_session_ids: line.selected_session_ids,
+        addons: addonRows,
+      },
+      snapshot,
+      sessions,
+      actor,
+    );
+  }
+
+  /**
+   * The capacity pools a selection takes a place in beyond the offering-wide ones, created where
+   * missing (SPK-PAY-014). One function for every path that takes a place: a basket hold, a
+   * waitlist entry and its offer's acceptance, a transfer (quality review M-2, M-3).
+   *
+   * - `extraPoolIds`, session pools: when the rule lets some customers choose days, every
+   *   registration counts on the seat pool of each session it attends, so a full-week place and
+   *   a single day share that day's seats, and a participant counts only on the sessions
+   *   selected. Before any of those seats is reserved, every live registration of the offering
+   *   that attends the session and is not yet on its pool is committed to it
+   *   (`CapacityService.seatRegistrations`): a place bought before the offering had such a tier
+   *   counts on each day like every other;
+   * - `replacesOfferingPools`: a selection of chosen days takes no place in the offering-wide pool;
+   * - `extraPoolIds`, add-on pools: one place in the add-on's own pool, per session for an add-on
+   *   limited per session.
+   *
+   * The offering's pools are locked first, in id order, and the add-on pools are reserved after
+   * them (also in id order, by `acquireHolds`): every transaction that takes several of them
+   * takes them in that order. A selection without tier and add-ons returns nothing and reads
+   * nothing.
+   */
+  async selectionPools(
+    trx: Trx,
+    organizationId: string,
+    selection: SelectionForPools,
+    snapshot: OfferingSnapshot,
+    sessions: readonly OfferingSession[],
+    actor: Principal,
+  ): Promise<{ extraPoolIds: string[]; replacesOfferingPools: boolean }> {
+    if (!selection.price_tier_id && selection.addons.length === 0) {
       return { extraPoolIds: [], replacesOfferingPools: false };
     }
     await this.capabilities.require(organizationId, 'price_tiers_addons', trx);
+    await this.capacity.lockOfferingPools(trx, organizationId, selection.offering_id);
     const now = this.clock.now();
+    const lineId = selection.id;
     const extraPoolIds: string[] = [];
     let replacesOfferingPools = false;
-    if (line.price_tier_id) {
+    if (selection.price_tier_id) {
       const rule = snapshot.priceRule;
-      const tier = rule?.tiers.find((t) => t.id === line.price_tier_id);
+      const tier = rule?.tiers.find((t) => t.id === selection.price_tier_id);
       if (!rule || !tier) {
         throw errors.resourceConflict(
           'The price of this offering changed since the line was added; remove the line and add it again.',
-          { code: 'TIER_NOT_AVAILABLE', lineId: line.id, priceTierId: line.price_tier_id },
+          { code: 'TIER_NOT_AVAILABLE', lineId, priceTierId: selection.price_tier_id },
         );
       }
       this.assertTierAvailable(tier, now);
       const byId = new Map(sessions.map((s) => [s.id, s]));
-      const gone = (line.selected_session_ids ?? []).filter((id) => {
+      const gone = (selection.selected_session_ids ?? []).filter((id) => {
         const session = byId.get(id);
         return !session || !selectable(session, now);
       });
       if (gone.length > 0) {
         throw errors.resourceConflict(
           'A chosen day has started or is no longer scheduled; remove the line and add it again.',
-          { code: 'SESSION_NOT_SELECTABLE', lineId: line.id, sessionIds: gone },
+          { code: 'SESSION_NOT_SELECTABLE', lineId, sessionIds: gone },
         );
       }
-      if (rule.tiers.some((t) => t.attendance === 'chosen_sessions')) {
-        const attended = [
-          ...(line.selected_session_ids ??
-            sessions.filter((s) => selectable(s, now)).map((s) => s.id)),
-        ].sort();
+      if (countsPerSession(rule)) {
+        const open = sessions.filter((s) => selectable(s, now)).map((s) => s.id);
+        const attended = [...(selection.selected_session_ids ?? open)].sort();
         for (const sessionId of attended) {
           const pools = await this.capacity.ensureSessionPool(
             trx,
@@ -647,17 +798,19 @@ export class RegistrationExtras {
           );
           extraPoolIds.push(...pools.filter((p) => p.status === 'active').map((p) => p.id));
         }
-        replacesOfferingPools = line.selected_session_ids !== null;
+        // M-3: everyone who attends these sessions is on their pools before a seat is reserved.
+        await this.capacity.seatRegistrations(trx, organizationId, selection.offering_id, open);
+        replacesOfferingPools = selection.selected_session_ids !== null;
       }
     }
-    if (addonRows.length > 0) {
-      const extras = await this.pricing.offeringExtras(organizationId, line.offering_id, trx);
-      for (const row of addonRows) {
+    if (selection.addons.length > 0) {
+      const extras = await this.pricing.offeringExtras(organizationId, selection.offering_id, trx);
+      for (const row of selection.addons) {
         const addon = extras.addons.find((a) => a.id === row.addon_id);
         if (!addon || addon.status !== 'active') {
           throw errors.resourceConflict(
             'An add-on of this line is no longer offered; remove the line and add it again.',
-            { code: 'ADDON_NOT_OFFERED', lineId: line.id, addonId: row.addon_id },
+            { code: 'ADDON_NOT_OFFERED', lineId, addonId: row.addon_id },
           );
         }
         if (addon.capacity === null) continue;
@@ -673,6 +826,190 @@ export class RegistrationExtras {
       }
     }
     return { extraPoolIds, replacesOfferingPools };
+  }
+
+  /**
+   * Quality review M-3 (SPK-PAY-014): for a command that takes a session's seat outside a
+   * selection (a pickup, trial or makeup booking, a session queue's offer). Where the offering's
+   * price rule lets customers choose days and `price_tiers_addons` is on, every live
+   * registration is first committed to the seat pools of the sessions it still attends, under
+   * the offering's pool locks. Does nothing, and reads only the switch, otherwise.
+   */
+  async reconcileSessionSeats(
+    trx: Trx,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    correlationId: string | null = null,
+  ): Promise<void> {
+    if (!countsPerSession(snapshot.priceRule)) return;
+    if (!(await this.capabilities.isEnabled(organizationId, 'price_tiers_addons', trx))) return;
+    await this.capacity.lockOfferingPools(trx, organizationId, snapshot.offering.id);
+    const open = await this.pricing.remainingSessions(
+      organizationId,
+      snapshot.offering.id,
+      this.clock.now(),
+      trx,
+    );
+    await this.capacity.seatRegistrations(
+      trx,
+      organizationId,
+      snapshot.offering.id,
+      open.map((session) => session.id),
+      correlationId,
+    );
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Waiting for a selection (quality review M-2)
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * The pools a waitlist entry needs a free place in, read as they are now (nothing is created:
+   * joining created them), and whether the entry can still be offered a place at all.
+   *
+   * An entry that asked for nothing beyond a place needs the offering-wide pools of its intent,
+   * as before. One that names a tier needs what a basket line with the same choices holds: the
+   * seat pool of each session it attends where days can be chosen, the offering-wide pools
+   * unless it chose days, and the pool of each limited add-on.
+   */
+  async poolsOfRequest(
+    db: Reader,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    entry: WaitingRequest,
+  ): Promise<{ pools: PoolRow[]; refusal: RequestRefusal | null }> {
+    const trx = db as Trx;
+    const offeringPools = this.capacity.poolsForIntent(
+      await this.capacity.poolRowsForOffering(db, organizationId, entry.offering_id),
+      entry.intent,
+    );
+    const rule = snapshot.priceRule;
+    const requestedAddons = entry.requested_extras?.addons ?? [];
+    const namesTierOrAddons = entry.price_tier_id !== null || requestedAddons.length > 0;
+    const tiersOn = await this.capabilities.isEnabled(organizationId, 'price_tiers_addons', trx);
+    if (!tiersOn) {
+      // With the switch off nothing of the amendment is evaluated; an entry that asked for a
+      // tier or an add-on while it was on waits until it is on again.
+      return namesTierOrAddons
+        ? { pools: [], refusal: 'capability_off' }
+        : { pools: offeringPools, refusal: null };
+    }
+    if (
+      entry.requested_extras?.uniform &&
+      !(await this.capabilities.isEnabled(organizationId, 'uniforms', trx))
+    ) {
+      return { pools: [], refusal: 'capability_off' };
+    }
+    const tiers = rule?.tiers ?? [];
+    if (!entry.price_tier_id && tiers.length > 0) {
+      return { pools: offeringPools, refusal: 'tier_required' };
+    }
+    if (!namesTierOrAddons) return { pools: offeringPools, refusal: null };
+    const now = this.clock.now();
+    const tier = entry.price_tier_id ? tiers.find((t) => t.id === entry.price_tier_id) : null;
+    if (entry.price_tier_id) {
+      if (!tier) return { pools: [], refusal: 'selection_not_available' };
+      if (tier.availableUntil && new Date(tier.availableUntil).getTime() <= now.getTime()) {
+        return { pools: [], refusal: 'selection_not_available' };
+      }
+    }
+    const open = (
+      await this.pricing.remainingSessions(organizationId, entry.offering_id, now, trx)
+    ).map((session) => session.id);
+    const openIds = new Set(open);
+    if ((entry.selected_session_ids ?? []).some((id) => !openIds.has(id))) {
+      return { pools: [], refusal: 'selection_not_available' };
+    }
+    const attended = entry.selected_session_ids ?? open;
+    const pools: PoolRow[] =
+      entry.selected_session_ids && countsPerSession(rule) ? [] : [...offeringPools];
+    if (tier && countsPerSession(rule) && attended.length > 0) {
+      pools.push(
+        ...(await db
+          .selectFrom('capacity_pools')
+          .selectAll()
+          .where('organization_id', '=', organizationId)
+          .where('scope_type', '=', 'session')
+          .where('scope_id', 'in', attended)
+          .where('status', '=', 'active')
+          .orderBy('id')
+          .execute()),
+      );
+    }
+    if (requestedAddons.length > 0) {
+      const extras = await this.pricing.offeringExtras(organizationId, entry.offering_id, trx);
+      const attendedIds = new Set(attended);
+      for (const requested of requestedAddons) {
+        const addon = extras.addons.find((a) => a.id === requested.addonId);
+        if (
+          !addon ||
+          addon.status !== 'active' ||
+          requested.sessionIds.some((id) => !attendedIds.has(id))
+        ) {
+          return { pools: [], refusal: 'selection_not_available' };
+        }
+        if (addon.capacity === null) continue;
+        let q = db
+          .selectFrom('capacity_pools')
+          .selectAll()
+          .where('organization_id', '=', organizationId)
+          .where('scope_type', '=', 'addon')
+          .where('scope_id', '=', addon.id)
+          .where('status', '=', 'active');
+        q =
+          requested.sessionIds.length > 0
+            ? q.where('scope_session_id', 'in', requested.sessionIds)
+            : q.where('scope_session_id', 'is', null);
+        pools.push(...(await q.orderBy('id').execute()));
+      }
+    }
+    return { pools: pools.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)), refusal: null };
+  }
+
+  /**
+   * DEC-006 (proposed `waitlistFirst`): how many other participants wait for a place this
+   * registration would take. While nobody in the offering's queue asked for a tier, days or
+   * add-ons this is everyone waiting for the offering, as before. Once somebody did, an entry
+   * counts when the pools it waits on include one of `poolIds`: a family that waits for Monday
+   * does not stop another from buying Tuesday, and still gets Monday's next free seat first.
+   */
+  async waitingAhead(
+    db: Reader,
+    organizationId: string,
+    snapshot: OfferingSnapshot,
+    participantPersonId: string,
+    poolIds: readonly string[],
+  ): Promise<number> {
+    const entries = await db
+      .selectFrom('waitlist_entries')
+      .select([
+        'offering_id',
+        'intent',
+        'price_tier_id',
+        'selected_session_ids',
+        'requested_extras',
+      ])
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', snapshot.offering.id)
+      .where('status', '=', 'waiting')
+      .where('session_id', 'is', null)
+      .where('participant_person_id', '<>', participantPersonId)
+      .orderBy('id')
+      .execute();
+    if (entries.length === 0) return 0;
+    // As before while the offering has one price and nobody asked for more than a place. Once
+    // it is sold by tier, an entry that names no tier can never be offered a place (it leaves
+    // the queue at the next offer), so it is ahead of nobody.
+    const soldByTier = (snapshot.priceRule?.tiers.length ?? 0) > 0;
+    if (!soldByTier && entries.every((entry) => !hasRequest(entry))) return entries.length;
+    const wanted = new Set(poolIds);
+    let ahead = 0;
+    for (const entry of entries) {
+      const { pools, refusal } = await this.poolsOfRequest(db, organizationId, snapshot, entry);
+      if (refusal) continue;
+      if (pools.some((pool) => wanted.has(pool.id))) ahead += 1;
+    }
+    return ahead;
   }
 
   /**
@@ -722,4 +1059,53 @@ export function countedSessions(
     return remainingSessionIds.filter((id) => selected.has(id));
   }
   return [...remainingSessionIds];
+}
+
+/**
+ * Whether a session's seats are shared by everyone who attends it (SPK-PAY-014): the price rule
+ * in effect has a tier that lets the customer choose days. The capability is checked by the
+ * caller.
+ */
+export function countsPerSession(rule: PriceRule | null): boolean {
+  return !!rule && rule.tiers.some((tier) => tier.attendance === 'chosen_sessions');
+}
+
+/** What to do about a missing tier, on the path that was refused (`details.nextAction`). */
+type TierNextAction = 'choose_price_tier' | 'remove_line_and_choose_tier' | 'name_tier';
+
+function tierRequired(tiers: readonly PriceRuleTier[], nextAction: TierNextAction): DomainError {
+  const message: Record<TierNextAction, string> = {
+    choose_price_tier: 'This offering is priced by tier: choose one.',
+    remove_line_and_choose_tier:
+      'This offering is priced by tier: remove the line and add it again, choosing a tier.',
+    name_tier:
+      'This offering is sold by price option. To move into it, choose the option, and the days where days are chosen. Where that cannot be chosen here, register for it in a basket and then cancel the current registration.',
+  };
+  return errors.validation(message[nextAction], {
+    code: 'TIER_REQUIRED',
+    path: 'priceTierId',
+    nextAction,
+    tiers: tiers.map((tier) => ({ id: tier.id, code: tier.code, name: tier.name })),
+  });
+}
+
+/** What to do about a missing uniform, on the path that was refused (`details.nextAction`). */
+type UniformNextAction =
+  'choose_uniform_size' | 'remove_line_and_choose_uniform_size' | 'register_in_basket';
+
+function uniformRequired(uniform: OfferingUniform, nextAction: UniformNextAction): DomainError {
+  const sizes = uniform.sizes.join(', ');
+  const message: Record<UniformNextAction, string> = {
+    choose_uniform_size: `This offering requires the uniform "${uniform.name}": choose a size.`,
+    remove_line_and_choose_uniform_size: `This offering requires the uniform "${uniform.name}": remove the line and add it again, choosing a size (${sizes}).`,
+    register_in_basket: `This offering requires the uniform "${uniform.name}", which is chosen and charged in a basket. A transfer cannot order it: register for this offering in a basket, choosing a size (${sizes}), then cancel the current registration.`,
+  };
+  return errors.validation(message[nextAction], {
+    code: 'UNIFORM_REQUIRED',
+    path: 'uniform',
+    nextAction,
+    offeringUniformId: uniform.id,
+    name: uniform.name,
+    sizes: uniform.sizes,
+  });
 }
