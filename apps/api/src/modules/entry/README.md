@@ -416,5 +416,12 @@ authorized. For an event, for a read of one person (a customer's read) and while
 off, `expected` is null and the answer is otherwise exactly as before. This is a read only: nothing
 about recording an observation changed.
 
-Not done here: the arrival checks do not read the day selection, so a participant arriving on a
-day they did not choose is checked as a participant of the offering.
+**Verified** (`__tests__/arrival-days.spec.ts`; quality review M-1): the arrival checks and the
+pass scan use the same rule, enrollment's `enrollmentAttendsSession` (every session when no day
+selection is stored). An enrollment is a participation basis only for the sessions it attends. A
+participant registered for other days of the offering gets the blocking issue
+`not_registered_for_session`, whose message names the days they are registered for in the
+facility's zone, with the next action `register_or_book`; the check-in is held like any other
+blocked arrival. No override exists and none was added: a place for the day is registered or
+booked first. A pass scan offers each family member only the sessions their enrollment attends
+that day. An enrollment without a day selection behaves exactly as before.

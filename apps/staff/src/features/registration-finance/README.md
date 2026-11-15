@@ -110,3 +110,18 @@ shown and nothing new is read.
 
 Not built: charge lines of an add-on or a uniform (the API takes them; the forms send none); a
 link to the uniform list from the team screens.
+
+## After the quality review of 2026-11-14 (findings M-6, M-8, m-1)
+
+- **Verified** (`screens/programs/__tests__/OfferingSetupScreen.test.tsx`, "with the capabilities
+  off, a per-session rule and a member price are listed with what customers are shown instead"):
+  the price rule list says, while `per_session_pricing` or `member_pricing` is known to be off,
+  that a quote of a per-session price is refused and customers see the offering as not open for
+  online registration, and that the member price is not applied or shown.
+- **Verified** (`screens/registrations/__tests__/EnrollmentChangeScreen.test.tsx`, "a place priced
+  per session shows what it costs…"): an enrollment and a transfer preview show the unit price the
+  API worked out (tier, member price, sessions counted) instead of the rule's base price.
+- Not built: the transfer panel does not choose a tier or days. For a target sold by tier the
+  preview shows the API's answer (`TIER_REQUIRED`, which says to register in a basket and then
+  cancel); for a target that requires a uniform the commit shows `UNIFORM_REQUIRED` with the same
+  instruction. The waitlist screen does not show what an entry waits for.

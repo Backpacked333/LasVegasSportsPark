@@ -507,6 +507,17 @@ Not done here: that the named entitlement is a membership benefit is checked by 
 the promotion badge compares a minimum line amount with the rule's base price, which for a
 per-session rule is the price of one session.
 
+### The public price follows the switches (quality review M-6)
+
+**Verified** (`__tests__/price-rule-amendments.spec.ts`, "the price an offering shows agrees with
+what a quote would do…"): `PublicPrice` advertises only what a quote made now would give. With
+`member_pricing` off, `memberPrice` is null (a quote charges the standard price). With
+`per_session_pricing` off, a per-session price is `notQuotable` (`per_session_pricing_off`, with a
+plain message), and its session count and product are null: the quote of such a rule is refused,
+so clients show the offering as not open for online registration instead of a price. Each switch
+is read only when a rule in view has its field; an offering that never used the amendments reads
+exactly as before. Registration commands are unchanged: the quote remains what refuses.
+
 ## Liability waivers (SPK-REG-011, proposed amendment PA-01): proposed, behind `liability_waivers`
 
 **Proposed.** The requirement is not part of the master specification until the product owner

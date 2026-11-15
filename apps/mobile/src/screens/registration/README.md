@@ -218,3 +218,22 @@ the waiver families each offering requires (`GET /v1/offerings/{id}/required-wai
 participant with the API's judgement and lets the person or guardian accept. With the capability
 off, or for an offering that requires no waiver, the screen is exactly as before. **Verified**
 `__tests__/RequiredWaivers.test.tsx`.
+
+## After the quality review of 2026-11-14 (findings M-2, M-6, m-6)
+
+SPK-PAY-013, SPK-PAY-014, SPK-PAY-015 and SPK-REG-012 are **Proposed** requirements behind their
+capability switches.
+
+- **Verified** (`__tests__/BasketScreen.test.tsx`, "when what a line chose is full…"): "Join the
+  waitlist" sends what the basket line chose (the price option, the days, the extras, the uniform
+  size; `features/registration/JoinWaitlist.tsx`), so the customer waits for the day or the extra
+  that was full. The basket says that the activity, a day or an extra is full, and says separately
+  when places go to people already waiting; it no longer tells a customer to join a waitlist the
+  API refuses.
+- **Verified** (`__tests__/OfferingDetailScreen.test.tsx`, "with per-class pricing turned off…"):
+  an offering whose price is `notQuotable` shows the API's reason and no amount, and offers no
+  registration; discover cards and camp weeks show no amount for it. A member price is shown only
+  when the API sends one (it sends none while member pricing is off).
+- Not built: the waitlist status screen does not list what an entry waits for, and the transfer
+  screen (`../enrollments`) does not choose a price option or days; for a target sold by price
+  option it shows the API's answer, which says to register in a basket and then cancel.
