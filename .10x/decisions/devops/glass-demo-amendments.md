@@ -19,7 +19,7 @@ production now refuses to start without an explicit proxy trust setting.
    `true`). Without it production does not start. `docs/deploy/staging.md` and
    `docs/deploy/production.md` say what to use; the readiness checklist has the check to do once
    on the host.
-2. **Migrations**: 20 new files across core, catalog, scheduling, competition, enrollment,
+2. **Migrations**: 26 new files across core, catalog, scheduling, competition, enrollment,
    finance, communications and reporting (list in `decisions/dba`). They are additive. One can
    refuse on existing data: `0525_enrollment_allocation_once_per_enrollment.sql` creates a unique
    index over active allocations and fails if a database already holds two active allocations for

@@ -48,3 +48,17 @@ drop a rule the original enforced.
   without a division.
 - `quote_lines.source_id` is guarded by a trigger rather than a foreign key, because it names an
   add-on or a uniform depending on the line kind.
+
+## Added by the review fixes
+
+| File                                                 | What                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| `0221_catalog_waiver_override_version.sql`           | An override names the waiver version it was recorded against              |
+| `0471_competition_public_adult_divisions.sql`        | A publication requires an adult minimum age on every division             |
+| `0524_enrollment_waitlist_selection.sql`             | A waitlist entry records the tier, days, add-ons and uniform it waits for |
+| `0525_enrollment_allocation_once_per_enrollment.sql` | One active allocation per enrollment per pool (unique index)              |
+| `0531_enrollment_booking_roster_acceptance.sql`      | Who a roster acceptance joined and who acted                              |
+| `0697_finance_pos_open_amount_sale_total.sql`        | The ceiling applies to what one person entered on one sale                |
+
+`0525` can refuse on existing data: it fails if a database already holds two active allocations
+for one enrollment in one pool.
