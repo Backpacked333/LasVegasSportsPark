@@ -170,6 +170,7 @@ describe('Facility class scenarios (assembled application)', () => {
         pricingBasis: 'per_session',
         remainingSessionCount: 7,
         remainingSessionsPriceMinor: 16_800,
+        notQuotable: null,
       });
 
       const { basketId } = await basketFor(t, parent, [klass], {

@@ -50,6 +50,7 @@ const PRICE = {
   pricingBasis: 'term' as const,
   remainingSessionCount: null,
   remainingSessionsPriceMinor: null,
+  notQuotable: null,
   memberPrice: null,
   tiers: [],
 };

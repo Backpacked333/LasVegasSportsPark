@@ -409,6 +409,7 @@ export function membershipOffering(
       pricingBasis: 'term',
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
+      notQuotable: null,
       memberPrice: null,
       tiers: [],
     },
@@ -467,6 +468,8 @@ export function enrollment(overrides: Partial<Schema<'Enrollment'>> = {}): Schem
     transferredAt: null,
     transferredToEnrollmentId: null,
     transferredFromEnrollmentId: null,
+    priceTierId: null,
+    selectedSessionIds: null,
     transferConsequence: null,
     completedAt: null,
     offering: {

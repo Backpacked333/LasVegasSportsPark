@@ -1,9 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Db } from '@sportspark/db';
-import { sql, type SqlBool } from 'kysely';
 import { DATABASE, executorFor, type Trx } from '../../../kernel';
 import { PRICING_PORT, type PricingPort } from '../../catalog';
 import type { ExpectedAtSession, SessionRosterPort } from '../enrollment.ports';
+import { attendsSessionSql } from './attended-sessions';
 
 /**
  * SESSION_ROSTER_PORT (SPK-PAY-014, proposed amendment PA-03): who a session of an offering
@@ -32,9 +32,8 @@ export class SessionRoster implements SessionRosterPort {
       .where('organization_id', '=', organizationId)
       .where('offering_id', '=', offeringId)
       .where('status', '=', 'confirmed')
-      .where(
-        sql<SqlBool>`(selected_session_ids is null or ${sessionId}::uuid = any(selected_session_ids))`,
-      )
+      // The one rule of which sessions an enrollment attends (`attended-sessions.ts`).
+      .where(attendsSessionSql(sessionId))
       .orderBy('participant_person_id')
       .orderBy('id')
       .execute();

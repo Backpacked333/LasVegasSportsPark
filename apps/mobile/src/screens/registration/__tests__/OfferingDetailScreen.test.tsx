@@ -93,6 +93,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
               pricingBasis: 'per_session',
               remainingSessionCount: 7,
               remainingSessionsPriceMinor: 16800,
+              notQuotable: null,
             },
           }),
         },
@@ -123,6 +124,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
               pricingBasis: 'per_session',
               remainingSessionCount: 0,
               remainingSessionsPriceMinor: 0,
+              notQuotable: null,
             },
           }),
         },
@@ -229,6 +231,40 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Autumn Youth Program' })).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Register' })).toBeOnTheScreen();
+  });
+
+  it('SPK-PAY-013 (QA M-6): with per-class pricing turned off, a per-class activity shows the reason and no price, and is not registered for online', async () => {
+    const base = offering();
+    const message =
+      'This activity is priced per class, and per-class pricing is turned off for this organization. It is not open for online registration; ask the front desk.';
+    const app = createRegistrationTestApp({
+      routes: routes({
+        'GET /offerings/{id}': {
+          status: 200,
+          body: offering({
+            price: {
+              ...(base.price as NonNullable<typeof base.price>),
+              basePriceMinor: 2400,
+              chargeLines: [],
+              pricingBasis: 'per_session',
+              remainingSessionCount: null,
+              remainingSessionsPriceMinor: null,
+              memberPrice: null,
+              notQuotable: { code: 'per_session_pricing_off', message },
+            },
+          }),
+        },
+      }),
+    });
+    render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    expect(await screen.findByText(message)).toBeOnTheScreen();
+    expect(
+      screen.getByText('This activity is not open for online registration. Ask the front desk.'),
+    ).toBeOnTheScreen();
+    // No amount the customer cannot get, and nothing to press.
+    expect(screen.queryByLabelText(/^Price per class/)).not.toBeOnTheScreen();
+    expect(screen.queryByText(/\$24\.00/)).not.toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Register' })).not.toBeOnTheScreen();
   });
 
   it('opens the registration chooser (SCR-C-09) from Register', async () => {

@@ -1108,15 +1108,100 @@ decision** DEC-101).
 
 Known limits:
 
-- A line opened by another command (a waitlist acceptance, a trial conversion) names no tier, so
-  for an offering sold by tier its quote is refused with `TIER_REQUIRED`; staff register the
-  participant through a basket instead.
-- Registrations made before an offering had tiers hold the offering-wide pool only and are not
-  counted on the session pools; a session scheduled after a full-week purchase is attended but its
-  pool does not count that participant.
 - A canceled session of a day selection is not followed here (nothing re-prices a purchase; the
   refund and credit policy, DEC-009, is not built). A transfer moves the place only: its add-ons
   and uniform stay with the original registration and finance reviews the money.
-- The arrival checks of the entry module do not read the day selection.
+- A selection of chosen days on an offering that has no `seats` or `session_seats` capacity unit
+  holds no pool at all (quality review n-7, not changed).
 - A team season's uniform is the uniform of the league offering its teams register through; the
   list by team reads the team entry recorded on the basket line. Nothing is stored on the season.
+
+## Tiers, days and uniforms on every path into an enrollment (quality review of 2026-11-14)
+
+Findings M-1 to M-4 and M-8 of `.10x/reviews/2026-11-14-qa-report.md`. SPK-PAY-013, SPK-PAY-014
+and SPK-REG-012 stay **Proposed** requirements behind `per_session_pricing`, `price_tiers_addons`
+and `uniforms`; with the capabilities off every path below behaves as before
+(`__tests__/selection-paths.spec.ts` "with the capabilities off…", and the earlier capability-off
+tests). What is described is **Verified** by the tests named, on PGlite and on PostgreSQL 16.
+
+**The sessions an enrollment attends are one rule** (`services/attended-sessions.ts`, exported from
+`index.ts`): every session of the offering when no day selection is stored, the selected sessions
+otherwise. `Enrollment` states `priceTierId` and `selectedSessionIds`. Readers, all through that
+function: the attendance list (`session-roster.ts`), the notice and reminder audience and the
+closure impact (`session-participants.ts`, which communications reads through
+`SESSION_AUDIENCE_PORT`), the family calendar, a participant's recent attendance
+(`enrollment-overview.service.ts`), the session a makeup replaces (`makeups.service.ts`), session
+capacity (`CapacityService.seatRegistrations`), and in the entry module the arrival checks and
+the pass scan. **Verified**: `services/attended-sessions.spec.ts`, `selection-paths.spec.ts`
+("the family calendar shows only the sessions the participant attends"),
+`entry/__tests__/arrival-days.spec.ts`.
+
+**The waiting list of an offering sold by tier** (migration 0524). `POST /v1/waitlist-entries`
+takes `priceTierId`, `selectedSessionIds`, `addons` and `uniform` with the rules of a basket line
+(`RegistrationExtras.resolve`). The entry waits on the pools its selection needs
+(`RegistrationExtras.selectionPools`: the seat pool of each session attended, the offering-wide
+pools unless days were chosen, the pool of each limited add-on) and is refused with
+`CAPACITY_AVAILABLE` only when each of them has a free place and nobody waits on one of them. An
+offer holds a place in each of those pools; offers follow the queue order, an entry that asked for
+a tier and cannot be served is passed over and keeps the pools it waits on, and an entry that
+names no tier once the offering is sold by tier, or whose selection can no longer be bought,
+leaves the queue with a notice (`removal_reason` `tier_required`, `selection_not_available`).
+Accepting opens a basket line with the tier, days, add-ons and uniform and holds it; a pool the
+selection needs that the offer did not hold (a session scheduled since) is held then.
+"Waitlist first" (DEC-006) counts who waits on a pool the new registration would take a place in,
+once somebody in the queue asked for a tier; before that, everyone waiting, as before.
+**Verified**: `selection-paths.spec.ts` (two tests, and the database refusals of 0524),
+`finance/__tests__/selection-paths-money.spec.ts` (the accepted line is quoted by its tier and
+paid).
+
+**One check where an enrollment is created.** `EnrollmentsService.createPending` is the only place
+an enrollment row is written; it calls `RegistrationExtras.assertComplete`: while the price rule in
+effect has tiers the registration names one (`TIER_REQUIRED`), and a required uniform was chosen
+with a size (`UNIFORM_REQUIRED`). `details.nextAction` says what to do: `choose_price_tier`,
+`choose_uniform_size` (the command can name it), `remove_line_and_choose_tier`,
+`remove_line_and_choose_uniform_size` (a basket line added before the offering changed),
+`name_tier`, `register_in_basket` (a transfer). A basket hold, a waitlist acceptance
+(`AcceptWaitlistOfferRequest.uniform` for an entry that recorded none), a trial conversion
+(`ConvertTrialRequest` takes the choices) and a transfer pass it. A rental or party booking is
+not a participant's registration and is not checked. Free-agent placement creates no enrollment
+(the registration it places was created through a basket), so it needs no check of its own.
+**Verified**: `selection-paths.spec.ts` (trial conversion; "a line added before the offering
+required a uniform…"; the transfer test).
+
+**Session seats count everyone who attends** (migration 0525). Where the price rule lets customers
+choose days, a session's seats are shared by everyone who attends that day. Before a seat of a
+session pool is reserved (a basket hold, a waitlist entry and its offer, a transfer, a pickup,
+trial or makeup booking), every live enrollment of the offering that attends the session and has
+no place in its pool is committed to it, under the locks of the offering's pools
+(`CapacityService.seatRegistrations`, called by `RegistrationExtras.selectionPools` and
+`reconcileSessionSeats`). Why this and not a migration that backfills or a count derived from
+enrollments: a rule with a tier of chosen days can be added to an offering at any time after a
+migration ran, so a one-time backfill cannot be the mechanism, and a count read from enrollments
+would move the guarantee out of the pool row, where the check constraint
+`capacity_pools_within_capacity` enforces it under concurrency. The pool row stays the ledger;
+`allocations_one_per_enrollment_idx` (0525) is the database's refusal of counting one enrollment
+twice in one pool. A session already over its seats when days start to be sold keeps everyone on
+its pool (capacity is kept at what is used) and raises the operational exception
+`enrollment.capacity_below_commitments` for program staff. **Verified**: `selection-paths.spec.ts`
+("add a single-day tier to a half-sold camp…", "eight concurrent holds…" under PostgreSQL and
+PGlite, "a session that is already over its seats…", "the database refuses a second active
+allocation…").
+
+**A transfer names the tier and days and stores its price.** `TransferEnrollmentRequest` and the
+transfer preview take `priceTierId` and `selectedSessionIds`; the new enrollment stores them, sits
+on the pools of that selection, and stores the price worked out from the tier, the member price
+and the sessions counted at the transfer (`PriceSnapshot.estimate`, through
+`RegistrationExtras.priceSnapshot`), so a later cancellation is a share of that price and never of
+the rule's base price. A transfer into an offering that requires a uniform is refused
+(`UNIFORM_REQUIRED`, `register_in_basket`): a transfer has no basket line a uniform could be
+charged on. **Verified**: `selection-paths.spec.ts` (the transfer test),
+`finance/__tests__/selection-paths-money.spec.ts` (transfer then cancellation: half of 168.00,
+not of 24.00).
+
+**Proposed** (assumed, no decision recorded): an entry is passed over rather than blocking the
+queue when it waits for other pools; an entry whose selection can no longer be bought is removed
+rather than held; the price a transferred place is later canceled on is the price it was moved in
+at, whatever finance decides about the transfer itself (**Pending decision** DEC-009). Not built:
+the staff and customer transfer screens do not choose a tier or days (the API answer says to
+register in a basket where they cannot), no staff screen converts a trial, and the staff waitlist
+screen does not show what an entry waits for.

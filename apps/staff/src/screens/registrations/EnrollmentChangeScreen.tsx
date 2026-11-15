@@ -74,7 +74,7 @@ function Participation({
         [
           'Price basis',
           summary.price
-            ? formatMoney(summary.price.basePriceMinor, summary.price.currency)
+            ? formatMoney(placePrice(summary.price), summary.price.currency)
             : 'Not priced',
         ],
       ]}
@@ -264,6 +264,15 @@ function TransferPreviewView({ preview }: { preview: Schema<'TransferPreview'> }
   );
 }
 
+/**
+ * What the place costs (SPK-PAY-013, SPK-PAY-014, SPK-PAY-015; quality review m-1, M-8): for a
+ * place priced per session, under a tier or at a member price, the unit price worked out from
+ * those facts, which the API states with the price; the rule's base price otherwise.
+ */
+function placePrice(price: NonNullable<Enrollment['price']>): number {
+  return price.estimate?.unitPriceMinor ?? price.basePriceMinor;
+}
+
 function TransferSection({ enrollment }: { enrollment: Enrollment }) {
   const online = useOnline();
   const queryClient = useQueryClient();
@@ -404,7 +413,7 @@ function EnrollmentView({ enrollment }: { enrollment: Enrollment }) {
           [
             'Price basis',
             enrollment.price
-              ? formatMoney(enrollment.price.basePriceMinor, enrollment.price.currency)
+              ? formatMoney(placePrice(enrollment.price), enrollment.price.currency)
               : 'Not priced',
           ],
           ['Confirmed', formatInstant(enrollment.confirmedAt, zone)],

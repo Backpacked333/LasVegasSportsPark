@@ -3,7 +3,7 @@ import type { ArrivalIssue, WaiverActivityRef } from '@sportspark/contracts';
 import { CLOCK, type Clock, type Trx } from '../../../kernel';
 import { POLICY_PORT, type PolicyPort } from '../../catalog';
 import { FIXTURE_PORT, ROSTER_PORT, type FixturePort, type RosterPort } from '../../competition';
-import { ENROLLMENT_PORT, type EnrollmentPort } from '../../enrollment';
+import { ENROLLMENT_PORT, enrollmentAttendsSession, type EnrollmentPort } from '../../enrollment';
 import type { EntryPolicy } from '../entry.policy';
 import { FINANCIAL_STANDING_PORT, type FinancialStandingPort } from '../entry.ports';
 import type { ResolvedActivity } from './activity-resolver';
@@ -40,6 +40,27 @@ function waiverActivities(activity: ResolvedActivity): WaiverActivityRef[] {
   return refs;
 }
 
+/**
+ * The days an enrollment with a day selection is registered for, as dates local to the facility
+ * (SPK-SCHED-008), in session order: what staff read when the participant arrives on another day.
+ */
+export function registeredDays(
+  activity: Pick<ResolvedActivity, 'timezone' | 'offeringSessionStarts'>,
+  selectedSessionIds: readonly string[],
+): string[] {
+  const format = new Intl.DateTimeFormat('en-US', {
+    timeZone: activity.timezone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+  const selected = new Set(selectedSessionIds);
+  return (activity.offeringSessionStarts ?? [])
+    .filter((s) => selected.has(s.sessionId))
+    .sort((a, b) => a.start.getTime() - b.start.getTime() || (a.sessionId < b.sessionId ? -1 : 1))
+    .map((s) => format.format(s.start));
+}
+
 export function hasBlocking(issues: readonly ArrivalIssue[]): boolean {
   return issues.some((i) => i.severity === 'blocking');
 }
@@ -50,7 +71,12 @@ export function hasBlocking(issues: readonly ArrivalIssue[]): boolean {
  *   - participation basis (SPK-ENTRY-006): a confirmed enrollment or session booking from the
  *     enrollment module, a person commitment on the scheduling event, or an effective roster
  *     membership of the fixture's teams (competition). Nothing is ever created to make one exist.
- *     A pending one is `enrollment_not_confirmed`; none at all is `no_participation`.
+ *     A pending one is `enrollment_not_confirmed`; none at all is `no_participation`. An
+ *     enrollment is a basis only for the sessions it attends (SPK-PAY-014, proposed: every
+ *     session, or the days chosen under a price tier; enrollment's `enrollmentAttendsSession`).
+ *     A participant registered for other days of the offering is `not_registered_for_session`,
+ *     blocking, with the days they are registered for; the check-in is held like any other
+ *     blocked arrival (there is no override: the day is registered or booked first).
  *   - required forms: each required policy version needs an active acknowledgment (catalog
  *     POLICY_PORT); a missing one blocks (MISSING_ACKNOWLEDGMENT category, §4.10).
  *   - required waivers (SPK-REG-011, proposed): each waiver family the offering requires is
@@ -243,8 +269,15 @@ export class ArrivalChecks {
     const bookings = (summary?.sessionBookings ?? []).filter(
       (b) => b.sessionId === activity.detail.sessionId,
     );
-    const enrollments = (summary?.enrollments ?? []).filter(
+    const ofOffering = (summary?.enrollments ?? []).filter(
       (e) => e.offeringId === activity.offeringId,
+    );
+    // SPK-PAY-014 (proposed amendment PA-03): an enrollment is a basis for the sessions it
+    // attends. The rule is enrollment's (`enrollmentAttendsSession`: every session when no day
+    // selection is stored), the same one the attendance list and the session's capacity use.
+    const sessionId = activity.detail.sessionId;
+    const enrollments = ofOffering.filter(
+      (e) => !sessionId || enrollmentAttendsSession(e, sessionId),
     );
     const confirmedBooking = bookings.find((b) => b.status === 'confirmed');
     if (confirmedBooking) {
@@ -276,6 +309,25 @@ export class ArrivalChecks {
         ),
       );
       return pending;
+    }
+    const otherDays = ofOffering.find((e) => !enrollments.includes(e));
+    if (otherDays) {
+      // Registered for the offering, not for this session: not an expected arrival. Staff read
+      // which days the participant is registered for; a place for today is registered or booked
+      // like any other (no override exists, and none is added here).
+      const days = registeredDays(activity, otherDays.selectedSessionIds ?? []);
+      issues.push(
+        issue(
+          'not_registered_for_session',
+          'blocking',
+          days.length > 0
+            ? `Not registered for today. This participant is registered for ${days.join(', ')}.`
+            : 'Not registered for today. This participant is registered for other days of this activity.',
+          'register_or_book',
+          { type: 'enrollment', id: otherDays.id },
+        ),
+      );
+      return null;
     }
     issues.push(
       issue(

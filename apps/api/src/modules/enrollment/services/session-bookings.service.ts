@@ -73,6 +73,7 @@ import {
   type PackageEntitlementRow,
 } from './package-entitlements.service';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
+import { RegistrationExtras } from './registration-extras';
 
 export type SessionBookingRow = Selectable<SessionBookingsTable>;
 
@@ -178,6 +179,7 @@ export class SessionBookingsService {
     private readonly packages: PackageEntitlementsService,
     private readonly memberships: MembershipsService,
     private readonly exceptions: OperationalExceptions,
+    private readonly extras: RegistrationExtras,
   ) {}
 
   async load(
@@ -422,6 +424,15 @@ export class SessionBookingsService {
         input.snapshot,
         input.session,
         input.actor,
+      );
+      // SPK-PAY-014 (quality review M-3): where the offering's days can be bought one by one, a
+      // session's seats are shared with everyone registered for that day. They are committed to
+      // its pool before this seat is reserved; nothing happens for any other offering.
+      await this.extras.reconcileSessionSeats(
+        trx,
+        organizationId,
+        input.snapshot,
+        input.correlationId,
       );
       const pools = sessionPools.filter((p) => p.status === 'active');
       if (sessionPools.some((p) => p.status === 'closed')) {

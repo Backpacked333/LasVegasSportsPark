@@ -30,6 +30,10 @@ const OFFERED = waitlistEntry({
   status: 'offered',
   position: null,
   offerCount: 1,
+  priceTierId: null,
+  selectedSessionIds: null,
+  addons: [],
+  uniform: null,
   offers: [
     {
       id: '0192f1a0-0000-7000-8000-000000000804',

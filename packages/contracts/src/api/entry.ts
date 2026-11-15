@@ -66,6 +66,9 @@ export type ActivityDetail = z.infer<typeof ActivityDetailSchema>;
 export const ArrivalIssueCodeSchema = z
   .enum([
     'no_participation',
+    // SPK-PAY-014 (proposed amendment PA-03): the participant is registered for other days of
+    // this offering, not for this session; the message names the days they are registered for.
+    'not_registered_for_session',
     'enrollment_not_confirmed',
     'missing_acknowledgment',
     // SPK-REG-011 (proposed amendment PA-01): a required waiver that was never accepted, or whose

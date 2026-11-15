@@ -139,7 +139,9 @@ export function CampWeekPicker({
           const detail = [
             offeringDates(week),
             week.price
-              ? formatMoney(week.price.basePriceMinor, week.price.currency)
+              ? week.price.notQuotable
+                ? 'Not open for online registration'
+                : formatMoney(week.price.basePriceMinor, week.price.currency)
               : 'No price published yet',
             places?.label,
             window?.label,

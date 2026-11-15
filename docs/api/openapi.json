@@ -7959,6 +7959,24 @@
           "entitlementName"
         ]
       },
+      "PublicPriceNotQuotable": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "per_session_pricing_off"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
       "PublicPrice": {
         "type": "object",
         "properties": {
@@ -8006,6 +8024,16 @@
               }
             ]
           },
+          "notQuotable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicPriceNotQuotable"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "tiers": {
             "type": "array",
             "items": {
@@ -8022,6 +8050,7 @@
           "remainingSessionCount",
           "remainingSessionsPriceMinor",
           "memberPrice",
+          "notQuotable",
           "tiers"
         ]
       },
@@ -30283,6 +30312,23 @@
             ],
             "format": "date-time"
           },
+          "priceTierId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "selectedSessionIds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
           "offering": {
             "anyOf": [
               {
@@ -30346,6 +30392,8 @@
           "transferredFromEnrollmentId",
           "transferConsequence",
           "completedAt",
+          "priceTierId",
+          "selectedSessionIds",
           "offering",
           "pendingReason",
           "revision",
@@ -30461,6 +30509,19 @@
           },
           "acceptedConsequence": {
             "$ref": "#/components/schemas/AcceptedConsequence"
+          },
+          "priceTierId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "selectedSessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 366
           },
           "expectedRevision": {
             "type": "integer",
@@ -30893,6 +30954,26 @@
           "revision"
         ]
       },
+      "WaitlistEntryAddon": {
+        "type": "object",
+        "properties": {
+          "addonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "addonId",
+          "sessionIds"
+        ]
+      },
       "WaitlistEntry": {
         "type": "object",
         "properties": {
@@ -30986,6 +31067,39 @@
             ],
             "format": "date-time"
           },
+          "priceTierId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "selectedSessionIds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitlistEntryAddon"
+            }
+          },
+          "uniform": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AddBasketLineUniform"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "type": "integer",
             "minimum": 1
@@ -31015,6 +31129,10 @@
           "acceptedEnrollmentId",
           "withdrawnAt",
           "removedAt",
+          "priceTierId",
+          "selectedSessionIds",
+          "addons",
+          "uniform",
           "revision",
           "createdAt"
         ]
@@ -31053,6 +31171,29 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 10000
+          },
+          "priceTierId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "selectedSessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 366
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddBasketLineAddon"
+            },
+            "maxItems": 20
+          },
+          "uniform": {
+            "$ref": "#/components/schemas/AddBasketLineUniform"
           },
           "expectedRevision": {
             "type": "integer",
@@ -31210,6 +31351,9 @@
           "payerPersonId": {
             "type": "string",
             "format": "uuid"
+          },
+          "uniform": {
+            "$ref": "#/components/schemas/AddBasketLineUniform"
           },
           "expectedRevision": {
             "type": "integer",
@@ -32669,6 +32813,29 @@
             "type": "string",
             "format": "uuid"
           },
+          "priceTierId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "selectedSessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "maxItems": 366
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddBasketLineAddon"
+            },
+            "maxItems": 20
+          },
+          "uniform": {
+            "$ref": "#/components/schemas/AddBasketLineUniform"
+          },
           "expectedRevision": {
             "type": "integer",
             "minimum": 1
@@ -33718,6 +33885,7 @@
         "type": "string",
         "enum": [
           "no_participation",
+          "not_registered_for_session",
           "enrollment_not_confirmed",
           "missing_acknowledgment",
           "waiver_missing",
@@ -94227,6 +94395,29 @@
             },
             "required": true,
             "name": "targetOfferingId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "priceTierId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "minItems": 1,
+              "maxItems": 366
+            },
+            "required": false,
+            "name": "selectedSessionIds",
             "in": "query"
           },
           {

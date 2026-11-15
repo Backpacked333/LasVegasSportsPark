@@ -17262,6 +17262,8 @@ export type paths = {
         get: {
             parameters: {
                 query: {
+                    priceTierId?: string;
+                    selectedSessionIds?: string[];
                     targetOfferingId: string;
                 };
                 header?: {
@@ -59555,6 +59557,7 @@ export type components = {
             payerPersonId?: string;
             policyReferences?: string[];
             reason?: string;
+            uniform?: components["schemas"]["AddBasketLineUniform"];
         };
         AccessControlEvent: {
             data: {
@@ -60344,7 +60347,7 @@ export type components = {
             severity: "blocking" | "warning" | "info";
         };
         /** @enum {string} */
-        ArrivalIssueCode: "no_participation" | "enrollment_not_confirmed" | "missing_acknowledgment" | "waiver_missing" | "waiver_lapsed" | "outstanding_balance" | "balance_unknown" | "activity_canceled" | "activity_ended" | "not_on_site" | "desk_review_required";
+        ArrivalIssueCode: "no_participation" | "not_registered_for_session" | "enrollment_not_confirmed" | "missing_acknowledgment" | "waiver_missing" | "waiver_lapsed" | "outstanding_balance" | "balance_unknown" | "activity_canceled" | "activity_ended" | "not_on_site" | "desk_review_required";
         Assessment: {
             /** Format: uuid */
             authorPersonId: string;
@@ -62135,14 +62138,19 @@ export type components = {
             };
         };
         ConvertTrialRequest: {
+            addons?: components["schemas"]["AddBasketLineAddon"][];
             expectedRevision: number;
             intent?: components["schemas"]["RegistrationIntent"];
             /** Format: uuid */
             payerPersonId?: string;
             policyReferences?: string[];
+            /** Format: uuid */
+            priceTierId?: string;
             reason?: string;
+            selectedSessionIds?: string[];
             /** Format: uuid */
             targetOfferingId: string;
+            uniform?: components["schemas"]["AddBasketLineUniform"];
         };
         CopyOfferingRequest: {
             /** @default false */
@@ -64256,8 +64264,11 @@ export type components = {
             placementRequestId: string | null;
             policies: components["schemas"]["PolicyReferences"];
             price: components["schemas"]["PriceSnapshot"] | null;
+            /** Format: uuid */
+            priceTierId: string | null;
             registeredBy: components["schemas"]["RegistrationActorSnapshot"];
             revision: number;
+            selectedSessionIds: string[] | null;
             /** Format: uuid */
             sourceApplicationId: string | null;
             status: components["schemas"]["EnrollmentStatus"];
@@ -65676,6 +65687,7 @@ export type components = {
         /** @enum {string} */
         JoinRequestStatus: "pending" | "approved" | "declined" | "withdrawn";
         JoinWaitlistRequest: {
+            addons?: components["schemas"]["AddBasketLineAddon"][];
             expectedRevision?: number;
             intent: components["schemas"]["RegistrationIntent"];
             /** Format: uuid */
@@ -65689,11 +65701,15 @@ export type components = {
             preferences?: {
                 [key: string]: unknown;
             };
+            /** Format: uuid */
+            priceTierId?: string;
             priorityBasis?: components["schemas"]["WaitlistPriorityBasis"];
             priorityRank?: number;
             reason?: string;
+            selectedSessionIds?: string[];
             /** Format: uuid */
             sessionId?: string;
+            uniform?: components["schemas"]["AddBasketLineUniform"];
         };
         /** @enum {string} */
         LedgerAccount: "customer_receivable" | "cash_processor" | "deferred_revenue" | "credits_payable" | "processor_fees" | "refunds" | "cash_on_hand" | "overpayment_liability" | "pos_revenue" | "taxes_payable" | "fees_payable";
@@ -68393,12 +68409,18 @@ export type components = {
             chargeLines: components["schemas"]["ChargeLine"][];
             currency: string;
             memberPrice: components["schemas"]["PublicMemberPrice"] | null;
+            notQuotable: components["schemas"]["PublicPriceNotQuotable"] | null;
             /** Format: uuid */
             priceRuleId: string;
             pricingBasis: components["schemas"]["PricingBasis"];
             remainingSessionCount: number | null;
             remainingSessionsPriceMinor: number | null;
             tiers: components["schemas"]["PriceRuleTier"][];
+        };
+        PublicPriceNotQuotable: {
+            /** @enum {string} */
+            code: "per_session_pricing_off";
+            message: string;
         };
         PublicPromotion: {
             amountKind: components["schemas"]["DiscountAmountKind"];
@@ -71604,7 +71626,10 @@ export type components = {
             commit?: boolean;
             expectedRevision: number;
             policyReferences?: string[];
+            /** Format: uuid */
+            priceTierId?: string;
             reason?: string;
+            selectedSessionIds?: string[];
             /** Format: uuid */
             targetOfferingId: string;
         };
@@ -72237,6 +72262,7 @@ export type components = {
         WaitlistEntry: {
             /** Format: uuid */
             acceptedEnrollmentId: string | null;
+            addons: components["schemas"]["WaitlistEntryAddon"][];
             /** Format: date-time */
             createdAt: string;
             /** Format: uuid */
@@ -72258,6 +72284,8 @@ export type components = {
             preferences: {
                 [key: string]: unknown;
             };
+            /** Format: uuid */
+            priceTierId: string | null;
             priorityBasis: components["schemas"]["WaitlistPriorityBasis"];
             priorityRank: number;
             /** Format: date-time */
@@ -72265,11 +72293,18 @@ export type components = {
             /** Format: date-time */
             removedAt: string | null;
             revision: number;
+            selectedSessionIds: string[] | null;
             /** Format: uuid */
             sessionId: string | null;
             status: components["schemas"]["WaitlistEntryStatus"];
+            uniform: components["schemas"]["AddBasketLineUniform"] | null;
             /** Format: date-time */
             withdrawnAt: string | null;
+        };
+        WaitlistEntryAddon: {
+            /** Format: uuid */
+            addonId: string;
+            sessionIds: string[];
         };
         /** @enum {string} */
         WaitlistEntryStatus: "waiting" | "offered" | "accepted" | "expired" | "withdrawn" | "removed";

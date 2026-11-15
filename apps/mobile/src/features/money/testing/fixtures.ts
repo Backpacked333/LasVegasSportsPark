@@ -149,6 +149,8 @@ export function enrollment(overrides: Record<string, unknown> = {}) {
     transferredAt: null,
     transferredToEnrollmentId: null,
     transferredFromEnrollmentId: null,
+    priceTierId: null,
+    selectedSessionIds: null,
     completedAt: null,
     revision: 3,
     createdAt: inDays(-31),

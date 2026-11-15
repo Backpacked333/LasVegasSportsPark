@@ -213,6 +213,35 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('SPK-PAY-013, SPK-PAY-015 (QA M-6): with the capabilities off, a per-session rule and a member price are listed with what customers are shown instead', async () => {
+    const app = createTestApp({
+      routes: routes({
+        'GET /offerings/{id}/price-rules': ok([
+          priceRule({
+            basePriceMinor: 2400,
+            pricingBasis: 'per_session',
+            memberPriceMinor: 2000,
+            memberEntitlementDefinitionId: MEMBERSHIP_ID,
+            memberEntitlementName: 'Annual membership',
+          }),
+        ]),
+      }),
+    });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const versions = await screen.findByRole('list', { name: 'Price rule versions' });
+    // The switches arrive with the permissions read, after the rules: wait for what they decide.
+    expect(
+      await within(versions).findByText(
+        'Per-session pricing is turned off: a quote of this price is refused, and customers see this offering as not open for online registration.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(versions).getByText(
+        'Member pricing is turned off: every participant is quoted the standard price, and customers are not shown the member price.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('SPK-PAY-013: with per-session pricing on, staff choose a price for each session and the rule is listed as per session', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
@@ -230,6 +259,10 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
     const form = screen.getByRole('form', { name: 'New price rule version' });
     const f = within(form);
     const basis = await f.findByLabelText(/^The base price is for/);
+    // QA M-6: the switch is on (the field above proves the permissions read arrived).
+    expect(
+      within(versions).queryByText(/^Per-session pricing is turned off/),
+    ).not.toBeInTheDocument();
     // The proposed rule is named with its decision record, never invented.
     expect(f.getByText(/pending DEC-096/)).toBeInTheDocument();
     // Member pricing is still off: its inputs are absent.

@@ -52,6 +52,7 @@ import {
   toHold,
   type Reader,
 } from '../enrollment.shared';
+import { attendsSessionSql } from './attended-sessions';
 import { EnrollmentFacilityScope } from './facility-scope';
 
 export type PoolRow = Selectable<CapacityPoolsTable>;
@@ -440,6 +441,181 @@ export class CapacityService implements CapacityPort {
       .where('status', '=', 'closed')
       .executeTakeFirst();
     return !!row;
+  }
+
+  /**
+   * Locks every pool of an offering in id order: the order holds, offer generation and a session's
+   * closing take them in, so whoever goes on to reserve several of them (the offering's places,
+   * its sessions' seats) never waits on another transaction in the opposite order.
+   */
+  async lockOfferingPools(trx: Trx, organizationId: string, offeringId: string): Promise<void> {
+    await trx
+      .selectFrom('capacity_pools')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .orderBy('id')
+      .forUpdate()
+      .execute();
+  }
+
+  /**
+   * SPK-PAY-014 (proposed amendment PA-03; quality review M-3), §4.7 invariant 3: every live
+   * registration of the offering sits on the seat pool of every session it attends, however it
+   * came to exist. Where a day can be sold by itself, a session's seats are shared by everyone
+   * who attends that day, so a registration that attends the session and holds no place in its
+   * pool (bought before the offering had a tier of chosen days, or for a session scheduled after
+   * the purchase) is committed to it here, before anybody reserves another seat of that session.
+   *
+   * The pool row stays the ledger: `capacity_pools_within_capacity` (committed + held <= capacity)
+   * is still what refuses the twenty-first seat, under concurrency too. The caller holds the row
+   * locks of the offering's pools (`lockOfferingPools`), so two transactions never seat the same
+   * registration twice: the second one reads the first one's allocation, and the database
+   * refuses a second active allocation of one enrollment on one pool
+   * (`allocations_one_per_enrollment_idx`, migration 0525). A registration that attends a session
+   * whose pool is already full is still seated (it holds the place, and the pool must say so):
+   * the pool's capacity is kept at what is used and an operational exception names the session
+   * for program staff, as a catalog limit lowered below its commitments is handled
+   * (`syncFromCatalog`). Idempotent; answers the pools it changed.
+   *
+   * `sessionIds` are the sessions that can still be attended: a session that already started is
+   * left as it was.
+   */
+  async seatRegistrations(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+    sessionIds: readonly string[],
+    correlationId: string | null = null,
+  ): Promise<string[]> {
+    if (sessionIds.length === 0) return [];
+    const missing = await trx
+      .selectFrom('capacity_pools as p')
+      .innerJoin('enrollments as e', (join) =>
+        join
+          .onRef('e.organization_id', '=', 'p.organization_id')
+          .onRef('e.offering_id', '=', 'p.offering_id'),
+      )
+      .leftJoin('basket_lines as bl', (join) =>
+        join
+          .onRef('bl.organization_id', '=', 'e.organization_id')
+          .onRef('bl.id', '=', 'e.basket_line_id'),
+      )
+      .select(['p.id as pool_id', 'e.id as enrollment_id', 'bl.quantity as quantity'])
+      .where('p.organization_id', '=', organizationId)
+      .where('p.offering_id', '=', offeringId)
+      .where('p.scope_type', '=', 'session')
+      .where('p.status', '=', 'active')
+      .where('p.scope_id', 'in', [...sessionIds])
+      .where('e.status', 'in', ['pending', 'confirmed'])
+      // The one rule of which sessions an enrollment attends (`attended-sessions.ts`); a line
+      // that bought a single session attends that one.
+      .where(attendsSessionSql(sql.ref('p.scope_id'), 'e'))
+      .where((eb) =>
+        eb.or([eb('bl.session_id', 'is', null), eb('bl.session_id', '=', eb.ref('p.scope_id'))]),
+      )
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom('allocations as a')
+              .select('a.id')
+              .whereRef('a.organization_id', '=', 'p.organization_id')
+              .whereRef('a.pool_id', '=', 'p.id')
+              .whereRef('a.enrollment_id', '=', 'e.id')
+              .where('a.status', '=', 'active'),
+          ),
+        ),
+      )
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom('holds as h')
+              .select('h.id')
+              .whereRef('h.organization_id', '=', 'p.organization_id')
+              .whereRef('h.pool_id', '=', 'p.id')
+              .where('h.owner_kind', '=', 'basket')
+              .whereRef('h.owner_id', '=', 'e.basket_line_id')
+              .where('h.status', '=', 'active'),
+          ),
+        ),
+      )
+      .orderBy('p.id')
+      .orderBy('e.id')
+      .execute();
+    if (missing.length === 0) return [];
+    const now = this.clock.now();
+    const changed: string[] = [];
+    for (const poolId of [...new Set(missing.map((row) => row.pool_id))]) {
+      const pool = await this.loadPool(trx, organizationId, poolId, true);
+      if (!pool || pool.status !== 'active') continue;
+      const rows = missing.filter((row) => row.pool_id === poolId);
+      const quantity = rows.reduce((sum, row) => sum + (row.quantity ?? 1), 0);
+      const used = pool.committed + pool.held + quantity;
+      const capacity = Math.max(pool.capacity, used);
+      await trx
+        .updateTable('capacity_pools')
+        .set((eb) => ({
+          committed: eb('committed', '+', quantity),
+          capacity,
+          revision: capacity === pool.capacity ? eb.ref('revision') : eb('revision', '+', 1),
+        }))
+        .where('organization_id', '=', organizationId)
+        .where('id', '=', poolId)
+        .execute();
+      for (const row of rows) {
+        await this.insertAllocation(
+          trx,
+          organizationId,
+          poolId,
+          null,
+          row.quantity ?? 1,
+          { enrollmentId: row.enrollment_id },
+          now,
+        );
+      }
+      await this.audit.record(trx, {
+        organizationId,
+        actor: enrollmentSystem(organizationId, 'enrollment.seat_registrations'),
+        action: 'enrollment.seat_registrations',
+        targetType: 'capacity_pool',
+        targetId: poolId,
+        beforeRevision: pool.revision,
+        afterRevision: capacity === pool.capacity ? pool.revision : pool.revision + 1,
+        correlationId,
+        details: {
+          offeringId,
+          sessionId: pool.scope_id,
+          enrollmentIds: rows.map((row) => row.enrollment_id),
+          quantity,
+          capacityBefore: pool.capacity,
+          capacityAfter: capacity,
+        },
+      });
+      if (capacity > pool.capacity) {
+        await this.exceptions.raise(trx, {
+          organizationId,
+          category: 'enrollment.capacity_below_commitments',
+          severity: 'high',
+          title: `A session has ${used} registered or held participants for ${pool.capacity} seats`,
+          affectedType: 'capacity_pool',
+          affectedId: poolId,
+          ownerQueue: 'program_manager',
+          dedupeKey: `capacity_below:${poolId}`,
+          details: {
+            offeringId,
+            sessionId: pool.scope_id,
+            unit: pool.unit,
+            requestedLimit: pool.capacity,
+            committed: pool.committed + quantity,
+            held: pool.held,
+          },
+        });
+      }
+      changed.push(poolId);
+    }
+    return changed;
   }
 
   /**

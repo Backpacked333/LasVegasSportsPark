@@ -179,6 +179,7 @@ describe('session bookings (SPK-PLACE-004, SPK-YOUTH-003, ENR-11)', () => {
       pricingBasis: 'term' as const,
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
+      notQuotable: null,
       memberPrice: null,
       tiers: [],
     };

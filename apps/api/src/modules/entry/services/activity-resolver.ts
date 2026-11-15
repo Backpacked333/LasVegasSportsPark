@@ -42,12 +42,27 @@ export interface ResolvedActivity {
   fixtureId: string | null;
   /** People committed to the event by scheduling (officials, named participants). */
   personCommitments: string[];
+  /**
+   * SPK-PAY-014 (proposed amendment PA-03): for a session activity, when each scheduled session
+   * of its offering starts, so arrival can name the days a participant is registered for when
+   * this session is not one of them. Absent for an event.
+   */
+  offeringSessionStarts?: ReadonlyArray<{ sessionId: string; start: Date }>;
 }
 
 export interface FacilityFacts {
   id: string;
   timezone: string;
   settings: Record<string, unknown>;
+}
+
+/** When each scheduled session of an offering starts (`ResolvedActivity.offeringSessionStarts`). */
+function sessionStarts(
+  sessions: ReadonlyArray<{ id: string; status: string; scheduledStart: string }>,
+): Array<{ sessionId: string; start: Date }> {
+  return sessions
+    .filter((s) => s.status === 'scheduled')
+    .map((s) => ({ sessionId: s.id, start: new Date(s.scheduledStart) }));
 }
 
 export function activityKey(ref: ActivityRef): string {
@@ -180,6 +195,7 @@ export class ActivityResolver {
         requiredWaiverKeys,
         fixtureId: null,
         personCommitments: [],
+        offeringSessionStarts: sessionStarts(sessions),
       }));
   }
 
@@ -195,7 +211,8 @@ export class ActivityResolver {
       }
       throw error;
     });
-    const session = (await this.sessions.list(system, offeringId)).find((s) => s.id === sessionId);
+    const sessions = await this.sessions.list(system, offeringId);
+    const session = sessions.find((s) => s.id === sessionId);
     if (!session) throw errors.notFound('session', sessionId);
     const facility = await this.facility(organizationId, offering.facilityId);
     return {
@@ -220,6 +237,7 @@ export class ActivityResolver {
       requiredWaiverKeys: await this.waivers.requiredKeys(organizationId, offeringId),
       fixtureId: null,
       personCommitments: [],
+      offeringSessionStarts: sessionStarts(sessions),
     };
   }
 
