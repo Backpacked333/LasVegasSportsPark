@@ -856,8 +856,32 @@ no module consumes them yet.
   (`private` by default), `public_code`, who changed it and when; `seasons.public_code`. A public
   competition has a code and the fact of the change; codes are well formed and name one record.
 - Staff: `GET /competitions/{id}/publication`, `POST /competitions/{id}/publish` (league staff;
-  refused while the capability is off and when a division's criteria describe players under 18),
-  `POST /competitions/{id}/unpublish` (never gated).
+  refused while the capability is off and unless every division is known to be an adult division,
+  see the rule below), `POST /competitions/{id}/unpublish` (never gated).
+- **The under-18 rule fails closed** (`public/publication-rule.ts`; security review M-2,
+  2026-11-14). A competition is public only when every division of its seasons is positively
+  known to be an adult division. The only fact that says so is structured: the division's age
+  band with a minimum age of 18 or more (`criteria.ageBand.minAge`; the criteria carry no
+  birth-year bound and no other adult marker). A division with no age band, a band open at the
+  bottom, or criteria that cannot be read is not known to be adult; a competition with no
+  division is not either. Wording never gives permission and is only a further refusal: a
+  competition, season or division name (or a division's level or category) that suggests players
+  under 18 refuses publication even when every age band says adult ("12U", "U12s", "Under 12",
+  "U-12", "12 and under", "ages 8-10", a birth year such as "2015 Coed", "youth", "junior",
+  "teen", "high school", "kids", "boys", "girls", "academy", "grade 5" and similar; labels up to
+  "U19" count, "U21" and "U23" do not). The refusal is `VALIDATION_FAILED`
+  `COMPETITION_NOT_KNOWN_ADULT` with `details.blockers`, each with a message that says what to
+  set; `GET /competitions/{id}/publication` lists the same blockers.
+- The rule is judged again on every public read: a public competition whose divisions later
+  change to youth or unknown, or whose names change, answers the standard "not available" on the
+  directory, the competition view, every season view and the facility schedule's game titles
+  until staff resolve it. A season that has no division is not shown (its view answers "not
+  available" and it is left out of the competition view) while the rest of the competition is.
+- Migration `0471_competition_public_adult_divisions.sql`: the database refuses to make a
+  competition public while it has no division, or a division that does not state a numeric
+  minimum age of 18 or more (the structured part of the rule; the wording checks stay in the
+  service). A division changed after publication is not refused there: the read re-check hides
+  the competition instead, so staff can still record the division.
 - Public reads (`public/public-competition.controller.ts`, no sign-in, rate limit `public_views`,
   `Cache-Control: public, max-age=30` on success, `computedAt` in the body):
   `GET /public/{organization}/directory`, `/competitions/{code}`, `/seasons/{code}` (fixtures,
@@ -865,17 +889,24 @@ no module consumes them yet.
   and public codes; the shapes (`packages/contracts/src/api/competition-public.ts`) have team
   names, scores, times and field names and no person, contact or internal id (asserted by
   exhaustive key inspection). An unknown organization or code, a record id used as a code, a
-  private competition, one with a division for players under 18 and the capability turned off all
-  answer the same `NOT_FOUND` "This view is not available.".
+  private competition, one that is not known to be for adults (see the rule above) and the
+  capability turned off all answer the same `NOT_FOUND` "This view is not available.".
 - The public facility schedule (scheduling) shows a game's team names and score only when
   competition vouches for them (`PublicScheduleTitles` contributor `competition.public_fixtures`).
 - The staff standings route still needs sign-in (401).
 
 **Proposed** (defaults this build assumes): a competition is private until staff publish it; the
-rule for "describes players under 18" (`describesMinors`: an age band that starts under 18 or is
-open at the bottom, or a name, level or category such as "U12", "Youth", "Girls") errs towards
-private; team, division, season and competition names are shown as staff and captains entered
-them; the directory lists what an organization has made public to anyone who knows its slug.
+under-18 rule above (adult means a stated minimum age of 18 or more; the list of words and
+labels that refuse; "U19" and below read as youth) is an engineering default; team, division,
+season and competition names are shown as staff and captains entered them; the directory lists
+what an organization has made public to anyone who knows its slug.
+
+**Known limits of the wording check** (it is a refusal on top of the structured rule, never the
+permission): two-digit birth years ("B12", "'15s") and words in other languages are not
+recognised; a four-digit year is read as a birth year only when it is 1 to 18 years before the
+season (or the current year, for a competition name) and is not one of the season's own years;
+an adult competition whose name contains a listed word ("Old Boys") has to be renamed or stay
+private.
 
 **Pending decision** (DEC-100): what is public and whether youth competitions differ; live
 tournament views. The fixture venue shown publicly is the copied venue (`fixtures.venue`), which

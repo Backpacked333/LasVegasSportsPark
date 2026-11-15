@@ -356,7 +356,8 @@ describe('SPK-SCHED-010 staff controls', () => {
     organizationSlug: ORG,
     publicCode: null,
     changedAt: null,
-    seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: null }],
+    seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: null, hasDivisions: true }],
+    blockers: [],
     minorDivisions: [],
     revision: 4,
     ...overrides,
@@ -368,7 +369,7 @@ describe('SPK-SCHED-010 staff controls', () => {
     'GET /rule-sets': ok([]),
   };
 
-  it('SPK-SCHED-010: league staff make a competition public and get its links; a competition with a division for players under 18 cannot be public', async () => {
+  it('SPK-SCHED-010: league staff make a competition public and get its links; a competition whose divisions are not all known to be adult divisions cannot be public, and the panel says what to set', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
@@ -378,7 +379,14 @@ describe('SPK-SCHED-010 staff controls', () => {
           publication({
             visibility: 'public',
             publicCode: CODE,
-            seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: SEASON_CODE }],
+            seasons: [
+              {
+                seasonId: ID.season,
+                name: 'Winter 2026',
+                publicCode: SEASON_CODE,
+                hasDivisions: true,
+              },
+            ],
             revision: 5,
           }),
         ),
@@ -401,7 +409,14 @@ describe('SPK-SCHED-010 staff controls', () => {
           publication({
             visibility: 'public',
             publicCode: CODE,
-            seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: SEASON_CODE }],
+            seasons: [
+              {
+                seasonId: ID.season,
+                name: 'Winter 2026',
+                publicCode: SEASON_CODE,
+                hasDivisions: true,
+              },
+            ],
           }),
         ),
       },
@@ -427,19 +442,85 @@ describe('SPK-SCHED-010 staff controls', () => {
         ...competitionRoutes,
         'GET /competitions/{id}/publication': ok(
           publication({
-            minorDivisions: [{ seasonName: 'Winter 2026', divisionName: 'Under 12' }],
+            blockers: [
+              {
+                scope: 'division',
+                reason: 'under_18',
+                seasonName: 'Winter 2026',
+                divisionName: 'Under 12',
+                message:
+                  'Division "Under 12" (Winter 2026) admits players under 18: its age band starts below 18.',
+              },
+              {
+                scope: 'division',
+                reason: 'age_not_stated',
+                seasonName: 'Winter 2026',
+                divisionName: 'Gold',
+                message:
+                  'Division "Gold" (Winter 2026) does not say its players are adults. Set its age band with a minimum age of 18 or more.',
+              },
+            ],
+            minorDivisions: [
+              { seasonName: 'Winter 2026', divisionName: 'Under 12' },
+              { seasonName: 'Winter 2026', divisionName: 'Gold' },
+            ],
           }),
         ),
       },
     });
-    render(youth.at(`/leagues/competitions/${ID.competition}`));
+    const third = render(youth.at(`/leagues/competitions/${ID.competition}`));
     const blocked = await screen.findByRole('region', { name: 'Public pages' });
     expect(await within(blocked).findByText('Cannot be public')).toBeInTheDocument();
     expect(
       within(blocked).getByText(/Proposed\s+rule, pending decision DEC-100/),
     ).toBeInTheDocument();
-    expect(within(blocked).getByText('Under 12 (Winter 2026)')).toBeInTheDocument();
+    const reasons = within(blocked).getByRole('list', { name: 'Why it cannot be public' });
+    expect(
+      within(reasons).getByText(/Division "Under 12" \(Winter 2026\) admits/),
+    ).toBeInTheDocument();
+    // a division that says nothing about age is a reason too, with what to set
+    expect(
+      within(reasons).getByText(/Set its age band with a minimum age of 18 or more\./),
+    ).toBeInTheDocument();
     expect(within(blocked).getByRole('button', { name: 'Make public' })).toBeDisabled();
+    third.unmount();
+
+    // Already public when a division changed: recorded as public, not served, and the panel says so.
+    const hidden = createTestApp({
+      routes: {
+        ...competitionRoutes,
+        'GET /competitions/{id}/publication': ok(
+          publication({
+            visibility: 'public',
+            publicCode: CODE,
+            seasons: [
+              {
+                seasonId: ID.season,
+                name: 'Winter 2026',
+                publicCode: SEASON_CODE,
+                hasDivisions: true,
+              },
+            ],
+            blockers: [
+              {
+                scope: 'division',
+                reason: 'age_not_stated',
+                seasonName: 'Winter 2026',
+                divisionName: 'Gold',
+                message:
+                  'Division "Gold" (Winter 2026) does not say its players are adults. Set its age band with a minimum age of 18 or more.',
+              },
+            ],
+            minorDivisions: [{ seasonName: 'Winter 2026', divisionName: 'Gold' }],
+          }),
+        ),
+      },
+    });
+    render(hidden.at(`/leagues/competitions/${ID.competition}`));
+    const notShown = await screen.findByRole('region', { name: 'Public pages' });
+    expect(await within(notShown).findByText(/Made public, but not shown/)).toBeInTheDocument();
+    expect(within(notShown).getByText('Cannot be public')).toBeInTheDocument();
+    expect(within(notShown).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
   });
 
   it('SPK-SCHED-010 capability off: the competition screen reads no publication and offers no public page', async () => {
