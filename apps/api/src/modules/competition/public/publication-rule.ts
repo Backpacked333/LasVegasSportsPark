@@ -170,7 +170,8 @@ export function publicationBlockers(input: {
   currentYear: number;
 }): PublicationBlocker[] {
   const blockers: PublicationBlocker[] = [];
-  const text = (a: string, b: string) => a.localeCompare(b, 'en');
+  // By code unit, so the order never depends on the runtime's collation data.
+  const text = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
   const seasons = [...input.seasons].sort((a, b) => text(a.name, b.name) || text(a.id, b.id));
   const everySeasonYear = new Set(seasons.flatMap((season) => season.years));
 
