@@ -60,12 +60,33 @@ psql "$DATABASE_URL" -f docs/deploy/staging-seed.sql
 | `DB_AUTO_MIGRATE`        | `false` (migrations are applied ahead of deploys, section 2)                                                                        |
 | `CORS_ALLOWED_ORIGINS`   | the staff project's https origin                                                                                                    |
 | `STAGING_INLINE_WORKER`  | `true`                                                                                                                              |
-| `TRUST_PROXY`            | `true` (Vercel terminates TLS; rate limits key on the client address)                                                               |
+| `TRUST_PROXY`            | `1` (one proxy, the host's, is in front and terminates TLS; rate limits key on the address it reports). Never `true`: see below     |
 | `LOG_FORMAT`             | `json`                                                                                                                              |
 | `RATE_LIMIT_STORE`       | `postgres` (instances share one count)                                                                                              |
 | `METRICS_TOKEN` \*       | optional: at least 24 characters, enables `GET /v1/metrics` for a scraper                                                           |
 
 4. Deploy. Note the API's https origin.
+
+**The proxy trust setting (`TRUST_PROXY`).** The rate limits of the public views
+(`public_views`), invitations, claims and the development sign-in count per client address, and
+the address is the one the trusted proxy reports. The value says how many proxies are in front
+(`1` here) or which addresses they have (`10.0.0.0/8`, `loopback`, comma-separated); `false`
+means none. Two settings are wrong and look harmless:
+
+- **Unset or `false` behind a proxy:** every visitor has the proxy's address, so they share one
+  bucket; one scraper, or a few lobby displays refreshing, makes every other display show "Please
+  wait a moment".
+- **`true`** (and a subnet that covers every address, `0.0.0.0/0`): the left-most
+  `X-Forwarded-For` entry is believed, so on a host that appends to the header a caller chooses
+  its own key and the limit does nothing.
+
+With `NODE_ENV=production` the API refuses to boot in both cases and says what to set; this
+staging project runs `NODE_ENV=development`, where the value is not enforced, so set it as above.
+**Verified** in the kernel tests (`config.spec.ts`, `rate-limit.spec.ts`): the accepted values,
+the production refusals, and that with a hop count a forged `X-Forwarded-For` entry does not
+change the key. **Not verified** on the host: that exactly one proxy is in front of the function.
+Check it once after deploying: read any public view more often than its limit from one network
+and confirm that a second network is still served.
 
 ## 4. Staff project (Vercel)
 

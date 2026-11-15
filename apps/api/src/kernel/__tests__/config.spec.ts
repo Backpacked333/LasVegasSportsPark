@@ -95,6 +95,53 @@ describe('configuration security boundaries', () => {
     ).toBe(5000);
   });
 
+  it('§4.14 (security review M-3): production refuses to boot without an explicit proxy trust setting, and refuses one that believes every sender', () => {
+    const { TRUST_PROXY: _trust, ...unset } = PRODUCTION_CONFIG_ENV;
+    // Unset: behind a proxy every visitor would share the proxy's address and one bucket.
+    expect(() => loadConfig(unset)).toThrow(/TRUST_PROXY must be set explicitly in production/);
+    expect(() => loadConfig({ ...unset, TRUST_PROXY: '' })).toThrow(
+      /TRUST_PROXY must be set explicitly in production/,
+    );
+    // The message says what to set.
+    expect(() => loadConfig(unset)).toThrow(
+      /the number of proxies in front of the API .* the addresses or subnets of those proxies .* or false when the API is reached directly/,
+    );
+    // "Trust everything": a caller would choose its own rate-limit key.
+    for (const everything of ['true', '0.0.0.0/0', '::/0', '10.0.0.0/8, 0.0.0.0/0']) {
+      expect(() => loadConfig({ ...unset, TRUST_PROXY: everything }), everything).toThrow(
+        /believes X-Forwarded-For from any sender.*refused in production/,
+      );
+    }
+    // A hop count, the proxies' own addresses, or an explicit "no proxy" are accepted.
+    expect(loadConfig({ ...unset, TRUST_PROXY: '1' }).TRUST_PROXY).toBe(1);
+    expect(loadConfig({ ...unset, TRUST_PROXY: '2' }).TRUST_PROXY).toBe(2);
+    expect(loadConfig({ ...unset, TRUST_PROXY: 'false' }).TRUST_PROXY).toBe(false);
+    expect(loadConfig({ ...unset, TRUST_PROXY: 'none' }).TRUST_PROXY).toBe(false);
+    expect(loadConfig({ ...unset, TRUST_PROXY: '10.0.0.0/8' }).TRUST_PROXY).toBe('10.0.0.0/8');
+    expect(
+      loadConfig({ ...unset, TRUST_PROXY: ' loopback , 192.0.2.10,2001:db8::/32 ' }).TRUST_PROXY,
+    ).toBe('loopback,192.0.2.10,2001:db8::/32');
+  });
+
+  it('§4.14: the proxy trust setting is a hop count, addresses or subnets, or a plain yes or no; anything else is refused in every environment', () => {
+    const env = { NODE_ENV: 'development', AUTH_LOCAL_SECRET: 'x'.repeat(40) };
+    // Outside production it may stay unset (forwarded headers are ignored) or be `true`.
+    expect(loadConfig(env).TRUST_PROXY).toBeUndefined();
+    expect(loadConfig({ ...env, TRUST_PROXY: 'true' }).TRUST_PROXY).toBe(true);
+    expect(loadConfig({ ...env, TRUST_PROXY: 'uniquelocal' }).TRUST_PROXY).toBe('uniquelocal');
+    for (const [value, message] of [
+      ['yes', /"yes" is not an address, a subnet or one of loopback, linklocal, uniquelocal/],
+      ['0', /0 is not a hop count; use false/],
+      ['99', /not a plausible hop count/],
+      ['10.0.0.0/33', /"10\.0\.0\.0\/33" is not an address/],
+      ['10.0.0.0/8,', /"" is not an address/],
+      ['proxy.internal', /"proxy\.internal" is not an address/],
+      ['-1', /"-1" is not an address/],
+    ] as const) {
+      expect(() => loadConfig({ ...env, TRUST_PROXY: value }), value).toThrow(message);
+    }
+  });
+
   it('§4.14: the shipped .env.example carries no usable identity secret', () => {
     const example = readFileSync(path.resolve(__dirname, '../../../../../.env.example'), 'utf8');
     const line = example.split('\n').find((l) => l.startsWith('AUTH_LOCAL_SECRET='));

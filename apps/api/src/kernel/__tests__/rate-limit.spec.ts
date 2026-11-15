@@ -1,6 +1,11 @@
 import { Controller, HttpCode, Post } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestApp, TEST_CONFIG_ENV, type TestApp } from '../../testing/test-app';
+import {
+  createTestApp,
+  PRODUCTION_CONFIG_ENV,
+  TEST_CONFIG_ENV,
+  type TestApp,
+} from '../../testing/test-app';
 import { Public } from '../auth/public.decorator';
 import { loadConfig } from '../config';
 import {
@@ -47,6 +52,62 @@ describe('rate-limited recovery (§4.14)', () => {
       // The window resets with the clock (the next fixed minute).
       t.clock.advance(60_000);
       expect((await t.http.post('/v1/ratetest')).status).toBe(200);
+    });
+  });
+
+  describe('the key behind a proxy (security review M-3)', () => {
+    const hit = (t: TestApp, forwardedFor?: string) => {
+      const request = t.http.post('/v1/ratetest');
+      return forwardedFor ? request.set('X-Forwarded-For', forwardedFor) : request;
+    };
+    const app = (TRUST_PROXY?: string) =>
+      createTestApp({
+        controllers: [RateLimitedTestController],
+        clockStart: '2026-11-09T12:00:05.000Z',
+        env: { RATE_LIMITS: 'dev_tokens=2/60', ...(TRUST_PROXY ? { TRUST_PROXY } : {}) },
+      });
+
+    it('§4.14: with a hop count the limit keys on the address the proxy saw, never on one the caller wrote into X-Forwarded-For', async () => {
+      const t = await app('1');
+      try {
+        // One visitor (203.0.113.9, as the proxy appended it) sending a different forged
+        // address each time is still one visitor.
+        expect((await hit(t, '198.51.100.1, 203.0.113.9')).status).toBe(200);
+        expect((await hit(t, '198.51.100.2, 203.0.113.9')).status).toBe(200);
+        expect((await hit(t, '198.51.100.3, 203.0.113.9')).status).toBe(429);
+        // Another visitor behind the same proxy has a bucket of their own.
+        expect((await hit(t, '198.51.100.3, 203.0.113.10')).status).toBe(200);
+      } finally {
+        await t.close();
+      }
+    });
+
+    it('§4.14: with no proxy trusted the header is ignored, so it cannot be used to leave a bucket', async () => {
+      for (const setting of [undefined, 'false']) {
+        const t = await app(setting);
+        try {
+          expect((await hit(t, '198.51.100.1')).status).toBe(200);
+          expect((await hit(t, '198.51.100.2')).status).toBe(200);
+          expect((await hit(t, '198.51.100.3')).status).toBe(429);
+        } finally {
+          await t.close();
+        }
+      }
+    });
+
+    it('§4.14: `true` lets the caller choose the key, which is why production refuses it', async () => {
+      const t = await app('true');
+      try {
+        for (let i = 1; i <= 4; i += 1) {
+          expect((await hit(t, `198.51.100.${i}, 203.0.113.9`)).status).toBe(200);
+        }
+      } finally {
+        await t.close();
+      }
+      const { TRUST_PROXY: _trust, ...production } = PRODUCTION_CONFIG_ENV;
+      expect(() => loadConfig({ ...production, TRUST_PROXY: 'true' })).toThrow(
+        /refused in production/,
+      );
     });
   });
 

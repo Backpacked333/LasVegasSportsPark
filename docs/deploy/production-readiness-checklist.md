@@ -26,7 +26,8 @@ Checked 2026-11-09 against branch `claude/clever-darwin-40w6dj` (pull request Ba
 - [ ] DEC-021 answered: container host chosen; managed PostgreSQL with point-in-time recovery enabled.
 - [ ] DEC-018 answered: identity provider project configured (asymmetric signing keys, redirect URLs, multifactor for the DEC-091 roles); `AUTH_JWKS_URL`, `AUTH_ISSUER`, `AUTH_AUDIENCE` and `PROVIDER_DECISIONS=identity=DEC-018` set.
 - [ ] Every provider selector set: `none` until its adapter exists ([production.md](production.md) section 3).
-- [ ] `DATABASE_SSL=require` (or `verify-full`), `TRUST_PROXY`, `CORS_ALLOWED_ORIGINS`, `METRICS_TOKEN`, `DATABASE_STATEMENT_TIMEOUT_MS` set.
+- [ ] `DATABASE_SSL=require` (or `verify-full`), `CORS_ALLOWED_ORIGINS`, `METRICS_TOKEN`, `DATABASE_STATEMENT_TIMEOUT_MS` set.
+- [ ] `TRUST_PROXY` set to the real number of proxies in front of the API or to their addresses (never `true`; the configuration refuses to boot without it), and checked once on the host: two networks reading a public view have separate rate-limit buckets.
 - [ ] GitHub environments `staging` and `production` created with `DATABASE_URL`; production requires a reviewer.
 - [ ] GitHub secret scanning with push protection turned on in the repository settings.
 - [ ] Migrations applied with the deploy workflow; `GET /v1/ready` is 200 with `"current":true`.

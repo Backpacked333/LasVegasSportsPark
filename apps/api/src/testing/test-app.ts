@@ -66,6 +66,8 @@ export const PRODUCTION_CONFIG_ENV: NodeJS.ProcessEnv = {
   DATABASE_URL: 'postgres://unused.example.test/sportspark',
   // §4.14: a database on another host is reached over TLS in production.
   DATABASE_SSL: 'require',
+  // §4.14: production names the proxies in front of it (one load balancer here).
+  TRUST_PROXY: '1',
   PAYMENT_PROVIDER: 'none',
   ACCOUNTING_PROVIDER: 'none',
   ACCESS_DEVICE_PROVIDER: 'none',

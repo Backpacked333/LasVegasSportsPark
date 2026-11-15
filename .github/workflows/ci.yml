@@ -123,7 +123,7 @@ jobs:
         run: |
           docker run -d --name api --network host -e NODE_ENV=production -e AUTH_MODE=oidc \
             -e AUTH_JWKS_URL=https://identity.example.test/jwks.json -e AUTH_ISSUER=https://identity.example.test \
-            -e PROVIDER_DECISIONS=identity=DEC-018 -e DATABASE_URL \
+            -e PROVIDER_DECISIONS=identity=DEC-018 -e DATABASE_URL -e TRUST_PROXY=false \
             -e PAYMENT_PROVIDER=none -e ACCOUNTING_PROVIDER=none -e ACCESS_DEVICE_PROVIDER=none \
             -e MESSAGING_PUSH_PROVIDER=none -e MESSAGING_EMAIL_PROVIDER=none -e MESSAGING_SMS_PROVIDER=none \
             "$IMAGE"
@@ -138,7 +138,7 @@ jobs:
         run: |
           docker run -d --name worker --network host -e NODE_ENV=production -e AUTH_MODE=oidc \
             -e AUTH_JWKS_URL=https://identity.example.test/jwks.json -e AUTH_ISSUER=https://identity.example.test \
-            -e PROVIDER_DECISIONS=identity=DEC-018 -e DATABASE_URL \
+            -e PROVIDER_DECISIONS=identity=DEC-018 -e DATABASE_URL -e TRUST_PROXY=false \
             -e PAYMENT_PROVIDER=none -e ACCOUNTING_PROVIDER=none -e ACCESS_DEVICE_PROVIDER=none \
             -e MESSAGING_PUSH_PROVIDER=none -e MESSAGING_EMAIL_PROVIDER=none -e MESSAGING_SMS_PROVIDER=none \
             "$IMAGE" node dist/worker.js
