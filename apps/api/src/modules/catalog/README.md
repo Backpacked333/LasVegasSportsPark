@@ -668,3 +668,18 @@ adjust its pool through the capacity endpoints once a pool exists); charge lines
 uniform in the staff screens (the API takes them); a jersey number chosen with the uniform (numbers
 stay on the team roster, SPK-COMP-005); the two new events in
 `docs/architecture/api-and-events.md` (a shared file, updated at integration).
+
+## Class names on the public schedule (SPK-SCHED-010, proposed amendment PA-06)
+
+**Proposed**, behind `public_schedule` (DEC-100). The public schedule never shows the title stored
+on a schedule event, because a person may have typed it. Catalog vouches for one kind of title
+(`public/public-session-titles.ts`, registered as `catalog.public_sessions` with scheduling's
+`PublicScheduleTitles`): a session that is not canceled, of an offering whose publication state is
+one the public catalog already lists, shows that offering's name. A session of a draft or archived
+offering shows only "Class".
+
+**Verified**: `__tests__/public-session-titles.spec.ts` (a published offering's name is shown; a
+draft offering's name, a canceled session and the typed title are not).
+
+**Pending decision** (DEC-100): whether every published offering's name may appear on a lobby
+screen, or only chosen ones.

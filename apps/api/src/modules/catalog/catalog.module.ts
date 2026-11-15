@@ -3,7 +3,8 @@ import type { EventPayload } from '@sportspark/contracts';
 import { EventHandlerRegistry } from '../../kernel';
 import { FacilitiesModule } from '../facilities';
 import { IdentityModule } from '../identity';
-import { EventChanged, SchedulingModule } from '../scheduling';
+import { EventChanged, PublicScheduleTitles, SchedulingModule } from '../scheduling';
+import { publicSessionTitles } from './public/public-session-titles';
 import { OFFERING_LOOKUP_PORT, POLICY_PORT, PRICING_PORT } from './catalog.ports';
 import { DiscountsController } from './controllers/discounts.controller';
 import { EntitlementDefinitionsController } from './controllers/entitlement-definitions.controller';
@@ -88,9 +89,14 @@ export class CatalogModule implements OnModuleInit {
   constructor(
     private readonly registry: EventHandlerRegistry,
     private readonly sessions: SessionsService,
+    private readonly publicTitles: PublicScheduleTitles,
   ) {}
 
   onModuleInit(): void {
+    // SPK-SCHED-010 (proposed amendment PA-06): on the public schedule a session of an offering
+    // that is in the public catalog shows that offering's name; every other session shows its
+    // kind in words. Catalog vouches for the name; the event's typed title is never shown.
+    this.publicTitles.register('catalog.public_sessions', publicSessionTitles);
     // SPK-AT-009, SPK-SCHED-009: the catalog session follows the scheduling event that reserves
     // its space (scheduling is the authority for the event, catalog for the session): a canceled
     // event cancels it, any other change retimes it to the event's published times (R2-JOURNEYS-03).

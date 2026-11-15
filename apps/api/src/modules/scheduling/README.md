@@ -478,6 +478,7 @@ schedule exists only where staff enabled it; the cache lifetime and the rate lim
 values.
 
 **Pending decision** (DEC-100): what is public; the wording shown for private bookings; the number
-of lobby screens and what they show. Not built: offering names on the public schedule. A class
-reads "Class" until catalog registers a `PublicScheduleTitles` contributor for the events of its
-published offerings.
+of lobby screens and what they show. A class reads "Class" unless catalog vouches for its name:
+catalog registers the contributor `catalog.public_sessions`, which answers the offering's name for
+a session of an offering that is in the public catalog (**Verified**:
+`catalog/__tests__/public-session-titles.spec.ts`).

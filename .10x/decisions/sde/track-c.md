@@ -141,3 +141,11 @@ Feature `glass-demo-amendments`. Status words follow §6.7: **Verified**, **Prop
   test was run under PGlite only.
 - HTTP caches: `Cache-Control: public, max-age=30` is set and asserted; no cache or CDN was put in
   front of the API.
+
+## Added at integration
+
+- Deviation 3 is closed: catalog registers `catalog.public_sessions`
+  (`apps/api/src/modules/catalog/public/public-session-titles.ts`), so a session of an offering in
+  the public catalog shows the offering's name on the public schedule.
+- `reporting_team_entries_v.status` is typed with `waiting` (the reporting schema test compares
+  the typed states with the base check).
