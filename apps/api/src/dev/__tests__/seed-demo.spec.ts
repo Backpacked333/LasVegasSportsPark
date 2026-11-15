@@ -218,7 +218,11 @@ describe('demo dataset (ADR-007)', () => {
     const today = localDateOf(DEMO_TIMEZONE, t.clock.now());
 
     // A published class, registration open, with a session on today's local date.
-    const listed = await offerings.listPublic(manager, { organization: 'dev', limit: 50 });
+    const listed = await offerings.listPublic(manager, {
+      organization: 'dev',
+      limit: 50,
+      view: 'public',
+    });
     const term = listed.items.find((o) => o.name.startsWith('Mini kickers'));
     expect(term).toMatchObject({ publicationState: 'registration_open' });
     const termSessions = await sessions.list(manager, term?.id as string);

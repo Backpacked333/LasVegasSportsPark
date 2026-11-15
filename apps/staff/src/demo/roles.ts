@@ -322,7 +322,7 @@ export const DEMO_ROLES: readonly DemoRole[] = [
         title: 'Money that needs a decision',
         body: 'One payment has an unknown outcome and one card was declined. A canceled registration waits for its refund to be settled, and one refund is still with the provider.',
         tryThis: [
-          'Open the payment marked unknown and check it with the provider',
+          'Open the payment marked unknown: it is never shown as paid or failed',
           'Open the refund that is still processing',
         ],
       },
