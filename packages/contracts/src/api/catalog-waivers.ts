@@ -120,7 +120,26 @@ export const WaiverActivityRefSchema = z
   .openapi('WaiverActivityRef');
 export type WaiverActivityRef = z.infer<typeof WaiverActivityRefSchema>;
 
-/** A recorded staff decision to let a person take part although the waiver rule blocks. */
+/**
+ * The activities an override can be recorded against: the ones the system resolves to a record
+ * and its facility when the override is recorded (an offering, one of its sessions, a scheduling
+ * event), so the staff member's facility scope is judged against the real activity and an
+ * unknown one is refused. A booking is not among them: no port resolves a booking for the
+ * catalog, and an override for a booked time names its scheduling event.
+ */
+export const WaiverOverrideActivityRefSchema = z
+  .object({
+    type: z.enum(['offering', 'offering_session', 'scheduling_event']),
+    id: z.uuid(),
+  })
+  .openapi('WaiverOverrideActivityRef');
+export type WaiverOverrideActivityRef = z.infer<typeof WaiverOverrideActivityRefSchema>;
+
+/**
+ * A recorded staff decision to let a person take part although the waiver rule blocks. It lifts
+ * the block for the waiver version it was recorded against (`policyVersionId`) and for no other:
+ * once another version is in force the rule asks again.
+ */
 export const WaiverOverrideSchema = z
   .object({
     id: z.uuid(),
@@ -181,7 +200,7 @@ export type RecordWaiverAcceptanceInput = z.infer<typeof RecordWaiverAcceptanceB
 export const RecordWaiverOverrideBody = withCommandMeta({
   personId: z.uuid(),
   policyKey: WaiverPolicyKey,
-  activity: WaiverActivityRefSchema,
+  activity: WaiverOverrideActivityRefSchema,
 })
   .extend({ reason: Reason })
   .openapi('RecordWaiverOverrideRequest');

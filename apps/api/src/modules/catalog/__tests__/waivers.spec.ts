@@ -8,6 +8,7 @@ import {
   createPersonFixture,
   createStaffMemberFixture,
 } from '../../identity';
+import { EventsService, at, createScheduledEvent, seedResource } from '../../scheduling';
 import { CatalogModule } from '../catalog.module';
 import {
   OFFERING_LOOKUP_PORT,
@@ -594,6 +595,204 @@ describe('liability waivers (SPK-REG-011, SPK-REG-009; proposed amendment PA-01)
     expect(current.body.details).toMatchObject({ code: 'WAIVER_NOT_BLOCKING' });
   });
 
+  it('SPK-REG-011 (security review L-4): an override names an activity the system resolves; an unknown activity is refused as not found and the staff member’s facility scope is judged against the real activity', async () => {
+    const policyKey = waiverKey();
+    await waiver(policyKey, {
+      enforcement: 'block',
+      overrideRoles: ['program_manager', 'front_desk'],
+    });
+    const person = await createPersonFixture(t, { kind: 'adult' });
+    // A second facility, and a program manager whose scope is the first one only.
+    const eastFacilityId = newId();
+    await t.db
+      .insertInto('facilities')
+      .values({
+        id: eastFacilityId,
+        organization_id: t.organizationId,
+        slug: `east-${eastFacilityId.slice(-6)}`,
+        name: 'East complex',
+        timezone: 'America/Los_Angeles',
+        address: null,
+      })
+      .execute();
+    const scopedMember = await createStaffMemberFixture(t, {
+      roles: ['program_manager'],
+      facilityIds: [t.facilityId],
+    });
+    const scoped = await authHeaderForPerson(t, scopedMember.personId);
+    const events = t.app.get(EventsService);
+    const eventAt = async (facilityId: string, day: string) => {
+      const field = await seedResource(t.db, {
+        organizationId: t.organizationId,
+        facilityId,
+        name: `Override field ${newId().slice(-6)}`,
+      });
+      return createScheduledEvent(events, {
+        organizationId: t.organizationId,
+        facilityId,
+        resourceIds: [field.resourceId],
+        start: at(day, '09:00'),
+        end: at(day, '10:00'),
+        kind: 'pickup',
+        title: 'Pickup',
+      });
+    };
+    const here = await eventAt(t.facilityId, '2026-11-20');
+    const elsewhere = await eventAt(eastFacilityId, '2026-11-21');
+    const manager = (await createStaffMemberFixture(t, { roles: ['program_manager'] })).personId;
+    const eastOffering = await createOfferingFixture(t, {
+      responsibleManagerPersonId: manager,
+      facilityId: eastFacilityId,
+    });
+    const body = (activity: Record<string, unknown>) => ({
+      personId: person,
+      policyKey,
+      activity,
+      reason: 'Paper form is on its way',
+    });
+
+    // A scheduling event of the staff member's own facility: resolved, and recorded.
+    const recorded = await override(scoped, body({ type: 'scheduling_event', id: here.id }));
+    expect(recorded.status, JSON.stringify(recorded.body)).toBe(201);
+    expect(recorded.body.activity).toEqual({ type: 'scheduling_event', id: here.id });
+    // An event id that names nothing is refused as not found: nothing is recorded against it.
+    const unknownId = newId();
+    const unknown = await override(scoped, body({ type: 'scheduling_event', id: unknownId }));
+    expect(unknown.status).toBe(404);
+    // An event, and an offering, of a facility outside the staff member's scope.
+    const outOfScope = await override(scoped, body({ type: 'scheduling_event', id: elsewhere.id }));
+    // Scheduling answers for an event the staff member may not read as for one that is not there.
+    expect(outOfScope.status).toBe(404);
+    const offeringElsewhere = await override(
+      scoped,
+      body({ type: 'offering', id: eastOffering.offeringId }),
+    );
+    expect(offeringElsewhere.status).toBe(403);
+    // ... which an organization-wide program manager may override.
+    expect((await override(pm, body({ type: 'scheduling_event', id: elsewhere.id }))).status).toBe(
+      201,
+    );
+    // A booking is not an activity an override can name: no port resolves one for the catalog.
+    const booking = await override(pm, body({ type: 'booking', id: newId() }));
+    expect(booking.status).toBe(400);
+    expect(booking.body.code).toBe('VALIDATION_FAILED');
+    // Only the two resolved activities carry an override.
+    const rows = await t.db
+      .selectFrom('waiver_overrides')
+      .select(['activity_type', 'activity_id'])
+      .where('person_id', '=', person)
+      .execute();
+    expect(rows.map((r) => `${r.activity_type}:${r.activity_id}`).sort()).toEqual(
+      [`scheduling_event:${here.id}`, `scheduling_event:${elsewhere.id}`].sort(),
+    );
+    expect(rows.some((r) => r.activity_id === unknownId)).toBe(false);
+  });
+
+  it('SPK-REG-011 (security review L-4): an override applies to the waiver version it was recorded against; a newer version asks again, and its own rule says who may override it', async () => {
+    const policyKey = waiverKey();
+    const first = await waiver(policyKey, {
+      enforcement: 'block',
+      overrideRoles: ['program_manager', 'front_desk'],
+    });
+    const manager = (await createStaffMemberFixture(t, { roles: ['program_manager'] })).personId;
+    const offering = await createOfferingFixture(t, { responsibleManagerPersonId: manager });
+    const person = await createPersonFixture(t, { kind: 'adult' });
+    const activity = { type: 'offering' as const, id: offering.offeringId };
+    const finding = async () =>
+      (
+        await port.waiverFindings(t.organizationId, {
+          personIds: [person],
+          policyKeys: [policyKey],
+          at: t.clock.now(),
+          activities: [activity],
+        })
+      )[0];
+    const body = { personId: person, policyKey, activity, reason: 'Paper form is on its way' };
+    const underFirst = await override(frontDesk, body);
+    expect(underFirst.status, JSON.stringify(underFirst.body)).toBe(201);
+    expect(underFirst.body.policyVersionId).toBe(first);
+    expect(await finding()).toMatchObject({
+      severity: 'warning',
+      override: { id: underFirst.body.id },
+    });
+
+    // A second version comes into force. It asks for acceptance again and lets only a program
+    // manager override: the override of the first version lifts nothing any more.
+    t.clock.set('2026-11-16T12:00:00Z');
+    try {
+      const second = await waiver(
+        policyKey,
+        { enforcement: 'block', reacceptOnNewVersion: true, overrideRoles: ['program_manager'] },
+        { version: 2, effectiveFrom: new Date('2026-11-15T00:00:00Z') },
+      );
+      expect(await finding()).toMatchObject({
+        status: 'missing',
+        severity: 'blocking',
+        override: null,
+        waiver: { currentVersion: { policyVersionId: second } },
+      });
+      // The old override is still on the person's record, as history.
+      const read = await waiversOf(pm, person);
+      expect(
+        read.body.waivers
+          .find((w: { policyKey: string }) => w.policyKey === policyKey)
+          .overrides.map((o: { id: string }) => o.id),
+      ).toEqual([underFirst.body.id]);
+      // The new version's rule decides who overrides it: no longer the front desk.
+      const byDesk = await override(frontDesk, body);
+      expect(byDesk.status).toBe(403);
+      expect(byDesk.body.details).toMatchObject({ code: 'WAIVER_OVERRIDE_NOT_PERMITTED' });
+      expect((await finding())?.severity).toBe('blocking');
+      const underSecond = await override(pm, body);
+      expect(underSecond.status, JSON.stringify(underSecond.body)).toBe(201);
+      expect(underSecond.body.policyVersionId).toBe(second);
+      expect(await finding()).toMatchObject({
+        severity: 'warning',
+        override: { id: underSecond.body.id },
+      });
+    } finally {
+      t.clock.set('2026-11-14T12:00:00Z');
+    }
+    // Back while the first version was in force, its own override is the one that counts.
+    expect(await finding()).toMatchObject({
+      severity: 'warning',
+      override: { id: underFirst.body.id },
+    });
+  });
+
+  it('SPK-REG-011 (security review L-5): the required waivers of an offering the caller may not see answer exactly like those of an offering that does not exist', async () => {
+    const manager = (await createStaffMemberFixture(t, { roles: ['program_manager'] })).personId;
+    const draft = await createOfferingFixture(t, {
+      responsibleManagerPersonId: manager,
+      publicationState: 'draft',
+    });
+    const archived = await createOfferingFixture(t, {
+      responsibleManagerPersonId: manager,
+      publicationState: 'archived',
+    });
+    const published = await createOfferingFixture(t, { responsibleManagerPersonId: manager });
+    const people = await createOrganizationPeople(t);
+    const customer = await authHeaderForPerson(t, people.adult.personId);
+    const read = (auth: Auth, offeringId: string) =>
+      t.http.get(`/v1/offerings/${offeringId}/required-waivers`).set(auth);
+    const answer = (res: { status: number; body: Record<string, unknown> }) => ({
+      status: res.status,
+      code: res.body['code'],
+      message: res.body['message'],
+      details: res.body['details'],
+    });
+    const unknown = answer(await read(customer, newId()));
+    expect(unknown).toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    expect(answer(await read(customer, draft.offeringId))).toEqual(unknown);
+    expect(answer(await read(customer, archived.offeringId))).toEqual(unknown);
+    // The answer names no id, so it cannot differ by which id was asked for.
+    expect(JSON.stringify(unknown)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    // A published offering is readable by a customer, and staff read a draft.
+    expect((await read(customer, published.offeringId)).status).toBe(200);
+    expect((await read(pm, draft.offeringId)).status).toBe(200);
+    expect(answer(await read(pm, newId()))).toEqual(unknown);
+  });
+
   it("SPK-REG-011 / SPK-IAM-003: a person's waivers are read by staff, the person and a guardian holding complete_forms; anyone else gets not found", async () => {
     const policyKey = waiverKey();
     await waiver(policyKey);
@@ -688,10 +887,11 @@ describe('liability waivers (SPK-REG-011, SPK-REG-009; proposed amendment PA-01)
     expect(
       (await lookup.getOffering(t.organizationId, copy.body.id, t.clock.now()))?.requiredWaiverKeys,
     ).toEqual([policyKey]);
-    // a draft offering's requirement is staff-only
+    // a draft offering's requirement is staff-only: to a customer the draft does not exist
+    // (the same answer as an unknown offering, §4.10)
     expect(
       (await t.http.get(`/v1/offerings/${copy.body.id}/required-waivers`).set(customer)).status,
-    ).toBe(403);
+    ).toBe(404);
     const cleared = await set(pm, []);
     expect(cleared.body.waivers).toEqual([]);
     const audits = await t.db
@@ -988,6 +1188,9 @@ describe('liability waivers (SPK-REG-011, SPK-REG-009; proposed amendment PA-01)
       await expect(insert({ actor_person_id: person })).rejects.toSatisfy(isCheckViolation);
       await expect(insert({ reason: '   ' })).rejects.toSatisfy(isCheckViolation);
       await expect(insert({ waiver_status: 'current' })).rejects.toSatisfy(isCheckViolation);
+      // Migration 0221: an override names the waiver version it was recorded against (it lifts
+      // the block of that version only, so one without a version could lift nothing).
+      await expect(insert({ policy_version_id: null })).rejects.toSatisfy(isCheckViolation);
       await expect(insert({ activity_type: 'team_entry' })).rejects.toSatisfy(isCheckViolation);
     });
 

@@ -243,11 +243,18 @@ export class WaiverStatusReader {
     return judged;
   }
 
-  /** The newest override recorded for the person, the family and any of the activities. */
+  /**
+   * The newest override recorded for the person, the family and any of the activities, against
+   * the waiver version given (the one in force when the block is judged). An override was a
+   * decision about one version of the rule: once another version is in force it lifts nothing,
+   * so a new version that asks for acceptance again is not passed over by an old override and
+   * the new version's own `overrideRoles` decide who may override it (security review L-4).
+   */
   async override(
     organizationId: string,
     personId: string,
     policyKey: string,
+    policyVersionId: string,
     activities: readonly WaiverActivityRef[],
     trx?: Trx,
   ): Promise<WaiverOverride | null> {
@@ -259,6 +266,7 @@ export class WaiverStatusReader {
       .where('organization_id', '=', organizationId)
       .where('person_id', 'in', resolving.length > 0 ? resolving : [personId])
       .where('policy_key', '=', policyKey)
+      .where('policy_version_id', '=', policyVersionId)
       .where((eb) =>
         eb.or(
           activities.map((activity) =>
@@ -302,9 +310,19 @@ export class WaiverStatusReader {
         });
         if (waiver.status === 'current') continue;
         const blocks = waiver.rule?.enforcement === 'block';
-        const override = blocks
-          ? await this.override(organizationId, personId, policyKey, request.activities, trx)
-          : null;
+        // Only an override of the version in force lifts its block.
+        const inForceId = family?.inForce?.ref.policyVersionId;
+        const override =
+          blocks && inForceId
+            ? await this.override(
+                organizationId,
+                personId,
+                policyKey,
+                inForceId,
+                request.activities,
+                trx,
+              )
+            : null;
         findings.push({
           personId,
           policyKey,

@@ -10,8 +10,8 @@ import {
   type RecordWaiverAcceptanceInput,
   type RecordWaiverOverrideInput,
   type SetOfferingRequiredWaiversInput,
-  type WaiverActivityRef,
   type WaiverOverride,
+  type WaiverOverrideActivityRef,
 } from '@sportspark/contracts';
 import { json, type Db } from '@sportspark/db';
 import {
@@ -28,6 +28,7 @@ import {
   type Trx,
 } from '../../../kernel';
 import { PERSON_DIRECTORY_PORT, type PersonDirectoryPort } from '../../identity';
+import { EVENT_SCHEDULING_PORT, type EventSchedulingPort } from '../../scheduling';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { organizationOf } from '../catalog.shared';
@@ -45,7 +46,9 @@ import { toWaiverOverride, WaiverStatusReader } from './waiver-status.reader';
  * - An acceptance is an acknowledgment of a waiver version (`AcknowledgmentsService`), so every
  *   signing rule of SPK-REG-009 holds; this service only routes the command.
  * - A requirement is a waiver key on an offering (`offering_required_waivers`).
- * - An override of a block is an append-only record for one person and one activity.
+ * - An override of a block is an append-only record for one person, one activity the system
+ *   resolves (so the staff member's facility scope is judged against the real activity) and the
+ *   waiver version in force when it was recorded; it lifts the block for that version only.
  *
  * Commands check the capability inside their unit of work. Reads never do: with the capability
  * off the person read answers `evaluated: false` and an offering shows no required waiver.
@@ -56,6 +59,7 @@ export class WaiversService {
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(PERSON_DIRECTORY_PORT) private readonly persons: PersonDirectoryPort,
+    @Inject(EVENT_SCHEDULING_PORT) private readonly scheduling: EventSchedulingPort,
     private readonly uow: UnitOfWork,
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
@@ -123,6 +127,13 @@ export class WaiversService {
    * Records that a staff member lets one person take part in one activity although the waiver
    * rule blocks. Permitted only where the version in force blocks and names one of the actor's
    * roles; never for a waiver that is current or only warns, and never for oneself.
+   *
+   * The activity is resolved before anything else (security review L-4): an offering or one of
+   * its sessions from the catalog's own tables, a scheduling event through scheduling's port. An
+   * activity that names nothing is refused as not found, and the authorization target always
+   * carries the activity's facility, so a staff member scoped to one facility does not override
+   * for an activity of another. The record names the version in force, and it lifts the block
+   * for that version only (`WaiverStatusReader.override`).
    */
   async override(
     principal: Principal,
@@ -143,11 +154,11 @@ export class WaiversService {
     }
     return this.uow.run(async ({ trx }) => {
       await this.capabilities.require(organizationId, 'liability_waivers', trx);
-      const facilityId = await this.activityFacility(trx, organizationId, body.activity);
+      const facilityId = await this.activityFacility(trx, principal, organizationId, body.activity);
       await this.authorization.require(principal, CatalogActions.overrideWaiver, {
         type: 'waiver_override',
         organizationId,
-        ...(facilityId ? { facilityId } : {}),
+        facilityId,
       });
       const person = await this.persons.findPerson(organizationId, body.personId, trx);
       if (!person) throw errors.notFound('person', body.personId);
@@ -251,13 +262,17 @@ export class WaiversService {
       .where('organization_id', '=', organizationId)
       .where('id', '=', offeringId)
       .executeTakeFirst();
-    if (!offering) throw errors.notFound('offering', offeringId);
+    // §4.10 (security review L-5): an offering that does not exist and one the caller may not
+    // see (a draft or an archived one, to anybody who does not read the catalog as staff) get
+    // the same answer, so the route says nothing about which ids name an unpublished offering.
+    if (!offering) throw errors.protectedNotFound('offering');
     if (offering.publication_state === 'draft' || offering.publication_state === 'archived') {
-      await this.authorization.require(principal, CatalogActions.readCatalog, {
+      const reader = await this.authorization.decide(principal, CatalogActions.readCatalog, {
         type: 'offering',
         id: offeringId,
         organizationId,
       });
+      if (!reader.allowed) throw errors.protectedNotFound('offering');
     }
     if (!(await this.capabilities.isEnabled(organizationId, 'liability_waivers'))) {
       return { offeringId, waivers: [] };
@@ -423,15 +438,18 @@ export class WaiversService {
   }
 
   /**
-   * The facility an override is authorized against, for the activities the catalog owns (an
-   * offering, or one of its sessions). An unknown one is refused. A scheduling event or a booking
-   * belongs to another module, so its id is recorded as a reference and not resolved here.
+   * The facility of the activity an override is recorded against. Every activity is resolved to a
+   * record: an offering or one of its sessions in the catalog's own tables, a scheduling event
+   * through scheduling's exported port (`EventSchedulingPort.getEvent`, which answers only for an
+   * event of this organization the staff member may read). One that names nothing is refused as
+   * not found. A booking is not accepted by the contract: no port resolves one for the catalog.
    */
   private async activityFacility(
     trx: Trx,
+    principal: Principal,
     organizationId: string,
-    activity: WaiverActivityRef,
-  ): Promise<string | null> {
+    activity: WaiverOverrideActivityRef,
+  ): Promise<string> {
     if (activity.type === 'offering') {
       const row = await trx
         .selectFrom('offerings')
@@ -457,6 +475,8 @@ export class WaiversService {
       if (!row) throw errors.notFound('offering session', activity.id);
       return row.facility_id;
     }
-    return null;
+    // A scheduling event belongs to scheduling: its port says whether it exists and where.
+    const event = await this.scheduling.getEvent(principal, activity.id);
+    return event.facilityId;
   }
 }
