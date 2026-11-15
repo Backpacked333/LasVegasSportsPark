@@ -1122,7 +1122,11 @@ amendments leave open are **Pending decision**.
   `POST /v1/uniform-orders/{id}/hand-over-corrections` (`enrollment.hand_over_uniform`, capability
   `uniforms`) record who handed it over and when, and undo that only by a correction with a
   reason; both write the append-only `uniform_handover_events`, the audit log and
-  `enrollment.uniform_order_changed`. The list stays readable with the capability off.
+  `enrollment.uniform_order_changed`. The list stays readable with the capability off. The two
+  hand-over commands answer a caller who may not hand uniforms over at the order's facility (a
+  customer, the family itself included, or staff without the role or the scope) exactly as they
+  answer an unknown order (`errors.protectedNotFound`, §4.10; security review L-5; **Verified**
+  in `__tests__/uniform-orders-visibility.spec.ts`).
 - `SESSION_ROSTER_PORT` (`services/session-roster.ts`, for the entry module):
   `expectedAtSession(organizationId, offeringId, sessionId)` names the participants of confirmed
   registrations whose selection includes the session, each with the add-ons bought for that day.

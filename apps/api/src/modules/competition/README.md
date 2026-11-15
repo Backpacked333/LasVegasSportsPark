@@ -816,6 +816,10 @@ the capability `team_waitlist`, which is off unless an organization turns it on 
   places of each division), `GET /team-entries/{id}/place-offers`, and `waiting` on the team
   workspace (`GET /team-entries/{id}`: division, position, list length, open offer).
   `GET /me/team-entries` lists a waiting entry so its captain can open it.
+  `GET /team-entries/{id}/place-offers` is read by league staff and the entry's captain and
+  co-captains; to anybody else an existing entry answers exactly like an unknown one
+  (`errors.protectedNotFound`, §4.10; security review L-5; **Verified** in
+  `__tests__/team-waitlist.spec.ts`).
 - Offer expiry: outbox event `competition.team_place_offer_expiry_due`, due at the expiry, handled
   by `competition.expire_team_place_offer` (in the event handler manifest); idempotent under
   replay (`__tests__/team-waitlist.spec.ts`).
