@@ -115,6 +115,19 @@ describe('demo dataset (ADR-007)', () => {
       ['dev-parent', []],
     ]);
     expect(first.devTokens.path).toBe('/v1/dev/tokens');
+    // The dataset adds one sign-in account: the general manager, who approves and sees money.
+    expect(first.demo.accounts.map((a) => [a.subject, a.roles])).toEqual([
+      [
+        'demo-manager',
+        [
+          'facilities_operator',
+          'finance_operator',
+          'general_manager',
+          'program_manager',
+          'scheduler',
+        ],
+      ],
+    ]);
     // Nothing the services refused: every part of the dataset was created.
     expect(first.demo.notCreated).toEqual([]);
     // The names apps/staff/src/demo/links.ts knows (its test holds the shape of each).
@@ -444,6 +457,34 @@ describe('demo dataset (ADR-007)', () => {
       'enrollment.cancellation_consequence_pending',
       'finance.unknown_payment_outcome',
     ]);
+
+    // The general manager signs in like the others and sees what the five roles above cannot:
+    // the finance queue, the refund in flight, the stored sales report and the facilities work.
+    const managerAccount = first.demo.accounts[0];
+    const minted = await t.http
+      .post('/v1/dev/tokens')
+      .send({ accountId: managerAccount?.accountId });
+    expect(minted.status).toBe(201);
+    const managerHeader = { Authorization: `Bearer ${minted.body.token as string}` };
+    const managerRead = async <T>(path: string): Promise<T> => {
+      const res = await t.http.get(path).set(managerHeader);
+      expect(res.status, `${path} ${JSON.stringify(res.body)}`).toBe(200);
+      return res.body as T;
+    };
+    const refunds = await managerRead<{ items: Array<{ status: string }> }>('/v1/refunds?limit=10');
+    expect(refunds.items.map((r) => r.status)).toEqual(['processing']);
+    const runs = await managerRead<{ items: Array<{ reportKey: string }> }>('/v1/reports/runs');
+    expect(runs.items.map((r) => r.reportKey).sort()).toEqual([
+      'outstanding_obligations',
+      'registration_funnel',
+      'sales_by_product_line',
+    ]);
+    const tasks = await managerRead<{ items: Json[] }>(
+      `/v1/maintenance-tasks?facilityId=${facility}`,
+    );
+    expect(tasks.items).toHaveLength(1);
+    const closures = await managerRead<Json[]>(`/v1/closures?facilityId=${facility}`);
+    expect(closures).toHaveLength(1);
 
     // "My assignments" of the coach and the official.
     const coachReads = await as('dev-coach');

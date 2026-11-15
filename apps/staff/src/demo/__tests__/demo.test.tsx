@@ -240,7 +240,9 @@ describe('guided tour', () => {
     );
     expect([...sections].sort()).toEqual([
       '/finance/point-of-sale',
+      '/finance/point-of-sale/sales/:id',
       '/finance/point-of-sale/sessions/:id',
+      '/schedule/closures',
       '/schedule/drafts',
       '/schedule/rentals',
       '/schedule/rentals/:id',
@@ -292,6 +294,10 @@ describe('guided tour', () => {
       'sequence',
     ]) {
       expect(league, topic).toContain(topic);
+    }
+    const manager = text('general-manager');
+    for (const topic of ['approve', 'open-amount', 'refund', 'sales', 'closure', 'maintenance']) {
+      expect(manager, topic).toContain(topic);
     }
     const admin = text('administrator');
     for (const topic of ['switches', 'template', 'reports', 'open-amount', 'tiers', 'uniform']) {

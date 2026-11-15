@@ -22,7 +22,12 @@ import { seedRegistrations } from './demo/registrations';
 import { seedRentals } from './demo/rentals';
 import { seedReports } from './demo/reports';
 import { seedSpaces } from './demo/spaces';
-import { assertSeedAllowed, seedDevelopment, type SeedSummary } from './seed-dev';
+import {
+  assertSeedAllowed,
+  seedDevelopment,
+  type SeededAccount,
+  type SeedSummary,
+} from './seed-dev';
 
 /**
  * The demo dataset (ADR-007, design section 4 "Demo mode"): a facility a person can walk through.
@@ -46,6 +51,11 @@ export interface DemoSeedOptions {
 
 export interface DemoSeedSummary extends SeedSummary {
   demo: {
+    /**
+     * Sign-in accounts the dataset adds to the six of the development seed (`accounts` keeps
+     * those six, in their order): the general manager, who approves and sees money and reports.
+     */
+    accounts: SeededAccount[];
     /** Paths of the staff dashboard that open without signing in. */
     publicLinks: Record<string, string>;
     /** Screens of the staff dashboard the tours open on a seeded record (path by name). */
@@ -174,6 +184,18 @@ export async function seedDemo(
   return {
     ...base,
     enabledCapabilities,
-    demo: { publicLinks, tourLinks, notCreated: ctx.notCreated },
+    demo: {
+      accounts: [
+        {
+          subject: staff.manager.subject,
+          accountId: staff.manager.accountId,
+          personId: staff.manager.personId,
+          roles: [...staff.manager.principal.staffRoles],
+        },
+      ],
+      publicLinks,
+      tourLinks,
+      notCreated: ctx.notCreated,
+    },
   };
 }

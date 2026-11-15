@@ -83,7 +83,10 @@ console.log('Building the API and seeding the demo database (about a minute)...'
 const summary = parseSeedSummary(
   await run('pnpm', ['--filter', '@sportspark/api', 'seed:demo'], apiEnv, true),
 );
-const accounts = Object.fromEntries(summary.accounts.map((a) => [a.subject, a.accountId]));
+// The six accounts of the development seed and the ones the dataset adds (the general manager).
+const accounts = Object.fromEntries(
+  [...summary.accounts, ...(summary.demo?.accounts ?? [])].map((a) => [a.subject, a.accountId]),
+);
 const publicLinks = summary.demo?.publicLinks ?? {};
 const tourLinks = { ...(summary.demo?.tourLinks ?? {}), ...publicLinks };
 

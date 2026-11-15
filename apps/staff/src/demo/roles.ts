@@ -305,6 +305,61 @@ export const DEMO_ROLES: readonly DemoRole[] = [
     ],
   },
   {
+    id: 'general-manager',
+    title: 'General manager',
+    who: 'Runs the facility: approvals, money that needs a decision, fields and reports.',
+    // Created by the demo dataset (apps/api/src/dev/seed-demo.ts), not by the development seed.
+    subject: 'demo-manager',
+    tour: [
+      {
+        path: '/today',
+        title: 'Today across the facility',
+        body: 'The same operating home as the front desk, with the exceptions of every queue: today a payment to check and a cancellation whose refund is to settle.',
+        tryThis: ['Open the exception about the cancellation', 'Acknowledge an exception'],
+      },
+      {
+        path: '/finance/payments',
+        title: 'Money that needs a decision',
+        body: 'One payment has an unknown outcome and one card was declined. A canceled registration waits for its refund to be settled, and one refund is still with the provider.',
+        tryThis: [
+          'Open the payment marked unknown and check it with the provider',
+          'Open the refund that is still processing',
+        ],
+      },
+      {
+        path: '/finance/point-of-sale',
+        link: 'openAmountSale',
+        title: 'Approve an open-amount line',
+        body: "The desk entered a line above its limit, so the sale cannot be paid yet. A second person approves it with a reason; the desk's own approval is refused.",
+        tryThis: ['Approve the line with a reason', 'Then take payment for the sale'],
+      },
+      {
+        path: '/registrations/queue',
+        title: 'Applications to decide',
+        body: 'Two children applied to the Advanced squad. Accepting an application offers the place; declining it records the reason.',
+        tryThis: ['Accept one application', 'Decline the other with a reason'],
+      },
+      {
+        path: '/facilities',
+        title: 'Fields and maintenance',
+        body: 'Assets, maintenance tasks and restrictions. A torn goal net on Field 3 was reported at the desk and is waiting for an owner.',
+        tryThis: ['Assign the task to yourself', 'Record what was done'],
+      },
+      {
+        path: '/schedule/closures',
+        title: 'Closures',
+        body: 'A closure of Field 3 is planned for a turf repair. Before it applies, the screen lists what it would affect.',
+        tryThis: ['Preview the impact of the closure', 'Withdraw it with a reason'],
+      },
+      {
+        path: '/reports',
+        title: 'Reports for the finance roles',
+        body: 'Stored runs of sales by product line, what is still owed and the registration funnel. The sales report lists open-amount register lines apart, one row each.',
+        tryThis: ['Open the sales run and find the lost key and the damage fee', 'Export a run'],
+      },
+    ],
+  },
+  {
     id: 'coach',
     title: 'Coach',
     who: 'Takes attendance, messages families and assesses players.',
