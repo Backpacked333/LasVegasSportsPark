@@ -315,6 +315,9 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
   const create = useApiCommand('post', '/offerings/{id}/price-rules', {
     invalidate: [['api', '/offerings/{id}/price-rules'], OFFERING_KEY],
   });
+  // SPK-PAY-002: a price starts now unless staff choose a later instant. "Now" sends no instant:
+  // the server stores its own, so nobody types the current minute and is refused for being late.
+  const [starts, setStarts] = useState<'now' | 'later'>('now');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [price, setPrice] = useState('');
@@ -354,9 +357,11 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
     if (!/^[A-Z]{3}$/.test(code)) errors.currency = 'Enter a three-letter currency code.';
     const base = /^[A-Z]{3}$/.test(code) ? parseMoneyInput(price, code, true) : null;
     if (base === null) errors.basePriceMinor = 'Enter the base price, for example 125.00.';
-    const effectiveFrom = localToInstant(from, zone);
+    const effectiveFrom = starts === 'later' ? localToInstant(from, zone) : undefined;
     const effectiveTo = to ? localToInstant(to, zone) : undefined;
-    if (!effectiveFrom) errors.effectiveFrom = 'Enter when this price takes effect.';
+    if (starts === 'later' && !effectiveFrom) {
+      errors.effectiveFrom = 'Enter when this price takes effect.';
+    }
     if (to && !effectiveTo) errors.effectiveTo = 'Enter a date and time, or leave empty.';
     const chargeLines: ChargeLine[] = [];
     charges.forEach((row, i) => {
@@ -395,12 +400,12 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
     const tiers = tiersOf(tiersOn ? tierRows : [], code, zone, wantsMember);
     Object.assign(errors, tiers.errors);
     setLocal(errors);
-    if (Object.keys(errors).length > 0 || base === null || !effectiveFrom) return;
+    if (Object.keys(errors).length > 0 || base === null) return;
     create
       .submit({
         path: { id: offering.id },
         body: {
-          effectiveFrom,
+          ...(effectiveFrom ? { effectiveFrom } : {}),
           ...(effectiveTo ? { effectiveTo } : {}),
           basePriceMinor: base,
           currency: code,
@@ -520,14 +525,27 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
             onChange={setCurrency}
             error={local.currency ?? server.currency}
           />
-          <TextField
-            label={`Effective from (${zoneLabel})`}
-            type="datetime-local"
-            required
-            value={from}
-            onChange={setFrom}
-            error={local.effectiveFrom ?? server.effectiveFrom}
+          <SelectField
+            label="This price starts"
+            hint="Now: from the moment you create this version."
+            value={starts}
+            onChange={(v) => setStarts(v === 'later' ? 'later' : 'now')}
+            options={[
+              { value: 'now', label: 'Starts now' },
+              { value: 'later', label: 'Starts at a date and time' },
+            ]}
+            error={starts === 'now' ? server.effectiveFrom : undefined}
           />
+          {starts === 'later' ? (
+            <TextField
+              label={`Effective from (${zoneLabel})`}
+              type="datetime-local"
+              required
+              value={from}
+              onChange={setFrom}
+              error={local.effectiveFrom ?? server.effectiveFrom}
+            />
+          ) : null}
           <TextField
             label={`Effective until (${zoneLabel})`}
             type="datetime-local"

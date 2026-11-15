@@ -7866,7 +7866,6 @@
           }
         },
         "required": [
-          "effectiveFrom",
           "basePriceMinor",
           "currency"
         ]

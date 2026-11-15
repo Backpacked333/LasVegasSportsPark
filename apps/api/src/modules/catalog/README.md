@@ -255,6 +255,15 @@ cannot set `source` or the id. `Program.source` is in every program read, which 
 - A new price rule starts at or after the clock (refused otherwise in every case) and closes the
   current open-ended rule where it begins; bounded windows must not overlap an existing rule;
   historical prices are never rewritten (DEC-007 for the actual prices, taxes and rounding).
+  "From now" (2026-11-15): `effectiveFrom` may be omitted, and an instant at most
+  `PRICE_EFFECTIVE_NOW_TOLERANCE_MS` (60 seconds, `catalog.policy.ts`, a technical tolerance)
+  behind the clock is read as now, because a caller's "now" is always behind the instant the
+  command runs at. Either way the rule is stored with the server's instant, never the caller's,
+  so no passed instant is priced and the exclusion constraint and the immutability trigger are
+  unchanged; anything earlier is refused as before. **Verified**:
+  `__tests__/price-rule-effective-now.spec.ts` (the clock moves between the caller's instant and
+  the command in every test). The staff price form offers "Starts now" by default and sends no
+  instant (`apps/staff/src/screens/programs/__tests__/OfferingSetupScreen.test.tsx`).
   Publication, and any edit of an offering beyond draft, require price rules that cover every
   instant of the remaining registration window, from the later of now and the opening to the
   closing (`price_rule_gap`, SPK-PAY-001).

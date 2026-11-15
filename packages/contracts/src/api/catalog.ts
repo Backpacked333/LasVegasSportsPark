@@ -819,7 +819,13 @@ export const PriceRuleSchema = z
 export type PriceRule = z.infer<typeof PriceRuleSchema>;
 
 export const CreatePriceRuleBody = withCommandMeta({
-  effectiveFrom: Instant,
+  /**
+   * When the rule takes effect. Omitted means "from now": the rule is stored with the server's
+   * instant. An instant up to a small technical tolerance (60 seconds) before the server's now is
+   * read the same way, because a caller's "now" is always slightly behind; anything earlier is
+   * refused (SPK-PAY-002: no price for the past).
+   */
+  effectiveFrom: Instant.optional(),
   effectiveTo: Instant.optional(),
   basePriceMinor: z.number().int().min(0).safe(),
   currency: CurrencyCode,
@@ -843,7 +849,11 @@ export const CreatePriceRuleBody = withCommandMeta({
   tiers: z.array(CreatePriceRuleTierSchema).max(20).default([]),
 })
   .refine(
-    (v) => v.effectiveTo === undefined || new Date(v.effectiveTo) > new Date(v.effectiveFrom),
+    // Without `effectiveFrom` the window is checked by the service against the server's now.
+    (v) =>
+      v.effectiveTo === undefined ||
+      v.effectiveFrom === undefined ||
+      new Date(v.effectiveTo) > new Date(v.effectiveFrom),
     { message: 'effectiveTo must be after effectiveFrom', path: ['effectiveTo'] },
   )
   .refine((v) => new Set(v.tiers.map((tier) => tier.code)).size === v.tiers.length, {

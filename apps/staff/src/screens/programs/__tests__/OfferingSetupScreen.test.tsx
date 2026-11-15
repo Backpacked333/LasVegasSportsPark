@@ -177,6 +177,7 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
     const f = within(form);
     await user.type(f.getByLabelText(/^Base price/), '125.50');
     await user.type(f.getByLabelText(/^Currency/), 'usd');
+    await user.selectOptions(f.getByLabelText('This price starts'), 'later');
     await user.type(f.getByLabelText(/^Effective from/), '2026-10-25T00:00');
     await user.click(f.getByRole('button', { name: 'Add a tax or fee' }));
     await user.type(f.getByLabelText('Charge 1 code'), 'STATE');
@@ -197,6 +198,43 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
         ],
       }),
     );
+  });
+
+  it('SPK-PAY-002: a price starts now by default: no instant is asked for or sent, and the server decides the moment; a later start is a choice', async () => {
+    const user = userEvent.setup();
+    const app = createTestApp({
+      routes: routes({ 'POST /offerings/{id}/price-rules': ok({}, 201) }),
+    });
+    render(app.at(`/programs/offerings/${OFFERING_ID}`));
+    const form = await screen.findByRole('form', { name: 'New price rule version' });
+    const f = within(form);
+    const starts = f.getByLabelText<HTMLSelectElement>('This price starts');
+    expect(starts.value).toBe('now');
+    expect(within(starts).getByRole('option', { name: 'Starts now' })).toBeInTheDocument();
+    // nobody types the current minute
+    expect(f.queryByLabelText(/^Effective from/)).toBeNull();
+    await user.type(f.getByLabelText(/^Base price/), '125.50');
+    await user.type(f.getByLabelText(/^Currency/), 'usd');
+    await user.click(f.getByRole('button', { name: 'Create price rule version' }));
+    await waitFor(() =>
+      expect(
+        app.fake.requests.find(
+          (r) => r.route === '/offerings/{id}/price-rules' && r.method === 'POST',
+        )?.body,
+      ).toEqual({ basePriceMinor: 12550, currency: 'USD', chargeLines: [] }),
+    );
+
+    // A later start asks for the instant and refuses to send without one.
+    await user.selectOptions(starts, 'later');
+    expect(f.getByLabelText(/^Effective from/)).toBeInTheDocument();
+    const sent = () =>
+      app.fake.requests.filter(
+        (r) => r.route === '/offerings/{id}/price-rules' && r.method === 'POST',
+      ).length;
+    const before = sent();
+    await user.click(f.getByRole('button', { name: 'Create price rule version' }));
+    expect(f.getByText('Enter when this price takes effect.')).toBeInTheDocument();
+    expect(sent()).toBe(before);
   });
 
   it('SPK-PAY-013, SPK-PAY-015: with the capabilities off the price form has no per-session or member price input', async () => {
@@ -269,6 +307,7 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
     expect(f.queryByLabelText(/^Member price/)).not.toBeInTheDocument();
     await user.type(f.getByLabelText(/^Base price/), '24.00');
     await user.type(f.getByLabelText(/^Currency/), 'usd');
+    await user.selectOptions(f.getByLabelText('This price starts'), 'later');
     await user.type(f.getByLabelText(/^Effective from/), '2026-10-25T00:00');
     await user.selectOptions(basis, 'per_session');
     await user.click(f.getByRole('button', { name: 'Create price rule version' }));
@@ -329,6 +368,7 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
 
     await user.type(f.getByLabelText(/^Base price/), '300.00');
     await user.type(f.getByLabelText(/^Currency/), 'USD');
+    await user.selectOptions(f.getByLabelText('This price starts'), 'later');
     await user.type(f.getByLabelText(/^Effective from/), '2026-10-25T00:00');
     await user.type(memberPrice, '250.00');
     await user.click(f.getByRole('button', { name: 'Create price rule version' }));

@@ -111,6 +111,7 @@ describe('SCR-S-14 offering setup: price tiers, add-ons and uniform', () => {
     expect(f.getByText(/pending DEC-097/)).toBeInTheDocument();
     await user.type(f.getByLabelText(/^Base price/), '300.00');
     await user.type(f.getByLabelText(/^Currency/), 'usd');
+    await user.selectOptions(f.getByLabelText('This price starts'), 'later');
     await user.type(f.getByLabelText(/^Effective from/), '2026-10-25T00:00');
     // A tier without a name or price is not sent.
     await user.click(f.getByRole('button', { name: 'Create price rule version' }));

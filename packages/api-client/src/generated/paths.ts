@@ -63186,7 +63186,7 @@ export type components = {
             chargeLines?: components["schemas"]["ChargeLine"][];
             currency: string;
             /** Format: date-time */
-            effectiveFrom: string;
+            effectiveFrom?: string;
             /** Format: date-time */
             effectiveTo?: string;
             expectedRevision?: number;

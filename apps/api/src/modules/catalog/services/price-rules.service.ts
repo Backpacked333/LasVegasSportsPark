@@ -24,6 +24,7 @@ import {
 } from '../../../kernel';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
+import { PRICE_EFFECTIVE_NOW_TOLERANCE_MS } from '../catalog.policy';
 import type { RemainingSession } from '../catalog.ports';
 import { organizationOf, toPriceRule, toPriceRuleTier } from '../catalog.shared';
 
@@ -33,6 +34,9 @@ import { organizationOf, toPriceRule, toPriceRuleTier } from '../catalog.shared'
  * previously open-ended rule is closed at that instant. The exclusion constraint in migration
  * 0200 is the final guarantee that one rule is effective per offering per instant; the trigger
  * keeps every rule's pricing content immutable.
+ *
+ * "Now" is this service's clock: a request without `effectiveFrom`, or with one at most
+ * `PRICE_EFFECTIVE_NOW_TOLERANCE_MS` behind the clock, starts the rule at the clock's instant.
  *
  * Proposed amendments (migration 0211): a rule may be priced per session (SPK-PAY-013, PA-02,
  * capability `per_session_pricing`) and may carry a member price with the membership entitlement
@@ -117,7 +121,15 @@ export class PriceRulesService {
         await this.capabilities.require(organizationId, 'price_tiers_addons', trx);
       }
       const now = this.clock.now();
-      const effectiveFrom = new Date(body.effectiveFrom);
+      const requestedFrom = body.effectiveFrom === undefined ? null : new Date(body.effectiveFrom);
+      // "From now": no instant given, or the caller's own "now", which is always a little behind
+      // this clock. The rule is then stored with this clock's instant, never the caller's, so no
+      // instant that has passed is priced.
+      const fromNow =
+        requestedFrom === null ||
+        (requestedFrom.getTime() < now.getTime() &&
+          now.getTime() - requestedFrom.getTime() <= PRICE_EFFECTIVE_NOW_TOLERANCE_MS);
+      const effectiveFrom = fromNow || requestedFrom === null ? now : requestedFrom;
       const effectiveTo = body.effectiveTo ? new Date(body.effectiveTo) : null;
       // SPK-PAY-002: a new rule never prices instants that have already passed, in any branch.
       if (effectiveFrom.getTime() < now.getTime()) {
@@ -125,6 +137,13 @@ export class PriceRulesService {
           'effectiveFrom must be at or after now; historical prices are never rewritten (SPK-PAY-002).',
           { path: 'effectiveFrom' },
         );
+      }
+      // The contract checks the window against the instant the caller gave; a rule that starts
+      // now is checked against the instant it is stored with.
+      if (effectiveTo && effectiveTo.getTime() <= effectiveFrom.getTime()) {
+        throw errors.validation('effectiveTo must be after effectiveFrom', {
+          path: 'effectiveTo',
+        });
       }
 
       const overlapping = await trx

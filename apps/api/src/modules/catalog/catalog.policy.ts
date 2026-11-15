@@ -41,6 +41,15 @@ export const POLICY_APPROVAL_ACTION: Record<PolicyKind, ActionDefinition> = {
 };
 
 /**
+ * SPK-PAY-002: how far before the server's clock a price rule's `effectiveFrom` may lie and
+ * still mean "from now". A caller's "now" is always a little behind the instant the command
+ * runs at (the request travels, the clock moves), so an instant within this tolerance is read as
+ * now and the rule is stored with the server's instant; anything earlier is a price for the past
+ * and is refused. A technical tolerance, not an operator decision; keep it small.
+ */
+export const PRICE_EFFECTIVE_NOW_TOLERANCE_MS = 60_000;
+
+/**
  * CAT-02, K-12 (§1.6, §6.5 Package G): the conditional capability an offering kind belongs to.
  * Creating, copying or publishing an offering of one of these kinds needs the organization's
  * switch (DEC-016 and the capability's own record: memberships DEC-072, session packages DEC-074,
