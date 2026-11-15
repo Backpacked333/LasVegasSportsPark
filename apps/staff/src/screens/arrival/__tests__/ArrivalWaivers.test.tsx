@@ -10,7 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { CHECKIN_1, CHILD_1, SESSION_1, checkin } from '../../../features/operations/testing';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
-import { WaiverActions, waiverIssues } from '../WaiverActions';
+import { WaiverActions, overrideActivityOf, waiverIssues } from '../WaiverActions';
 
 const VERSION = '0192f1a0-0000-7000-8000-0000000004a1';
 const GUARDIAN = '0192f1a0-0000-7000-8000-0000000004b1';
@@ -93,6 +93,7 @@ function setup(
   status: 'held' | 'admitted',
   extra: Record<string, { status: number; body: unknown }> = {},
   actions = ['catalog.accept_waiver', 'catalog.override_waiver'],
+  activity?: Record<string, string | null>,
 ) {
   const app = createTestApp({
     routes: {
@@ -102,7 +103,8 @@ function setup(
     },
   });
   const onRecheck = vi.fn();
-  const record = checkin(CHECKIN_1, CHILD_1, SESSION_1, status, issues);
+  const base = checkin(CHECKIN_1, CHILD_1, SESSION_1, status, issues);
+  const record = activity ? { ...base, activity } : base;
   render(<WaiverActions checkin={record as never} onRecheck={onRecheck} />, {
     wrapper: app.wrapper,
   });
@@ -232,6 +234,69 @@ describe('SCR-S-28 liability waiver at the desk', () => {
       reason: 'Guardian is bringing the form',
     });
     expect(onRecheck).not.toHaveBeenCalled();
+  });
+
+  it('SPK-REG-011: an override is recorded against the event of an event check-in', async () => {
+    const user = userEvent.setup();
+    const EVENT = '0192f1a0-0000-7000-8000-0000000004e1';
+    const { app } = setup(
+      [waiverIssue('waiver_missing', 'blocking')],
+      'held',
+      { 'POST /waiver-overrides': { status: 201, body: {} } },
+      undefined,
+      { type: 'event', id: EVENT, offeringId: null, sessionId: null, eventId: EVENT },
+    );
+    const group = await screen.findByRole('group', { name: 'Liability waiver' });
+    const override = within(group).getByRole('button', { name: 'Override with reason' });
+    await waitFor(() => expect(override).toBeEnabled());
+    await user.click(override);
+    const form = await screen.findByRole('group', {
+      name: 'Override the waiver for this activity',
+    });
+    await user.type(
+      within(form).getByLabelText(/Why is this participant let in/),
+      'Form is on file',
+    );
+    const submit = within(form).getByRole('button', { name: 'Record override' });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await user.click(submit);
+    await waitFor(() =>
+      expect(app.fake.requests.find((r) => r.route === '/waiver-overrides')?.body).toMatchObject({
+        activity: { type: 'scheduling_event', id: EVENT },
+      }),
+    );
+  });
+
+  it('SPK-REG-011: a check-in that names no session, offering or event offers no override and says where one is recorded', async () => {
+    const ACTIVITY = '0192f1a0-0000-7000-8000-0000000004f1';
+    const unresolved = {
+      type: 'event',
+      id: ACTIVITY,
+      offeringId: null,
+      sessionId: null,
+      eventId: null,
+    };
+    expect(overrideActivityOf(unresolved as never)).toBeNull();
+    expect(
+      overrideActivityOf({ ...unresolved, type: 'session', offeringId: ACTIVITY } as never),
+    ).toEqual({ type: 'offering', id: ACTIVITY });
+    const { app } = setup(
+      [waiverIssue('waiver_missing', 'blocking')],
+      'held',
+      {},
+      undefined,
+      unresolved,
+    );
+    const group = await screen.findByRole('group', { name: 'Liability waiver' });
+    expect(within(group).queryByRole('button', { name: 'Override with reason' })).toBeNull();
+    expect(
+      within(group).getByText(
+        /This check-in names no session, offering or event, so an override cannot be recorded here\./,
+      ),
+    ).toBeInTheDocument();
+    // signing and paper stay available
+    expect(within(group).getByRole('button', { name: 'Record paper waiver' })).toBeInTheDocument();
+    expect(app.fake.requests.some((r) => r.route === '/waiver-overrides')).toBe(false);
   });
 
   it('without the permission the actions are shown disabled with the reason', async () => {

@@ -21,8 +21,10 @@
  * - "Sign on this tablet": a digital acceptance by the named signer (staff never sign).
  * - "Record paper waiver": a staff entry in the staff member's name with the date on the paper;
  *   never shown as the customer's digital signature (SPK-REG-009).
- * - "Override with reason": only for a waiver that blocks. The approved waiver names the roles
- *   that may override; the API refuses any other role, and that refusal is shown.
+ * - "Override with reason": only for a waiver that blocks, and only when the check-in carries an
+ *   activity the API resolves (an offering session, an offering or a scheduling event); otherwise
+ *   a sentence says where an override can be recorded. The approved waiver names the roles that
+ *   may override; the API refuses any other role, and that refusal is shown.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -204,14 +206,35 @@ function TabletSigning({
   );
 }
 
+type WaiverOverrideActivity = Schema<'WaiverOverrideActivityRef'>;
+
+/**
+ * The activity an override of this check-in is recorded against, as the API resolves it: the
+ * session of an offering, the offering itself, or a scheduling event. Null when the check-in
+ * carries none of them: the check-in's own activity id is not one the API resolves (it answers
+ * NOT_FOUND), so no override is offered then.
+ */
+export function overrideActivityOf(
+  activity: SessionCheckin['activity'],
+): WaiverOverrideActivity | null {
+  if (activity.type === 'session') {
+    if (activity.sessionId) return { type: 'offering_session', id: activity.sessionId };
+    if (activity.offeringId) return { type: 'offering', id: activity.offeringId };
+    return null;
+  }
+  return activity.eventId ? { type: 'scheduling_event', id: activity.eventId } : null;
+}
+
 /** Records that a permitted role lets the participant in although the waiver rule blocks. */
 function WaiverOverrideForm({
   checkin,
+  activity,
   policyVersionId,
   onRecorded,
   onCancel,
 }: {
   checkin: SessionCheckin;
+  activity: WaiverOverrideActivity;
   policyVersionId: string;
   onRecorded: () => void;
   onCancel: () => void;
@@ -222,13 +245,6 @@ function WaiverOverrideForm({
   });
   const [reason, setReason] = useState('');
   const record = useApiCommand('post', '/waiver-overrides');
-  const activity =
-    checkin.activity.type === 'session' && checkin.activity.sessionId
-      ? ({ type: 'offering_session', id: checkin.activity.sessionId } as const)
-      : ({
-          type: 'scheduling_event',
-          id: checkin.activity.eventId ?? checkin.activity.id,
-        } as const);
   const ready = policy.data !== undefined && reason.trim().length > 0;
   const submit = () => {
     if (!ready || !policy.data) return;
@@ -291,6 +307,7 @@ function WaiverIssueActions({
   if (checkin.status === 'withdrawn' || issues.length === 0) return null;
   const mayAccept = permissions.isPermitted(ACCEPT_WAIVER_ACTION) === true;
   const mayOverride = permissions.isPermitted(OVERRIDE_WAIVER) === true;
+  const overrideActivity = overrideActivityOf(checkin.activity);
   const done = (message: string) => {
     setOpen(null);
     setOutcome(message);
@@ -300,12 +317,15 @@ function WaiverIssueActions({
   return (
     <div className="waiver-actions" role="group" aria-label="Liability waiver">
       {open?.mode === 'override' ? (
-        <WaiverOverrideForm
-          checkin={checkin}
-          policyVersionId={open.policyVersionId}
-          onCancel={() => setOpen(null)}
-          onRecorded={() => done('Override recorded')}
-        />
+        overrideActivity ? (
+          <WaiverOverrideForm
+            checkin={checkin}
+            activity={overrideActivity}
+            policyVersionId={open.policyVersionId}
+            onCancel={() => setOpen(null)}
+            onRecorded={() => done('Override recorded')}
+          />
+        ) : null
       ) : open ? (
         <WaiverAcceptanceForm
           personId={checkin.personId}
@@ -333,7 +353,7 @@ function WaiverIssueActions({
             >
               Record paper waiver
             </Button>
-            {issue.blocking ? (
+            {issue.blocking && overrideActivity ? (
               <Button
                 variant="secondary"
                 disabled={!online || !mayOverride}
@@ -348,6 +368,12 @@ function WaiverIssueActions({
         ))
       )}
       {outcome ? <CommandSuccess label={outcome} /> : null}
+      {!outcome && !overrideActivity && issues.some((issue) => issue.blocking) ? (
+        <p className="caption">
+          This check-in names no session, offering or event, so an override cannot be recorded here.
+          An override is recorded from the check-in of the session or event the participant attends.
+        </p>
+      ) : null}
       {!mayAccept ? (
         <p className="caption">Recording a waiver is not available to your role.</p>
       ) : null}
