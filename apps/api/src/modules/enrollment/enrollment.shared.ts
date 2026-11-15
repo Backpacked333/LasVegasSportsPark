@@ -548,6 +548,8 @@ export function toEnrollment(row: Selectable<EnrollmentsTable>): Enrollment {
     transferredFromEnrollmentId: row.transferred_from_enrollment_id,
     transferConsequence: emptyToNull<FinancialConsequence>(row.transfer_consequence),
     completedAt: isoOrNull(row.completed_at),
+    priceTierId: row.price_tier_id ?? null,
+    selectedSessionIds: row.selected_session_ids ?? null,
     // ENR-02: HTTP views enrich these (EnrollmentViews); ports return the bare record.
     offering: null,
     pendingReason: null,
@@ -783,6 +785,13 @@ export function toWaitlistEntry(
     acceptedEnrollmentId: row.accepted_enrollment_id,
     withdrawnAt: isoOrNull(row.withdrawn_at),
     removedAt: isoOrNull(row.removed_at),
+    priceTierId: row.price_tier_id ?? null,
+    selectedSessionIds: row.selected_session_ids ?? null,
+    addons: (row.requested_extras?.addons ?? []).map((addon) => ({
+      addonId: addon.addonId,
+      sessionIds: [...addon.sessionIds],
+    })),
+    uniform: row.requested_extras?.uniform ?? null,
     revision: row.revision,
     createdAt: iso(row.created_at),
   };

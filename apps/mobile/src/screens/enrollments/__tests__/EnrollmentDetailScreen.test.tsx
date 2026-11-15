@@ -209,6 +209,8 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
       id: IDS.enrollmentB,
       offeringId: IDS.offeringB,
       transferredFromEnrollmentId: IDS.enrollment,
+      priceTierId: null,
+      selectedSessionIds: null,
     });
     renderDetail(
       enrollment({ status: 'transferred', transferredToEnrollmentId: IDS.enrollmentB }),

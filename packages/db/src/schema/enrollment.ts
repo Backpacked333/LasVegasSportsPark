@@ -1,4 +1,4 @@
-import type { Generated } from 'kysely';
+import type { ColumnType, Generated } from 'kysely';
 import type {
   GeneratedJson,
   GeneratedTimestamp,
@@ -407,9 +407,26 @@ export interface WaitlistEntriesTable {
   withdrawn_at: NullableTimestamp;
   removed_at: NullableTimestamp;
   removal_reason: string | null;
+  /**
+   * 0524 (SPK-PAY-014, SPK-REG-012): what the entry waits for beyond a place: the tier, the days
+   * of a tier of chosen days (null = every session), and the add-ons and uniform asked for.
+   */
+  price_tier_id: Generated<string | null>;
+  selected_session_ids: Generated<string[] | null>;
+  requested_extras: ColumnType<
+    WaitlistRequestedExtras | null,
+    string | null | undefined,
+    string | null
+  >;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
+}
+
+/** The add-ons and uniform a waitlist entry asked for (0524). */
+export interface WaitlistRequestedExtras {
+  addons: Array<{ addonId: string; sessionIds: string[] }>;
+  uniform: { offeringUniformId: string; size: string } | null;
 }
 
 export type WaitlistOfferStatus = 'offered' | 'accepted' | 'expired' | 'declined';

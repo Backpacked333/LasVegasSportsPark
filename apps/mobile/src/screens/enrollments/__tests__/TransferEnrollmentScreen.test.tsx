@@ -40,6 +40,8 @@ const NEXT = enrollment({
   id: IDS.enrollmentB,
   offeringId: IDS.offeringB,
   transferredFromEnrollmentId: IDS.enrollment,
+  priceTierId: null,
+  selectedSessionIds: null,
   revision: 2,
 });
 const PREVIOUS = enrollment({

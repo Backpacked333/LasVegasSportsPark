@@ -77,6 +77,9 @@ export async function createEnrollmentFixture(
     entitlementDefinitionId?: string | null;
     orderRef?: string | null;
     price?: { basePriceMinor: number; currency: string; priceRuleId: string } | null;
+    /** 0521 (SPK-PAY-014): the tier bought and the sessions attended (default: every session). */
+    priceTierId?: string | null;
+    selectedSessionIds?: string[] | null;
     organizationId?: string;
   },
 ): Promise<string> {
@@ -121,6 +124,8 @@ export async function createEnrollmentFixture(
       transferred_to_enrollment_id: null,
       transferred_from_enrollment_id: null,
       transfer_consequence: null,
+      price_tier_id: input.priceTierId ?? null,
+      selected_session_ids: input.selectedSessionIds ?? null,
       completed_at: status === 'completed' ? now : null,
     })
     .execute();
