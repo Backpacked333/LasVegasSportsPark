@@ -196,6 +196,14 @@ describe('SPK-COMP-006 team waiting list (staff screens)', () => {
       await within(entries).findByRole('button', { name: 'Add to the waiting list' }),
     );
     const form = screen.getByRole('form', { name: 'Add the entry to the waiting list' });
+    // The divisions are a second read: the option must be there before it is chosen.
+    await waitFor(() =>
+      expect(
+        within(form)
+          .getByLabelText<HTMLSelectElement>('Wait for division')
+          .querySelector(`option[value="${ID.division}"]`),
+      ).not.toBeNull(),
+    );
     await user.selectOptions(within(form).getByLabelText('Wait for division'), ID.division);
     await user.click(within(form).getByRole('button', { name: 'Add to the waiting list' }));
     expect(await screen.findByText('Entry waiting')).toBeInTheDocument();
@@ -204,6 +212,13 @@ describe('SPK-COMP-006 team waiting list (staff screens)', () => {
 
     await user.click(within(entries).getByRole('button', { name: 'Approve' }));
     const approve = screen.getByRole('form', { name: 'Approve the entry' });
+    await waitFor(() =>
+      expect(
+        within(approve)
+          .getByLabelText<HTMLSelectElement>('Place in division')
+          .querySelector(`option[value="${ID.division}"]`),
+      ).not.toBeNull(),
+    );
     await user.selectOptions(within(approve).getByLabelText('Place in division'), ID.division);
     await user.click(within(approve).getByRole('button', { name: 'Approve the entry' }));
     expect(
