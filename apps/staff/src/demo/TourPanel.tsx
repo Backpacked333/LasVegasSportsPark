@@ -5,11 +5,12 @@
 import { useLocation, useNavigate } from 'react-router';
 import { Button } from '../ui/Button';
 import { Glass } from '../ui/glass/Glass';
+import { demoLinksFromEnv, stepPath, type DemoLinks } from './links';
 import { findRole } from './roles';
 import { setDemoState, useDemoState } from './store';
 import './demo.css';
 
-export function TourPanel() {
+export function TourPanel({ links = demoLinksFromEnv() }: { links?: DemoLinks }) {
   const demo = useDemoState();
   const navigate = useNavigate();
   const location = useLocation();
@@ -19,13 +20,19 @@ export function TourPanel() {
   const last = role.tour.length - 1;
   const index = Math.min(demo.step, last);
   const step = role.tour[index]!;
-  const onScreen = location.pathname === step.path;
+  // A step opens its seeded record when the demo knows it, otherwise its fallback screen.
+  const path = stepPath(step, links);
+  const onScreen = location.pathname === path.split('?')[0];
+  const open = (step.openLinks ?? []).flatMap((item) => {
+    const href = links[item.link];
+    return href ? [{ label: item.label, href }] : [];
+  });
 
   const go = (next: number) => {
     const target = role.tour[next];
     if (!target) return;
     setDemoState({ step: next });
-    navigate(target.path);
+    navigate(stepPath(target, links));
   };
 
   return (
@@ -53,8 +60,19 @@ export function TourPanel() {
           </ul>
         </>
       ) : null}
+      {open.length > 0 ? (
+        <ul className="demo-tour-links">
+          {open.map((item) => (
+            <li key={item.href}>
+              <a href={item.href} target="_blank" rel="noreferrer">
+                {item.label} (opens in a new tab, no sign-in)
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {!onScreen ? (
-        <Button variant="secondary" onClick={() => navigate(step.path)}>
+        <Button variant="secondary" onClick={() => navigate(path)}>
           Open this screen
         </Button>
       ) : null}
