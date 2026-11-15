@@ -333,7 +333,16 @@ describe('public competition views (SPK-SCHED-010)', () => {
       scheduler,
     );
     expect(enabled.status, JSON.stringify(enabled.body)).toBe(200);
-    const schedule = await anonymous(`${slug}/schedule/${enabled.body.publicCode}?date=${day}`);
+    // The public day schedule answers for yesterday to 14 days ahead (security review L-3); the
+    // games are 16 days after this suite's clock, so the day is read a week later.
+    t.clock.advance(7 * 24 * HOUR);
+    const schedule = await (async () => {
+      try {
+        return await anonymous(`${slug}/schedule/${enabled.body.publicCode}?date=${day}`);
+      } finally {
+        t.clock.advance(-7 * 24 * HOUR);
+      }
+    })();
     expect(schedule.status, JSON.stringify(schedule.body)).toBe(200);
     expect(schedule.body.entries).toEqual([
       {

@@ -32,11 +32,14 @@ const schedule = (
     entry(19, { title: 'Comets vs Rockets', score: { home: 5, away: 3 } }),
     entry(20),
   ],
+  date = '2026-11-21',
 ) => ({
   organizationName: 'Desert Park',
   facilityName: 'Main complex',
   timezone: TZ,
-  date: '2026-11-21',
+  date,
+  // The days the API answers for: yesterday to 14 days ahead of 2026-11-21.
+  window: { from: '2026-11-20', to: '2026-12-05' },
   fields: ['Field 1', 'Field 2'],
   entries,
   computedAt: '2026-11-21T16:30:00.000Z',
@@ -143,6 +146,53 @@ describe('SPK-SCHED-010 public pages (no sign-in)', () => {
       'href',
       `/public/${ORG}/schedule/${CODE}?date=2026-11-22`,
     );
+  });
+
+  it('SPK-SCHED-010 (security review L-3): the previous and next day controls stop at the first and last day the view answers for', async () => {
+    const app = createTestApp({
+      session: null,
+      routes: {
+        [SCHEDULE_ROUTE]: (req) =>
+          fakeResponse(200, schedule(undefined, req.query.date ?? '2026-11-21')),
+      },
+    });
+    const days = () => screen.getByRole('navigation', { name: 'Days' });
+    const href = (date: string) => `/public/${ORG}/schedule/${CODE}?date=${date}`;
+    // The first day of the window: no day before it is offered.
+    const first = render(app.at(href('2026-11-20')));
+    expect(await screen.findByText('Friday, November 20, 2026')).toBeInTheDocument();
+    expect(within(days()).queryByRole('link', { name: 'Previous day' })).toBeNull();
+    expect(within(days()).getByText('Previous day')).toHaveAttribute('aria-disabled', 'true');
+    expect(within(days()).getByRole('link', { name: 'Next day' })).toHaveAttribute(
+      'href',
+      href('2026-11-21'),
+    );
+    expect(screen.getByTestId('public-window')).toHaveTextContent(
+      'This page shows Friday, November 20, 2026 to Saturday, December 5, 2026.',
+    );
+    first.unmount();
+    // The last day of the window: no day after it is offered.
+    const last = render(app.at(href('2026-12-05')));
+    expect(await screen.findByText('Saturday, December 5, 2026')).toBeInTheDocument();
+    expect(within(days()).queryByRole('link', { name: 'Next day' })).toBeNull();
+    expect(within(days()).getByText('Next day')).toHaveAttribute('aria-disabled', 'true');
+    expect(within(days()).getByRole('link', { name: 'Previous day' })).toHaveAttribute(
+      'href',
+      href('2026-12-04'),
+    );
+    last.unmount();
+    // A day inside it: both.
+    render(app.at(href('2026-11-28')));
+    expect(await screen.findByText('Saturday, November 28, 2026')).toBeInTheDocument();
+    expect(within(days()).getByRole('link', { name: 'Previous day' })).toHaveAttribute(
+      'href',
+      href('2026-11-27'),
+    );
+    expect(within(days()).getByRole('link', { name: 'Next day' })).toHaveAttribute(
+      'href',
+      href('2026-11-29'),
+    );
+    expect(within(days()).getByRole('link', { name: 'Today' })).toBeInTheDocument();
   });
 
   it('SPK-SCHED-010: a view that is not public, unknown or turned off reads "Not available" and nothing else', async () => {

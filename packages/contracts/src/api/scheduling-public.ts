@@ -60,6 +60,12 @@ export const PublicDayScheduleSchema = z
     /** IANA zone of the facility; `date` and every time are read in it (SPK-SCHED-008). */
     timezone: z.string(),
     date: DateOnly,
+    /**
+     * The first and last facility-local day this view answers for: a window around today (a
+     * proposed default of yesterday to 14 days ahead, DEC-100 pending). A day outside it answers
+     * "not available", so a page stops its previous and next controls at these days.
+     */
+    window: z.object({ from: DateOnly, to: DateOnly }),
     /** The fields and rooms of the facility, in display order. */
     fields: z.array(z.string()),
     entries: z.array(PublicScheduleEntrySchema),
@@ -72,7 +78,10 @@ export const PublicDayScheduleSchema = z
 export type PublicDaySchedule = z.infer<typeof PublicDayScheduleSchema>;
 
 export const PublicDayScheduleQuery = z.object({
-  /** The facility-local day; today in the facility's zone when omitted. */
+  /**
+   * The facility-local day; today in the facility's zone when omitted. Only a day inside the
+   * view's `window` is answered.
+   */
   date: DateOnly.optional(),
 });
 export type PublicDayScheduleQuery = z.infer<typeof PublicDayScheduleQuery>;
@@ -125,7 +134,7 @@ const IdParams = z.object({ id: z.uuid() });
 
 /** The one answer of every public route that has nothing to show (ADR-005 "fail closed"). */
 export const PUBLIC_NOT_AVAILABLE =
-  'Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same';
+  'Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same';
 
 openApiRegistry.registerPath({
   method: 'get',

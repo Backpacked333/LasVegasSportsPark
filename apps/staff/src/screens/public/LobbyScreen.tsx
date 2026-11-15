@@ -82,6 +82,8 @@ export function LobbyScreen() {
   // Hooks are called a fixed number of times: a lobby shows at most two seasons' standings.
   const firstSeason = useSeasonPages(organization, seasons[0]);
   const secondSeason = useSeasonPages(organization, seasons[1]);
+  // Today only: the read names no day, so it is always inside the days the API answers for (a
+  // window around today, security review L-3), and a lobby has no previous or next day control.
   const view = usePublicView(
     { path: '/public/{organization}/schedule/{code}', request: { path: { organization, code } } },
     `lobby:${organization}:${code}`,

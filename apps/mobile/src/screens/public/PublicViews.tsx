@@ -116,6 +116,11 @@ function Choice({
   );
 }
 
+/**
+ * Today only: the read names no day, so it is always inside the days the API answers for (a
+ * window around today, security review L-3) and the screen has no previous or next day control
+ * that could leave it.
+ */
 function DaySchedule({ slug, code }: { slug: string; code: string }) {
   const schedule = useApiQuery({
     path: '/public/{organization}/schedule/{code}',

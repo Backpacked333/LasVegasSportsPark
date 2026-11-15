@@ -465,20 +465,32 @@ Status words follow §6.7. The requirement is **Proposed**
   kind in words ("Class", "Practice", "League game", "Not available") unless the module that owns
   its source vouches for a title through `PublicScheduleTitles` (competition does, for the games
   of a public competition). Draft and canceled events are not part of the day.
+- **The public read answers for a window of days around today only** (security review L-3,
+  2026-11-14): from `SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK` days before today to
+  `SCHEDULING_PUBLIC_SCHEDULE_DAYS_AHEAD` days after it, where today is the facility-local day
+  (`facilities.timezone`, SPK-SCHED-008), so the window turns at the facility's midnight and not
+  at UTC's. A day outside the window answers the same "not available" as an unknown code; the
+  answer carries `window: { from, to }` so a page stops its day controls there. An anonymous
+  caller can no longer walk the facility's history or its whole forward booking state (the times
+  of private bookings included). The two values are technical settings of the module's settings
+  section (`scheduling.settings.ts`, K-15: read from the environment and validated at boot, a
+  malformed value refuses boot).
 - Every public read counts against the rate limit `public_views` per client address
   (`kernel/http/rate-limit.ts`, 120 a minute by default, `RATE_LIMITS=public_views=<n>/<seconds>`);
   a successful answer carries `Cache-Control: public, max-age=30` and `computedAt`; an unknown
-  organization, an unknown, malformed or disabled code and the capability turned off all answer
-  the same `NOT_FOUND` "This view is not available." with `no-store`.
+  organization, an unknown, malformed or disabled code, a day outside the window and the
+  capability turned off all answer the same `NOT_FOUND` "This view is not available." with
+  `no-store`.
 - Exported for other modules: `PublicScheduleTitles`, `resolvePublicOrganization`,
   `publicViewNotAvailable`, `assertPublicAddress`, `allowPublicCache`, `newPublicCode`.
 
 **Proposed** (defaults this build assumes): the wording "Reserved" for private bookings; a public
 schedule exists only where staff enabled it; the cache lifetime and the rate limit are technical
-values.
+values; the window of days is yesterday to 14 days ahead
+(`SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK=1`, `SCHEDULING_PUBLIC_SCHEDULE_DAYS_AHEAD=14`).
 
-**Pending decision** (DEC-100): what is public; the wording shown for private bookings; the number
-of lobby screens and what they show. A class reads "Class" unless catalog vouches for its name:
+**Pending decision** (DEC-100): what is public, and for how many days back and ahead; the wording
+shown for private bookings; the number of lobby screens and what they show. A class reads "Class" unless catalog vouches for its name:
 catalog registers the contributor `catalog.public_sessions`, which answers the offering's name for
 a session of an offering that is in the public catalog (**Verified**:
 `catalog/__tests__/public-session-titles.spec.ts`).

@@ -18,6 +18,7 @@ import {
   CapabilityService,
   CLOCK,
   DATABASE,
+  MODULE_SETTINGS,
   Outbox,
   UnitOfWork,
   assertExpectedRevision,
@@ -28,8 +29,9 @@ import {
 } from '../../../kernel';
 import { SchedulingActions } from '../scheduling.actions';
 import { PublicScheduleViewChanged } from '../scheduling.events';
+import { SchedulingSettings, type SchedulingSettingsValue } from '../scheduling.settings';
 import { organizationOf } from '../services/organization';
-import { addDays, localDateOf, resolveLocal } from '../time/local-time';
+import { addDays, compareLocalDates, localDateOf, resolveLocal } from '../time/local-time';
 import {
   PUBLIC_CACHE_SECONDS,
   PublicScheduleTitles,
@@ -61,7 +63,10 @@ type ViewRow = Selectable<FacilityPublicViewsTable>;
 /**
  * A facility's public day schedule and the staff switch that enables it (SPK-SCHED-010, proposed
  * amendment PA-06; capability `public_schedule`, pending DEC-100; ADR-005). The public read is a
- * query of its own into `PublicDaySchedule`, a shape with no person, booker, contact or id.
+ * query of its own into `PublicDaySchedule`, a shape with no person, booker, contact or id. It
+ * answers for a window of days around today in the facility's zone only (settings
+ * `SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK` and `_DAYS_AHEAD`; security review L-3): the facility's
+ * history and its whole forward booking state are not an anonymous read.
  */
 @Injectable()
 export class PublicScheduleService {
@@ -74,6 +79,8 @@ export class PublicScheduleService {
     private readonly outbox: Outbox,
     private readonly capabilities: CapabilityService,
     private readonly titles: PublicScheduleTitles,
+    @Inject(MODULE_SETTINGS(SchedulingSettings.module))
+    private readonly settings: SchedulingSettingsValue,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -100,7 +107,17 @@ export class PublicScheduleService {
     if (!facility) throw publicViewNotAvailable();
 
     const now = this.clock.now();
-    const day = date ?? localDateOf(facility.timezone, now);
+    // The days this view answers for: a window around today in the facility's zone
+    // (SPK-SCHED-008). Any other day gets the one answer of everything that is not public.
+    const today = localDateOf(facility.timezone, now);
+    const window = {
+      from: addDays(today, -this.settings.PUBLIC_SCHEDULE_DAYS_BACK),
+      to: addDays(today, this.settings.PUBLIC_SCHEDULE_DAYS_AHEAD),
+    };
+    const day = date ?? today;
+    if (compareLocalDates(day, window.from) < 0 || compareLocalDates(day, window.to) > 0) {
+      throw publicViewNotAvailable();
+    }
     const from = resolveLocal(day, '00:00', facility.timezone)?.instant;
     const to = resolveLocal(addDays(day, 1), '00:00', facility.timezone)?.instant;
     if (!from || !to) throw errors.validation('date is not a day of this facility.', { date: day });
@@ -166,6 +183,7 @@ export class PublicScheduleService {
       facilityName: facility.name,
       timezone: facility.timezone,
       date: day,
+      window,
       fields: resources.map((resource) => resource.name),
       entries,
       computedAt: now.toISOString(),
