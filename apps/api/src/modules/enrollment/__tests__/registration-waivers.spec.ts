@@ -230,8 +230,10 @@ describe('registration and roster readiness with required waivers (SPK-REG-011, 
   });
 
   it('SPK-REG-011: roster readiness counts rostered participants whose waiver is missing or lapsed, as a warning or a block by the approved rule, and reports nothing for a current one', async () => {
-    const warnKey = waiverKey();
-    const blockKey = waiverKey();
+    // Findings come in key order (`WaiversService.requiredKeys`), so the two keys are named to
+    // sort the same way every run: the rule that warns first, the rule that blocks second.
+    const warnKey = `a-${waiverKey()}`;
+    const blockKey = `b-${waiverKey()}`;
     const warnVersion = await waiver(warnKey, { renewEveryMonths: 6 });
     const blockVersion = await waiver(blockKey, { enforcement: 'block' });
     const setup = await offering(t);

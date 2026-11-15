@@ -9,7 +9,7 @@ import {
   type OfferingUniform,
   type Principal,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams } from '../../../kernel';
+import { CurrentPrincipal, Idempotent, RecordAuthority, ZodBody, ZodParams } from '../../../kernel';
 import { CorrelationId } from '../catalog.shared';
 import { OfferingExtrasService } from '../services/offering-extras.service';
 
@@ -19,12 +19,16 @@ type Id = z.infer<typeof IdParams>;
 /**
  * Add-ons (SPK-PAY-014, proposed amendment PA-03) and uniforms (SPK-REG-012, proposed amendment
  * PA-07) of an offering, and the purchase options a customer chooses from.
+ *
+ * Record authority (§5.3, §5.6): an add-on and a uniform are configuration of their offering,
+ * the program category, like its price rules.
  */
 @Controller()
 export class OfferingExtrasController {
   constructor(private readonly extras: OfferingExtrasService) {}
 
   @Post('offerings/:id/addons')
+  @RecordAuthority('program')
   @Idempotent()
   createAddon(
     @CurrentPrincipal() principal: Principal,
@@ -44,6 +48,7 @@ export class OfferingExtrasController {
   }
 
   @Post('offering-addons/:id/retire')
+  @RecordAuthority('program')
   @HttpCode(200)
   @Idempotent()
   retireAddon(
@@ -56,6 +61,7 @@ export class OfferingExtrasController {
   }
 
   @Post('offerings/:id/uniforms')
+  @RecordAuthority('program')
   @Idempotent()
   createUniform(
     @CurrentPrincipal() principal: Principal,
@@ -75,6 +81,7 @@ export class OfferingExtrasController {
   }
 
   @Post('offering-uniforms/:id/retire')
+  @RecordAuthority('program')
   @HttpCode(200)
   @Idempotent()
   retireUniform(

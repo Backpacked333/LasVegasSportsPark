@@ -7,11 +7,21 @@ import {
   type Principal,
   type UniformOrder,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  NoRecordAuthority,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CorrelationId } from '../enrollment.shared';
 import { UniformOrdersService } from '../services/uniform-orders.service';
 
 const IdParams = z.object({ id: z.uuid() });
+
+/** §5.6: handing a uniform over is a facility fact that exists in no source system. */
+const NOT_A_RECORD = 'A uniform hand-over is not a §5.3 record category';
 
 /**
  * Uniform orders of a class or a team, and their hand-over (SPK-REG-012, proposed amendment
@@ -30,6 +40,7 @@ export class UniformOrdersController {
   }
 
   @Post(':id/hand-over')
+  @NoRecordAuthority(NOT_A_RECORD)
   @HttpCode(200)
   @Idempotent()
   handOver(
@@ -42,6 +53,7 @@ export class UniformOrdersController {
   }
 
   @Post(':id/hand-over-corrections')
+  @NoRecordAuthority(NOT_A_RECORD)
   @HttpCode(200)
   @Idempotent()
   correctHandOver(
