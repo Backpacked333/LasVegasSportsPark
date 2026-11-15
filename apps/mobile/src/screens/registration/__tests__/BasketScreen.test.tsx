@@ -277,6 +277,73 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(app.progressStore.snapshot()).toEqual({ pendingCheckoutQuoteId: null });
   });
 
+  it('SPK-PAY-014, SPK-REG-012 (QA M-2): when what a line chose is full the wording says so, and the waitlist is joined for exactly that choice', async () => {
+    const day = '0192f1a0-0000-7000-8000-0000000000d1';
+    const chosen = line({
+      priceTierId: '0192f1a0-0000-7000-8000-0000000000f1',
+      selectedSessionIds: [day],
+      addons: [
+        {
+          addonId: '0192f1a0-0000-7000-8000-0000000000a1',
+          code: 'lunch',
+          name: 'Lunch',
+          selection: 'per_session',
+          sessionIds: [day],
+          priceMinor: 900,
+          currency: 'USD',
+          quantity: 1,
+        },
+      ],
+      uniform: {
+        offeringUniformId: '0192f1a0-0000-7000-8000-0000000000b1',
+        itemKey: 'kit',
+        name: 'Camp kit',
+        size: 'YM',
+        priceMinor: 2500,
+        currency: 'USD',
+        returningHolderFree: false,
+        heldUniformOrderId: null,
+      },
+    });
+    const app = renderBasket({
+      routes: routes({
+        'GET /baskets/{id}': { status: 200, body: basket({ lines: [chosen] }) },
+        'POST /registration-quotes': () =>
+          fakeResponse(
+            409,
+            apiErrorBody('CAPACITY_UNAVAILABLE', {
+              nextAction: 'join_waitlist_or_choose_alternative',
+            }),
+          ),
+        'POST /waitlist-entries': { status: 201, body: waitlistEntry() },
+      }),
+    });
+    const price = await screen.findByRole('button', { name: 'Get your price' });
+    await act(async () => {
+      fireEvent.press(price);
+    });
+    expect(
+      await screen.findByText(
+        'The activity, a day or an extra you chose is full for at least one line. Nothing was charged. You can join the waitlist for exactly what you chose, or remove the line and choose something else.',
+      ),
+    ).toBeOnTheScreen();
+    // The participant's name arrives with the family read, which may land after the basket.
+    const join = await screen.findByRole('button', { name: 'Join the waitlist for Ada' });
+    await act(async () => {
+      fireEvent.press(join);
+    });
+    expect(app.fake.requests.find((r) => r.route === '/waitlist-entries')?.body).toEqual({
+      offeringId: IDS.offering,
+      participantPersonId: IDS.childA,
+      intent: 'youth',
+      preferences: {},
+      priceTierId: '0192f1a0-0000-7000-8000-0000000000f1',
+      selectedSessionIds: [day],
+      addons: [{ addonId: '0192f1a0-0000-7000-8000-0000000000a1', sessionIds: [day] }],
+      uniform: { offeringUniformId: '0192f1a0-0000-7000-8000-0000000000b1', size: 'YM' },
+    });
+  });
+
   it('a checkout whose answer never arrived (app closed mid-payment) is found again from the basket', async () => {
     renderBasket({
       progress: { pendingCheckoutQuoteId: IDS.quote },

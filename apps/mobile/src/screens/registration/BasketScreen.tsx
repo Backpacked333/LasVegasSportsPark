@@ -285,6 +285,9 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
   const status = basketStatus(basket, now);
   const ended = basket.status === 'expired' || basket.status === 'released';
   const capacityFailed = failure?.error.code === 'CAPACITY_UNAVAILABLE';
+  const waitlistFirst =
+    capacityFailed &&
+    (failure?.error.details as { waitlistFirst?: unknown } | undefined)?.waitlistFirst === true;
   const forms = useFormsStatus(
     basket.lines.map((l) => ({
       participantPersonId: l.participantPersonId,
@@ -397,9 +400,12 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
       />
       {capacityFailed ? (
         <Section title="No place available">
+          {/* SPK-PAY-014 (quality review M-2, m-6): what is full may be the activity, a day or
+              an extra that was chosen; the waitlist is joined for exactly what the line chose. */}
           <Body>
-            There is no place left for at least one line. Nothing was charged. You can join the
-            waitlist for a participant, or remove the line and continue.
+            {waitlistFirst
+              ? 'Places that come free go to the people already waiting. Nothing was charged. You can join the waitlist for what you chose, or remove the line and continue.'
+              : 'The activity, a day or an extra you chose is full for at least one line. Nothing was charged. You can join the waitlist for exactly what you chose, or remove the line and choose something else.'}
           </Body>
         </Section>
       ) : null}
