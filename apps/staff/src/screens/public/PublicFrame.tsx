@@ -6,6 +6,7 @@
  * connection is down. Nothing here reads the session: these routes are outside the session guard.
  */
 import type { ReactNode } from 'react';
+import { Glass } from '../../ui/glass/Glass';
 import type { PublicViewState } from './usePublicView';
 import './public.css';
 
@@ -110,12 +111,23 @@ export function PublicFrame<T extends { computedAt: string }>({
   const sub = subtitle ? subtitle(data) : null;
   return (
     <main className="public-page" data-variant={variant}>
-      <header className="public-header">
-        <p className="public-organization">{organizationName(data)}</p>
-        <h1>{title(data)}</h1>
-        {sub ? <p className="public-subtitle">{sub}</p> : null}
+      {/* The one glass body of a public page: the header floats on the backdrop; the tables under
+          it are solid, because they are read from a distance (ADR-001). */}
+      <Glass
+        as="header"
+        radius={variant === 'lobby' ? 32 : 24}
+        squircle
+        material="frost"
+        className="public-header"
+        contentClassName="public-header-inner"
+      >
+        <div className="public-header-text">
+          <p className="public-organization">{organizationName(data)}</p>
+          <h1>{title(data)}</h1>
+          {sub ? <p className="public-subtitle">{sub}</p> : null}
+        </div>
         <LastUpdated computedAt={data.computedAt} timezone={zone} stale={view.stale} />
-      </header>
+      </Glass>
       {nav}
       {children(data)}
     </main>

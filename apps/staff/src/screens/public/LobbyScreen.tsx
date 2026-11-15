@@ -126,7 +126,15 @@ export function LobbyScreen() {
             <h2>{page.label}</h2>
             {page.render()}
             {pages.length > 1 ? (
-              <p className="public-note">
+              <p className="public-pager">
+                <span className="public-pager-dots" aria-hidden="true">
+                  {pages.map((each, index) => (
+                    <span
+                      key={each.key}
+                      data-current={index === turn % pages.length ? 'true' : 'false'}
+                    />
+                  ))}
+                </span>
                 Screen {(turn % pages.length) + 1} of {pages.length}
               </p>
             ) : null}
