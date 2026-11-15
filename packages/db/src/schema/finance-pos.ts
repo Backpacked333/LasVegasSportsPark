@@ -158,6 +158,12 @@ export interface PosSaleLinesTable {
   entered_by_person_id: Generated<string | null>;
   approval_ceiling_minor: Generated<number | null>;
   approval_required: Generated<boolean | null>;
+  /**
+   * 0697: the open-amount total its enterer had in effect on the sale, this line included, when
+   * the line was entered. Derived by the database; `approval_required` follows from it and the
+   * ceiling. Null on product lines and on lines written before 0697 (judged alone).
+   */
+  entered_total_minor: Generated<number | null>;
   policy_version_id: Generated<string | null>;
   created_at: GeneratedTimestamp;
 }
@@ -174,6 +180,8 @@ export interface PosLineApprovalsTable {
   currency: string;
   amount_minor: MinorUnits;
   ceiling_minor: MinorUnits;
+  /** 0697: the enterer's open-amount total on the sale the approval was given for (derived). */
+  entered_total_minor: Generated<number | null>;
   reason: string;
   approved_by: Json<Record<string, unknown>>;
   approved_by_person_id: string;

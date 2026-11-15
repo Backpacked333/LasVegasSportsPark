@@ -5,14 +5,17 @@
  * - OtherAmountForm: a line that is not a product: what it is for, an amount and a reason category
  *   of the approved list (`POST /v1/pos-sales/{id}/lines`). The categories and the viewer's own
  *   ceiling come from `GET /v1/pos-open-amount-rules`; while the facility has approved no policy
- *   the API applies its proposed default and the form says so, naming the decision. An amount
- *   above the ceiling can be entered: the form says, before it is sent, that the sale will then
- *   wait for a second person.
- * - OpenAmountApprovals: the approval step. While an open sale holds a line above the ceiling of
- *   the person who entered it, the page says the sale cannot take a tender, who approves (the
- *   approving roles the API names, never the person who entered the line) and, to a permitted
- *   second person, offers the approval with its reason
- *   (`POST /v1/pos-sales/{id}/lines/{lineId}/approval`). The line can be removed instead.
+ *   the API applies its proposed default and the form says so, naming the decision. The ceiling
+ *   is for everything the person enters as other amounts on one sale, not for each line: the
+ *   form adds the amount to what they already have on the sale and says, before it is sent, when
+ *   the sale will then wait for a second person.
+ * - OpenAmountApprovals: the approval step. While an open sale holds a line the API marks as
+ *   waiting (`awaitingApproval`: its own amount, or the total of the person who entered it on
+ *   this sale, is above that person's ceiling), the page says the sale cannot take a tender, who
+ *   approves (the approving roles the API names, never the person who entered the line) and, to
+ *   a permitted second person, offers the approval with its reason
+ *   (`POST /v1/pos-sales/{id}/lines/{lineId}/approval`). A line can be removed instead; once the
+ *   person's amounts on the sale are within the ceiling again, nothing waits.
  * - OpenAmountLineText / RemoveOpenAmountLine: how such a line reads on the sale and its ticket.
  * - SessionOpenAmountLines: the session's open-amount lines apart from its product sales
  *   (`GET /v1/pos-register-sessions/{id}/open-amount-lines`), for review.
@@ -77,9 +80,15 @@ export function useOpenAmountOffer(facilityId: string) {
 /** The open-amount lines of an open sale that still wait for their second approval. */
 export function linesAwaitingApproval(sale: Sale): Line[] {
   if (sale.status !== 'open') return [];
-  return sale.lines.filter(
-    (l) => l.openAmount?.approvalRequired === true && !l.openAmount.approval,
-  );
+  return sale.lines.filter((l) => l.openAmount?.awaitingApproval === true);
+}
+
+/** What one person has in other amounts on the sale now (the sale lists its lines in effect). */
+export function enteredOnSale(sale: Sale, personId: string | null): number {
+  if (personId === null) return 0;
+  return sale.lines
+    .filter((l) => l.openAmount?.enteredByPersonId === personId)
+    .reduce((sum, l) => sum + l.unitPriceMinor, 0);
 }
 
 function approverWords(roles: readonly string[] | undefined): string {
@@ -104,13 +113,17 @@ export function OtherAmountForm({ sale, onReload }: { sale: Sale; onReload: () =
   const [touched, setTouched] = useState(false);
   const command = useApiCommand('post', '/pos-sales/{id}/lines', SALE_COMMAND);
   const intent = useIntentForm(command);
+  const me = useMyPersonId();
   const c = sale.currency;
   const amountMinor = parseMoneyInput(amount, c);
   const data = rules.data;
   const ceiling = data?.ceilingMinor ?? null;
   const otherCurrency =
     data && data.currency !== null && data.currency !== c ? data.currency : null;
-  const above = amountMinor !== null && ceiling !== null && amountMinor > ceiling;
+  // The ceiling is for what this person enters on this sale: what they already have counts.
+  const already = enteredOnSale(sale, me);
+  const wouldTotal = amountMinor === null ? null : already + amountMinor;
+  const above = wouldTotal !== null && ceiling !== null && wouldTotal > ceiling;
   const descriptionError = !description.trim()
     ? 'Describe what the amount is for.'
     : description.trim().length > 200
@@ -192,17 +205,21 @@ export function OtherAmountForm({ sale, onReload }: { sale: Sale; onReload: () =
             hint={
               ceiling === null
                 ? 'A positive amount, before taxes.'
-                : `A positive amount, before taxes. Your ceiling is ${formatMoney(ceiling, c)}: above it a second person approves.`
+                : `A positive amount, before taxes. Your ceiling is ${formatMoney(ceiling, c)} for the other amounts you enter on one sale${
+                    already > 0 ? ` (you have ${formatMoney(already, c)} on this one)` : ''
+                  }: above it a second person approves.`
             }
             error={touched && amountMinor === null ? `Enter a positive amount in ${c}.` : null}
             disabled={intent.locked}
           />
           {above ? (
             <p role="status" data-testid="open-amount-above">
-              <StatusBadge tone="warning" label="Above your ceiling" /> This amount is above your
-              ceiling of {formatMoney(ceiling, c)}. It can be added, but the sale cannot take a
-              tender or finish until {approverWords(data?.approverRoles)} other than you approves
-              the line.
+              <StatusBadge tone="warning" label="Above your ceiling" />{' '}
+              {already > 0 && wouldTotal !== null
+                ? `With this amount, the other amounts you entered on this sale total ${formatMoney(wouldTotal, c)}, above your ceiling of ${formatMoney(ceiling, c)}.`
+                : `This amount is above your ceiling of ${formatMoney(ceiling, c)}.`}{' '}
+              It can be added, but the sale cannot take a tender or finish until{' '}
+              {approverWords(data?.approverRoles)} other than you approves the line.
             </p>
           ) : null}
           <Button type="submit" busy={command.isProcessing} disabled={!online || intent.locked}>
@@ -263,10 +280,11 @@ function ApprovalStep({
       </p>
       <p>
         {awaiting.length === 1 ? 'A line' : `${awaiting.length} lines`} on this sale{' '}
-        {awaiting.length === 1 ? 'is' : 'are'} above the ceiling of the person who entered{' '}
-        {awaiting.length === 1 ? 'it' : 'them'}. The sale cannot take a tender or finish before{' '}
-        {approverWords(rules.data?.approverRoles)} approves each one. The person who entered a line
-        never approves it. A line can also be removed from the ticket.
+        {awaiting.length === 1 ? 'takes' : 'take'} the other amounts of the person who entered{' '}
+        {awaiting.length === 1 ? 'it' : 'them'} above that person&apos;s ceiling. The ceiling counts
+        every other amount one person enters on one sale. The sale cannot take a tender or finish
+        before {approverWords(rules.data?.approverRoles)} approves each one. The person who entered
+        a line never approves it. A line can also be removed from the ticket.
       </p>
       <ul className="list" aria-label="Lines waiting for a second approval">
         {awaiting.map((line) => (
@@ -304,7 +322,10 @@ function ApproveLine({
         <strong>{open.description}</strong> · {line.name} · {formatMoney(line.unitPriceMinor, c)}{' '}
         <span className="caption">
           Ceiling {formatMoney(open.ceilingMinor, c)}. Entered by{' '}
-          <PersonName id={open.enteredByPersonId} fallback="Staff" />.
+          <PersonName id={open.enteredByPersonId} fallback="Staff" />
+          {open.enteredTotalMinor > line.unitPriceMinor
+            ? `, whose other amounts on this sale then totalled ${formatMoney(open.enteredTotalMinor, c)}.`
+            : '.'}
         </span>
       </p>
       {!offer.on ? (
@@ -375,7 +396,7 @@ export function OpenAmountLineText({ line, zone }: { line: Line; zone: string | 
             Approved by <PersonName id={open.approval.approvedByPersonId} fallback="Staff" />,{' '}
             {formatInstant(open.approval.approvedAt, zone)}: {open.approval.reason}
           </>
-        ) : open.approvalRequired ? (
+        ) : open.awaitingApproval ? (
           ' Waiting for a second approval.'
         ) : null}
       </span>
@@ -514,8 +535,10 @@ export function SessionOpenAmountLines({
                             {formatInstant(item.approval.approvedAt, zone)}: {item.approval.reason}
                           </span>
                         </>
-                      ) : item.approvalRequired ? (
+                      ) : item.awaitingApproval ? (
                         <StatusBadge tone="warning" label="waiting for a second approval" />
+                      ) : item.approvalRequired ? (
+                        `Not given: lines were removed until this person's amounts on the sale were within the ceiling of ${formatMoney(item.ceilingMinor, item.currency)}`
                       ) : (
                         `Not needed: within the ceiling of ${formatMoney(item.ceilingMinor, item.currency)}`
                       )}

@@ -53,8 +53,9 @@ nothing of the API, while the capability is off and on a party. **Verified**
 **Proposed**, behind the capability `open_amount_lines` (DEC-102 pending: the categories, the
 ceilings, who may enter and who may approve). `point-of-sale/OpenAmount.tsx` adds to SCR-S-55:
 "Other amount" on an open sale (what it is for, an amount, a reason category; the form names the
-decision while the API applies its proposed default, and says before sending when the amount is
-above the viewer's ceiling); the approval step (the sale offers no tender, the page says who
+decision while the API applies its proposed default, and says before sending when the amount,
+with the other amounts the viewer already entered on the sale, is above the viewer's ceiling: the
+ceiling counts everything one person enters on one sale, security review M-4); the approval step (the sale offers no tender, the page says who
 approves and that the sale cannot finish before, and a permitted second person approves with a
 reason; the person who entered the line is told another person approves it); the line on the sale,
 its ticket (removal only) and its receipt by its description and category; and the session's

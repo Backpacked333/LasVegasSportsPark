@@ -52,14 +52,15 @@ import { TaxFeeContent, chargeFor, returnedShare } from './pos-charges';
 import { PosSaleFinalizer, type PosSaleRow } from './pos-sale-finalizer.service';
 import { PosSetupService } from './pos-setup.service';
 import {
-  PAID_SALE_STATES,
+  enteredTotalOf,
   liveLines,
   loadSaleParts,
+  PAID_SALE_STATES,
+  type PosSaleLineRow,
   returnedUnits,
   revenueKeyOf,
   toPosReceipt,
   toPosSale,
-  type PosSaleLineRow,
 } from './pos-views';
 
 /** The catalog policy kind of approved taxes and fees (CAT-02, IF-48). */
@@ -520,8 +521,11 @@ export class PosSalesService {
         // Who removed it: the removal is its own entry.
         entered_by: json(snapshotActor(principal)),
         entered_by_person_id: principal.personId,
+        // A removal repeats the ceiling, the total it was judged against and the approval need of
+        // the line it removes (the database refuses anything else, migration 0697).
         approval_ceiling_minor: line.approval_ceiling_minor,
         approval_required: line.approval_required,
+        entered_total_minor: line.entered_total_minor,
         policy_version_id: line.policy_version_id,
       })
       .execute();
@@ -680,18 +684,20 @@ export class PosSalesService {
       // the switch is turned off, and its session and register can then be closed.
       if (sale.status !== 'open') throw errors.invalidTransition('PosSale', sale.status, 'tender');
       assertExpectedRevision(input.expectedRevision, sale.revision);
-      // SPK-PAY-016 (proposed): no tender while an open-amount line above its ceiling waits for
-      // the second approval (the database refuses it too, pos_tenders_open_amount_approved).
+      // SPK-PAY-016 (proposed): no tender while an open-amount line waits for the second
+      // approval: its own amount, or the total its enterer put on this sale, is above that
+      // person's ceiling (the database refuses it too, pos_tenders_open_amount_approved).
       const awaiting = await this.finalizer.awaitingApproval(trx, organizationId, sale.id);
       if (awaiting.length > 0) {
         throw errors.resourceConflict(
-          'An open-amount line above its ceiling waits for a second approval; the sale takes no tender before it is approved or removed.',
+          'An open-amount line above its ceiling waits for a second approval; the sale takes no tender before it is approved or removed. The ceiling counts every open amount the same person entered on this sale.',
           {
             code: 'OPEN_AMOUNT_APPROVAL_REQUIRED',
             lines: awaiting.map((l) => ({
               saleLineId: l.id,
               amountMinor: Number(l.unit_price_minor),
               ceilingMinor: Number(l.approval_ceiling_minor ?? 0),
+              enteredTotalMinor: enteredTotalOf(l),
               enteredByPersonId: l.entered_by_person_id,
             })),
           },

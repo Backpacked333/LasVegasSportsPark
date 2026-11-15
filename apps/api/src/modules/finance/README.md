@@ -849,19 +849,20 @@ amendment leaves open are **Pending decision**.
 
 **Verified** (`__tests__/pos-open-amount.spec.ts`,
 `apps/api/src/__tests__/journeys/facility-register.spec.ts`; migrations
-`0695_finance_pos_open_amount_lines.sql`, `0696_finance_pos_line_approvals.sql`;
-`services/pos/pos-open-amount.service.ts`):
+`0695_finance_pos_open_amount_lines.sql`, `0696_finance_pos_line_approvals.sql`,
+`0697_finance_pos_open_amount_sale_total.sql`; `services/pos/pos-open-amount.service.ts`):
 
 - A sale line is a product line, exactly as before, or an open-amount line (`kind`
   `open_amount`): no product and no SKU; a typed description (1 to 200 characters), a positive
   amount, the reason category chosen (its label as approved is the line's `name`), the revenue
-  category it books to, who entered it, the ceiling that applied to that person, whether the
-  amount is above it, and the policy version the category and ceiling came from. The database
-  refuses a line that is both or neither (`pos_sale_lines_shape`), an amount that is not positive
-  or a quantity other than one (`pos_sale_lines_open_amount_positive`), a category that is not a
-  code or an empty description (`pos_sale_lines_open_amount_text`), and an approval flag that does
-  not follow from the amount and the ceiling (`pos_sale_lines_open_amount_ceiling`). A discount or
-  a refund is never a negative line (SPK-PAY-003, SPK-PAY-008).
+  category it books to, who entered it, the ceiling that applied to that person, the total that
+  person then had in open-amount lines on the sale, whether that total is above the ceiling, and
+  the policy version the category and ceiling came from. The database refuses a line that is both
+  or neither (`pos_sale_lines_shape`), an amount that is not positive or a quantity other than one
+  (`pos_sale_lines_open_amount_positive`), a category that is not a code or an empty description
+  (`pos_sale_lines_open_amount_text`), and an approval flag that does not follow from the total
+  and the ceiling (`pos_sale_lines_open_amount_ceiling`). A discount or a refund is never a
+  negative line (SPK-PAY-003, SPK-PAY-008).
 - `POST /v1/pos-sales/{id}/lines` takes either body: a product and a quantity, or a description,
   an amount and a reason category (`finance.enter_open_amount_line`: front desk, finance
   operator). The second needs `point_of_sale` and `open_amount_lines`; with the second switch off
@@ -869,7 +870,25 @@ amendment leaves open are **Pending decision**.
   category that is not on the list is refused (`OPEN_AMOUNT_CATEGORY_UNKNOWN`).
 - The category gives the tax treatment: the keys of approved `tax_fee` policies applied to the
   line, with the same refusals as a product's charges (`CHARGE_POLICY_NOT_APPROVED` and the others,
-  DEC-057). The ceiling is on the amount entered, before taxes and fees.
+  DEC-057). The ceiling is on the amounts entered, before taxes and fees.
+- **The ceiling is for what one person enters on one sale, not for each line** (security review
+  M-4, 2026-11-14; migration 0697). A line needs the second approval when the open-amount lines
+  in effect that its enterer has on the sale, this line included, total more than the ceiling
+  recorded with it; one line above the ceiling is the case of a total of one line. So lines each
+  just under the ceiling no longer reach a tender without a second person: the line that takes
+  the total above the ceiling, and every later one, waits. The database derives the total under
+  the sale lock (`entered_total_minor`, never taken from the writer) and refuses a line whose
+  approval flag does not follow from it; the service computes the same first. Each person's total
+  is their own: another person's lines on the sale count against that person's ceiling. A line
+  that needed an approval keeps that fact; it stops blocking when it is approved, or when lines
+  were removed until its enterer's total on the sale is within the ceiling again
+  (`pos_sale_awaits_line_approval`; `awaitingApproval` on the line in the API), which is how
+  removing a single line above the ceiling already lifted the block.
+- **Not limited: totals across separate sales.** A person may enter open amounts up to their
+  ceiling on each sale of a register session with no second approval. This is visible, not
+  prevented: `GET /v1/pos-register-sessions/{id}/open-amount-lines` lists every open-amount line
+  of the session with who entered it and the total it was judged against. Whether a ceiling per
+  session or per day is wanted is a **Pending decision** (DEC-102).
 - Categories and ceilings are policy content, read through `FinancePolicyResolver.openAmountRules`:
   the approved catalog policy version of the family `OPEN_AMOUNT_POLICY` (`finance.policy.ts`) in
   effect, whose content is `OpenAmountPolicyContent` (categories with a revenue category and
@@ -882,7 +901,7 @@ amendment leaves open are **Pending decision**.
 - Above the ceiling a second person approves: `POST /v1/pos-sales/{id}/lines/{lineId}/approval`
   (`finance.approve_open_amount_line`: finance operator, general manager; expected revision and a
   reason required) writes its own append-only record (`pos_line_approvals`: who, when, why, the
-  amount and ceiling). The approver is never the person who entered the line
+  amount, the ceiling and the enterer's total it was given for). The approver is never the person who entered the line
   (`SECOND_PERSON_REQUIRED`; `pos_line_approvals_second_person` in the database), there is one
   approval per line, and it is never rewritten or deleted. Until then the sale takes no tender
   (`OPEN_AMOUNT_APPROVAL_REQUIRED`; `pos_tenders_open_amount_approved`) and is not paid
@@ -912,8 +931,10 @@ taxed; a ceiling of 50.00 in the sale's currency for the front desk and 250.00 f
 operator. The role assignments of the two actions are proposed as well.
 
 **Pending decision** (DEC-102): who may use an open-amount line and each ceiling (questionnaire
-H2); the categories, including tips and deposits (H9, G12), which are not revenue and for which
-no ledger account is assumed here; whether the approver needs a ceiling of their own.
+H2); whether a ceiling also applies across the sales of a register session or a day (today it is
+per person and sale, and the session report shows the rest); the categories, including tips and
+deposits (H9, G12), which are not revenue and for which no ledger account is assumed here;
+whether the approver needs a ceiling of their own.
 
 Known limits (see `.10x/decisions/sde/track-f.md`): the policy family uses the finance-approved
 catalog kind `overpayment` with the key `register-open-amount`, because catalog has no kind for

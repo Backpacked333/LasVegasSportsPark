@@ -243,6 +243,8 @@ export function openAmountLine(
   openAmount: Partial<NonNullable<Model<'PosSaleLine'>['openAmount']>> = {},
   overrides: Partial<Model<'PosSaleLine'>> = {},
 ): Model<'PosSaleLine'> {
+  const unitPriceMinor = overrides.unitPriceMinor ?? 12000;
+  const approvalRequired = openAmount.approvalRequired ?? true;
   return {
     id: OPEN_LINE_ID,
     lineNumber: 2,
@@ -256,7 +258,11 @@ export function openAmountLine(
       revenueCategory: 'facility_fees',
       enteredByPersonId: ME_PERSON,
       ceilingMinor: 5000,
-      approvalRequired: true,
+      // The enterer's other amounts on the sale, this line included: alone unless a test says so.
+      enteredTotalMinor: unitPriceMinor,
+      approvalRequired,
+      // Waiting while it needed an approval and has none (a test may say lines were removed).
+      awaitingApproval: approvalRequired && !openAmount.approval,
       approval: null,
       policyVersionId: null,
       ...openAmount,

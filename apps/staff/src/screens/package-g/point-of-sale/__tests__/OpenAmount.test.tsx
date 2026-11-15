@@ -169,6 +169,108 @@ describe('SCR-S-55 open-amount lines (SPK-PAY-016, proposed)', () => {
     ).toBeInTheDocument();
   });
 
+  it('SPK-PAY-016: the ceiling counts every other amount the person entered on the sale: an amount within it is announced as above it once the total is, and a line that no longer waits blocks nothing', async () => {
+    const user = userEvent.setup();
+    // 30.00 already entered by the signed-in person, within the ceiling of 50.00.
+    const first = openAmountLine(
+      { description: 'Locker key 14', reasonCategory: 'lost_key', approvalRequired: false },
+      { name: 'Lost key', unitPriceMinor: 3000, baseMinor: 3000, lineTotalMinor: 3000 },
+    );
+    const second = openAmountLine(
+      { description: 'Locker key 15', reasonCategory: 'lost_key', enteredTotalMinor: 5500 },
+      {
+        id: '0192f1a0-0000-7000-8000-00000000a5f2',
+        lineNumber: 3,
+        name: 'Lost key',
+        unitPriceMinor: 2500,
+        baseMinor: 2500,
+        lineTotalMinor: 2500,
+      },
+    );
+    let current = sale({
+      subtotalMinor: 3000,
+      totalMinor: 3000,
+      remainingMinor: 3000,
+      revision: 2,
+      lines: [first],
+    });
+    const app = createTestApp({
+      routes: saleRoutes(() => current, {
+        'POST /pos-sales/{id}/lines': () => {
+          current = sale({
+            subtotalMinor: 5500,
+            totalMinor: 5500,
+            remainingMinor: 5500,
+            revision: 3,
+            lines: [first, second],
+          });
+          return fakeResponse(201, current);
+        },
+      }),
+    });
+    const view = render(app.at(SALE_PATH));
+    const form = await screen.findByRole('form', { name: 'Other amount' });
+    await within(form).findByRole('option', { name: 'Lost key' });
+    // What the person already has on the sale comes from a second read (who is signed in).
+    expect(await within(form).findByText(/you have \$30\.00 on this one/)).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(/^What it is for/), 'Locker key 15');
+    await user.selectOptions(within(form).getByLabelText(/^Reason category/), 'lost_key');
+    // 20.00 more is exactly the ceiling: nothing to announce.
+    await user.type(within(form).getByLabelText(/^Amount/), '20.00');
+    expect(within(form).queryByTestId('open-amount-above')).toBeNull();
+    // 25.00 is within the ceiling alone, and above it with the 30.00 already there.
+    await user.clear(within(form).getByLabelText(/^Amount/));
+    await user.type(within(form).getByLabelText(/^Amount/), '25.00');
+    const warning = await within(form).findByTestId('open-amount-above');
+    expect(warning).toHaveTextContent(
+      'With this amount, the other amounts you entered on this sale total $55.00, above your ceiling of $50.00.',
+    );
+    await user.click(within(form).getByRole('button', { name: 'Add the amount to the sale' }));
+    const step = await screen.findByTestId('open-amount-approval');
+    expect(step).toHaveTextContent(
+      'The ceiling counts every other amount one person enters on one sale.',
+    );
+    // Only the line that took the total above the ceiling waits; it says what the total was.
+    const waiting = within(step).getByRole('list', { name: 'Lines waiting for a second approval' });
+    expect(within(waiting).getAllByRole('listitem')).toHaveLength(1);
+    expect(waiting).toHaveTextContent('Locker key 15 · Lost key · $25.00');
+    expect(waiting).toHaveTextContent('whose other amounts on this sale then totalled $55.00');
+    expect(screen.getByTestId('tender-blocked')).toBeInTheDocument();
+    view.unmount();
+
+    // The first line was removed: the second keeps how it was entered and no longer waits.
+    const released = createTestApp({
+      routes: saleRoutes(() =>
+        sale({
+          subtotalMinor: 2500,
+          totalMinor: 2500,
+          remainingMinor: 2500,
+          revision: 4,
+          lines: [
+            openAmountLine(
+              {
+                description: 'Locker key 15',
+                reasonCategory: 'lost_key',
+                enteredTotalMinor: 5500,
+                awaitingApproval: false,
+              },
+              { name: 'Lost key', unitPriceMinor: 2500, baseMinor: 2500, lineTotalMinor: 2500 },
+            ),
+          ],
+        }),
+      ),
+    });
+    render(released.at(SALE_PATH));
+    expect(await screen.findByRole('form', { name: 'Take a tender' })).toBeInTheDocument();
+    expect(screen.queryByTestId('open-amount-approval')).toBeNull();
+    expect(screen.queryByTestId('tender-blocked')).toBeNull();
+    expect(
+      within(screen.getByRole('table', { name: 'Sale lines' })).queryByText(
+        /Waiting for a second approval/,
+      ),
+    ).toBeNull();
+  });
+
   it('SPK-PAY-016: a second person approves with a reason and the sale’s revision; the sale can then take a tender', async () => {
     const user = userEvent.setup();
     let current = waitingSale(OTHER_PERSON);
@@ -389,7 +491,9 @@ describe('SCR-S-55 open-amount lines (SPK-PAY-016, proposed)', () => {
       enteredByPersonId: OTHER_PERSON,
       enteredAt: NOW,
       ceilingMinor: 5000,
+      enteredTotalMinor: 12000,
       approvalRequired: true,
+      awaitingApproval: false,
       approval: {
         id: APPROVAL_ID,
         approvedByPersonId: '0192f1a0-0000-7000-8000-0000000000dd',
@@ -414,9 +518,34 @@ describe('SCR-S-55 open-amount lines (SPK-PAY-016, proposed)', () => {
             reasonLabel: 'Lost key',
             amountMinor: 1500,
             lineTotalMinor: 1500,
+            enteredTotalMinor: 1500,
             approvalRequired: false,
             approval: null,
             returnedQuantity: 1,
+          }),
+          // Needed an approval when it was entered; lines were then removed until the person's
+          // amounts on the sale were within the ceiling, so none was given.
+          item({
+            lineId: '0192f1a0-0000-7000-8000-00000000a504',
+            description: 'Locker key 15',
+            reasonLabel: 'Lost key',
+            amountMinor: 2500,
+            lineTotalMinor: 2500,
+            enteredTotalMinor: 5500,
+            approvalRequired: true,
+            awaitingApproval: false,
+            approval: null,
+          }),
+          item({
+            lineId: '0192f1a0-0000-7000-8000-00000000a505',
+            description: 'Locker key 16',
+            reasonLabel: 'Lost key',
+            amountMinor: 2600,
+            lineTotalMinor: 2600,
+            enteredTotalMinor: 5600,
+            approvalRequired: true,
+            awaitingApproval: true,
+            approval: null,
           }),
         ]),
       },
@@ -427,7 +556,11 @@ describe('SCR-S-55 open-amount lines (SPK-PAY-016, proposed)', () => {
     ).toBeInTheDocument();
     const table = await screen.findByRole('table', { name: 'Other amounts in this session' });
     const rows = within(table).getAllByRole('row');
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(5);
+    expect(rows[3]).toHaveTextContent(
+      "Not given: lines were removed until this person's amounts on the sale were within the ceiling of $50.00",
+    );
+    expect(rows[4]).toHaveTextContent('waiting for a second approval');
     expect(rows[1]).toHaveTextContent('Sale FD1-20261024-0001');
     expect(rows[1]).toHaveTextContent('Goal net torn on field 3');
     expect(rows[1]).toHaveTextContent('Field damage fee Books to facility_fees.');
