@@ -2,7 +2,8 @@
 
 ## Features
 
-- `glass-demo-amendments`: written when its phase completes.
+- `glass-demo-amendments`: `glass-demo-amendments.md`, with one note per track (`track-a.md` to
+  `track-h.md`).
 
 ## Discovered [DISCOVERED]
 

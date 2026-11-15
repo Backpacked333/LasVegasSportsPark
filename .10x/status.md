@@ -8,8 +8,8 @@ Feature: `glass-demo-amendments` · Branch: `claude/jolly-johnson-gd61vv` · Pul
 | 1 Strategy       | Complete | `decisions/cto`, `decisions/product-manager`                |
 | 2 Design         | Complete | ADR-001 to ADR-007; `decisions/architect`, `staff-engineer` |
 | 3 Planning       | Complete | `decisions/engineering-manager`, `senior-engineer`          |
-| 4 Implementation | Running  | Wave 0 done; wave 1 tracks running; glass (H) built         |
-| 5 Verification   | Pending  |                                                             |
+| 4 Implementation | Complete | Six tracks merged; demo dataset (G) running                 |
+| 5 Verification   | Running  | QA and security reviews in progress                         |
 | 6 Delivery       | Pending  |                                                             |
 
 ## Tasks
