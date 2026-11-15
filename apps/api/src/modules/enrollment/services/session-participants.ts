@@ -4,6 +4,7 @@ import { sql } from 'kysely';
 import type { Trx } from '../../../kernel';
 import { SessionsService } from '../../catalog';
 import type { ClosureImpactContribution, ImpactedEventRef } from '../../scheduling';
+import { attendsSession } from './attended-sessions';
 
 /** A participant of a catalog session, or the booker of a rental or party, of a scheduling event. */
 export interface SessionParticipant {
@@ -103,11 +104,13 @@ export class SessionParticipants {
     const out: SessionParticipant[] = [...booked];
     for (const session of sessions) {
       // SPK-PAY-014 (PA-03): a registration with a day selection takes part only in the
-      // sessions selected; one without (every registration before the amendment) in all.
+      // sessions selected; one without (every registration before the amendment) in all. The
+      // one rule of `attended-sessions.ts`, so a reminder or a change notice (communications
+      // reads this through SESSION_AUDIENCE_PORT) reaches exactly who the session expects.
       for (const e of enrollments.filter(
         (x) =>
           x.offering_id === session.offeringId &&
-          (x.selected_session_ids === null || x.selected_session_ids.includes(session.id)),
+          attendsSession(x.selected_session_ids, session.id),
       )) {
         out.push({
           schedulingEventId: session.schedulingEventId,
