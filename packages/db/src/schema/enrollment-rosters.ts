@@ -2,7 +2,7 @@ import type { Generated } from 'kysely';
 import type { GeneratedTimestamp, Json, NullableTimestamp, Timestamp } from './core';
 
 /**
- * Enrollment rental-group roster tables (migration 0530; SPK-COND-005, proposed amendment PA-09,
+ * Enrollment rental-group roster tables (migrations 0530 and 0531; SPK-COND-005, proposed amendment PA-09,
  * DEC-103; capability `rental_rosters`). The lifecycles are the module-local machines of
  * `enrollment.state-machines.ts`.
  */
@@ -28,6 +28,8 @@ export interface BookingRosterMembersTable {
   updated_at: GeneratedTimestamp;
 }
 
+/** Who accepted: the joiner, somebody acting for them, or unknown (accepted before 0531). */
+export type BookingRosterAcceptanceCapacity = 'self' | 'representative' | 'legacy';
 export type BookingRosterInvitationStatus =
   'pending' | 'accepted' | 'declined' | 'revoked' | 'expired';
 export interface BookingRosterInvitationsTable {
@@ -46,6 +48,9 @@ export interface BookingRosterInvitationsTable {
   expires_at: Timestamp;
   accepted_at: NullableTimestamp;
   accepted_by_person_id: string | null;
+  /** The person who joined the roster on this invitation (migration 0531). */
+  accepted_for_person_id: string | null;
+  accepted_as: BookingRosterAcceptanceCapacity | null;
   declined_at: NullableTimestamp;
   revoked_at: NullableTimestamp;
   revoked_by: Json<Record<string, unknown>> | null;

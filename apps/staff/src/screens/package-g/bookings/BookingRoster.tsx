@@ -5,9 +5,10 @@
  *
  * `GET /v1/bookings/{id}/roster` lists who is on the roster (joined), who is invited and who was
  * removed, each with their liability waiver for the rental's required waiver (SPK-REG-011):
- * current, lapsed, missing, or not evaluated (liability waivers off, no waiver required, or an
- * invited contact with no record yet). A missing waiver is shown and never blocks the booking
- * (the proposed default of DEC-103).
+ * current, lapsed, missing, or not evaluated (liability waivers off, no waiver required, or
+ * somebody who is only invited). A person's details are theirs until they join: an invited row
+ * shows the contact it went to or "Invited person", never a name or a waiver. A missing waiver is
+ * shown and never blocks the booking (the proposed default of DEC-103).
  *
  * Staff add a person at the desk by their person reference (`POST /v1/bookings/{id}/roster`),
  * invite a contact (`POST .../roster/invitations`; the one-time code is shown once, to pass on,
@@ -53,7 +54,7 @@ const WAIVER_NOTE: Record<Roster['waiver']['state'], string> = {
 function memberName(member: Member): string {
   if (member.displayName) return member.displayName;
   if (member.invitedContact) return `${member.invitedContact.value} (invited, no record yet)`;
-  return 'Person';
+  return member.joinedAt === null ? 'Invited person' : 'Person';
 }
 
 function RemoveMember({
@@ -246,7 +247,9 @@ function RosterBody({
                   <span className="row-title">{memberName(member)}</span>
                   <span className="pg-badges">
                     <StatusBadge tone={status.tone} label={status.label} />
-                    <StatusBadge tone={waiver.tone} label={waiver.label} />
+                    {member.status === 'joined' ? (
+                      <StatusBadge tone={waiver.tone} label={waiver.label} />
+                    ) : null}
                     {member.invitation && member.status === 'invited' ? (
                       <StatusBadge
                         tone={member.invitation.status === 'pending' ? 'pending' : 'neutral'}

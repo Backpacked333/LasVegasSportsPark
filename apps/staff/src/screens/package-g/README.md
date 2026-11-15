@@ -42,7 +42,9 @@ is a panel of the rental booking detail (SCR-S-51): who is on the roster, who is
 removed, and each member's liability waiver (current, lapsed, missing, not evaluated), with adding
 a person by reference, inviting a contact (the invitation code is shown once, because no messaging
 channel is approved: DEC-012, DEC-062) and removing with a reason. It says that a missing waiver
-does not block the booking and that being on the roster grants nothing else. Absent, and asking
+does not block the booking and that being on the roster grants nothing else. Somebody who is only
+invited is listed by the contact the invitation went to, or as "Invited person", with no name and
+no waiver until they join (security review M-1). Absent, and asking
 nothing of the API, while the capability is off and on a party. **Verified**
 `bookings/__tests__/BookingRoster.test.tsx`. No route or navigation entry was added.
 

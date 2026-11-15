@@ -7,6 +7,9 @@
  * waiver (SPK-REG-011): accepted, needs accepting again, not accepted yet, or not checked. A
  * missing waiver is shown and never blocks the booking (the proposed default of DEC-103).
  *
+ * Somebody who is only invited has not joined: the list shows the email address the renter typed,
+ * or "Invited person", never a name or a waiver (a person's details are theirs until they join).
+ *
  * The renter adds themselves or someone they register for (`POST /v1/bookings/{id}/roster`),
  * invites anybody else by email (`POST .../roster/invitations`: the one-time code is shown once,
  * to pass on, because nothing is sent for them: no messaging channel is approved, DEC-012,
@@ -55,8 +58,11 @@ const WAIVER_NOTE: Record<Roster['waiver']['state'], string> = {
 
 const LIVE: ReadonlyArray<Booking['status']> = ['requested', 'held', 'awaiting_staff', 'confirmed'];
 
+/** The name of somebody who joined; for an invitation, the contact it went to or just that. */
 function memberName(member: Member): string {
-  return member.displayName ?? member.invitedContact?.value ?? 'Somebody';
+  if (member.displayName) return member.displayName;
+  if (member.invitedContact) return member.invitedContact.value;
+  return member.joinedAt === null ? 'Invited person' : 'Somebody';
 }
 
 function MemberRow({
@@ -80,6 +86,8 @@ function MemberRow({
   const status = MEMBER_STATUS[member.status];
   const waiver = WAIVER_STATUS[member.waiverStatus];
   const name = memberName(member);
+  // A waiver is judged only for somebody who joined: nothing is said about an invited person.
+  const judged = showWaiver && member.status === 'joined';
   const submit = async () => {
     setFailure(null);
     try {
@@ -96,13 +104,13 @@ function MemberRow({
     <View style={styles.row} testID={`roster-member-${member.id}`}>
       <View
         accessible
-        accessibilityLabel={`${name}, ${status.label}${showWaiver ? `, ${waiver.label}` : ''}`}
+        accessibilityLabel={`${name}, ${status.label}${judged ? `, ${waiver.label}` : ''}`}
       >
         <Body>{name}</Body>
       </View>
       <View style={styles.badges}>
         <StatusBadge tone={status.tone} label={status.label} />
-        {showWaiver ? <StatusBadge tone={waiver.tone} label={waiver.label} /> : null}
+        {judged ? <StatusBadge tone={waiver.tone} label={waiver.label} /> : null}
       </View>
       {canChange ? (
         <Button

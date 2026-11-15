@@ -20,10 +20,12 @@ const MEMBER_A = '0192f1a0-0000-7000-8000-0000000007a1';
 const MEMBER_B = '0192f1a0-0000-7000-8000-0000000007a2';
 const MEMBER_C = '0192f1a0-0000-7000-8000-0000000007a3';
 const MEMBER_D = '0192f1a0-0000-7000-8000-0000000007a4';
+const MEMBER_E = '0192f1a0-0000-7000-8000-0000000007a5';
 const PERSON_A = '0192f1a0-0000-7000-8000-0000000007b1';
 const PERSON_B = '0192f1a0-0000-7000-8000-0000000007b2';
 const PERSON_NEW = '0192f1a0-0000-7000-8000-0000000007b9';
 const INVITATION = '0192f1a0-0000-7000-8000-0000000007c1';
+const INVITATION_E = '0192f1a0-0000-7000-8000-0000000007c2';
 const NOW = '2026-10-24T12:00:00.000Z';
 
 function member(id: string, over: Record<string, unknown> = {}) {
@@ -62,6 +64,15 @@ function roster(over: Record<string, unknown> = {}) {
         joinedAt: null,
         invitation: { id: INVITATION, status: 'pending', expiresAt: '2026-11-07T12:00:00.000Z' },
       }),
+      // invited by person reference: no name and no waiver until they join (security review M-1)
+      member(MEMBER_E, {
+        personId: PERSON_B,
+        displayName: null,
+        status: 'invited',
+        waiverStatus: 'not_evaluated',
+        joinedAt: null,
+        invitation: { id: INVITATION_E, status: 'pending', expiresAt: '2026-11-07T12:00:00.000Z' },
+      }),
       member(MEMBER_D, {
         displayName: 'Cy Dunn',
         status: 'removed',
@@ -70,7 +81,7 @@ function roster(over: Record<string, unknown> = {}) {
         removalReason: 'Cannot come',
       }),
     ],
-    counts: { joined: 2, invited: 1, waiverOutstanding: 1 },
+    counts: { joined: 2, invited: 2, waiverOutstanding: 1 },
     ...over,
   };
 }
@@ -105,7 +116,7 @@ describe('SCR-S-51 rental group roster', () => {
     const panel = await screen.findByRole('region', { name: 'Group roster' });
     expect(
       await within(panel).findByText(
-        '2 people on the roster, 1 invited, 1 without a current waiver.',
+        '2 people on the roster, 2 invited, 1 without a current waiver.',
       ),
     ).toBeInTheDocument();
     const list = within(panel).getByRole('list', { name: 'Roster members' });
@@ -118,8 +129,13 @@ describe('SCR-S-51 rental group roster', () => {
       name: 'guest@example.test (invited, no record yet)',
     });
     expect(within(guest).getByText('Invited')).toBeInTheDocument();
-    expect(within(guest).getByText('Waiver not evaluated')).toBeInTheDocument();
     expect(within(guest).getByText('Invitation pending')).toBeInTheDocument();
+    // somebody who is only invited has not joined: no name, and no waiver is said about them
+    const invited = within(list).getByRole('listitem', { name: 'Invited person' });
+    expect(within(invited).getByText('Invited')).toBeInTheDocument();
+    for (const row of [guest, invited]) {
+      expect(within(row).queryByText(/^Waiver/)).toBeNull();
+    }
     const removed = within(panel).getByRole('list', { name: 'Removed from the roster' });
     expect(within(removed).getByText(/Cannot come/)).toBeInTheDocument();
     expect(within(panel).getByText(/does not block the booking/)).toBeInTheDocument();

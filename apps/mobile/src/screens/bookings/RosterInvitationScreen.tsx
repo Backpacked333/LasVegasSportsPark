@@ -4,14 +4,17 @@
  * that name this person, and a field for an invitation code) and
  * `/booking-roster-invitations/[id]` (one invitation that names this person).
  *
- * An invitation that names the signed-in person is read and answered without a code: signing in
- * proves who they are. An invitation sent to an email address is opened with the code the renter
- * passed on (`<invitation>.<code>`); the code stays in this screen's memory only, never in the
- * route, and is forgotten when the screen closes (§4.13, §4.14).
+ * An invitation that names the signed-in person, or a child they register for, is read and
+ * answered without a code: signing in proves who they are, and only the person named joins on it.
+ * An invitation sent to an email address is opened with the code the renter passed on
+ * (`<invitation>.<code>`); the code stays in this screen's memory only and is forgotten when the
+ * screen closes. It is sent in the body of `POST /v1/booking-roster-invitations/{id}/open` and of
+ * the answer: never in a route, an address or the read cache's key (§4.13, §4.14).
  *
- * `GET /v1/booking-roster-invitations/{id}` says what the invitation is to (the rental, when, who
- * invited) and nothing more. Accepting (`POST .../accept`) joins the person themselves, or, on a
- * code invitation, a child they register for; declining (`POST .../decline`) closes it. Once
+ * The read (`GET /v1/booking-roster-invitations/{id}`, or `.../open` with a code) says what the
+ * invitation is to (the rental, when, who invited) and nothing more. Accepting (`POST .../accept`)
+ * joins the person it names, or, on a code invitation, the signed-in person or a child they
+ * register for; declining (`POST .../decline`) closes it. Once
  * joined, the waiver the rental asks for (SPK-REG-011) is shown for the person who joined, to
  * accept there and then. Being on the roster is only a name on the renter's list.
  *
@@ -20,7 +23,8 @@
  * the same as no invitation, §4.10); stale (already answered, revoked or expired: shown as it is
  * now); offline (cannot answer); processing; success (joined, or declined).
  */
-import type { ApiError, Schema } from '@sportspark/api-client';
+import { apiQueryKey, type ApiError, type ApiResponse, type Schema } from '@sportspark/api-client';
+import { useQuery } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
@@ -35,7 +39,7 @@ import { ChoiceRow } from '../../features/registration/ui';
 import { displayZone, formatRange } from '../../features/today/time';
 import { WaiverCard } from '../../features/waivers/WaiverCard';
 import { formatCalendarDate } from '../../features/waivers/waivers';
-import { useConnectivity } from '../../providers/AppProviders';
+import { useApi, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
@@ -50,6 +54,7 @@ type InvitationView = Schema<'BookingRosterInvitationView'>;
 
 export const ROSTER_INVITATIONS_PATH = '/booking-roster-invitations';
 const MY_INVITATIONS_KEY = ['api', '/me/booking-roster-invitations'] as const;
+const OPEN_PATH = '/booking-roster-invitations/{id}/open';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const STATUS: Record<InvitationView['status'], { tone: StatusTone; label: string }> = {
@@ -146,27 +151,33 @@ function InvitationBody({
   const offline = reachable === false;
   const me = useMe();
   const selfId = me.data?.person?.id ?? null;
-  // A code invitation may be answered for a child the person registers for; one that names the
-  // person is answered for themselves.
+  // A code invitation may be answered for a child the person registers for; one that names a
+  // person joins that person only (themselves, or a child they answer for).
+  const named = invitation.recipientPersonId;
   const children =
-    invitation.recipientPersonId === null
+    named === null
       ? (me.data?.authorities ?? [])
           .filter((a) => a.permissions.includes('register'))
           .map((a) => a.subjectPersonId)
       : [];
-  const names = useParticipantNames(children);
+  const names = useParticipantNames(named === null ? children : [named]);
   const [joiner, setJoiner] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const [joined, setJoined] = useState<string | null>(null);
   const [declined, setDeclined] = useState(false);
-  const invalidate = [MY_INVITATIONS_KEY, ['api', '/booking-roster-invitations/{id}']] as const;
+  const invalidate = [
+    MY_INVITATIONS_KEY,
+    ['api', '/booking-roster-invitations/{id}'],
+    ['api', OPEN_PATH],
+  ] as const;
   const accept = useApiCommand('post', '/booking-roster-invitations/{id}/accept', {
     invalidate: [...invalidate],
   });
   const decline = useApiCommand('post', '/booking-roster-invitations/{id}/decline', {
     invalidate: [...invalidate],
   });
-  const who = joiner ?? selfId;
+  const who = named ?? joiner ?? selfId;
+  const forSomebodyElse = named !== null && selfId !== null && named !== selfId;
   const status = STATUS[invitation.status];
   const open = invitation.status === 'pending' && joined === null && !declined;
 
@@ -176,9 +187,11 @@ function InvitationBody({
     try {
       await accept.submit({
         path: { id: invitation.id },
+        // The code answers a code invitation only; an invitation that names a person names
+        // its joiner already.
         body: {
           ...(token ? { token } : {}),
-          ...(who !== selfId ? { personId: who } : {}),
+          ...(named === null && who !== selfId ? { personId: who } : {}),
         },
       });
       setJoined(who);
@@ -201,13 +214,20 @@ function InvitationBody({
       <Section title="You are invited to a rental">
         <Field label="Rental" value={invitation.booking.offeringName} />
         <Field label="When" value={when(invitation)} />
+        {forSomebodyElse ? <Field label="For" value={names(named)} /> : null}
         {invitation.invitedByName ? (
           <Field label="Invited by" value={invitation.invitedByName} />
         ) : null}
         {invitation.message ? <Field label="Message" value={invitation.message} /> : null}
         <StatusBadge
           tone={joined ? 'success' : declined ? 'neutral' : status.tone}
-          label={joined ? 'You joined the roster' : declined ? 'Declined' : status.label}
+          label={
+            joined
+              ? `${joined === selfId ? 'You' : names(joined)} joined the roster`
+              : declined
+                ? 'Declined'
+                : status.label
+          }
           testID="roster-invitation-status"
         />
         {open ? (
@@ -272,11 +292,28 @@ function InvitationBody({
   );
 }
 
-function InvitationRead({ invitationId, token }: { invitationId: string; token?: string }) {
-  const invitation = useApiQuery({
-    path: '/booking-roster-invitations/{id}',
-    request: { path: { id: invitationId }, query: token ? { token } : {} },
+/**
+ * The invitation a code opens. The code is sent in the request body and is no part of the cache
+ * key, so it is in no address, log or stored cache entry (§4.14). The read is cached like any
+ * other read, under the invitation it opens.
+ */
+function useInvitationByCode(invitationId: string, token: string) {
+  const api = useApi();
+  const query = useQuery<ApiResponse<InvitationView>, ApiError>({
+    queryKey: apiQueryKey(OPEN_PATH, { path: { id: invitationId } }),
+    queryFn: ({ signal }) =>
+      api.request('post', OPEN_PATH, {
+        path: { id: invitationId },
+        body: { token },
+        intent: api.newIntent(),
+        signal,
+      }),
   });
+  return { ...query, data: query.data?.data, updatedAt: query.data?.receivedAt ?? null };
+}
+
+function InvitationByCode({ invitationId, token }: { invitationId: string; token: string }) {
+  const invitation = useInvitationByCode(invitationId, token);
   return (
     <QueryBoundary
       query={invitation}
@@ -291,6 +328,29 @@ function InvitationRead({ invitationId, token }: { invitationId: string; token?:
   );
 }
 
+function InvitationRead({ invitationId }: { invitationId: string }) {
+  const invitation = useApiQuery({
+    path: '/booking-roster-invitations/{id}',
+    request: { path: { id: invitationId } },
+  });
+  return (
+    <QueryBoundary
+      query={invitation}
+      label="the invitation"
+      empty={{ title: 'Not available', description: '' }}
+      unavailableOffline={['Joining the roster', 'Declining']}
+    >
+      {(data) => (
+        <InvitationBody
+          invitation={data}
+          token={undefined}
+          reload={() => void invitation.refetch()}
+        />
+      )}
+    </QueryBoundary>
+  );
+}
+
 /** Opening an invitation with the code the renter passed on; the code never leaves this screen. */
 function EnterCode() {
   const [code, setCode] = useState('');
@@ -300,7 +360,7 @@ function EnterCode() {
   if (opened) {
     return (
       <>
-        <InvitationRead invitationId={opened.id} token={opened.token} />
+        <InvitationByCode invitationId={opened.id} token={opened.token} />
         <ButtonRow>
           <Button
             label="Enter another code"
@@ -349,7 +409,8 @@ function MyInvitations() {
       isEmpty={(items) => items.length === 0}
       empty={{
         title: 'No invitations waiting',
-        description: 'An invitation to a rental roster that names you appears here.',
+        description:
+          'An invitation to a rental roster that names you, or a child you register for, appears here.',
       }}
       unavailableOffline={['Joining a roster']}
     >

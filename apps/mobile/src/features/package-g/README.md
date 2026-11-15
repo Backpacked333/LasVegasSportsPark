@@ -110,12 +110,17 @@ any screen still a placeholder.
   the renter's roster from `GET /v1/bookings/{id}/roster` with each member's waiver, adding
   themselves or someone they register for, inviting somebody by email (the invitation code is
   shown once; nothing is sent, DEC-012 and DEC-062) and removing somebody. It says that a waiver
-  that is not accepted does not block the booking.
+  that is not accepted does not block the booking. Somebody who is only invited is listed by the
+  email address the renter typed, or as "Invited person": no name and no waiver is shown before
+  they join (security review M-1).
 - "Rentals and parties" links to the roster invitations (`/booking-roster-invitations`, route
   files under `app/booking-roster-invitations/`; `src/screens/bookings/RosterInvitationScreen.tsx`):
-  the invitations that name the person, a field for an invitation code, joining for oneself or a
-  child, declining, and then the waiver the rental asks for (SPK-REG-011) to accept.
-- An invitation code stays in the screen's memory and is never part of a route (§4.13, §4.14).
+  the invitations that name the person or a child they register for, a field for an invitation
+  code, joining for oneself or a child, declining, and then the waiver the rental asks for
+  (SPK-REG-011) to accept. An invitation that names somebody joins that person only.
+- An invitation code stays in the screen's memory and is sent in a request body only
+  (`POST /v1/booking-roster-invitations/{id}/open` and the answer): never in a route, a query
+  string or the read cache's key (§4.13, §4.14; security review L-1).
 
 With the capability off the roster is absent and nothing is asked of the API; the invitation
 screens say rental rosters are not in use. **Verified** in jest:

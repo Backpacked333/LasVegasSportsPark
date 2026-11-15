@@ -36,6 +36,7 @@ jest.mock('expo-router', () => ({
 const MEMBER_SELF = '0192f1a0-0000-7000-8000-00000000c101';
 const MEMBER_FRIEND = '0192f1a0-0000-7000-8000-00000000c102';
 const MEMBER_GUEST = '0192f1a0-0000-7000-8000-00000000c103';
+const MEMBER_INVITED = '0192f1a0-0000-7000-8000-00000000c104';
 const FRIEND = '0192f1a0-0000-7000-8000-00000000c201';
 const INVITATION = '0192f1a0-0000-7000-8000-00000000c301';
 const WAIVER_VERSION = '0192f1a0-0000-7000-8000-00000000c401';
@@ -137,8 +138,17 @@ describe('rental roster on the booking (SPK-COND-005, proposed)', () => {
                 waiverStatus: 'not_evaluated',
                 joinedAt: null,
               }),
+              // somebody staff invited by name: the renter is told nothing about who they are
+              member(MEMBER_INVITED, {
+                personId: null,
+                displayName: null,
+                invitedContact: null,
+                status: 'invited',
+                waiverStatus: 'not_evaluated',
+                joinedAt: null,
+              }),
             ],
-            { counts: { joined: 2, invited: 1, waiverOutstanding: 1 } },
+            { counts: { joined: 2, invited: 2, waiverOutstanding: 1 } },
           ),
         ),
       }),
@@ -146,7 +156,7 @@ describe('rental roster on the booking (SPK-COND-005, proposed)', () => {
     render(<BookingDetailScreen bookingId={G.booking} />, { wrapper: app.wrapper });
     const section = await screen.findByTestId('booking-roster');
     expect(
-      await within(section).findByText('2 coming, 1 invited, 1 without an accepted waiver.'),
+      await within(section).findByText('2 coming, 2 invited, 1 without an accepted waiver.'),
     ).toBeOnTheScreen();
     expect(
       within(section).getByLabelText('Alex Rivera, Coming, Waiver accepted'),
@@ -154,11 +164,15 @@ describe('rental roster on the booking (SPK-COND-005, proposed)', () => {
     expect(
       within(section).getByLabelText('Jo Friend, Coming, Waiver not accepted yet'),
     ).toBeOnTheScreen();
+    // somebody who is only invited: the contact the renter typed, or nothing but "invited";
+    // never a name, and no waiver is said about them (security review M-1)
     expect(
-      within(section).getByLabelText(
-        'guest@example.test, Invited, not answered yet, Waiver not checked',
-      ),
+      within(section).getByLabelText('guest@example.test, Invited, not answered yet'),
     ).toBeOnTheScreen();
+    expect(
+      within(section).getByLabelText('Invited person, Invited, not answered yet'),
+    ).toBeOnTheScreen();
+    expect(within(section).queryByLabelText(/Invited, not answered yet, Waiver/)).toBeNull();
     expect(within(section).getByText(/It does not block your booking/)).toBeOnTheScreen();
     expect(within(section).getByText(/it is not a registration/)).toBeOnTheScreen();
   });
@@ -381,8 +395,9 @@ describe('joining a rental roster (SPK-COND-005, proposed)', () => {
     const app = createTestApp({
       routes: inviteRoutes({
         'GET /me/booking-roster-invitations': ok([]),
-        'GET /booking-roster-invitations/{id}': (req) =>
-          req.query.token === TOKEN
+        // the code opens the invitation in the body of a POST: never in an address
+        'POST /booking-roster-invitations/{id}/open': (req) =>
+          (req.body as { token?: string } | undefined)?.token === TOKEN
             ? fakeResponse(
                 200,
                 invitationView({
@@ -411,13 +426,59 @@ describe('joining a rental roster (SPK-COND-005, proposed)', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Join the roster' }));
     });
-    expect(await screen.findByLabelText('You joined the roster')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Sam joined the roster')).toBeOnTheScreen();
     expect(
       app.fake.requests.find((r) => r.route === '/booking-roster-invitations/{id}/accept')?.body,
     ).toEqual({ token: TOKEN, personId: G.child });
     expect(mockRouter.push).not.toHaveBeenCalled();
+    // §4.14 (security review L-1): the code travels in a request body only. No address carries
+    // it (path or query string), and the invitation is not read by its address with a code.
+    const opened = app.fake.requests.filter(
+      (r) => r.route === '/booking-roster-invitations/{id}/open',
+    );
+    expect(opened.length).toBeGreaterThan(0);
+    for (const request of opened) expect(request.body).toEqual({ token: TOKEN });
+    expect(app.fake.requests.some((r) => r.route === '/booking-roster-invitations/{id}')).toBe(
+      false,
+    );
+    for (const request of app.fake.requests) {
+      expect(request.path).not.toContain(TOKEN);
+      expect(JSON.stringify(request.query)).not.toContain(TOKEN);
+    }
     expect(parseInvitationCode(`${INVITATION}.${TOKEN}`)).toEqual({ id: INVITATION, token: TOKEN });
     expect(parseInvitationCode(TOKEN)).toBeNull();
+  });
+
+  it('SPK-COND-005: an invitation that names a child the person registers for is answered for that child and nobody else', async () => {
+    const app = createTestApp({
+      routes: inviteRoutes({
+        'GET /booking-roster-invitations/{id}': ok(invitationView({ recipientPersonId: G.child })),
+        'POST /booking-roster-invitations/{id}/accept': ok({
+          invitation: invitationView({
+            recipientPersonId: G.child,
+            status: 'accepted',
+            acceptedAt: T,
+          }),
+          member: member(MEMBER_GUEST, { personId: G.child, displayName: 'Sam Rivera' }),
+        }),
+      }),
+    });
+    render(<RosterInvitationScreen invitationId={INVITATION} />, { wrapper: app.wrapper });
+    // The child's name comes from the family read, which can arrive after the invitation.
+    expect(await screen.findByLabelText('For: Sam')).toBeOnTheScreen();
+    // it names its joiner: there is no choice of who joins
+    expect(screen.queryByRole('radio', { name: 'I am joining' })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Join the roster' })).toBeEnabled(),
+    );
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Join the roster' }));
+    });
+    expect(await screen.findByLabelText('Sam joined the roster')).toBeOnTheScreen();
+    // neither a code nor another person is sent: the invitation says who joins
+    expect(
+      app.fake.requests.find((r) => r.route === '/booking-roster-invitations/{id}/accept')?.body,
+    ).toEqual({});
   });
 
   it('declining closes the invitation; a list row opens the invitation by its id only', async () => {

@@ -7,7 +7,7 @@ import {
   seedOrganization,
 } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { TestApp } from '../../../testing';
+import { idempotencyStoreContains, type TestApp } from '../../../testing';
 import {
   POLICY_PORT,
   createAcknowledgmentFixture,
@@ -138,6 +138,40 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     post(t, `/v1/bookings/${bookingId}/roster/invitations`, actor.header, body);
   const accept = (actor: Actor, invitationId: string, body: Record<string, unknown> = {}) =>
     post(t, `/v1/booking-roster-invitations/${invitationId}/accept`, actor.header, body);
+  const decline = (actor: Actor, invitationId: string, body: Record<string, unknown> = {}) =>
+    post(t, `/v1/booking-roster-invitations/${invitationId}/decline`, actor.header, body);
+  /** Reading a contact invitation with its token: in the body, never in the address. */
+  const open = (actor: Actor, invitationId: string, token: string) =>
+    t.http
+      .post(`/v1/booking-roster-invitations/${invitationId}/open`)
+      .set(actor.header)
+      .send({ token });
+  const invitationRow = (id: string) =>
+    t.db
+      .selectFrom('booking_roster_invitations')
+      .select([
+        'status',
+        'member_id',
+        'recipient_person_id',
+        'accepted_by_person_id',
+        'accepted_for_person_id',
+        'accepted_as',
+      ])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+  const memberRowOf = (id: string) =>
+    t.db
+      .selectFrom('booking_roster_members')
+      .select(['status', 'person_id', 'joined_at'])
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow();
+  /** What a refusal says, without what differs per request (the correlation id). */
+  const refusal = (response: { status: number; body: Record<string, unknown> }) => ({
+    status: response.status,
+    code: response.body.code,
+    message: response.body.message,
+    details: response.body.details,
+  });
   const disabled = (response: { status: number; body: { details?: unknown } }) => {
     expect(response.status).toBe(403);
     expect(response.body.details).toMatchObject({
@@ -194,8 +228,13 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     expect(direct.status).toBe(400);
     expect(direct.body.details).toMatchObject({ code: 'ROSTER_INVITATION_REQUIRED' });
 
-    // an invitation to a known person: accepted by that person, signed in, for themselves
-    const invited = await invite(renter, bookingId, {
+    // a renter does not name somebody else by reference: that person is invited by contact
+    const named = await invite(renter, bookingId, { recipientPersonId: friend.personId });
+    expect(named.status).toBe(400);
+    expect(named.body.details).toMatchObject({ code: 'ROSTER_INVITE_BY_CONTACT' });
+    // an invitation staff make to a known person: accepted by that person, signed in, for
+    // themselves
+    const invited = await invite(desk, bookingId, {
       recipientPersonId: friend.personId,
       message: 'Thursday five-a-side',
     });
@@ -214,7 +253,7 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
       .where('id', '=', invited.body.id)
       .executeTakeFirstOrThrow();
     expect(stored.token_hash).not.toContain(invited.body.token);
-    const again = await invite(renter, bookingId, { recipientPersonId: friend.personId });
+    const again = await invite(desk, bookingId, { recipientPersonId: friend.personId });
     expect(again.status).toBe(409);
     expect(again.body.details).toMatchObject({ code: 'ROSTER_MEMBER_EXISTS' });
 
@@ -415,10 +454,7 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     });
     expect(roster.counts).toEqual({ joined: 3, invited: 1, waiverOutstanding: 2 });
     // the invited person sees which waiver the rental asks for
-    const view = await t.http
-      .get(`/v1/booking-roster-invitations/${pendingInvite.body.id}`)
-      .query({ token: pendingInvite.body.token })
-      .set((await adult(t)).header);
+    const view = await open(await adult(t), pendingInvite.body.id, pendingInvite.body.token);
     expect(view.status, JSON.stringify(view.body)).toBe(200);
     expect(view.body.requiredWaiverKeys).toEqual([policyKey]);
     // the waiver blocks nothing here: a person whose waiver is missing was added, and the
@@ -462,28 +498,29 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     const guest = await adult(t);
 
     // declined by the invited person: the invited row is removed, with why
-    const first = await invite(renter, bookingId, { recipientPersonId: guest.personId });
-    const declined = await post(
-      t,
-      `/v1/booking-roster-invitations/${first.body.id}/decline`,
-      guest.header,
-      {},
-    );
+    const first = await invite(desk, bookingId, { recipientPersonId: guest.personId });
+    const declined = await decline(guest, first.body.id);
     expect(declined.status, JSON.stringify(declined.body)).toBe(200);
     expect(declined.body.status).toBe('declined');
     expect((await accept(guest, first.body.id)).body.code).toBe('INVALID_TRANSITION');
-    let roster = await rosterOf(renter, bookingId);
+    let roster = await rosterOf(desk, bookingId);
     expect(roster.members).toEqual([
       expect.objectContaining({
         personId: guest.personId,
+        // never joined: the row carries no name, for staff either
+        displayName: null,
         status: 'removed',
         waiverStatus: 'not_evaluated',
         invitation: expect.objectContaining({ status: 'declined' }),
       }),
     ]);
+    // the renter sees that somebody was invited and declined, not who
+    expect((await rosterOf(renter, bookingId)).members).toEqual([
+      expect.objectContaining({ personId: null, displayName: null, status: 'removed' }),
+    ]);
 
     // the same person can be invited again (the removed row is history, not a live member)
-    const second = await invite(renter, bookingId, { recipientPersonId: guest.personId });
+    const second = await invite(desk, bookingId, { recipientPersonId: guest.personId });
     expect(second.status).toBe(201);
     // only the renter or staff revoke; a reason is required
     const notTheirs = await post(
@@ -541,7 +578,7 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     expect(roster.members.map((m) => m.status)).toEqual(['removed', 'removed', 'removed']);
 
     // a joined member leaves by themselves; the renter removes another; staff remove a third
-    const fourth = await invite(renter, bookingId, { recipientPersonId: guest.personId });
+    const fourth = await invite(desk, bookingId, { recipientPersonId: guest.personId });
     const joined = await accept(guest, fourth.body.id);
     expect(joined.status).toBe(200);
     const memberId = joined.body.member.id as string;
@@ -626,7 +663,11 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     expect(refused.status).toBe(400);
     expect(refused.body.details).toMatchObject({ code: 'ROSTER_RENTAL_ONLY' });
     expect(
-      (await invite(host, party.body.id, { recipientPersonId: guest })).body.details,
+      (
+        await invite(host, party.body.id, {
+          recipientContact: { kind: 'email', value: 'party-guest@example.test' },
+        })
+      ).body.details,
     ).toMatchObject({ code: 'ROSTER_RENTAL_ONLY' });
 
     // an ended booking's roster is read, not added to
@@ -651,8 +692,8 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     const { renter, bookingId } = await rental();
     const guest = await adult(t);
     const other = await adult(t);
-    const pending = await invite(renter, bookingId, { recipientPersonId: guest.personId });
-    const second = await invite(renter, bookingId, { recipientPersonId: other.personId });
+    const pending = await invite(desk, bookingId, { recipientPersonId: guest.personId });
+    const second = await invite(desk, bookingId, { recipientPersonId: other.personId });
     expect((await add(renter, bookingId, renter.personId)).status).toBe(201);
     await t.disableCapability('rental_rosters');
     try {
@@ -700,6 +741,334 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     } finally {
       await t.enableCapability('rental_rosters');
     }
+  });
+
+  describe('whose person may be named, shown and joined (security review M-1)', () => {
+    it('SPK-COND-005 / SPK-IAM-003: a renter names by reference only themselves and the people they register for, and a reference they may not name answers exactly like an unknown one', async () => {
+      const { renter, bookingId } = await rental();
+      const stranger = await adult(t);
+      const strangersChild = await child(t, [stranger]);
+      const ownChild = await child(t, [renter]);
+      const before = await rosterOf(renter, bookingId);
+
+      // inviting: a known adult, a known child and an id that names nobody are one answer
+      const known = await invite(renter, bookingId, {
+        recipientPersonId: stranger.personId,
+        message: 'You do not know me',
+      });
+      const knownChild = await invite(renter, bookingId, { recipientPersonId: strangersChild });
+      const unknown = await invite(renter, bookingId, { recipientPersonId: newId() });
+      expect(known.status).toBe(400);
+      expect(known.body.details).toMatchObject({
+        code: 'ROSTER_INVITE_BY_CONTACT',
+        path: 'recipientPersonId',
+      });
+      expect(refusal(knownChild)).toEqual(refusal(known));
+      expect(refusal(unknown)).toEqual(refusal(known));
+      // adding: the same, with the answer adding has always given
+      const addKnown = await add(renter, bookingId, stranger.personId);
+      const addUnknown = await add(renter, bookingId, newId());
+      expect(addKnown.status).toBe(400);
+      expect(addKnown.body.details).toMatchObject({ code: 'ROSTER_INVITATION_REQUIRED' });
+      expect(refusal(addUnknown)).toEqual(refusal(addKnown));
+      // nothing was written about the people named, and nothing reaches them
+      expect(await rosterOf(renter, bookingId)).toEqual(before);
+      for (const personId of [stranger.personId, strangersChild]) {
+        expect(
+          await t.db
+            .selectFrom('booking_roster_members')
+            .select('id')
+            .where('person_id', '=', personId)
+            .execute(),
+        ).toEqual([]);
+        expect(
+          await t.db
+            .selectFrom('booking_roster_invitations')
+            .select('id')
+            .where('recipient_person_id', '=', personId)
+            .execute(),
+        ).toEqual([]);
+      }
+      expect(
+        (await t.http.get('/v1/me/booking-roster-invitations').set(stranger.header)).body,
+      ).toEqual([]);
+
+      // themselves and someone they register for: named by reference
+      const child1 = await invite(renter, bookingId, { recipientPersonId: ownChild });
+      expect(child1.status, JSON.stringify(child1.body)).toBe(201);
+      expect(child1.body.recipientPersonId).toBe(ownChild);
+      expect((await add(renter, bookingId, renter.personId)).status).toBe(201);
+      // anybody else: by contact, to answer for themselves
+      const byContact = await invite(renter, bookingId, {
+        recipientContact: { kind: 'email', value: 'stranger@example.test' },
+      });
+      expect(byContact.status).toBe(201);
+      // staff keep naming anybody, and are told when a reference names nobody
+      const byStaff = await invite(desk, bookingId, { recipientPersonId: stranger.personId });
+      expect(byStaff.status, JSON.stringify(byStaff.body)).toBe(201);
+      const staffUnknown = await invite(desk, bookingId, { recipientPersonId: newId() });
+      expect(staffUnknown.status).toBe(404);
+    });
+
+    it("SPK-COND-005 / SPK-REG-011: the roster shows no name and no waiver status for somebody who is only invited; a person's details are theirs until they join", async () => {
+      const setup = await rentalOffering();
+      const policyKey = `rental-waiver-${newId().slice(-8)}`;
+      const version = await createPolicyVersionFixture(t, {
+        kind: 'waiver',
+        key: policyKey,
+        title: 'Rental waiver',
+        effectiveFrom: LONG_AGO,
+        content: fixtureWaiverContent({ enforcement: 'warn' }),
+      });
+      await requireWaiverFixture(t, { offeringId: setup.offeringId, policyKey });
+      const { renter, bookingId } = await rental(setup, version);
+      const invitee = await adult(t);
+      const decliner = await adult(t);
+      const ownChild = await child(t, [renter]);
+
+      const invited = await invite(desk, bookingId, { recipientPersonId: invitee.personId });
+      const declined = await invite(desk, bookingId, { recipientPersonId: decliner.personId });
+      const ownInvite = await invite(renter, bookingId, { recipientPersonId: ownChild });
+      const contact = await invite(renter, bookingId, {
+        recipientContact: { kind: 'email', value: 'someone@example.test' },
+      });
+      for (const response of [invited, declined, ownInvite, contact]) {
+        expect(response.status, JSON.stringify(response.body)).toBe(201);
+      }
+      expect((await decline(decliner, declined.body.id)).status).toBe(200);
+
+      const row = (roster: { members: Member[] }, memberId: string) =>
+        roster.members.find((m) => m.id === memberId);
+      // the renter: somebody is invited; not who, not their name, not their waiver
+      let asRenter = await rosterOf(renter, bookingId);
+      expect(row(asRenter, invited.body.memberId)).toMatchObject({
+        status: 'invited',
+        personId: null,
+        displayName: null,
+        invitedContact: null,
+        waiverStatus: 'not_evaluated',
+        invitation: { id: invited.body.id, status: 'pending' },
+      });
+      // someone who declined never joined: still nobody's to see
+      expect(row(asRenter, declined.body.memberId)).toMatchObject({
+        status: 'removed',
+        personId: null,
+        displayName: null,
+        waiverStatus: 'not_evaluated',
+      });
+      // the renter's own child: the reference they gave, and still no name or waiver
+      expect(row(asRenter, ownInvite.body.memberId)).toMatchObject({
+        status: 'invited',
+        personId: ownChild,
+        displayName: null,
+        waiverStatus: 'not_evaluated',
+      });
+      // a contact invitation shows the contact the renter typed
+      expect(row(asRenter, contact.body.memberId)).toMatchObject({
+        personId: null,
+        displayName: null,
+        invitedContact: { kind: 'email', value: 'someone@example.test' },
+        waiverStatus: 'not_evaluated',
+      });
+      expect(asRenter.counts).toEqual({ joined: 0, invited: 3, waiverOutstanding: 0 });
+      expect(JSON.stringify(asRenter)).not.toContain(invitee.personId);
+      expect(JSON.stringify(asRenter)).not.toContain(decliner.personId);
+      // staff keep the reference they invited by, and see no name or waiver either
+      const asStaff = await rosterOf(desk, bookingId);
+      expect(row(asStaff, invited.body.memberId)).toMatchObject({
+        personId: invitee.personId,
+        displayName: null,
+        waiverStatus: 'not_evaluated',
+      });
+
+      // once the person joins, their name and waiver are on the roster
+      expect((await accept(invitee, invited.body.id)).status).toBe(200);
+      asRenter = await rosterOf(renter, bookingId);
+      expect(row(asRenter, invited.body.memberId)).toMatchObject({
+        status: 'joined',
+        personId: invitee.personId,
+        waiverStatus: 'missing',
+      });
+      expect(row(asRenter, invited.body.memberId)?.displayName).toEqual(expect.any(String));
+      expect(asRenter.counts).toEqual({ joined: 1, invited: 2, waiverOutstanding: 1 });
+    });
+
+    it('SPK-COND-005 / SPK-IAM-003: an invitation that names a person is answered only by that person or somebody who may act for them, and its token never lets anybody else read it, decline it or mark the person as joined', async () => {
+      const { renter, bookingId } = await rental();
+      const victim = await adult(t);
+      const attacker = await adult(t);
+      const issued = await invite(desk, bookingId, { recipientPersonId: victim.personId });
+      expect(issued.status, JSON.stringify(issued.body)).toBe(201);
+      const token = issued.body.token as string;
+
+      // the attack of the review: whoever holds the token (the inviter was handed it) accepts
+      // the invitation themselves so that the person it names becomes "joined"
+      for (const holder of [attacker, renter]) {
+        for (const body of [
+          { token },
+          { token, personId: victim.personId },
+          { token, personId: holder.personId },
+        ]) {
+          const tried = await accept(holder, issued.body.id, body);
+          expect(tried.status, JSON.stringify(tried.body)).toBe(404);
+        }
+        expect((await decline(holder, issued.body.id, { token })).status).toBe(404);
+      }
+      // the token opens nothing either: not in the body, and not in the address any more
+      expect((await open(attacker, issued.body.id, token)).status).toBe(404);
+      expect(
+        (
+          await t.http
+            .get(`/v1/booking-roster-invitations/${issued.body.id}`)
+            .query({ token })
+            .set(attacker.header)
+        ).status,
+      ).toBe(404);
+      // nothing moved: the person is still only invited
+      expect(await invitationRow(issued.body.id)).toMatchObject({
+        status: 'pending',
+        accepted_by_person_id: null,
+        accepted_for_person_id: null,
+        accepted_as: null,
+      });
+      expect(await memberRowOf(issued.body.memberId)).toMatchObject({
+        status: 'invited',
+        joined_at: null,
+      });
+      expect((await rosterOf(renter, bookingId)).counts).toMatchObject({ joined: 0, invited: 1 });
+
+      // the person it names joins, signed in, without the token; the record says they did
+      const joined = await accept(victim, issued.body.id);
+      expect(joined.status, JSON.stringify(joined.body)).toBe(200);
+      expect(joined.body.member).toMatchObject({ personId: victim.personId, status: 'joined' });
+      expect(await invitationRow(issued.body.id)).toMatchObject({
+        status: 'accepted',
+        accepted_by_person_id: victim.personId,
+        accepted_for_person_id: victim.personId,
+        accepted_as: 'self',
+      });
+    });
+
+    it("SPK-COND-005 / SPK-IAM-003: somebody with authority to register a child answers the invitation that names the child; nobody else does, and the child's own row joins", async () => {
+      const { bookingId } = await rental();
+      const guardian = await adult(t);
+      const kid = await child(t, [guardian]);
+      const other = await adult(t);
+      // a relationship without the registering permission is not that authority
+      const viewer = await adult(t);
+      await child(t, [viewer]);
+      const onlyViews = await child(t, [viewer], { permissions: ['view'] });
+
+      const issued = await invite(desk, bookingId, { recipientPersonId: kid });
+      const forViewer = await invite(desk, bookingId, { recipientPersonId: onlyViews });
+      expect(issued.status, JSON.stringify(issued.body)).toBe(201);
+      expect(forViewer.status, JSON.stringify(forViewer.body)).toBe(201);
+
+      // the guardian finds it among their invitations and reads it; nobody else does
+      const mine = await t.http.get('/v1/me/booking-roster-invitations').set(guardian.header);
+      expect(mine.body.map((i: { id: string }) => i.id)).toEqual([issued.body.id]);
+      expect(
+        (await t.http.get('/v1/me/booking-roster-invitations').set(viewer.header)).body,
+      ).toEqual([]);
+      expect(
+        (await t.http.get(`/v1/booking-roster-invitations/${issued.body.id}`).set(other.header))
+          .status,
+      ).toBe(404);
+      expect((await accept(other, issued.body.id, { token: issued.body.token })).status).toBe(404);
+      expect(
+        (await accept(viewer, forViewer.body.id, { token: forViewer.body.token })).status,
+      ).toBe(404);
+      // it names the child: the guardian does not join in the child's place
+      const instead = await accept(guardian, issued.body.id, { personId: guardian.personId });
+      expect(instead.status).toBe(400);
+      expect(instead.body.details).toMatchObject({ code: 'ROSTER_INVITATION_NAMES_PERSON' });
+
+      const joined = await accept(guardian, issued.body.id);
+      expect(joined.status, JSON.stringify(joined.body)).toBe(200);
+      expect(joined.body.member).toMatchObject({ personId: kid, status: 'joined' });
+      expect(await invitationRow(issued.body.id)).toMatchObject({
+        status: 'accepted',
+        accepted_by_person_id: guardian.personId,
+        accepted_for_person_id: kid,
+        accepted_as: 'representative',
+      });
+      expect(await memberRowOf(issued.body.memberId)).toMatchObject({
+        status: 'joined',
+        person_id: kid,
+      });
+    });
+
+    it('SPK-COND-005: a contact invitation joins the signed-in holder of its token, or a child they act for, and the stored member is that joiner', async () => {
+      const { renter, bookingId } = await rental();
+      const holder = await adult(t);
+      const holdersChild = await child(t, [holder]);
+      const someoneElse = await adult(t);
+      const first = await invite(renter, bookingId, {
+        recipientContact: { kind: 'email', value: 'first@example.test' },
+      });
+      const second = await invite(renter, bookingId, {
+        recipientContact: { kind: 'email', value: 'second@example.test' },
+      });
+      // without the token there is no invitation; with it, never for somebody they do not act for
+      expect((await accept(holder, first.body.id)).status).toBe(404);
+      expect((await open(holder, first.body.id, 'not-the-right-token-at-all')).status).toBe(404);
+      expect(
+        (
+          await accept(holder, first.body.id, {
+            token: first.body.token,
+            personId: someoneElse.personId,
+          })
+        ).status,
+      ).toBe(404);
+      expect((await open(holder, first.body.id, first.body.token)).status).toBe(200);
+
+      const self = await accept(holder, first.body.id, { token: first.body.token });
+      expect(self.status, JSON.stringify(self.body)).toBe(200);
+      expect(self.body.member).toMatchObject({ personId: holder.personId, status: 'joined' });
+      expect(await invitationRow(first.body.id)).toMatchObject({
+        recipient_person_id: null,
+        accepted_by_person_id: holder.personId,
+        accepted_for_person_id: holder.personId,
+        accepted_as: 'self',
+      });
+      expect(await memberRowOf(first.body.memberId)).toMatchObject({ person_id: holder.personId });
+
+      const forChild = await accept(holder, second.body.id, {
+        token: second.body.token,
+        personId: holdersChild,
+      });
+      expect(forChild.status, JSON.stringify(forChild.body)).toBe(200);
+      expect(forChild.body.member).toMatchObject({ personId: holdersChild, status: 'joined' });
+      expect(await invitationRow(second.body.id)).toMatchObject({
+        accepted_by_person_id: holder.personId,
+        accepted_for_person_id: holdersChild,
+        accepted_as: 'representative',
+      });
+      expect(await memberRowOf(second.body.memberId)).toMatchObject({ person_id: holdersChild });
+    });
+
+    it('§4.14 (security review L-1): the invitation token is not kept with the idempotency record, and a replay withholds it', async () => {
+      const { renter, bookingId } = await rental();
+      const key = `roster-invite-${newId()}`;
+      const body = { recipientContact: { kind: 'email', value: 'replay@example.test' } };
+      const send = () =>
+        t.http
+          .post(`/v1/bookings/${bookingId}/roster/invitations`)
+          .set(renter.header)
+          .set('Idempotency-Key', key)
+          .send(body);
+      const issued = await send();
+      expect(issued.status, JSON.stringify(issued.body)).toBe(201);
+      expect(issued.body.token).toEqual(expect.any(String));
+      expect(await idempotencyStoreContains(t.db, issued.body.token as string)).toBe(false);
+      const replayed = await send();
+      expect(replayed.status).toBe(409);
+      expect(replayed.body).toMatchObject({
+        code: 'IDEMPOTENCY_SECRET_WITHHELD',
+        details: { resourceId: issued.body.id },
+      });
+      expect(JSON.stringify(replayed.body)).not.toContain(issued.body.token);
+    });
   });
 
   describe('database integrity (migration 0530)', () => {
@@ -922,6 +1291,147 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
       await expect(
         t.db.deleteFrom('booking_roster_invitations').where('id', '=', id).execute(),
       ).rejects.toThrow(/append-only/);
+    });
+    it('SPK-COND-005 (migration 0531): the database refuses an acceptance that joins somebody other than the person the invitation names, misstates who acted, or leaves the roster row not joined as the joiner', async () => {
+      const { bookingId } = await rental();
+      const named = await createPersonFixture(t, { kind: 'adult' });
+      const other = await createPersonFixture(t, { kind: 'adult' });
+      const now = t.clock.now();
+      const seed = async (recipient: string | null) => {
+        const memberId = newId();
+        const invitationId = newId();
+        await insertMember(bookingId, {
+          id: memberId,
+          person_id: recipient,
+          status: 'invited',
+          joined_at: null,
+          ...(recipient
+            ? {}
+            : { invited_contact_kind: 'email', invited_contact_value: `${memberId}@example.test` }),
+        });
+        await t.db
+          .insertInto('booking_roster_invitations')
+          .values({
+            id: invitationId,
+            organization_id: t.organizationId,
+            booking_id: bookingId,
+            member_id: memberId,
+            invited_by: actor,
+            invited_by_person_id: null,
+            recipient_person_id: recipient,
+            recipient_contact_kind: recipient ? null : 'email',
+            recipient_contact_value: recipient ? null : `${memberId}@example.test`,
+            message: null,
+            token_hash: `hash-${invitationId}`,
+            expires_at: new Date(now.getTime() + DAY),
+          } as never)
+          .execute();
+        return { memberId, invitationId };
+      };
+      const acceptRow = (invitationId: string, set: Record<string, unknown>) =>
+        t.db
+          .updateTable('booking_roster_invitations')
+          .set({ status: 'accepted', accepted_at: now, ...set } as never)
+          .where('id', '=', invitationId)
+          .execute();
+      const join = (memberId: string, personId: string) =>
+        t.db
+          .updateTable('booking_roster_members')
+          .set({ status: 'joined', joined_at: now, person_id: personId })
+          .where('id', '=', memberId)
+          .execute();
+
+      // the attack, written straight into the tables: the roster row of the named person is
+      // marked joined, and the invitation accepted by somebody else
+      const attack = await seed(named);
+      // ... while the roster row is still only invited
+      await expect(
+        acceptRow(attack.invitationId, {
+          accepted_by_person_id: named,
+          accepted_for_person_id: named,
+          accepted_as: 'self',
+        }),
+      ).rejects.toSatisfy(isCheckViolation);
+      await join(attack.memberId, named);
+      // ... for a joiner who is not the person named
+      await expect(
+        acceptRow(attack.invitationId, {
+          accepted_by_person_id: other,
+          accepted_for_person_id: other,
+          accepted_as: 'self',
+        }),
+      ).rejects.toSatisfy(isCheckViolation);
+      // ... by somebody else, recorded as if the named person had answered
+      await expect(
+        acceptRow(attack.invitationId, {
+          accepted_by_person_id: other,
+          accepted_for_person_id: named,
+          accepted_as: 'self',
+        }),
+      ).rejects.toSatisfy(isCheckViolation);
+      // ... as a representative who is the person themselves
+      await expect(
+        acceptRow(attack.invitationId, {
+          accepted_by_person_id: named,
+          accepted_for_person_id: named,
+          accepted_as: 'representative',
+        }),
+      ).rejects.toSatisfy(isCheckViolation);
+      // ... without saying who joined, in what capacity, or who acted
+      await expect(
+        acceptRow(attack.invitationId, { accepted_by_person_id: named }),
+      ).rejects.toSatisfy(isCheckViolation);
+      await expect(
+        acceptRow(attack.invitationId, {
+          accepted_for_person_id: named,
+          accepted_as: 'representative',
+        }),
+      ).rejects.toSatisfy(isCheckViolation);
+      // ... and an invitation that is not accepted names no joiner
+      await expect(
+        t.db
+          .updateTable('booking_roster_invitations')
+          .set({ accepted_for_person_id: named, accepted_as: 'self' })
+          .where('id', '=', attack.invitationId)
+          .execute(),
+      ).rejects.toSatisfy(isCheckViolation);
+      expect(
+        await t.db
+          .selectFrom('booking_roster_invitations')
+          .select(['status', 'accepted_for_person_id'])
+          .where('id', '=', attack.invitationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ status: 'pending', accepted_for_person_id: null });
+
+      // the named person's own acceptance is taken, and is then a fact that cannot be rewritten
+      await acceptRow(attack.invitationId, {
+        accepted_by_person_id: named,
+        accepted_for_person_id: named,
+        accepted_as: 'self',
+      });
+      await expect(
+        t.db
+          .updateTable('booking_roster_invitations')
+          .set({ accepted_by_person_id: other, accepted_as: 'representative' })
+          .where('id', '=', attack.invitationId)
+          .execute(),
+      ).rejects.toThrow(/cannot be rewritten/);
+
+      // a contact invitation: the roster row is the joiner, not whoever else
+      const contact = await seed(null);
+      await join(contact.memberId, other);
+      await expect(
+        acceptRow(contact.invitationId, {
+          accepted_by_person_id: named,
+          accepted_for_person_id: named,
+          accepted_as: 'self',
+        }),
+      ).rejects.toSatisfy(isCheckViolation);
+      await acceptRow(contact.invitationId, {
+        accepted_by_person_id: named,
+        accepted_for_person_id: other,
+        accepted_as: 'representative',
+      });
     });
   });
 });
