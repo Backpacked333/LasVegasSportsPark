@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   errors,
@@ -90,11 +90,36 @@ function newToken(): string {
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
+/** Whether `token` is the one behind `tokenHash`, compared in constant time. */
+function holdsToken(token: string | undefined, tokenHash: string): boolean {
+  if (token === undefined) return false;
+  const presented = Buffer.from(hashToken(token), 'hex');
+  const stored = Buffer.from(tokenHash, 'hex');
+  return presented.length === stored.length && timingSafeEqual(presented, stored);
+}
 
 interface Access {
   staff: boolean;
   booker: boolean;
   selfIds: string[];
+}
+
+/**
+ * Who is reading a roster row. A person's details are theirs until they join (security review
+ * M-1): a row that never joined shows no name and no waiver status to anybody, and its person
+ * reference only to staff or to a reader who may act for that person.
+ */
+interface Viewer {
+  staff: boolean;
+  ownIds: ReadonlySet<string>;
+}
+
+/** In what capacity the caller answers an invitation. */
+interface Recipient {
+  invitation: InvitationRow;
+  selfIds: string[];
+  /** `self`: the invitation names the caller, or the caller holds a contact invitation's token. */
+  capacity: 'self' | 'representative';
 }
 
 /**
@@ -104,8 +129,16 @@ interface Access {
  * A rental booking may have a roster: the people the renter brings. The renter or staff add and
  * invite people; an invited person joins for themselves (or, on a contact invitation, for their
  * child); a member may add their own child. Staff and the renter read the roster with each
- * member's liability waiver status for the rental offering's required waiver, judged by the
- * catalog (`PolicyPort.waiverStatuses`), or `not_evaluated` while liability waivers are off.
+ * joined member's liability waiver status for the rental offering's required waiver, judged by
+ * the catalog (`PolicyPort.waiverStatuses`), or `not_evaluated` while liability waivers are off.
+ *
+ * Whose person a customer may name (security review M-1; SPK-IAM-003): a renter or member names
+ * by person reference only themselves and the people they hold registering authority for, when
+ * adding and when inviting; anybody else is invited by contact. A reference they may not name is
+ * answered exactly as an unknown one. An invitation that names a person is answered only by
+ * that person or by somebody who may act for them, with or without its token; a contact
+ * invitation is answered by the holder of its token, for themselves or a child they act for.
+ * The database records who joined and in what capacity (migration 0531).
  *
  * Being on a roster grants nothing else. This service writes only its two tables: no enrollment,
  * no entitlement, no hold, no team entry, no roster membership; no other module reads them. A
@@ -152,7 +185,14 @@ export class BookingRostersService {
       .orderBy('created_at')
       .orderBy('id')
       .execute();
-    const { members, waiver } = await this.memberViews(this.db, organizationId, booking, rows);
+    const viewer = await this.viewer(principal, access);
+    const { members, waiver } = await this.memberViews(
+      this.db,
+      organizationId,
+      booking,
+      rows,
+      viewer,
+    );
     const order = { joined: 0, invited: 1, removed: 2 } as const;
     members.sort((a, b) => order[a.status] - order[b.status]);
     const joined = members.filter((m) => m.status === 'joined');
@@ -171,8 +211,10 @@ export class BookingRostersService {
   }
 
   /**
-   * One invitation as the invited person sees it. Readable by the person it names, by whoever
-   * holds its token, by the renter and by staff at the facility; nobody else learns it exists.
+   * One invitation as the invited person sees it. Readable by the person it names or somebody who
+   * may act for them, by whoever holds a contact invitation's token, by the renter and by staff
+   * at the facility; nobody else learns it exists. A token never opens an invitation that names
+   * somebody else.
    */
   async invitation(
     principal: Principal,
@@ -185,26 +227,38 @@ export class BookingRostersService {
     const booking = await this.bookings.load(this.db, organizationId, row.booking_id);
     if (!booking) throw errors.protectedNotFound('booking_roster_invitation');
     const access = await this.access(principal, booking, EnrollmentActions.readBookingRoster);
-    const invited =
-      (row.recipient_person_id !== null && access.selfIds.includes(row.recipient_person_id)) ||
-      (token !== undefined && hashToken(token) === row.token_hash);
-    if (!invited && !access.staff && !access.booker) {
-      throw errors.protectedNotFound('booking_roster_invitation');
+    if (!access.staff && !access.booker) {
+      // Throws the answer an unknown invitation gets unless the caller is its recipient.
+      await this.recipientOf(principal, row, token);
     }
-    return this.invitationView(organizationId, row, booking);
+    return this.withoutRecipient(
+      await this.invitationView(organizationId, row, booking),
+      await this.viewer(principal, access),
+    );
   }
 
-  /** The open invitations that name the signed-in person. */
+  /**
+   * The open invitations that name the signed-in person, or a person they may register (a child
+   * staff invited by name has no account of their own to answer with).
+   */
   async myInvitations(principal: Principal): Promise<BookingRosterInvitationView[]> {
     const organizationId = organizationOf(principal);
     if (!principal.personId) return [];
-    const selfIds = await this.customers.selfIds(principal);
+    const answerable = [
+      ...new Set([
+        ...(await this.customers.selfIds(principal)),
+        ...(await this.customers.subjectIds(
+          principal,
+          EnrollmentActions.acceptBookingRosterInvitation,
+        )),
+      ]),
+    ];
     const now = this.clock.now();
     const rows = await this.db
       .selectFrom('booking_roster_invitations')
       .selectAll()
       .where('organization_id', '=', organizationId)
-      .where('recipient_person_id', 'in', selfIds)
+      .where('recipient_person_id', 'in', answerable)
       .where('status', '=', 'pending')
       .where('expires_at', '>', now)
       .orderBy('created_at', 'desc')
@@ -253,6 +307,8 @@ export class BookingRostersService {
         );
       }
     }
+    // Read before the unit of work opens: it reads relationships, not this module's rows.
+    const viewer = await this.viewer(principal, access);
     return this.uow.run(async ({ trx }) => {
       await this.capabilities.require(organizationId, 'rental_rosters', trx);
       const booking = await this.rosterableBooking(trx, organizationId, bookingId);
@@ -284,7 +340,7 @@ export class BookingRostersService {
         correlationId,
         details: { addedDirectly: true, byStaff: access.staff },
       });
-      return this.memberView(trx, organizationId, booking, row);
+      return this.memberView(trx, organizationId, booking, row, viewer);
     });
   }
 
@@ -300,6 +356,15 @@ export class BookingRostersService {
     if (!found) throw errors.protectedNotFound('booking');
     const access = await this.access(principal, found, EnrollmentActions.manageBookingRoster);
     if (!access.staff && !access.booker) throw errors.protectedNotFound('booking');
+    // A renter names by reference only themselves or someone they may register (never through a
+    // staff role held elsewhere). Any other reference, known or not, gets one answer: no lookup
+    // is made, so the answer says nothing about whether such a person exists (§4.10).
+    if (body.recipientPersonId && !access.staff) {
+      const mayName = (
+        await this.customers.subjectIds(principal, EnrollmentActions.manageBookingRoster)
+      ).includes(body.recipientPersonId);
+      if (!mayName) throw inviteByContact();
+    }
     const token = newToken();
     const contact = body.recipientContact
       ? {
@@ -321,7 +386,11 @@ export class BookingRostersService {
           trx,
         );
         if (!recipient || recipient.status !== 'active') {
-          throw errors.notFound('person', body.recipientPersonId);
+          // Staff look people up elsewhere; a renter gets the one answer of every refused
+          // reference.
+          throw access.staff
+            ? errors.notFound('person', body.recipientPersonId)
+            : inviteByContact();
         }
         recipientPersonId = recipient.id;
       }
@@ -411,10 +480,11 @@ export class BookingRostersService {
   }
 
   /**
-   * The invited person joins. An invitation that names a person is accepted by that person, for
-   * themselves (signing in proves who they are; the token is not needed). An invitation to a
-   * contact is accepted by whoever holds its token, for themselves or for someone they may
-   * register (their child).
+   * The invited person joins. An invitation that names a person joins that person and nobody
+   * else, and is accepted only by them or by somebody who may register them (signing in proves
+   * who they are; its token is neither needed nor enough). An invitation to a contact is accepted
+   * by whoever holds its token, for themselves or for someone they may register (their child);
+   * the roster row becomes that joiner.
    */
   async accept(
     principal: Principal,
@@ -427,26 +497,26 @@ export class BookingRostersService {
     if (!actorPersonId) {
       throw errors.accessDenied('Link your account to a person before accepting.');
     }
-    const { selfIds } = await this.recipientCheck(principal, organizationId, invitationId, body);
-    const joiner = body.personId ?? actorPersonId;
     const found = await this.loadInvitation(this.db, organizationId, invitationId);
     if (!found) throw errors.protectedNotFound('booking_roster_invitation');
-    if (found.recipient_person_id) {
-      if (!selfIds.includes(joiner)) {
-        throw errors.validation(
-          'This invitation names you. Join first; then add your child from the roster.',
-          { path: 'personId', code: 'ROSTER_INVITATION_NAMES_PERSON' },
-        );
-      }
-    } else {
-      // Self, or a person the caller may register: the same authority a registration needs.
-      await this.authorization.require(principal, EnrollmentActions.acceptBookingRosterInvitation, {
-        type: 'booking_roster_invitation',
-        id: invitationId,
-        organizationId,
-        subjectPersonIds: [joiner],
-        protected: true,
-      });
+    const recipient = await this.recipientOf(principal, found, body.token);
+    const { joiner, capacity } = this.joinerOf(recipient, actorPersonId, body.personId);
+    const target = {
+      type: 'booking_roster_invitation',
+      id: invitationId,
+      organizationId,
+      subjectPersonIds: [joiner],
+      protected: true,
+    };
+    // Self, or a person the caller may register: the same authority a registration needs. The
+    // person an invitation names needs no more than being that person.
+    const needsAuthority = found.recipient_person_id === null || capacity === 'representative';
+    if (needsAuthority) {
+      await this.authorization.require(
+        principal,
+        EnrollmentActions.acceptBookingRosterInvitation,
+        target,
+      );
     }
     const now = this.clock.now();
     await this.expireIfDue(principal, organizationId, invitationId, now, correlationId);
@@ -454,6 +524,14 @@ export class BookingRostersService {
       await this.capabilities.require(organizationId, 'rental_rosters', trx);
       const invitation = await this.loadInvitation(trx, organizationId, invitationId, true);
       if (!invitation) throw errors.protectedNotFound('booking_roster_invitation');
+      if (needsAuthority) {
+        // Judged again inside the unit of work, against the joiner (§4.11).
+        await this.authorization.require(
+          principal,
+          EnrollmentActions.acceptBookingRosterInvitation,
+          target,
+        );
+      }
       BookingRosterInvitationMachine.next(invitation.status, 'accept');
       const booking = await this.rosterableBooking(trx, organizationId, invitation.booking_id);
       const member = await this.loadMember(trx, organizationId, invitation.member_id, true);
@@ -470,7 +548,9 @@ export class BookingRostersService {
           .updateTable('booking_roster_members')
           .set({
             status: BookingRosterMemberMachine.next(member.status, 'join'),
-            person_id: member.person_id ?? person.id,
+            // The joiner: the person the invitation names, or whoever a contact invitation's
+            // holder joined. The row's person never changes once named (0530 guard).
+            person_id: person.id,
             joined_at: now,
             revision: member.revision + 1,
           })
@@ -492,7 +572,11 @@ export class BookingRostersService {
         .set({
           status: 'accepted',
           accepted_at: now,
-          accepted_by_person_id: actorPersonId,
+          // Who acted, who joined and in what capacity: the database refuses an acceptance whose
+          // joiner is not the person named or not the joined roster row (migration 0531).
+          accepted_by_person_id: capacity === 'self' ? person.id : actorPersonId,
+          accepted_for_person_id: person.id,
+          accepted_as: capacity,
           revision: invitation.revision + 1,
         })
         .where('organization_id', '=', organizationId)
@@ -509,11 +593,15 @@ export class BookingRostersService {
         reason: null,
         correlationId,
         beforeRevision: member.revision,
-        details: { invitationId: invitation.id },
+        details: { invitationId: invitation.id, acceptedAs: capacity },
       });
       return {
         invitation: this.toInvitation(accepted, now),
-        member: await this.memberView(trx, organizationId, booking, joined),
+        // The caller is the joiner or acts for them: the row is theirs to see.
+        member: await this.memberView(trx, organizationId, booking, joined, {
+          staff: false,
+          ownIds: new Set([person.id]),
+        }),
       };
     });
   }
@@ -525,7 +613,9 @@ export class BookingRostersService {
     correlationId: string | null,
   ): Promise<BookingRosterInvitation> {
     const organizationId = organizationOf(principal);
-    await this.recipientCheck(principal, organizationId, invitationId, body);
+    const found = await this.loadInvitation(this.db, organizationId, invitationId);
+    if (!found) throw errors.protectedNotFound('booking_roster_invitation');
+    await this.recipientOf(principal, found, body.token);
     const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
       const invitation = await this.loadInvitation(trx, organizationId, invitationId, true);
@@ -560,8 +650,9 @@ export class BookingRostersService {
     if (!access.staff && !access.booker) {
       throw errors.protectedNotFound('booking_roster_invitation');
     }
+    const viewer = await this.viewer(principal, access);
     const now = this.clock.now();
-    return this.uow.run(async ({ trx }) => {
+    const revoked = await this.uow.run(async ({ trx }) => {
       const invitation = await this.loadInvitation(trx, organizationId, invitationId, true);
       if (!invitation) throw errors.protectedNotFound('booking_roster_invitation');
       assertExpectedRevision(body.expectedRevision, invitation.revision);
@@ -577,6 +668,7 @@ export class BookingRostersService {
         correlationId,
       });
     });
+    return this.withoutRecipient(revoked, viewer);
   }
 
   /** The renter, staff, the member themselves or someone who may register them. */
@@ -608,6 +700,7 @@ export class BookingRostersService {
         ).includes(found.person_id);
       if (!own) throw errors.protectedNotFound('booking');
     }
+    const viewer = await this.viewer(principal, access);
     const now = this.clock.now();
     return this.uow.run(async ({ trx }) => {
       const member = await this.loadMember(trx, organizationId, memberId, true);
@@ -649,7 +742,7 @@ export class BookingRostersService {
         beforeRevision: member.revision,
         details: {},
       });
-      return this.memberView(trx, organizationId, booking, removed);
+      return this.memberView(trx, organizationId, booking, removed, viewer);
     });
   }
 
@@ -689,24 +782,67 @@ export class BookingRostersService {
     return row !== undefined;
   }
 
+  /** The reader of a roster: staff, and the people this person may act for as a customer. */
+  private async viewer(principal: Principal, access: Access): Promise<Viewer> {
+    const own = principal.personId
+      ? await this.customers.subjectIds(principal, EnrollmentActions.manageBookingRoster)
+      : [];
+    return { staff: access.staff, ownIds: new Set([...access.selfIds, ...own]) };
+  }
+
   /**
-   * Whether the caller is the person an invitation is for: the person it names, or the holder of
-   * its token. Anyone else gets the answer an unknown invitation gets (§4.10).
+   * Whether the caller is who an invitation is for, and in what capacity they answer it.
+   *
+   * An invitation that names a person is for that person, or for somebody who holds registering
+   * authority over them (the rule a registration uses; never a staff role). Its token is neither
+   * needed nor enough: holding it never lets one person answer for another (security review M-1).
+   * An invitation to a contact is for whoever holds its token. Anyone else gets the answer an
+   * unknown invitation gets (§4.10).
    */
-  private async recipientCheck(
+  private async recipientOf(
     principal: Principal,
-    organizationId: string,
-    invitationId: string,
-    body: { token?: string },
-  ): Promise<{ selfIds: string[] }> {
-    const invitation = await this.loadInvitation(this.db, organizationId, invitationId);
-    if (!invitation) throw errors.protectedNotFound('booking_roster_invitation');
+    invitation: InvitationRow,
+    token: string | undefined,
+  ): Promise<Recipient> {
     const selfIds = principal.personId ? await this.customers.selfIds(principal) : [];
-    const named =
-      invitation.recipient_person_id !== null && selfIds.includes(invitation.recipient_person_id);
-    const holdsToken = body.token !== undefined && hashToken(body.token) === invitation.token_hash;
-    if (!named && !holdsToken) throw errors.protectedNotFound('booking_roster_invitation');
-    return { selfIds };
+    const named = invitation.recipient_person_id;
+    if (named === null) {
+      if (!holdsToken(token, invitation.token_hash)) {
+        throw errors.protectedNotFound('booking_roster_invitation');
+      }
+      return { invitation, selfIds, capacity: 'self' };
+    }
+    if (selfIds.includes(named)) return { invitation, selfIds, capacity: 'self' };
+    const actsFor =
+      !!principal.personId &&
+      (
+        await this.customers.subjectIds(principal, EnrollmentActions.acceptBookingRosterInvitation)
+      ).includes(named);
+    if (!actsFor) throw errors.protectedNotFound('booking_roster_invitation');
+    return { invitation, selfIds, capacity: 'representative' };
+  }
+
+  /** Who joins on an acceptance, and whether the caller is that person or acts for them. */
+  private joinerOf(
+    recipient: Recipient,
+    actorPersonId: string,
+    requested: string | undefined,
+  ): { joiner: string; capacity: 'self' | 'representative' } {
+    const named = recipient.invitation.recipient_person_id;
+    if (named !== null) {
+      if (requested !== undefined && requested !== named) {
+        throw errors.validation(
+          'This invitation names one person, and only they join on it. Anyone else is added from the roster or invited.',
+          { path: 'personId', code: 'ROSTER_INVITATION_NAMES_PERSON' },
+        );
+      }
+      return { joiner: named, capacity: recipient.capacity };
+    }
+    const joiner = requested ?? actorPersonId;
+    return {
+      joiner,
+      capacity: recipient.selfIds.includes(joiner) ? 'self' : 'representative',
+    };
   }
 
   /** The booking under lock, refused unless it is a live rental. */
@@ -948,6 +1084,17 @@ export class BookingRostersService {
     });
   }
 
+  /**
+   * An invitation as a renter reads it when staff invited somebody by name: the renter learns
+   * that an invitation is out, not whom it names. The person's reference is kept for staff, for
+   * the person and for whoever may act for them (security review M-1).
+   */
+  private withoutRecipient<T extends BookingRosterInvitation>(invitation: T, viewer: Viewer): T {
+    const named = invitation.recipientPersonId;
+    if (named === null || viewer.staff || viewer.ownIds.has(named)) return invitation;
+    return { ...invitation, recipientPersonId: null };
+  }
+
   private toInvitation(row: InvitationRow, now: Date): BookingRosterInvitation {
     return {
       id: row.id,
@@ -1007,8 +1154,9 @@ export class BookingRostersService {
     organizationId: string,
     booking: BookingRow,
     row: MemberRow,
+    viewer: Viewer,
   ): Promise<BookingRosterMember> {
-    const [member] = (await this.memberViews(db, organizationId, booking, [row])).members;
+    const [member] = (await this.memberViews(db, organizationId, booking, [row], viewer)).members;
     if (!member) throw errors.internal('a roster member could not be shown');
     return member;
   }
@@ -1018,12 +1166,19 @@ export class BookingRostersService {
    * each row, and the waiver status for the rental offering's required waiver families from the
    * catalog policy port (the worst of them when several are required). Nothing is evaluated while
    * liability waivers are off or the offering requires none.
+   *
+   * A person's details are theirs until they join (security review M-1). A row that has never
+   * joined (invited, or removed before joining) shows no display name and no waiver status to
+   * anybody, and nothing is read about its person; its person reference is shown only to staff or
+   * to a reader who may act for that person. The contact an invitation was sent to is shown: the
+   * inviter typed it.
    */
   private async memberViews(
     db: Reader,
     organizationId: string,
     booking: BookingRow,
     rows: readonly MemberRow[],
+    viewer: Viewer,
   ): Promise<{ members: BookingRosterMember[]; waiver: BookingRosterWaiverRequirement }> {
     const now = this.clock.now();
     const trx = db === this.db ? undefined : (db as Trx);
@@ -1040,7 +1195,12 @@ export class BookingRostersService {
       policyKeys: waiversOn ? keys : [],
       blocksBooking: false,
     };
-    const personIds = [...new Set(rows.map((r) => r.person_id).filter((id) => id !== null))];
+    // Only people who joined are looked up: their name, and their waiver while they are coming.
+    const joinedOnce = rows.filter((r) => r.joined_at !== null && r.person_id !== null);
+    const namedIds = [...new Set(joinedOnce.map((r) => r.person_id as string))];
+    const personIds = [
+      ...new Set(joinedOnce.filter((r) => r.status === 'joined').map((r) => r.person_id as string)),
+    ];
     const statusOf = new Map<string, BookingRosterWaiverStatus>();
     if (waiver.state === 'evaluated') {
       for (const policyKey of keys) {
@@ -1058,7 +1218,7 @@ export class BookingRostersService {
         }
       }
     }
-    const names = await this.persons.displayNames(organizationId, personIds, trx);
+    const names = await this.persons.displayNames(organizationId, namedIds, trx);
     const invitations =
       rows.length === 0
         ? []
@@ -1077,21 +1237,26 @@ export class BookingRostersService {
     const latest = new Map(invitations.map((i) => [i.member_id, i]));
     const members = rows.map((row): BookingRosterMember => {
       const invitation = latest.get(row.id);
+      const joined = row.joined_at !== null;
+      const mayRefer =
+        joined || viewer.staff || (row.person_id !== null && viewer.ownIds.has(row.person_id));
       return {
         id: row.id,
         bookingId: row.booking_id,
-        personId: row.person_id,
-        displayName: row.person_id ? (names.get(row.person_id)?.displayName ?? null) : null,
+        personId: mayRefer ? row.person_id : null,
+        displayName:
+          joined && row.person_id ? (names.get(row.person_id)?.displayName ?? null) : null,
         invitedContact:
           row.person_id === null && row.invited_contact_kind && row.invited_contact_value
             ? { kind: row.invited_contact_kind, value: row.invited_contact_value }
             : null,
         status: row.status,
-        // A removed row is no longer judged: it is history, not somebody who is coming.
+        // Only somebody who is coming is judged: an invited row has not joined, and a removed
+        // row is history.
         waiverStatus:
-          row.status === 'removed' || row.person_id === null
-            ? 'not_evaluated'
-            : (statusOf.get(row.person_id) ?? 'not_evaluated'),
+          row.status === 'joined' && row.person_id !== null
+            ? (statusOf.get(row.person_id) ?? 'not_evaluated')
+            : 'not_evaluated',
         addedByPersonId: row.added_by_person_id,
         addedAt: iso(row.created_at),
         joinedAt: isoOrNull(row.joined_at),
@@ -1119,4 +1284,12 @@ function effectiveStatus(
   return row.status === 'pending' && new Date(row.expires_at).getTime() <= now.getTime()
     ? 'expired'
     : row.status;
+}
+
+/** The one answer to a renter who names a person they may not name, whoever that is (§4.10). */
+function inviteByContact(): Error {
+  return errors.validation(
+    'You can name yourself or someone you register for. Invite anyone else by their email address or phone number, so they answer for themselves.',
+    { path: 'recipientPersonId', code: 'ROSTER_INVITE_BY_CONTACT' },
+  );
 }

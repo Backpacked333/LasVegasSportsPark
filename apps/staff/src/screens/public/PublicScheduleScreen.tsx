@@ -3,6 +3,11 @@
  * amendment PA-06): `/public/:organization/schedule/:code?date=YYYY-MM-DD`. The API decides every
  * word shown: a private booking reads "Reserved" with no renter, a game of a competition that is
  * not public reads "League game", and a title a person typed never arrives here.
+ *
+ * The API answers for a window of days around today only (`window` in the answer: a proposed
+ * default of yesterday to 14 days ahead, DEC-100 pending; security review L-3). The previous and
+ * next day controls stop at the window's first and last day, and the page says which days it
+ * shows. A day outside the window, typed into the address, reads "Not available".
  */
 import type { Schema } from '@sportspark/api-client';
 import { Link, useParams, useSearchParams } from 'react-router';
@@ -73,6 +78,22 @@ export function ScheduleTable({
   );
 }
 
+/**
+ * A link to another day, or, at the end of the days this view shows, the same words as text that
+ * says no day follows (never a link to a day the API would answer "not available" for).
+ */
+function DayLink({ label, to }: { label: string; to: string | null }) {
+  if (to === null) {
+    return (
+      <span className="public-nav-end" aria-disabled="true">
+        {label}
+        <span className="public-sr"> (not shown: outside the days this page shows)</span>
+      </span>
+    );
+  }
+  return <Link to={`?date=${to}`}>{label}</Link>;
+}
+
 export function PublicScheduleScreen() {
   const { organization = '', code = '' } = useParams();
   const [params] = useSearchParams();
@@ -96,10 +117,20 @@ export function PublicScheduleScreen() {
       {(data) => (
         <>
           <nav className="public-nav" aria-label="Days">
-            <Link to={`?date=${shiftDate(data.date, -1)}`}>Previous day</Link>
+            <DayLink
+              label="Previous day"
+              to={data.date > data.window.from ? shiftDate(data.date, -1) : null}
+            />
             <Link to=".">Today</Link>
-            <Link to={`?date=${shiftDate(data.date, 1)}`}>Next day</Link>
+            <DayLink
+              label="Next day"
+              to={data.date < data.window.to ? shiftDate(data.date, 1) : null}
+            />
           </nav>
+          <p className="public-note" data-testid="public-window">
+            This page shows {formatPublicDate(data.window.from)} to{' '}
+            {formatPublicDate(data.window.to)}.
+          </p>
           <ScheduleTable
             entries={data.entries}
             timezone={data.timezone}

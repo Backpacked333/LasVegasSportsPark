@@ -21,6 +21,8 @@ const KNOWN_UNDOCUMENTED: Record<string, string> = {};
 
 /** Commands that are consequential-free reads or provider callbacks: never Idempotency-Key. */
 const HEADER_FREE = [
+  // Read-only: reads a roster invitation with its token in the body, never in the address (§4.14).
+  'POST /booking-roster-invitations/{id}/open',
   'POST /discounts/evaluate',
   // Read-only: counts the recipients an audience resolves to (communications composer).
   'POST /notification-audience-counts',

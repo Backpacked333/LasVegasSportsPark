@@ -2,9 +2,9 @@ import { Controller, Get, HttpCode, Post } from '@nestjs/common';
 import {
   AcceptBookingRosterInvitationBody,
   AddBookingRosterMemberBody,
-  BookingRosterInvitationQuery,
   CreateBookingRosterInvitationBody,
   DeclineBookingRosterInvitationBody,
+  OpenBookingRosterInvitationBody,
   RemoveBookingRosterMemberBody,
   RevokeBookingRosterInvitationBody,
   z,
@@ -22,7 +22,6 @@ import {
   NoRecordAuthority,
   ZodBody,
   ZodParams,
-  ZodQuery,
 } from '../../../kernel';
 import { CorrelationId } from '../enrollment.shared';
 import { BookingRostersService } from '../services/booking-rosters.service';
@@ -63,7 +62,8 @@ export class BookingRostersController {
   }
 
   @Post('bookings/:id/roster/invitations')
-  @Idempotent()
+  // §4.14: the invitation token is stored only as a hash; never keep it with the idempotency key.
+  @Idempotent({ withhold: ['token'] })
   @NoRecordAuthority(NOT_A_RECORD)
   invite(
     @CurrentPrincipal() principal: Principal,
@@ -93,13 +93,29 @@ export class BookingRostersController {
     return this.rosters.myInvitations(principal);
   }
 
+  /** Without a token: the person the invitation names, someone who acts for them, renter, staff. */
   @Get('booking-roster-invitations/:id')
   invitation(
     @CurrentPrincipal() principal: Principal,
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
-    @ZodQuery(BookingRosterInvitationQuery) query: BookingRosterInvitationQuery,
   ): Promise<BookingRosterInvitationView> {
-    return this.rosters.invitation(principal, params.id, query.token);
+    return this.rosters.invitation(principal, params.id, undefined);
+  }
+
+  /**
+   * The same read for the holder of a contact invitation's token. The token travels in the body,
+   * never in the address, so it reaches no access log, proxy log or history (§4.14; security
+   * review L-1). A pure read: nothing changes, so no idempotency key is required.
+   */
+  @Post('booking-roster-invitations/:id/open')
+  @HttpCode(200)
+  @NoRecordAuthority('Reading a roster invitation changes no record')
+  open(
+    @CurrentPrincipal() principal: Principal,
+    @ZodParams(IdParams) params: z.infer<typeof IdParams>,
+    @ZodBody(OpenBookingRosterInvitationBody) body: z.infer<typeof OpenBookingRosterInvitationBody>,
+  ): Promise<BookingRosterInvitationView> {
+    return this.rosters.invitation(principal, params.id, body.token);
   }
 
   @Post('booking-roster-invitations/:id/accept')

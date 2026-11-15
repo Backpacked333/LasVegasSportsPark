@@ -52,6 +52,7 @@ const schedule = {
   facilityName: 'Main complex',
   timezone: TZ,
   date: '2026-11-21',
+  window: { from: '2026-11-20', to: '2026-12-05' },
   fields: ['Field 1', 'Field 2'],
   entries: [
     entry({ kind: 'reserved', title: 'Reserved', fields: ['Field 2'] }),

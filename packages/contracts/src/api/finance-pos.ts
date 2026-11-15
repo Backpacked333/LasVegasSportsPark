@@ -252,8 +252,23 @@ export const PosOpenAmountLineSchema = z
     enteredByPersonId: z.uuid(),
     /** The ceiling that applied to the person who entered the line, in the sale's currency. */
     ceilingMinor: z.number().int(),
-    /** True when the amount is above that ceiling: a second person approves before any tender. */
+    /**
+     * What the ceiling was judged against: the open-amount lines in effect that this person had
+     * entered on the sale when the line was entered, this line included.
+     */
+    enteredTotalMinor: z.number().int(),
+    /**
+     * True when that total was above the ceiling: the line needed a second approval when it was
+     * entered. The ceiling is for what one person enters on one sale, so several lines each within
+     * it need the approval once together they are above it.
+     */
     approvalRequired: z.boolean(),
+    /**
+     * True while the sale waits for this line's approval: it needed one, nobody approved it, and
+     * its own amount or the total its enterer has in effect on the sale now is above the ceiling.
+     * False again once lines were removed until that total is within the ceiling.
+     */
+    awaitingApproval: z.boolean(),
     /** The second approval, once given; never by the person who entered the line. */
     approval: PosLineApprovalSchema.nullable(),
     /** The approved policy version the category and ceiling came from; null: the proposed default. */
@@ -501,7 +516,12 @@ export const PosSessionOpenAmountLineSchema = z
     enteredByPersonId: z.uuid(),
     enteredAt: Instant,
     ceilingMinor: z.number().int(),
+    /** The enterer's open-amount total on the sale when the line was entered, the line included. */
+    enteredTotalMinor: z.number().int(),
+    /** The line needed a second approval when it was entered (that total was above the ceiling). */
     approvalRequired: z.boolean(),
+    /** The sale still waits for it (see `PosOpenAmountLine.awaitingApproval`). */
+    awaitingApproval: z.boolean(),
     approval: PosLineApprovalSchema.nullable(),
     /** 1 once the line was returned, else 0. */
     returnedQuantity: z.number().int(),

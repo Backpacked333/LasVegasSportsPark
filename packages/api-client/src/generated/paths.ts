@@ -8562,12 +8562,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Read a roster invitation: the invited person, the token holder, the renter or staff (SPK-COND-005, proposed) */
+        /** Read a roster invitation: the person it names or somebody who acts for them, the renter or staff (SPK-COND-005, proposed) */
         get: {
             parameters: {
-                query?: {
-                    token?: string;
-                };
+                query?: never;
                 header?: {
                     /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
                     "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
@@ -8634,7 +8632,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Accept a roster invitation for yourself or your child (SPK-COND-005, proposed) */
+        /** Accept a roster invitation: the person it names (or somebody who acts for them), or the token holder of a contact invitation for themselves or their child (SPK-COND-005, proposed) */
         post: {
             parameters: {
                 query?: never;
@@ -8785,6 +8783,78 @@ export type paths = {
                 };
                 /** @description Conflict (RESOURCE_CONFLICT, STALE_REVISION, INVALID_TRANSITION, IDEMPOTENCY_*) */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092) */
+                426: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/booking-roster-invitations/{id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read an invitation to a contact with its token, sent in the body (a pure read; SPK-COND-005, proposed) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Identifies the calling app build: `sportspark-(mobile|staff)/<semver[-pre]> (ios|android|web)`. Absent: served. Malformed: VALIDATION_FAILED (details.header). Below the configured minimum for its app and platform: 426 CLIENT_UPDATE_REQUIRED (details.app, platform, clientVersion, minimumVersion). Minimum versions are Proposed configuration pending DEC-061; the error is DEC-092. */
+                    "X-Sportspark-Client"?: components["parameters"]["ClientInfo"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["OpenBookingRosterInvitationRequest"];
+                };
+            };
+            responses: {
+                /** @description The invitation */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BookingRosterInvitationView"];
+                    };
+                };
+                /** @description Validation failed */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorResponse"];
+                    };
+                };
+                /** @description Not found or not visible (also a wrong token) */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -9585,7 +9655,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Invite a person or a contact to the roster; the one-time token is returned once (SPK-COND-005, proposed) */
+        /** Invite a contact, or a person the caller may name (staff: anyone; a renter: themselves or someone they register), to the roster; the one-time token is returned once (SPK-COND-005, proposed) */
         post: {
             parameters: {
                 query?: never;
@@ -12719,7 +12789,7 @@ export type paths = {
                         "application/json": components["schemas"]["CompetitionPublication"];
                     };
                 };
-                /** @description Validation failed (a division for players under 18) */
+                /** @description Validation failed (COMPETITION_NOT_KNOWN_ADULT: a division is not known to be an adult division, or a name suggests players under 18) */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -12811,7 +12881,7 @@ export type paths = {
                         "application/json": components["schemas"]["CompetitionPublication"];
                     };
                 };
-                /** @description Validation failed (a division for players under 18) */
+                /** @description Validation failed (COMPETITION_NOT_KNOWN_ADULT: a division is not known to be an adult division, or a name suggests players under 18) */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -43656,7 +43726,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same */
+                /** @description Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -43724,7 +43794,7 @@ export type paths = {
                         "application/json": components["schemas"]["PublicDirectory"];
                     };
                 };
-                /** @description Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same */
+                /** @description Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -43804,7 +43874,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same */
+                /** @description Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -43882,7 +43952,7 @@ export type paths = {
                         "application/json": components["schemas"]["ErrorResponse"];
                     };
                 };
-                /** @description Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same */
+                /** @description Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -61931,6 +62001,7 @@ export type components = {
         /** @enum {string} */
         CompetitionKind: "league" | "tournament";
         CompetitionPublication: {
+            blockers: components["schemas"]["PublicationBlocker"][];
             /** Format: date-time */
             changedAt: string | null;
             /** Format: uuid */
@@ -61943,6 +62014,7 @@ export type components = {
             publicCode: components["schemas"]["PublicCode"] | null;
             revision: number;
             seasons: {
+                hasDivisions: boolean;
                 name: string;
                 publicCode: components["schemas"]["PublicCode"] | null;
                 /** Format: uuid */
@@ -66877,6 +66949,9 @@ export type components = {
             /** Format: uuid */
             subjectPersonId: string;
         };
+        OpenBookingRosterInvitationRequest: {
+            token: string;
+        };
         OpenCaseRequest: {
             category: components["schemas"]["CaseCategory"];
             description?: string;
@@ -67683,10 +67758,12 @@ export type components = {
                 reason: string;
             } | null;
             approvalRequired: boolean;
+            awaitingApproval: boolean;
             ceilingMinor: number;
             description: string;
             /** Format: uuid */
             enteredByPersonId: string;
+            enteredTotalMinor: number;
             /** Format: uuid */
             policyVersionId: string | null;
             reasonCategory: string;
@@ -67923,6 +68000,7 @@ export type components = {
                 reason: string;
             } | null;
             approvalRequired: boolean;
+            awaitingApproval: boolean;
             ceilingMinor: number;
             chargesMinor: number;
             currency: string;
@@ -67931,6 +68009,7 @@ export type components = {
             enteredAt: string;
             /** Format: uuid */
             enteredByPersonId: string;
+            enteredTotalMinor: number;
             /** Format: uuid */
             lineId: string;
             lineTotalMinor: number;
@@ -68263,6 +68342,15 @@ export type components = {
                 }[];
             };
         };
+        PublicationBlocker: {
+            divisionName: string | null;
+            message: string;
+            /** @enum {string} */
+            reason: "no_divisions" | "age_not_stated" | "under_18" | "name_suggests_minors";
+            /** @enum {string} */
+            scope: "competition" | "season" | "division";
+            seasonName: string | null;
+        };
         PublicationCheck: {
             /** Format: uuid */
             offeringId: string;
@@ -68325,6 +68413,12 @@ export type components = {
             fields: string[];
             organizationName: string;
             timezone: string;
+            window: {
+                /** Format: date */
+                from: string;
+                /** Format: date */
+                to: string;
+            };
         };
         PublicDirectory: {
             cacheSeconds: number;
@@ -69223,7 +69317,7 @@ export type components = {
             subjectPersonId: string;
         };
         RecordWaiverOverrideRequest: {
-            activity: components["schemas"]["WaiverActivityRef"];
+            activity: components["schemas"]["WaiverOverrideActivityRef"];
             expectedRevision?: number;
             /** Format: uuid */
             personId: string;
@@ -72427,6 +72521,12 @@ export type components = {
             reason: string;
             /** @enum {string} */
             waiverStatus: "missing" | "lapsed";
+        };
+        WaiverOverrideActivityRef: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            type: "offering" | "offering_session" | "scheduling_event";
         };
         WaiverRule: {
             enforcement: components["schemas"]["WaiverEnforcement"];

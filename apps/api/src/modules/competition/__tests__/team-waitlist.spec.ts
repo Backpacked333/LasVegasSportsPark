@@ -1,3 +1,4 @@
+import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { drainOutboxChecked, setCapability, type TestApp } from '../../../testing';
 import { seedResource } from '../../scheduling';
@@ -263,6 +264,32 @@ describe('team waiting list (SPK-COMP-006)', () => {
     // The offers of an entry are a record staff and the captain can read.
     const history = await get(`/team-entries/${charlie.id}/place-offers`, leagueManager);
     expect(history.body).toEqual([expect.objectContaining({ id: offerId, status: 'accepted' })]);
+  });
+
+  it('SPK-COMP-006 (security review L-5): the offers of an entry are read by league staff and its captain; to anybody else an existing entry answers exactly like an unknown one', async () => {
+    const { season, placed } = await fullDivision(1);
+    const entry = placed[0]!;
+    const outsider = await adultCustomer(t);
+    const otherCaptain = (await enter(season.seasonId, 'Hotel')).captain;
+    const answer = (res: { status: number; body: Json }) => ({
+      status: res.status,
+      code: res.body['code'],
+      message: res.body['message'],
+      details: res.body['details'],
+    });
+    const read = (actor: Actor, entryId: string) =>
+      get(`/team-entries/${entryId}/place-offers`, actor);
+    const unknown = answer(await read(outsider, newId()));
+    expect(unknown).toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    // An entry that exists, read by a person outside it and by the captain of another team.
+    expect(answer(await read(outsider, entry.teamEntryId))).toEqual(unknown);
+    expect(answer(await read(otherCaptain, entry.teamEntryId))).toEqual(unknown);
+    // The answer names no id, so it cannot differ by which id was asked for.
+    expect(JSON.stringify(unknown)).not.toContain(entry.teamEntryId);
+    // Its captain and league staff read it.
+    expect((await read(entry.captain, entry.teamEntryId)).status).toBe(200);
+    expect((await read(leagueManager, entry.teamEntryId)).status).toBe(200);
+    expect(answer(await read(leagueManager, newId()))).toEqual(unknown);
   });
 
   it('SPK-COMP-006: an offer expires at its expiry by a timer; the entry keeps its place in the order, the place is free again, and replaying the timer changes nothing', async () => {

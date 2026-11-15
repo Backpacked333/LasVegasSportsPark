@@ -557,7 +557,11 @@ export class TeamWaitlistService {
     return { seasonId, offerHours: this.offerHours(), lists };
   }
 
-  /** Every offer made to an entry, newest first: staff, the captain and co-captains. */
+  /**
+   * Every offer made to an entry, newest first: staff, the captain and co-captains. Anybody else
+   * gets the answer an unknown entry gets (§4.10; security review L-5): whether an id names a
+   * team entry is not something this read tells a person outside it.
+   */
   async offersOfEntry(principal: Principal, entryId: string): Promise<TeamEntryPlaceOffer[]> {
     const organizationId = organizationOf(principal);
     const db = executorFor(this.db);
@@ -571,9 +575,7 @@ export class TeamWaitlistService {
       await effectiveRoles(db, organizationId, entryId, now),
       now,
     );
-    if (!viewer.canManage) {
-      throw errors.accessDenied('Only the captain or league staff read the offers of an entry.');
-    }
+    if (!viewer.canManage) throw errors.protectedNotFound('team_entry');
     const rows = await db
       .selectFrom('team_entry_place_offers')
       .selectAll()

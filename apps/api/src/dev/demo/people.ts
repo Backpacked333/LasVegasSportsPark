@@ -38,9 +38,42 @@ interface AdultSpec {
   phone?: string;
 }
 
+/**
+ * An adult's date of birth, steady for a subject and between 24 and 41 years before the year the
+ * dataset is built. The league's divisions state an adult age band (a competition is public only
+ * when every division does, SPK-SCHED-010), and a division with an age band needs a date of birth
+ * for each rostered player.
+ */
+function adultBirthDate(ctx: DemoContext, subject: string): string {
+  const spread = [...subject].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 18;
+  return `${ctx.clock.now().getUTCFullYear() - 25 - spread}-06-15`;
+}
+
+/** Gives a seeded adult a date of birth when they have none (idempotent). */
+export async function ensureAdultBirthDate(
+  ctx: DemoContext,
+  personId: string,
+  subject: string,
+): Promise<void> {
+  const people = service(ctx, PeopleService);
+  const person = await people.getPerson(ctx.system, personId);
+  if (person.dateOfBirth) return;
+  await people.updatePerson(
+    ctx.system,
+    personId,
+    {
+      dateOfBirth: adultBirthDate(ctx, subject),
+      expectedRevision: person.revision,
+      policyReferences: [],
+    },
+    null,
+  );
+}
+
 async function ensureAdult(ctx: DemoContext, spec: AdultSpec): Promise<DemoAdult> {
   const existing = await principalOf(ctx, spec.subject);
   if (existing?.personId && existing.accountId) {
+    await ensureAdultBirthDate(ctx, existing.personId, spec.subject);
     return {
       subject: spec.subject,
       personId: existing.personId,
@@ -54,6 +87,7 @@ async function ensureAdult(ctx: DemoContext, spec: AdultSpec): Promise<DemoAdult
       kind: 'adult',
       givenName: spec.givenName,
       familyName: spec.familyName,
+      dateOfBirth: adultBirthDate(ctx, spec.subject),
       contactPoints: [
         {
           kind: 'email',

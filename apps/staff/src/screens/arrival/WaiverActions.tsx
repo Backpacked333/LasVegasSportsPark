@@ -252,7 +252,7 @@ function WaiverOverrideForm({
         onChange={setReason}
         required
         rows={2}
-        hint="Kept with your name on the person's record. It covers this activity only, and the waiver stays missing until it is accepted."
+        hint="Kept with your name on the person's record. It covers this activity and this version of the waiver only, and the waiver stays missing until it is accepted."
       />
       <div className="ops-actions">
         <Button busy={record.isProcessing} disabled={!ready} onClick={submit}>

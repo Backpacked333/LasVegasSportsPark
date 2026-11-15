@@ -14,7 +14,7 @@ import { PublicCompetitionService } from '../../modules/competition/public/publi
 import { TeamWaitlistService } from '../../modules/competition/services/team-waitlist.service';
 import { PublicScheduleService, ScheduleDraftsService } from '../../modules/scheduling';
 import { calendarOf, optional, service, settle, type DemoContext } from './context';
-import { seedAdults, type DemoAdult, type DemoStaff } from './people';
+import { ensureAdultBirthDate, seedAdults, type DemoAdult, type DemoStaff } from './people';
 import type { DemoSpaces } from './spaces';
 
 /**
@@ -155,7 +155,13 @@ export async function seedLeague(
         {
           seasonId,
           name,
-          criteria: { ageBand: null, level, category: 'Adult', format: null },
+          // An adult league: stating it is what lets the competition be made public.
+          criteria: {
+            ageBand: { minAge: 18, maxAge: null },
+            level,
+            category: 'Adult',
+            format: null,
+          },
           facilityId: ctx.facilityId,
           capacityTeamEntries: capacity,
           policyReferences: [],
@@ -229,7 +235,10 @@ export async function seedLeague(
     if (fresh) {
       const others = [2, 3, 4].map((slot) => player(`team-${index + 1}-${slot}`).personId);
       // The seeded parent plays for the Cactus Kickers, so the app's Teams tab has a team.
-      if (team === 'Cactus Kickers' && parent.personId) others.push(parent.personId);
+      if (team === 'Cactus Kickers' && parent.personId) {
+        await ensureAdultBirthDate(ctx, parent.personId, 'dev-parent');
+        others.push(parent.personId);
+      }
       await roster.changeRoster(
         league,
         entry.id,

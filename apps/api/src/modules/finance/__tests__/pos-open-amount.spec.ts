@@ -1,5 +1,6 @@
 import { newId } from '@sportspark/contracts';
 import { json, pgErrorCode, seedOrganization } from '@sportspark/db';
+import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { databaseConstraintOf } from '../../../kernel';
 import type { TestApp } from '../../../testing';
@@ -649,7 +650,254 @@ describe('point of sale: open-amount lines (SPK-PAY-016, proposed)', () => {
     }
   });
 
-  describe('integrity the database enforces (migrations 0695, 0696)', () => {
+  describe('the ceiling is for what one person enters on one sale (security review M-4)', () => {
+    const openAmountOf = (sale: Json, lineId: string) =>
+      (sale.lines as SaleBody['lines']).find((l) => l.id === lineId)?.openAmount as Json;
+    /** The line a command just added: the one whose id the sale did not have before. */
+    const addedTo = (before: Json, after: Json) => {
+      const known = new Set((before.lines as SaleBody['lines']).map((l) => l.id));
+      return (after.lines as SaleBody['lines']).find((l) => !known.has(l.id))!;
+    };
+
+    it('SPK-PAY-016: lines each within the ceiling need a second approval once the total their enterer has on the sale is above it, and the sale takes no tender before', async () => {
+      const sale = await openSale();
+      // 30.00, then 20.00: 50.00 is the ceiling, not above it.
+      const first = await openLine(sale, desk, { amountMinor: 3_000 });
+      const second = await openLine(first.body, desk, {
+        description: 'Second amount',
+        amountMinor: 2_000,
+      });
+      for (const [before, after, total] of [
+        [sale, first.body, 3_000],
+        [first.body, second.body, 5_000],
+      ] as const) {
+        expect(addedTo(before, after).openAmount).toMatchObject({
+          ceilingMinor: 5_000,
+          enteredTotalMinor: total,
+          approvalRequired: false,
+          awaitingApproval: false,
+        });
+      }
+      // One more dollar: each line is far below the ceiling, the total is above it.
+      const third = await openLine(second.body, desk, {
+        description: 'Third amount',
+        amountMinor: 100,
+      });
+      expect(third.status, JSON.stringify(third.body)).toBe(201);
+      const thirdLine = addedTo(second.body, third.body);
+      expect(thirdLine.openAmount).toMatchObject({
+        ceilingMinor: 5_000,
+        enteredTotalMinor: 5_100,
+        approvalRequired: true,
+        awaitingApproval: true,
+        approval: null,
+      });
+      // No tender, exactly as with a single line above the ceiling.
+      const early = await cash(third.body, 5_100);
+      expect(early.status).toBe(409);
+      expect(early.body.details).toMatchObject({
+        code: 'OPEN_AMOUNT_APPROVAL_REQUIRED',
+        lines: [
+          {
+            saleLineId: thirdLine.id,
+            amountMinor: 100,
+            ceilingMinor: 5_000,
+            enteredTotalMinor: 5_100,
+            enteredByPersonId: desk.personId,
+          },
+        ],
+      });
+      // The lines entered while the total was within the ceiling need none.
+      const notNeeded = await approve(third.body, first.body.lines[0].id, manager);
+      expect(notNeeded.body.details.code).toBe('APPROVAL_NOT_REQUIRED');
+      // A second person approves; the record says what total it was given for.
+      const approved = await approve(third.body, thirdLine.id, manager, 'Three fees, one renter');
+      expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+      expect(openAmountOf(approved.body, thirdLine.id)).toMatchObject({
+        approvalRequired: true,
+        awaitingApproval: false,
+        approval: { approvedByPersonId: manager.personId },
+      });
+      expect(
+        await t.db
+          .selectFrom('pos_line_approvals')
+          .select(['amount_minor', 'ceiling_minor', 'entered_total_minor', 'reason'])
+          .where('sale_line_id', '=', thirdLine.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({
+        amount_minor: 100,
+        ceiling_minor: 5_000,
+        entered_total_minor: 5_100,
+        reason: 'Three fees, one renter',
+      });
+      // Every further line of this person on the sale is above the ceiling too.
+      const fourth = await openLine(approved.body, desk, {
+        description: 'Fourth amount',
+        amountMinor: 50,
+      });
+      const fourthLine = addedTo(approved.body, fourth.body);
+      expect(fourthLine.openAmount).toMatchObject({
+        enteredTotalMinor: 5_150,
+        approvalRequired: true,
+        awaitingApproval: true,
+      });
+      expect((await cash(fourth.body, 5_150)).body.details).toMatchObject({
+        code: 'OPEN_AMOUNT_APPROVAL_REQUIRED',
+        lines: [{ saleLineId: fourthLine.id }],
+      });
+      const again = await approve(fourth.body, fourthLine.id, manager);
+      expect(again.status, JSON.stringify(again.body)).toBe(200);
+      const paid = await cash(again.body, 5_150);
+      expect(paid.status, JSON.stringify(paid.body)).toBe(201);
+      expect(paid.body.status).toBe('paid');
+      const audit = await t.db
+        .selectFrom('audit_records')
+        .select('details')
+        .where('target_id', '=', sale.id)
+        .where('action', '=', 'finance.enter_open_amount_line')
+        .execute();
+      // Ordered by the running total (each entry has its own), not by generated ids.
+      expect(
+        audit
+          .map((a) => {
+            const details = a.details as Json;
+            return [details.amountMinor, details.enteredTotalMinor, details.approvalRequired];
+          })
+          .sort((a, b) => Number(a[1]) - Number(b[1])),
+      ).toEqual([
+        [3_000, 3_000, false],
+        [2_000, 5_000, false],
+        [100, 5_100, true],
+        [50, 5_150, true],
+      ]);
+    });
+
+    it('SPK-PAY-016: splitting an amount into lines just under the ceiling no longer avoids the second person', async () => {
+      // The review's case: a desk user whose ceiling is 50.00 enters lines of 50.00 on one sale.
+      let sale: Json = await openSale();
+      const lineIds: string[] = [];
+      for (let i = 1; i <= 4; i += 1) {
+        const added = await openLine(sale, desk, {
+          description: `Split ${i}`,
+          amountMinor: 5_000,
+        });
+        expect(added.status, JSON.stringify(added.body)).toBe(201);
+        lineIds.push(addedTo(sale, added.body).id);
+        sale = added.body;
+      }
+      expect(lineIds.map((id) => openAmountOf(sale, id).approvalRequired)).toEqual([
+        false,
+        true,
+        true,
+        true,
+      ]);
+      expect(lineIds.map((id) => openAmountOf(sale, id).enteredTotalMinor)).toEqual([
+        5_000, 10_000, 15_000, 20_000,
+      ]);
+      const refused = await cash(sale, 20_000);
+      expect(refused.status).toBe(409);
+      expect((refused.body.details.lines as Json[]).map((l) => l.saleLineId).sort()).toEqual(
+        lineIds.slice(1).sort(),
+      );
+      // Not the person who entered them, even one line at a time.
+      for (const lineId of lineIds.slice(1)) {
+        const approved = await approve(sale, lineId, manager);
+        expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+        sale = approved.body;
+      }
+      expect((await cash(sale, 20_000)).body.status).toBe('paid');
+    });
+
+    it('SPK-PAY-016: the total is each person’s own, and removing lines until it is within the ceiling lifts the block', async () => {
+      const sale = await openSale();
+      const mine = await openLine(sale, desk, { amountMinor: 4_000 });
+      // Another person's line on the same sale counts for that person, not for this one.
+      const theirs = await openLine(mine.body, finance, {
+        description: 'Entered by finance',
+        amountMinor: 4_000,
+      });
+      expect(theirs.status, JSON.stringify(theirs.body)).toBe(201);
+      expect(addedTo(mine.body, theirs.body).openAmount).toMatchObject({
+        enteredByPersonId: finance.personId,
+        ceilingMinor: 25_000,
+        enteredTotalMinor: 4_000,
+        approvalRequired: false,
+      });
+      const more = await openLine(theirs.body, desk, {
+        description: 'Second by the desk',
+        amountMinor: 3_000,
+      });
+      const flagged = addedTo(theirs.body, more.body);
+      expect(flagged.openAmount).toMatchObject({
+        enteredByPersonId: desk.personId,
+        enteredTotalMinor: 7_000,
+        approvalRequired: true,
+        awaitingApproval: true,
+      });
+      expect((await cash(more.body, 11_000)).status).toBe(409);
+      // The desk removes its first line: what it has on the sale is 30.00, within the ceiling.
+      const removed = await post(
+        t,
+        `/v1/pos-sales/${sale.id}/lines/${mine.body.lines[0].id}/quantity`,
+        desk.header,
+        { quantity: 0, expectedRevision: more.body.revision },
+      );
+      expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+      // The line keeps the fact of how it was entered, and no longer waits.
+      expect(openAmountOf(removed.body, flagged.id)).toMatchObject({
+        enteredTotalMinor: 7_000,
+        approvalRequired: true,
+        awaitingApproval: false,
+        approval: null,
+      });
+      // A line entered now is judged against what is in effect: 30.00 + 10.00.
+      const small = await openLine(removed.body, desk, {
+        description: 'Third by the desk',
+        amountMinor: 1_000,
+      });
+      expect(addedTo(removed.body, small.body).openAmount).toMatchObject({
+        enteredTotalMinor: 4_000,
+        approvalRequired: false,
+      });
+      const paid = await cash(small.body, 8_000);
+      expect(paid.status, JSON.stringify(paid.body)).toBe(201);
+      expect(paid.body.status).toBe('paid');
+    });
+
+    it('SPK-PAY-016 (Pending decision DEC-102): totals across separate sales of a register session are not limited; they are in the session’s open-amount report', async () => {
+      const first = await openSale();
+      const one = await openLine(first, desk, { amountMinor: 5_000 });
+      expect((await cash(one.body, 5_000)).body.status).toBe('paid');
+      const second = await post(t, '/v1/pos-sales', desk.header, {
+        registerSessionId: first.registerSessionId,
+        customerPersonId: customer.personId,
+      });
+      const two = await openLine(second.body, desk, { amountMinor: 5_000 });
+      expect(two.body.lines[0].openAmount).toMatchObject({
+        enteredTotalMinor: 5_000,
+        approvalRequired: false,
+      });
+      expect((await cash(two.body, 5_000)).body.status).toBe('paid');
+      const report = await t.http
+        .get(`/v1/pos-register-sessions/${first.registerSessionId}/open-amount-lines`)
+        .set(manager.header);
+      expect(report.status).toBe(200);
+      expect(
+        (report.body.items as Json[]).map((i) => [
+          i.amountMinor,
+          i.enteredTotalMinor,
+          i.approvalRequired,
+          i.awaitingApproval,
+          i.enteredByPersonId,
+        ]),
+      ).toEqual([
+        [5_000, 5_000, false, false, desk.personId],
+        [5_000, 5_000, false, false, desk.personId],
+      ]);
+    });
+  });
+
+  describe('integrity the database enforces (migrations 0695, 0696, 0697)', () => {
     let sale: SaleBody;
     let productId: string;
 
@@ -979,6 +1227,197 @@ describe('point of sale: open-amount lines (SPK-PAY-016, proposed)', () => {
             .execute(),
         ),
       ).toBe('23514:pos_line_approvals_open_sale');
+    });
+
+    it('SPK-PAY-016 (migration 0697): the database derives the total a person has on the sale and refuses a line written as needing no approval once that total is above the ceiling', async () => {
+      const split = await openSale();
+      const on = (over: Json = {}) => insertLine({ sale_id: split.id, ...over });
+      const amounts = { unit_price_minor: 3_000, base_minor: 3_000, line_total_minor: 3_000 };
+      const totalOf = async (id: string) =>
+        (
+          await t.db
+            .selectFrom('pos_sale_lines')
+            .select(['entered_total_minor', 'approval_required'])
+            .where('id', '=', id)
+            .executeTakeFirstOrThrow()
+        ).entered_total_minor;
+      // The first line; the total is derived, whatever the writer states.
+      const first = newId();
+      await on({ id: first, ...amounts, entered_total_minor: 1 });
+      expect(await totalOf(first)).toBe(3_000);
+      // The violating row, written directly: a second line within the ceiling, stated as needing
+      // no approval, while the person's lines on the sale now total 60.00 against 50.00.
+      expect(await refusedBy(on({ ...amounts }))).toBe('23514:pos_sale_lines_open_amount_ceiling');
+      expect(await refusedBy(on({ ...amounts, entered_total_minor: 3_000 }))).toBe(
+        '23514:pos_sale_lines_open_amount_ceiling',
+      );
+      // The same line stated as it is.
+      const second = newId();
+      await on({ id: second, ...amounts, approval_required: true });
+      expect(await totalOf(second)).toBe(6_000);
+      // Another person's line on the sale is judged against that person's own total.
+      const other = newId();
+      await on({ id: other, ...amounts, entered_by_person_id: otherDesk.personId });
+      expect(await totalOf(other)).toBe(3_000);
+      // ... and a line of theirs within their total is not one that needs an approval.
+      expect(
+        await refusedBy(
+          on({
+            unit_price_minor: 1_000,
+            base_minor: 1_000,
+            line_total_minor: 1_000,
+            entered_by_person_id: otherDesk.personId,
+            approval_required: true,
+          }),
+        ),
+      ).toBe('23514:pos_sale_lines_open_amount_ceiling');
+      // A product line carries no total.
+      expect(
+        await refusedBy(
+          t.db
+            .insertInto('pos_sale_lines')
+            .values({
+              id: newId(),
+              organization_id: t.organizationId,
+              sale_id: split.id,
+              currency: 'USD',
+              line_number: 8_000_001,
+              product_id: productId,
+              sku: 'W',
+              name: 'Whistle',
+              kind: 'merchandise',
+              unit_price_minor: 700,
+              quantity: 1,
+              base_minor: 700,
+              charges: json([]),
+              charges_minor: 0,
+              line_total_minor: 700,
+              entered_total_minor: 700,
+            } as never)
+            .execute(),
+        ),
+      ).toBe('23514:pos_sale_lines_entered_total');
+
+      // No tender and no paid sale while the second line waits.
+      const tender = () =>
+        t.db
+          .insertInto('pos_tenders')
+          .values({
+            id: newId(),
+            organization_id: t.organizationId,
+            sale_id: split.id,
+            currency: 'USD',
+            kind: 'cash',
+            amount_minor: 9_000,
+            payment_attempt_id: null,
+            evidence: null,
+            status: 'settled',
+            failure_reason: null,
+            recorded_by: json({ kind: 'staff' }),
+            recorded_by_person_id: desk.personId,
+            recorded_at: t.clock.now(),
+            settled_at: t.clock.now(),
+            failed_at: null,
+          })
+          .execute();
+      expect(await refusedBy(tender())).toBe('23514:pos_tenders_open_amount_approved');
+      expect(
+        await refusedBy(
+          t.db
+            .updateTable('pos_sales')
+            .set({ status: 'paid', paid_at: t.clock.now() })
+            .where('id', '=', split.id)
+            .execute(),
+        ),
+      ).toBe('23514:pos_sales_open_amount_approved');
+      // The approval of a line within the ceiling whose total is above it: accepted, by a second
+      // person, and it records the total it was given for (derived, whatever the writer states).
+      const approval = (over: Json = {}) =>
+        t.db
+          .insertInto('pos_line_approvals')
+          .values({
+            ...approvalRow(second, { amount_minor: 3_000, entered_total_minor: 1, ...over }),
+            sale_id: split.id,
+          } as never)
+          .execute();
+      expect(await refusedBy(approval({ approved_by_person_id: desk.personId }))).toBe(
+        '23514:pos_line_approvals_second_person',
+      );
+      await approval();
+      expect(
+        await t.db
+          .selectFrom('pos_line_approvals')
+          .select(['amount_minor', 'ceiling_minor', 'entered_total_minor'])
+          .where('sale_line_id', '=', second)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ amount_minor: 3_000, ceiling_minor: 5_000, entered_total_minor: 6_000 });
+      await tender();
+    });
+
+    it('SPK-PAY-016 (migration 0697): a removal repeats the ceiling and the approval need of the line it removes, and removing lines until the total is within the ceiling lifts the block in the database', async () => {
+      const split = await openSale();
+      const on = (over: Json = {}) => insertLine({ sale_id: split.id, ...over });
+      const amounts = { unit_price_minor: 3_000, base_minor: 3_000, line_total_minor: 3_000 };
+      const first = newId();
+      const second = newId();
+      await on({ id: first, ...amounts });
+      await on({ id: second, ...amounts, approval_required: true });
+      const awaits = async () =>
+        (
+          await sql<{ waits: boolean }>`
+            select pos_sale_awaits_line_approval(${t.organizationId}, ${split.id}) as waits
+          `.execute(t.db)
+        ).rows[0]?.waits;
+      expect(await awaits()).toBe(true);
+      const removal = {
+        ...amounts,
+        supersedes_line_id: first,
+        quantity: 0,
+        base_minor: 0,
+        line_total_minor: 0,
+      };
+      // Not as it was entered: another approval need, another ceiling.
+      expect(await refusedBy(on({ ...removal, approval_required: true }))).toBe(
+        '23514:pos_sale_lines_open_amount_supersede',
+      );
+      expect(await refusedBy(on({ ...removal, approval_ceiling_minor: 9_000 }))).toBe(
+        '23514:pos_sale_lines_open_amount_supersede',
+      );
+      const removalId = newId();
+      await on({ id: removalId, ...removal, entered_total_minor: 999 });
+      expect(
+        await t.db
+          .selectFrom('pos_sale_lines')
+          .select(['entered_total_minor', 'approval_required'])
+          .where('id', '=', removalId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ entered_total_minor: 3_000, approval_required: false });
+      // What the person has in effect is 30.00 again: the second line no longer blocks, and it
+      // keeps the fact that it needed an approval when it was entered.
+      expect(await awaits()).toBe(false);
+      expect(
+        await t.db
+          .selectFrom('pos_sale_lines')
+          .select(['entered_total_minor', 'approval_required'])
+          .where('id', '=', second)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ entered_total_minor: 6_000, approval_required: true });
+      // A line alone above the ceiling blocks whatever else is removed.
+      const alone = await openSale();
+      await insertLine({
+        sale_id: alone.id,
+        unit_price_minor: 9_000,
+        base_minor: 9_000,
+        line_total_minor: 9_000,
+        approval_required: true,
+      });
+      expect(
+        (
+          await sql<{ waits: boolean }>`
+            select pos_sale_awaits_line_approval(${t.organizationId}, ${alone.id}) as waits
+          `.execute(t.db)
+        ).rows[0]?.waits,
+      ).toBe(true);
     });
 
     it('§4.3: an open-amount line and its approval never reference another organization’s records', async () => {

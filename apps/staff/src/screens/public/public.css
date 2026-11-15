@@ -75,6 +75,15 @@
   text-decoration: none;
 }
 
+/* A day control at the end of the days the view shows: the same shape, not a link. */
+.public-nav .public-nav-end {
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-control);
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
 .public-nav a:hover,
 .public-links a:hover {
   color: var(--link-hover);

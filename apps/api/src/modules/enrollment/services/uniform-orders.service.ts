@@ -289,6 +289,12 @@ export class UniformOrdersService {
   // POST /uniform-orders/{id}/hand-over and /hand-over-corrections
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * The order under lock, for a caller who may hand uniforms over at its offering's facility.
+   * Anybody else gets the answer an unknown order gets (§4.10; security review L-5): the order
+   * is a family's purchase, and whether an id names one is not told to a person who may not act
+   * on it.
+   */
   private async forCommand(trx: Trx, principal: Principal, id: string): Promise<UniformOrderRow> {
     const organizationId = organizationOf(principal);
     const row = await trx
@@ -298,12 +304,13 @@ export class UniformOrdersService {
       .where('id', '=', id)
       .forUpdate()
       .executeTakeFirst();
-    if (!row) throw errors.notFound('uniform_order', id);
+    if (!row) throw errors.protectedNotFound('uniform_order');
     await this.authorization.require(principal, EnrollmentActions.handOverUniform, {
       type: 'uniform_order',
       id,
       organizationId,
       facilityId: await this.scope.facilityOf(organizationId, row.offering_id, trx),
+      protected: true,
     });
     await this.capabilities.require(organizationId, 'uniforms', trx);
     return row;

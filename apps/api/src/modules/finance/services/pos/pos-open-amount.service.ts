@@ -34,12 +34,19 @@ import {
   keysetAt,
   keysetPage,
   organizationOf,
+  type Reader,
 } from '../../finance.shared';
 import { FinancePolicyResolver } from '../finance-policy.resolver';
 import { requirePosRead } from './pos-access';
 import { PosSaleFinalizer } from './pos-sale-finalizer.service';
 import { PosSalesService } from './pos-sales.service';
-import { liveLines, toLineApproval } from './pos-views';
+import {
+  awaitsApproval,
+  enteredTotalOf,
+  liveLines,
+  openAmountTotals,
+  toLineApproval,
+} from './pos-views';
 
 /**
  * SPK-PAY-016 (proposed amendment PA-08): the ceiling of the principal at the facility, the
@@ -59,8 +66,28 @@ export function openAmountCeiling(
 }
 
 /**
+ * SPK-PAY-016 (proposed): the total of the open-amount lines in effect that one person entered on
+ * one sale. It is what that person's ceiling is judged against (migration 0697 derives the same
+ * figure under the sale lock). Read with the sale locked.
+ */
+export async function enteredOpenAmountTotal(
+  db: Reader,
+  organizationId: string,
+  saleId: string,
+  personId: string,
+): Promise<number> {
+  const rows = await db
+    .selectFrom('pos_sale_lines')
+    .selectAll()
+    .where('organization_id', '=', organizationId)
+    .where('sale_id', '=', saleId)
+    .execute();
+  return openAmountTotals(rows).get(personId) ?? 0;
+}
+
+/**
  * Open-amount register lines (SPK-PAY-016, proposed amendment PA-08; §3.16 POS row; capability
- * `open_amount_lines`, DEC-102 pending). Migrations 0695 and 0696.
+ * `open_amount_lines`, DEC-102 pending). Migrations 0695, 0696 and 0697.
  *
  * - Entering a line (`finance.enter_open_amount_line`): a typed description, a positive amount and
  *   a reason category of the approved list. The category gives the revenue category the line books
@@ -69,11 +96,19 @@ export function openAmountCeiling(
  *   FinancePolicyResolver (`OPEN_AMOUNT_POLICY`); while no version is approved the proposed
  *   default of the finance configuration applies, and the line records which basis it used
  *   (`policy_version_id`, null for the default). The line records who entered it and the ceiling
- *   that applied to them; the database derives whether the amount is above it.
- * - Approving a line above the ceiling (`finance.approve_open_amount_line`): its own command and
- *   its own append-only record (`pos_line_approvals`: who, when, why). The approver is never the
- *   person who entered the line (SECOND_PERSON_REQUIRED; the database refuses it too). Until then
- *   the sale takes no tender (PosSalesService.addTender, OPEN_AMOUNT_APPROVAL_REQUIRED).
+ *   that applied to them.
+ * - The ceiling applies to what one person enters on one sale, not to each line alone (security
+ *   review M-4): a line needs the second approval when the open-amount lines in effect that its
+ *   enterer has on the sale, this line included, total more than the ceiling. One line above the
+ *   ceiling is the case of a total of one line. The database derives the total under the sale
+ *   lock and whether the approval is needed (migration 0697); the service computes the same
+ *   first. Totals across separate sales of a session are not limited: they are in the session's
+ *   open-amount report (**Pending decision**, DEC-102).
+ * - Approving such a line (`finance.approve_open_amount_line`): its own command and its own
+ *   append-only record (`pos_line_approvals`: who, when, why, and the total it was given for).
+ *   The approver is never the person who entered the line (SECOND_PERSON_REQUIRED; the database
+ *   refuses it too). Until then the sale takes no tender (PosSalesService.addTender,
+ *   OPEN_AMOUNT_APPROVAL_REQUIRED).
  * - Both commands need the `open_amount_lines` switch; entering a line also needs
  *   `point_of_sale`, like any line. Removing the line, voiding the sale, tenders, returns and
  *   reads are never gated by it (DEC-016), so turning the switch off strands no sale.
@@ -161,7 +196,16 @@ export class PosOpenAmountService {
         .where('sale_id', '=', sale.id)
         .executeTakeFirst();
       const lineId = newId();
-      const approvalRequired = input.amountMinor > ceiling;
+      // The ceiling is for what this person enters on this sale: the lines in effect they
+      // already have on it count with this one (the sale is locked, so the sum is stable).
+      const enteredBefore = await enteredOpenAmountTotal(
+        trx,
+        organizationId,
+        sale.id,
+        principal.personId,
+      );
+      const enteredTotal = enteredBefore + input.amountMinor;
+      const approvalRequired = enteredTotal > ceiling;
       await trx
         .insertInto('pos_sale_lines')
         .values({
@@ -188,6 +232,8 @@ export class PosOpenAmountService {
           entered_by_person_id: principal.personId,
           approval_ceiling_minor: ceiling,
           approval_required: approvalRequired,
+          // Stated for the reader; the database derives it itself and judges by its own figure.
+          entered_total_minor: enteredTotal,
           policy_version_id: resolved.policyVersionId,
         })
         .execute();
@@ -208,6 +254,7 @@ export class PosOpenAmountService {
           reasonCategory: category.code,
           revenueCategory: category.revenueCategory,
           ceilingMinor: ceiling,
+          enteredTotalMinor: enteredTotal,
           approvalRequired,
           policyBasis: resolved.basis,
           policyVersionId: resolved.policyVersionId,
@@ -303,6 +350,7 @@ export class PosOpenAmountService {
           currency: line.currency,
           amount_minor: Number(line.unit_price_minor),
           ceiling_minor: Number(line.approval_ceiling_minor),
+          entered_total_minor: enteredTotalOf(line),
           reason: input.reason,
           approved_by: json(snapshotActor(principal)),
           approved_by_person_id: principal.personId,
@@ -332,6 +380,7 @@ export class PosOpenAmountService {
           lineId,
           amountMinor: Number(line.unit_price_minor),
           ceilingMinor: Number(line.approval_ceiling_minor),
+          enteredTotalMinor: enteredTotalOf(line),
           currency: line.currency,
           enteredByPersonId: line.entered_by_person_id,
         },
@@ -455,6 +504,20 @@ export class PosOpenAmountService {
       }
     }
     const approvalOf = new Map(approvals.map((a) => [a.sale_line_id, a]));
+    // Whether a line still waits depends on what its enterer has in effect on its sale now.
+    const saleLines =
+      saleIds.length === 0
+        ? []
+        : await this.db
+            .selectFrom('pos_sale_lines')
+            .selectAll()
+            .where('organization_id', '=', organizationId)
+            .where('sale_id', 'in', saleIds)
+            .where('kind', '=', 'open_amount')
+            .execute();
+    const totalsOf = new Map(
+      saleIds.map((id) => [id, openAmountTotals(saleLines.filter((l) => l.sale_id === id))]),
+    );
     return {
       items: page.rows.map((r) => {
         const approval = approvalOf.get(r.id);
@@ -474,7 +537,11 @@ export class PosOpenAmountService {
           enteredByPersonId: r.entered_by_person_id ?? '',
           enteredAt: iso(r.created_at),
           ceilingMinor: Number(r.approval_ceiling_minor ?? 0),
+          enteredTotalMinor: enteredTotalOf(r),
           approvalRequired: r.approval_required === true,
+          awaitingApproval:
+            r.sale_status === 'open' &&
+            awaitsApproval(r, approval !== undefined, totalsOf.get(r.sale_id) ?? new Map()),
           approval: approval ? toLineApproval(approval) : null,
           returnedQuantity: returned.get(r.id) ?? 0,
         };

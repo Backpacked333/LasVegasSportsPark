@@ -50,6 +50,10 @@ export const BookingRosterInvitationSchema = z
     id: z.uuid(),
     bookingId: z.uuid(),
     memberId: z.uuid(),
+    /**
+     * The person the invitation names; null for an invitation to a contact, and for a renter
+     * reading an invitation staff made to somebody the renter may not act for.
+     */
     recipientPersonId: z.uuid().nullable(),
     recipientContact: BookingRosterContactSchema.nullable(),
     message: z.string().nullable(),
@@ -65,7 +69,11 @@ export const BookingRosterInvitationSchema = z
   .openapi('BookingRosterInvitation');
 export type BookingRosterInvitation = z.infer<typeof BookingRosterInvitationSchema>;
 
-/** The invitation with its one-time token: shown once, to the inviter, to pass on. */
+/**
+ * The invitation with its one-time token: shown once, to the inviter, to pass on. The token opens
+ * and answers an invitation to a contact. It does nothing for an invitation that names a person:
+ * that one is answered by the person, signed in, or by somebody who may act for them.
+ */
 export const BookingRosterInvitationIssuedSchema = BookingRosterInvitationSchema.extend({
   token: z.string(),
 }).openapi('BookingRosterInvitationIssued');
@@ -75,12 +83,20 @@ export const BookingRosterMemberSchema = z
   .object({
     id: z.uuid(),
     bookingId: z.uuid(),
+    /**
+     * The person on the row. Null for a contact invitation nobody accepted yet, and, while a row
+     * has not joined, for every reader except staff and somebody who may act for that person.
+     */
     personId: z.uuid().nullable(),
-    /** The person's display name; null while the row is an unaccepted contact invitation. */
+    /**
+     * The person's display name, once they have joined. A person's details are theirs until they
+     * join: an invited row has no name here for any reader.
+     */
     displayName: z.string().nullable(),
     /** The contact an unaccepted invitation was sent to; null once a person is known. */
     invitedContact: BookingRosterContactSchema.nullable(),
     status: BookingRosterMemberStatusSchema,
+    /** Judged only for a joined member; `not_evaluated` for an invited or removed row. */
     waiverStatus: BookingRosterWaiverStatusSchema,
     addedByPersonId: z.uuid().nullable(),
     addedAt: Instant,
@@ -138,6 +154,10 @@ export const AddBookingRosterMemberBody = withCommandMeta({
 export type AddBookingRosterMemberInput = z.infer<typeof AddBookingRosterMemberBody>;
 
 export const CreateBookingRosterInvitationBody = withCommandMeta({
+  /**
+   * Staff: any active person. A renter: only themselves or someone they may register; any other
+   * reference is refused with `ROSTER_INVITE_BY_CONTACT`, whether or not it names anybody.
+   */
   recipientPersonId: z.uuid().optional(),
   recipientContact: BookingRosterContactSchema.optional(),
   message: z.string().trim().min(1).max(1000).optional(),
@@ -156,9 +176,15 @@ export const CreateBookingRosterInvitationBody = withCommandMeta({
 export type CreateBookingRosterInvitationInput = z.infer<typeof CreateBookingRosterInvitationBody>;
 
 export const AcceptBookingRosterInvitationBody = withCommandMeta({
-  /** Required unless the signed-in person is the person the invitation names. */
+  /**
+   * Required for an invitation to a contact. Not needed, and not enough, for an invitation that
+   * names a person: only that person or somebody who may act for them accepts it.
+   */
   token: z.string().min(16).max(200).optional(),
-  /** Who joins: defaults to the signed-in person; a contact invitation may name their child. */
+  /**
+   * Who joins. A contact invitation: the signed-in person (the default) or a child they may
+   * register. An invitation that names a person: that person only.
+   */
   personId: z.uuid().optional(),
 }).openapi('AcceptBookingRosterInvitationRequest');
 export type AcceptBookingRosterInvitationInput = z.infer<typeof AcceptBookingRosterInvitationBody>;
@@ -202,10 +228,11 @@ export const BookingRosterInvitationViewSchema = BookingRosterInvitationSchema.e
 }).openapi('BookingRosterInvitationView');
 export type BookingRosterInvitationView = z.infer<typeof BookingRosterInvitationViewSchema>;
 
-export const BookingRosterInvitationQuery = z.object({
-  token: z.string().min(16).max(200).optional(),
-});
-export type BookingRosterInvitationQuery = z.infer<typeof BookingRosterInvitationQuery>;
+/** Opening a contact invitation with its token: sent in the body, never in the address (§4.14). */
+export const OpenBookingRosterInvitationBody = z
+  .object({ token: z.string().min(16).max(200) })
+  .openapi('OpenBookingRosterInvitationRequest');
+export type OpenBookingRosterInvitationInput = z.infer<typeof OpenBookingRosterInvitationBody>;
 
 // ---------------------------------------------------------------------------------------------
 // OpenAPI registration
@@ -248,18 +275,13 @@ function command(
   });
 }
 
-function query(
-  path: string,
-  summary: string,
-  response: z.ZodType,
-  request?: z.ZodObject<z.ZodRawShape>,
-) {
+function query(path: string, summary: string, response: z.ZodType) {
   openApiRegistry.registerPath({
     method: 'get',
     path,
     summary,
     tags: [TAG],
-    request: { params: path.includes('{id}') ? IdParams : undefined, query: request },
+    request: { params: path.includes('{id}') ? IdParams : undefined },
     responses: {
       200: ok('Result', response),
       403: err('Access denied'),
@@ -281,7 +303,7 @@ command(
 );
 command(
   '/bookings/{id}/roster/invitations',
-  'Invite a person or a contact to the roster; the one-time token is returned once (SPK-COND-005, proposed)',
+  'Invite a contact, or a person the caller may name (staff: anyone; a renter: themselves or someone they register), to the roster; the one-time token is returned once (SPK-COND-005, proposed)',
   CreateBookingRosterInvitationBody,
   BookingRosterInvitationIssuedSchema,
 );
@@ -299,13 +321,28 @@ query(
 );
 query(
   '/booking-roster-invitations/{id}',
-  'Read a roster invitation: the invited person, the token holder, the renter or staff (SPK-COND-005, proposed)',
+  'Read a roster invitation: the person it names or somebody who acts for them, the renter or staff (SPK-COND-005, proposed)',
   BookingRosterInvitationViewSchema,
-  BookingRosterInvitationQuery,
 );
+openApiRegistry.registerPath({
+  method: 'post',
+  path: '/booking-roster-invitations/{id}/open',
+  summary:
+    'Read an invitation to a contact with its token, sent in the body (a pure read; SPK-COND-005, proposed)',
+  tags: [TAG],
+  request: {
+    params: IdParams,
+    body: { content: { 'application/json': { schema: OpenBookingRosterInvitationBody } } },
+  },
+  responses: {
+    200: ok('The invitation', BookingRosterInvitationViewSchema),
+    400: err('Validation failed'),
+    404: err('Not found or not visible (also a wrong token)'),
+  },
+});
 command(
   '/booking-roster-invitations/{id}/accept',
-  'Accept a roster invitation for yourself or your child (SPK-COND-005, proposed)',
+  'Accept a roster invitation: the person it names (or somebody who acts for them), or the token holder of a contact invitation for themselves or their child (SPK-COND-005, proposed)',
   AcceptBookingRosterInvitationBody,
   BookingRosterInvitationAcceptedSchema,
   200,

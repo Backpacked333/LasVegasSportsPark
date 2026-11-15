@@ -552,9 +552,24 @@ offering_id, policy_key)`. A copied offering keeps its required waivers.
   judged, the rule applied and when it lapses. A paper acceptance counts from the date on the
   paper. Acceptances recorded under a merged person record still count.
 - **An override of a block** is its own append-only record (`waiver_overrides`): one person, one
-  waiver family, one activity (an offering, an offering session, a scheduling event or a booking),
-  a reason and the staff member. It is permitted only where the version in force blocks and names
-  one of the actor's roles; never for a waiver that is current or only warns, never for oneself.
+  waiver family and the version in force, one activity, a reason and the staff member. It is
+  permitted only where the version in force blocks and names one of the actor's roles; never for
+  a waiver that is current or only warns, never for oneself.
+  - **The activity is resolved when the override is recorded** (security review L-4, 2026-11-14):
+    an offering or an offering session from the catalog's own tables, a scheduling event through
+    scheduling's exported port (`EventSchedulingPort.getEvent`). An activity that names nothing is
+    refused as not found, and the authorization target always carries the activity's facility,
+    so a staff member scoped to one facility does not override for an activity of another.
+    **A booking was dropped** as an activity an override can name: no port resolves a booking
+    for the catalog (enrollment depends on the catalog, not the reverse), nothing read overrides
+    by booking, and an override for a booked time names its scheduling event. The stored column
+    still admits `booking` for rows written before.
+  - **An override applies to the waiver version it was recorded against** and to no other
+    (`WaiverStatusReader.override` matches `policy_version_id` to the version in force;
+    migration `0221_catalog_waiver_override_version.sql` requires the version on every new
+    override). Once another version is in force the rule asks again, whether or not that version
+    asks for acceptance again, and its own `overrideRoles` decide who may override it. The
+    earlier override stays on the person's record as history.
 
 Routes (contracts in `packages/contracts/src/api/catalog-waivers.ts`):
 
@@ -563,11 +578,16 @@ Routes (contracts in `packages/contracts/src/api/catalog-waivers.ts`):
 | `GET /v1/people/{id}/waivers`              | staff; the person; a guardian holding `complete_forms`; else 404              |
 | `POST /v1/waiver-acceptances`              | digital: the adult, a guardian, or staff naming the signer; paper: staff only |
 | `POST /v1/waiver-overrides`                | staff whose role the approved waiver names                                    |
-| `GET /v1/offerings/{id}/required-waivers`  | any signed-in person once the offering is published; staff before             |
+| `GET /v1/offerings/{id}/required-waivers`  | any signed-in person once the offering is published; staff before; else 404   |
 | `POST /v1/offerings/{id}/required-waivers` | `catalog.manage_required_waivers`                                             |
 
 `POST /v1/acknowledgments` refuses a waiver version (`USE_WAIVER_ACCEPTANCE`), so a waiver
 acceptance always carries its method and always checks the capability.
+
+`GET /v1/offerings/{id}/required-waivers` answers an offering the caller may not see (a draft or
+an archived one, to anybody who does not read the catalog as staff) exactly as an offering that
+does not exist (`errors.protectedNotFound`, §4.10; security review L-5), as the offering reads
+do.
 
 Port (`PolicyPort`, `catalog.ports.ts`): `waiverStatus`, `waiverStatuses` (a roster in two reads)
 and `waiverFindings` (the missing or lapsed required waivers of some people for one activity, with
@@ -599,8 +619,11 @@ uses them); answering DEC-095 is approving a version, not a release.
   or its day had ended everywhere before the waiver version existed. The renewal clock of a paper
   acceptance starts at midnight UTC of that date. **Pending decision** whether the facility's zone
   should decide (DEC-095, J4).
-- An override recorded against a scheduling event or a booking stores the id as a reference; the
-  catalog cannot check that another module's record exists.
+- An override has no end of its own: it lasts while the waiver version it was recorded against is
+  in force. Whether an override should also expire after a time, or cover one day of a recurring
+  activity only, is a **Pending decision** (DEC-095).
+- An override cannot be recorded against a booking (see above); **Proposed** to add it when a
+  port resolves a booking to its facility for the catalog.
 - `overrideRoles` can only narrow `catalog.override_waiver` (front desk, program and league
   manager, general manager, system administrator, support operator); a role outside that list
   never overrides.

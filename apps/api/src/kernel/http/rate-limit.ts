@@ -123,7 +123,11 @@ export const RateLimited = (name: RateLimitName) => SetMetadata(RATE_LIMIT_KEY, 
 /**
  * Applies `@RateLimited` before authentication (§4.14), so an anonymous caller cannot guess
  * passcodes or tokens at speed. A refused request answers 429 RATE_LIMITED with `Retry-After`.
- * The client address is the one Express reports, which follows `TRUST_PROXY` behind a proxy.
+ * The client address is the one Express reports, which follows `TRUST_PROXY` behind a proxy: a
+ * hop count or the proxies' own addresses, so the address is the one the trusted proxy saw and
+ * never one a caller wrote into `X-Forwarded-For`. Production refuses to boot when `TRUST_PROXY`
+ * is unset (behind a proxy every visitor would share the proxy's address and one bucket) or
+ * believes every sender (a caller would choose its own key); see `ConfigSchema`.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {

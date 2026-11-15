@@ -1,5 +1,6 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { moduleSettings } from '../../kernel';
 import { ConflictDetector } from './conflicts/conflict-detector';
 import { PartyCommitmentSources } from './conflicts/party-commitment-sources';
 import { ClosureImpactController, ClosuresController } from './controllers/closures.controller';
@@ -13,6 +14,7 @@ import {
   PublicScheduleController,
 } from './public/public-schedule.controller';
 import { PublicScheduleService } from './public/public-schedule.service';
+import { SchedulingSettings } from './scheduling.settings';
 import {
   AVAILABILITY_PORT,
   CLOSURE_PORT,
@@ -87,6 +89,7 @@ const providers: Provider[] = [
   // SPK-SCHED-010 (proposed amendment PA-06): the public day schedule and its title registry.
   PublicScheduleTitles,
   PublicScheduleService,
+  moduleSettings(SchedulingSettings.module),
   { provide: EVENT_SCHEDULING_PORT, useExisting: EventsService },
   { provide: AVAILABILITY_PORT, useExisting: EventsService },
   { provide: RESERVATION_QUERY_PORT, useExisting: EventsService },

@@ -1,12 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
-  DivisionCriteriaSchema,
   DomainError,
   errors,
   type ChangeCompetitionPublicationInput,
   type CompetitionPublication,
-  type DivisionCriteria,
   type Principal,
+  type PublicationBlocker,
   type PublicBracketMatch,
   type PublicCompetitionView,
   type PublicDirectory,
@@ -43,37 +42,10 @@ import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
 import { organizationOf } from '../competition.shared';
 import { StandingsService } from '../services/standings.service';
+import { publicationBlockers } from './publication-rule';
 
 type Reader = Db | Trx;
 type CompetitionRow = Selectable<CompetitionsTable>;
-
-/** The age from which a player is an adult for publication (proposed, DEC-100 N2, N3). */
-export const PUBLIC_ADULT_AGE = 18;
-const MINOR_WORDS =
-  /\b(youth|junior|juniors|kid|kids|boy|boys|girl|girls|child|children|minor|minors)\b/i;
-const UNDER_AGE = /\bu[-\s]?(\d{1,2})\b/i;
-
-/**
- * Whether a division's documented criteria describe players under 18 (SPK-SCHED-010 "no child's
- * name ... appears"; proposed rule pending DEC-100): an age band that starts under 18 or is open
- * at the bottom, or a name, level or category that says so ("U12", "Youth", "Girls"). A division
- * with no age criteria at all describes nobody under 18. The rule errs towards private: a band
- * with only a maximum counts as describing minors.
- */
-export function describesMinors(division: { name: string; criteria: unknown }): boolean {
-  const parsed = DivisionCriteriaSchema.safeParse(division.criteria);
-  // Criteria that cannot be read are not evidence of an adult division.
-  if (!parsed.success) return true;
-  const criteria: DivisionCriteria = parsed.data;
-  const band = criteria.ageBand;
-  if (band && (band.minAge !== null || band.maxAge !== null)) {
-    if (band.minAge === null || band.minAge < PUBLIC_ADULT_AGE) return true;
-  }
-  const words = [division.name, criteria.level, criteria.category].filter(Boolean).join(' ');
-  if (MINOR_WORDS.test(words)) return true;
-  const under = UNDER_AGE.exec(words);
-  return under !== null && Number(under[1]) <= PUBLIC_ADULT_AGE;
-}
 
 const iso = (value: Date | string): string => new Date(value).toISOString();
 const isoOrNull = (value: Date | string | null): string | null => (value ? iso(value) : null);
@@ -81,9 +53,12 @@ const isoOrNull = (value: Date | string | null): string | null => (value ? iso(v
 /**
  * Public competition views and the staff switch behind them (SPK-SCHED-010, proposed amendment
  * PA-06; capability `public_schedule`, pending DEC-100; ADR-005). A competition is private until a
- * permitted staff member publishes it; publishing is refused, and a public competition answers
- * "not available", while any of its divisions describes players under 18. The public reads are
- * queries of their own into shapes with team names, scores, times and field names only.
+ * permitted staff member publishes it. The under-18 rule fails closed (`publication-rule.ts`;
+ * security review M-2): publishing is refused, and a public competition answers "not available"
+ * on every read, unless every division of its seasons states a minimum age of 18 or more and no
+ * competition, season or division name suggests players under 18. A season that has no division
+ * is not shown. The public reads are queries of their own into shapes with team names, scores,
+ * times and field names only.
  */
 @Injectable()
 export class PublicCompetitionService {
@@ -145,17 +120,20 @@ export class PublicCompetitionService {
       .where('organization_id', '=', organization.id)
       .where('public_code', '=', code)
       .executeTakeFirst();
-    if (!competition || !(await this.isShown(db, competition))) throw publicViewNotAvailable();
-    const seasons = await db
-      .selectFrom('seasons')
-      .select(['name', 'starts_on', 'ends_on', 'public_code'])
-      .where('organization_id', '=', organization.id)
-      .where('competition_id', '=', competition.id)
-      .where('status', 'in', ['open', 'active', 'completed'])
-      .where('public_code', 'is not', null)
-      .orderBy('starts_on', 'desc')
-      .orderBy('name')
-      .execute();
+    const shownSeasons = competition ? await this.shownSeasons(db, competition) : null;
+    if (!competition || !shownSeasons) throw publicViewNotAvailable();
+    const seasons = (
+      await db
+        .selectFrom('seasons')
+        .select(['id', 'name', 'starts_on', 'ends_on', 'public_code'])
+        .where('organization_id', '=', organization.id)
+        .where('competition_id', '=', competition.id)
+        .where('status', 'in', ['open', 'active', 'completed'])
+        .where('public_code', 'is not', null)
+        .orderBy('starts_on', 'desc')
+        .orderBy('name')
+        .execute()
+    ).filter((season) => shownSeasons.has(season.id));
     return {
       organizationName: organization.name,
       name: competition.name,
@@ -190,7 +168,10 @@ export class PublicCompetitionService {
       .where('organization_id', '=', organization.id)
       .where('id', '=', season.competition_id)
       .executeTakeFirst();
-    if (!competition || !(await this.isShown(db, competition))) throw publicViewNotAvailable();
+    // The competition is judged again on every read, and so is the season: one without a division
+    // says nothing about who plays in it.
+    const shownSeasons = competition ? await this.shownSeasons(db, competition) : null;
+    if (!competition || !shownSeasons?.has(season.id)) throw publicViewNotAvailable();
 
     const divisions = await db
       .selectFrom('divisions')
@@ -293,6 +274,7 @@ export class PublicCompetitionService {
       )
       .select([
         'fixtures.id',
+        'fixtures.season_id',
         'fixtures.scheduling_event_id',
         'fixtures.home_entry_id',
         'fixtures.away_entry_id',
@@ -302,7 +284,7 @@ export class PublicCompetitionService {
       .where('fixtures.scheduling_event_id', 'in', eventIds)
       .execute();
     if (fixtures.length === 0) return out;
-    const shown = new Map<string, boolean>();
+    const shown = new Map<string, ReadonlySet<string> | null>();
     for (const competitionId of new Set(fixtures.map((f) => f.competition_id))) {
       const competition = await db
         .selectFrom('competitions')
@@ -310,9 +292,9 @@ export class PublicCompetitionService {
         .where('organization_id', '=', organizationId)
         .where('id', '=', competitionId)
         .executeTakeFirst();
-      shown.set(competitionId, competition ? await this.isShown(db, competition) : false);
+      shown.set(competitionId, competition ? await this.shownSeasons(db, competition) : null);
     }
-    const visible = fixtures.filter((f) => shown.get(f.competition_id) === true);
+    const visible = fixtures.filter((f) => shown.get(f.competition_id)?.has(f.season_id) === true);
     const teamNames = await this.teamNames(
       db,
       organizationId,
@@ -371,12 +353,20 @@ export class PublicCompetitionService {
       if (competition.status === 'archived') {
         throw errors.invalidTransition('Competition', competition.status, 'publish');
       }
-      const minors = await this.minorDivisions(trx, organizationId, competitionId);
-      if (minors.length > 0) {
+      // Fails closed: public only when every division is positively known to be an adult
+      // division. The database repeats the structured part (migration 0471).
+      const { blockers } = await this.audience(trx, competition);
+      if (blockers.length > 0) {
         throw new DomainError(
           'VALIDATION_FAILED',
-          'A competition with a division for players under 18 cannot be made public.',
-          { details: { code: 'COMPETITION_HAS_MINOR_DIVISION', divisions: minors } },
+          `This competition cannot be made public. ${blockers[0]?.message ?? ''}`.trim(),
+          {
+            details: {
+              code: 'COMPETITION_NOT_KNOWN_ADULT',
+              blockers,
+              divisions: divisionsOf(blockers),
+            },
+          },
         );
       }
       await trx
@@ -460,36 +450,66 @@ export class PublicCompetitionService {
   // -------------------------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------------------------
-  /** Public, not archived, and no division describes players under 18 (checked on every read). */
-  private async isShown(db: Reader, competition: CompetitionRow): Promise<boolean> {
+  /**
+   * The seasons of a competition that may be shown, or null when the competition is not shown at
+   * all: private, archived, or anything stops it from being public (judged on every read, so a
+   * public competition whose divisions later change to youth or unknown stops being served). A
+   * season without a division is left out.
+   */
+  private async shownSeasons(
+    db: Reader,
+    competition: CompetitionRow,
+  ): Promise<ReadonlySet<string> | null> {
     if (competition.public_visibility !== 'public' || competition.status === 'archived') {
-      return false;
+      return null;
     }
-    const minors = await this.minorDivisions(db, competition.organization_id, competition.id);
-    return minors.length === 0;
+    const audience = await this.audience(db, competition);
+    return audience.blockers.length === 0 ? audience.seasonsWithDivisions : null;
   }
 
-  private async minorDivisions(
+  private async isShown(db: Reader, competition: CompetitionRow): Promise<boolean> {
+    return (await this.shownSeasons(db, competition)) !== null;
+  }
+
+  /** What stops the competition from being public, and which of its seasons have a division. */
+  private async audience(
     db: Reader,
-    organizationId: string,
-    competitionId: string,
-  ): Promise<Array<{ seasonName: string; divisionName: string }>> {
-    const divisions = await db
-      .selectFrom('divisions')
-      .innerJoin('seasons', (join) =>
-        join
-          .onRef('seasons.organization_id', '=', 'divisions.organization_id')
-          .onRef('seasons.id', '=', 'divisions.season_id'),
-      )
-      .select(['divisions.name', 'divisions.criteria', 'seasons.name as season_name'])
-      .where('divisions.organization_id', '=', organizationId)
-      .where('seasons.competition_id', '=', competitionId)
-      .orderBy('seasons.name')
-      .orderBy('divisions.name')
+    competition: CompetitionRow,
+  ): Promise<{ blockers: PublicationBlocker[]; seasonsWithDivisions: ReadonlySet<string> }> {
+    const seasons = await db
+      .selectFrom('seasons')
+      .select(['id', 'name', 'starts_on', 'ends_on'])
+      .where('organization_id', '=', competition.organization_id)
+      .where('competition_id', '=', competition.id)
       .execute();
-    return divisions
-      .filter((division) => describesMinors(division))
-      .map((division) => ({ seasonName: division.season_name, divisionName: division.name }));
+    const divisions =
+      seasons.length === 0
+        ? []
+        : await db
+            .selectFrom('divisions')
+            .select(['season_id', 'name', 'criteria'])
+            .where('organization_id', '=', competition.organization_id)
+            .where(
+              'season_id',
+              'in',
+              seasons.map((season) => season.id),
+            )
+            .execute();
+    const blockers = publicationBlockers({
+      competitionName: competition.name,
+      seasons: seasons.map((season) => ({
+        id: season.id,
+        name: season.name,
+        years: [...new Set([yearOf(season.starts_on), yearOf(season.ends_on)])],
+      })),
+      divisions: divisions.map((division) => ({
+        seasonId: division.season_id,
+        name: division.name,
+        criteria: division.criteria,
+      })),
+      currentYear: this.clock.now().getUTCFullYear(),
+    });
+    return { blockers, seasonsWithDivisions: new Set(divisions.map((d) => d.season_id)) };
   }
 
   private async load(
@@ -525,7 +545,9 @@ export class PublicCompetitionService {
       .where('competition_id', '=', competition.id)
       .orderBy('starts_on', 'desc')
       .orderBy('name')
+      .orderBy('id')
       .execute();
+    const { blockers, seasonsWithDivisions } = await this.audience(db, competition);
     return {
       competitionId: competition.id,
       visibility: competition.public_visibility,
@@ -536,8 +558,10 @@ export class PublicCompetitionService {
         seasonId: season.id,
         name: season.name,
         publicCode: season.public_code,
+        hasDivisions: seasonsWithDivisions.has(season.id),
       })),
-      minorDivisions: await this.minorDivisions(db, competition.organization_id, competition.id),
+      blockers,
+      minorDivisions: divisionsOf(blockers),
       revision: competition.revision,
     };
   }
@@ -683,4 +707,25 @@ export class PublicCompetitionService {
       startsAt: node.fixture_id ? isoOrNull(startOf.get(node.fixture_id) ?? null) : null,
     }));
   }
+}
+
+/** The calendar year of a season date (a `date` column reads as text or as a Date). */
+function yearOf(value: Date | string): number {
+  return value instanceof Date ? value.getUTCFullYear() : Number(String(value).slice(0, 4));
+}
+
+/** The divisions among the blockers, each once, in the blockers' order. */
+function divisionsOf(
+  blockers: readonly PublicationBlocker[],
+): Array<{ seasonName: string; divisionName: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ seasonName: string; divisionName: string }> = [];
+  for (const blocker of blockers) {
+    if (blocker.scope !== 'division' || !blocker.seasonName || !blocker.divisionName) continue;
+    const id = `${blocker.seasonName}\u0000${blocker.divisionName}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ seasonName: blocker.seasonName, divisionName: blocker.divisionName });
+  }
+  return out;
 }

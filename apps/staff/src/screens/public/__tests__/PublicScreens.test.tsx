@@ -32,11 +32,14 @@ const schedule = (
     entry(19, { title: 'Comets vs Rockets', score: { home: 5, away: 3 } }),
     entry(20),
   ],
+  date = '2026-11-21',
 ) => ({
   organizationName: 'Desert Park',
   facilityName: 'Main complex',
   timezone: TZ,
-  date: '2026-11-21',
+  date,
+  // The days the API answers for: yesterday to 14 days ahead of 2026-11-21.
+  window: { from: '2026-11-20', to: '2026-12-05' },
   fields: ['Field 1', 'Field 2'],
   entries,
   computedAt: '2026-11-21T16:30:00.000Z',
@@ -143,6 +146,53 @@ describe('SPK-SCHED-010 public pages (no sign-in)', () => {
       'href',
       `/public/${ORG}/schedule/${CODE}?date=2026-11-22`,
     );
+  });
+
+  it('SPK-SCHED-010 (security review L-3): the previous and next day controls stop at the first and last day the view answers for', async () => {
+    const app = createTestApp({
+      session: null,
+      routes: {
+        [SCHEDULE_ROUTE]: (req) =>
+          fakeResponse(200, schedule(undefined, req.query.date ?? '2026-11-21')),
+      },
+    });
+    const days = () => screen.getByRole('navigation', { name: 'Days' });
+    const href = (date: string) => `/public/${ORG}/schedule/${CODE}?date=${date}`;
+    // The first day of the window: no day before it is offered.
+    const first = render(app.at(href('2026-11-20')));
+    expect(await screen.findByText('Friday, November 20, 2026')).toBeInTheDocument();
+    expect(within(days()).queryByRole('link', { name: 'Previous day' })).toBeNull();
+    expect(within(days()).getByText('Previous day')).toHaveAttribute('aria-disabled', 'true');
+    expect(within(days()).getByRole('link', { name: 'Next day' })).toHaveAttribute(
+      'href',
+      href('2026-11-21'),
+    );
+    expect(screen.getByTestId('public-window')).toHaveTextContent(
+      'This page shows Friday, November 20, 2026 to Saturday, December 5, 2026.',
+    );
+    first.unmount();
+    // The last day of the window: no day after it is offered.
+    const last = render(app.at(href('2026-12-05')));
+    expect(await screen.findByText('Saturday, December 5, 2026')).toBeInTheDocument();
+    expect(within(days()).queryByRole('link', { name: 'Next day' })).toBeNull();
+    expect(within(days()).getByText('Next day')).toHaveAttribute('aria-disabled', 'true');
+    expect(within(days()).getByRole('link', { name: 'Previous day' })).toHaveAttribute(
+      'href',
+      href('2026-12-04'),
+    );
+    last.unmount();
+    // A day inside it: both.
+    render(app.at(href('2026-11-28')));
+    expect(await screen.findByText('Saturday, November 28, 2026')).toBeInTheDocument();
+    expect(within(days()).getByRole('link', { name: 'Previous day' })).toHaveAttribute(
+      'href',
+      href('2026-11-27'),
+    );
+    expect(within(days()).getByRole('link', { name: 'Next day' })).toHaveAttribute(
+      'href',
+      href('2026-11-29'),
+    );
+    expect(within(days()).getByRole('link', { name: 'Today' })).toBeInTheDocument();
   });
 
   it('SPK-SCHED-010: a view that is not public, unknown or turned off reads "Not available" and nothing else', async () => {
@@ -356,7 +406,8 @@ describe('SPK-SCHED-010 staff controls', () => {
     organizationSlug: ORG,
     publicCode: null,
     changedAt: null,
-    seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: null }],
+    seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: null, hasDivisions: true }],
+    blockers: [],
     minorDivisions: [],
     revision: 4,
     ...overrides,
@@ -368,7 +419,7 @@ describe('SPK-SCHED-010 staff controls', () => {
     'GET /rule-sets': ok([]),
   };
 
-  it('SPK-SCHED-010: league staff make a competition public and get its links; a competition with a division for players under 18 cannot be public', async () => {
+  it('SPK-SCHED-010: league staff make a competition public and get its links; a competition whose divisions are not all known to be adult divisions cannot be public, and the panel says what to set', async () => {
     const user = userEvent.setup();
     const app = createTestApp({
       routes: {
@@ -378,7 +429,14 @@ describe('SPK-SCHED-010 staff controls', () => {
           publication({
             visibility: 'public',
             publicCode: CODE,
-            seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: SEASON_CODE }],
+            seasons: [
+              {
+                seasonId: ID.season,
+                name: 'Winter 2026',
+                publicCode: SEASON_CODE,
+                hasDivisions: true,
+              },
+            ],
             revision: 5,
           }),
         ),
@@ -401,7 +459,14 @@ describe('SPK-SCHED-010 staff controls', () => {
           publication({
             visibility: 'public',
             publicCode: CODE,
-            seasons: [{ seasonId: ID.season, name: 'Winter 2026', publicCode: SEASON_CODE }],
+            seasons: [
+              {
+                seasonId: ID.season,
+                name: 'Winter 2026',
+                publicCode: SEASON_CODE,
+                hasDivisions: true,
+              },
+            ],
           }),
         ),
       },
@@ -427,19 +492,85 @@ describe('SPK-SCHED-010 staff controls', () => {
         ...competitionRoutes,
         'GET /competitions/{id}/publication': ok(
           publication({
-            minorDivisions: [{ seasonName: 'Winter 2026', divisionName: 'Under 12' }],
+            blockers: [
+              {
+                scope: 'division',
+                reason: 'under_18',
+                seasonName: 'Winter 2026',
+                divisionName: 'Under 12',
+                message:
+                  'Division "Under 12" (Winter 2026) admits players under 18: its age band starts below 18.',
+              },
+              {
+                scope: 'division',
+                reason: 'age_not_stated',
+                seasonName: 'Winter 2026',
+                divisionName: 'Gold',
+                message:
+                  'Division "Gold" (Winter 2026) does not say its players are adults. Set its age band with a minimum age of 18 or more.',
+              },
+            ],
+            minorDivisions: [
+              { seasonName: 'Winter 2026', divisionName: 'Under 12' },
+              { seasonName: 'Winter 2026', divisionName: 'Gold' },
+            ],
           }),
         ),
       },
     });
-    render(youth.at(`/leagues/competitions/${ID.competition}`));
+    const third = render(youth.at(`/leagues/competitions/${ID.competition}`));
     const blocked = await screen.findByRole('region', { name: 'Public pages' });
     expect(await within(blocked).findByText('Cannot be public')).toBeInTheDocument();
     expect(
       within(blocked).getByText(/Proposed\s+rule, pending decision DEC-100/),
     ).toBeInTheDocument();
-    expect(within(blocked).getByText('Under 12 (Winter 2026)')).toBeInTheDocument();
+    const reasons = within(blocked).getByRole('list', { name: 'Why it cannot be public' });
+    expect(
+      within(reasons).getByText(/Division "Under 12" \(Winter 2026\) admits/),
+    ).toBeInTheDocument();
+    // a division that says nothing about age is a reason too, with what to set
+    expect(
+      within(reasons).getByText(/Set its age band with a minimum age of 18 or more\./),
+    ).toBeInTheDocument();
     expect(within(blocked).getByRole('button', { name: 'Make public' })).toBeDisabled();
+    third.unmount();
+
+    // Already public when a division changed: recorded as public, not served, and the panel says so.
+    const hidden = createTestApp({
+      routes: {
+        ...competitionRoutes,
+        'GET /competitions/{id}/publication': ok(
+          publication({
+            visibility: 'public',
+            publicCode: CODE,
+            seasons: [
+              {
+                seasonId: ID.season,
+                name: 'Winter 2026',
+                publicCode: SEASON_CODE,
+                hasDivisions: true,
+              },
+            ],
+            blockers: [
+              {
+                scope: 'division',
+                reason: 'age_not_stated',
+                seasonName: 'Winter 2026',
+                divisionName: 'Gold',
+                message:
+                  'Division "Gold" (Winter 2026) does not say its players are adults. Set its age band with a minimum age of 18 or more.',
+              },
+            ],
+            minorDivisions: [{ seasonName: 'Winter 2026', divisionName: 'Gold' }],
+          }),
+        ),
+      },
+    });
+    render(hidden.at(`/leagues/competitions/${ID.competition}`));
+    const notShown = await screen.findByRole('region', { name: 'Public pages' });
+    expect(await within(notShown).findByText(/Made public, but not shown/)).toBeInTheDocument();
+    expect(within(notShown).getByText('Cannot be public')).toBeInTheDocument();
+    expect(within(notShown).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
   });
 
   it('SPK-SCHED-010 capability off: the competition screen reads no publication and offers no public page', async () => {

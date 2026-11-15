@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import os from 'node:os';
 import type { FactoryProvider } from '@nestjs/common';
 import { CLIENT_APPS, CLIENT_PLATFORMS, ProviderGateSchema, z } from '@sportspark/contracts';
@@ -178,24 +179,25 @@ export const ConfigSchema = z
       .default('')
       .transform((value, ctx) => parseRateLimits(value, ctx)),
     /**
-     * Express `trust proxy` (§4.14): `true` (any proxy), `false`, a hop count, or addresses and
-     * subnets (`loopback`, `10.0.0.0/8`). Set it behind a load balancer so rate limits key on the
-     * client and `Strict-Transport-Security` sees https. Unset: forwarded headers are ignored.
+     * Which forwarded headers to believe for the client address and scheme (Express
+     * `trust proxy`, §4.14). The public and token rate limits key on that address, so the value
+     * decides whether a limit is per visitor (security review M-3):
+     *
+     * - a hop count (`1` behind one load balancer or platform proxy): the address is taken that
+     *   many entries from the right of `X-Forwarded-For`, which the proxies wrote themselves;
+     * - the proxies' own addresses or subnets, comma-separated (`10.0.0.0/8`, `loopback`,
+     *   `linklocal`, `uniquelocal`): only those senders are believed;
+     * - `false`: nothing is in front of the API and forwarded headers are ignored.
+     *
+     * `true` (and a subnet that covers every address) believes any sender, so a caller chooses
+     * its own rate-limit key by sending the header: accepted outside production only. Unset
+     * means `false`; production refuses to boot without an explicit, safe value, because behind
+     * a proxy an unset value puts every visitor in one bucket.
      */
     TRUST_PROXY: z
       .string()
       .optional()
-      .transform((value) =>
-        value === undefined || value === ''
-          ? undefined
-          : value === 'true'
-            ? true
-            : value === 'false'
-              ? false
-              : /^\d+$/.test(value)
-                ? Number(value)
-                : value,
-      ),
+      .transform((value, ctx) => parseTrustProxy(value, ctx)),
     /** `Strict-Transport-Security` max-age on https answers (0 turns it off; technical value). */
     HSTS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).default(31_536_000),
     /** One access line per answered request (method, path without ids or query, status, time). */
@@ -389,6 +391,24 @@ export const ConfigSchema = z
             message: `${key}=fake is a deterministic test adapter and cannot run in production (specification §5.2, ${selector.decisionRef})`,
           });
         }
+      }
+    }
+    if (cfg.NODE_ENV === 'production') {
+      // §4.14 (security review M-3): the rate limits of the public and token routes key on the
+      // client address Express reports. Unset behind a proxy, every visitor shares the proxy's
+      // address and one bucket; trusting every sender lets a caller pick its own key.
+      if (cfg.TRUST_PROXY === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['TRUST_PROXY'],
+          message: `TRUST_PROXY must be set explicitly in production. ${TRUST_PROXY_WHAT_TO_SET}`,
+        });
+      } else if (trustsEveryProxy(cfg.TRUST_PROXY)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['TRUST_PROXY'],
+          message: `TRUST_PROXY=${String(cfg.TRUST_PROXY)} believes X-Forwarded-For from any sender, so a caller chooses its own rate-limit key; it is refused in production. ${TRUST_PROXY_WHAT_TO_SET}`,
+        });
       }
     }
     if (cfg.NODE_ENV === 'production') {
@@ -626,6 +646,67 @@ export const RATE_LIMIT_NAMES = [
 type RateLimitOverrides = Readonly<
   Partial<Record<(typeof RATE_LIMIT_NAMES)[number], { limit: number; windowSeconds: number }>>
 >;
+
+const TRUST_PROXY_WHAT_TO_SET =
+  'Set the number of proxies in front of the API (for example 1 behind one load balancer), the addresses or subnets of those proxies (for example 10.0.0.0/8), or false when the API is reached directly.';
+const TRUST_PROXY_NAMED_RANGES = ['loopback', 'linklocal', 'uniquelocal'];
+const TRUST_PROXY_MAX_HOPS = 32;
+
+/** The value Express is given: a hop count, a list of trusted senders, or a plain yes or no. */
+export type TrustProxySetting = boolean | number | string;
+
+function parseTrustProxy(
+  value: string | undefined,
+  ctx: z.RefinementCtx,
+): TrustProxySetting | undefined {
+  const text = value?.trim() ?? '';
+  if (text === '') return undefined;
+  const refuse = (message: string): undefined => {
+    ctx.addIssue({ code: 'custom', message: `TRUST_PROXY: ${message} ${TRUST_PROXY_WHAT_TO_SET}` });
+    return undefined;
+  };
+  if (text === 'true') return true;
+  if (text === 'false' || text === 'none') return false;
+  if (/^\d+$/.test(text)) {
+    const hops = Number(text);
+    if (hops === 0) return refuse('0 is not a hop count; use false when no proxy is in front.');
+    if (hops > TRUST_PROXY_MAX_HOPS) {
+      return refuse(`${text} proxies in front of the API is not a plausible hop count.`);
+    }
+    return hops;
+  }
+  const entries = text.split(',').map((entry) => entry.trim());
+  for (const entry of entries) {
+    if (!isTrustedSender(entry)) {
+      return refuse(
+        `"${entry}" is not an address, a subnet or one of ${TRUST_PROXY_NAMED_RANGES.join(', ')}.`,
+      );
+    }
+  }
+  return entries.join(',');
+}
+
+/** An IP address, a CIDR subnet, or one of the named private ranges Express knows. */
+function isTrustedSender(entry: string): boolean {
+  if (TRUST_PROXY_NAMED_RANGES.includes(entry)) return true;
+  const [address, prefix, ...rest] = entry.split('/');
+  if (!address || rest.length > 0) return false;
+  const family = isIP(address);
+  if (family === 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  return Number(prefix) <= (family === 4 ? 32 : 128);
+}
+
+/** Whether the setting believes forwarded headers from any sender at all. */
+export function trustsEveryProxy(setting: TrustProxySetting): boolean {
+  if (setting === true) return true;
+  if (typeof setting !== 'string') return false;
+  return setting.split(',').some((entry) => {
+    const [address, prefix] = entry.split('/');
+    return prefix !== undefined && Number(prefix) === 0 && isIP(address ?? '') !== 0;
+  });
+}
 
 function parseRateLimits(value: string, ctx: z.RefinementCtx): RateLimitOverrides {
   const out: Partial<

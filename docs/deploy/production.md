@@ -46,6 +46,16 @@ Required in production (the configuration refuses to boot otherwise):
 | `PROVIDER_DECISIONS`                                                            | e.g. `identity=DEC-018`; one entry per gate whose provider adapter runs   |
 | `PAYMENT_PROVIDER`, `ACCOUNTING_PROVIDER`, `ACCESS_DEVICE_PROVIDER`             | `none` until the gate's adapter exists (production refuses `fake`)        |
 | `MESSAGING_PUSH_PROVIDER`, `MESSAGING_EMAIL_PROVIDER`, `MESSAGING_SMS_PROVIDER` | `none` until the gate's adapter exists                                    |
+| `TRUST_PROXY`                                                                   | the proxies in front of the API: a hop count, their addresses, or `false` |
+
+`TRUST_PROXY` (API and worker read the same configuration, so set it for both): the number of
+proxies in front of the API (`1` behind one load balancer), or their addresses or subnets
+(`10.0.0.0/8`, `loopback`, `linklocal`, `uniquelocal`, comma-separated), or `false` when the API
+is reached directly. Rate limits and `Strict-Transport-Security` use the client address and
+scheme the trusted proxy reports. Unset is refused (behind a proxy every visitor would share one
+rate-limit bucket), and so is `true` or a subnet covering every address (a caller would choose
+its own rate-limit key by sending `X-Forwarded-For`). The count must match the real chain: too
+low keys on a proxy, too high believes an entry a caller wrote.
 
 Recommended:
 
@@ -54,7 +64,6 @@ Recommended:
 | `DATABASE_SSL`                                     | `require` or `verify-full` (+ `DATABASE_SSL_CA_PATH`); `disable` is refused, and unset is refused for a database on another host unless `DATABASE_URL` sets `sslmode=require`, `verify-ca` or `verify-full` |
 | `DATABASE_STATEMENT_TIMEOUT_MS`                    | e.g. `30000`                                                                                                                                                                                                |
 | `DATABASE_POOL_MAX`                                | per process; the sum over processes under the database's connection limit                                                                                                                                   |
-| `TRUST_PROXY`                                      | the load balancer (hop count or subnet), so rate limits and HSTS see the client                                                                                                                             |
 | `CORS_ALLOWED_ORIGINS`                             | the staff dashboard's https origin (if not same-origin)                                                                                                                                                     |
 | `RATE_LIMIT_STORE`                                 | `postgres` (the production default)                                                                                                                                                                         |
 | `LOG_FORMAT`                                       | `json` (the production default)                                                                                                                                                                             |

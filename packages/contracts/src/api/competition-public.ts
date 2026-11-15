@@ -141,6 +141,25 @@ export type PublicDirectory = z.infer<typeof PublicDirectorySchema>;
 // ---------------------------------------------------------------------------------------------
 // Staff: making a competition public or private, and its links
 // ---------------------------------------------------------------------------------------------
+/**
+ * One reason a competition cannot be public (proposed rule, DEC-100). The rule fails closed: a
+ * competition is public only when every division of its seasons states, in its age band, a
+ * minimum age of 18 or more. `age_not_stated`: a division says nothing that makes its players
+ * adults. `under_18`: its age band admits players under 18. `name_suggests_minors`: the
+ * competition's, a season's or a division's wording suggests players under 18, whatever the age
+ * bands say. `no_divisions`: there is no division yet. `message` tells staff what to set.
+ */
+export const PublicationBlockerSchema = z
+  .object({
+    scope: z.enum(['competition', 'season', 'division']),
+    reason: z.enum(['no_divisions', 'age_not_stated', 'under_18', 'name_suggests_minors']),
+    seasonName: z.string().nullable(),
+    divisionName: z.string().nullable(),
+    message: z.string(),
+  })
+  .openapi('PublicationBlocker');
+export type PublicationBlocker = z.infer<typeof PublicationBlockerSchema>;
+
 export const CompetitionPublicationSchema = z
   .object({
     competitionId: z.uuid(),
@@ -150,11 +169,25 @@ export const CompetitionPublicationSchema = z
     publicCode: PublicCode.nullable(),
     changedAt: Instant.nullable(),
     seasons: z.array(
-      z.object({ seasonId: z.uuid(), name: z.string(), publicCode: PublicCode.nullable() }),
+      z.object({
+        seasonId: z.uuid(),
+        name: z.string(),
+        publicCode: PublicCode.nullable(),
+        /**
+         * False while the season has no division: nothing says who plays in it, so its own view
+         * answers "not available" even while the competition is public.
+         */
+        hasDivisions: z.boolean(),
+      }),
     ),
     /**
-     * Divisions whose criteria describe players under 18: while any is listed the competition
-     * cannot be made public, and a public one answers "not available" (proposed rule, DEC-100).
+     * Why the competition cannot be public. While any is listed, publishing is refused and a
+     * competition that is already public answers "not available" on every public read.
+     */
+    blockers: z.array(PublicationBlockerSchema),
+    /**
+     * The divisions among `blockers`: those not positively known to be adult divisions (an age
+     * band under 18, no stated minimum age, or wording that suggests players under 18).
      */
     minorDivisions: z.array(z.object({ seasonName: z.string(), divisionName: z.string() })),
     revision: Revision,
@@ -254,7 +287,9 @@ for (const [action, summary] of [
     },
     responses: {
       200: ok('Command outcome', CompetitionPublicationSchema),
-      400: err('Validation failed (a division for players under 18)'),
+      400: err(
+        'Validation failed (COMPETITION_NOT_KNOWN_ADULT: a division is not known to be an adult division, or a name suggests players under 18)',
+      ),
       403: err('Access denied, or public views are not enabled (CAPABILITY_DISABLED)'),
       404: err('Not found or not visible'),
       409: err('Conflict (STALE_REVISION, IDEMPOTENCY_*)'),

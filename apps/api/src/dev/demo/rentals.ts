@@ -151,11 +151,13 @@ export async function seedRentals(
       { personId: renter('renter-guest-1').personId, policyReferences: [] },
       null,
     );
-    // Two open invitations: a friend, and the seeded parent (to answer in the customer app).
+    // Two open invitations: a friend, and the seeded parent (to answer in the customer app). The
+    // desk names them: a renter invites another adult by email or phone, never by picking a
+    // person (SPK-COND-005).
     for (const recipientPersonId of [renter('renter-guest-2').personId, parent.personId]) {
       if (!recipientPersonId) continue;
       await rosters.invite(
-        organizer.principal,
+        desk,
         main.id,
         {
           recipientPersonId,

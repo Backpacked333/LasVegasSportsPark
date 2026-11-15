@@ -968,7 +968,8 @@ it on is **Verified** by `__tests__/booking-rosters.spec.ts`.
 
 A rental booking (one booking row also covers a standing weekly series) may have a group roster:
 the people the renter brings. `services/booking-rosters.service.ts`, beside
-`services/bookings.service.ts`; tables in migration `0530_enrollment_booking_rosters.sql`:
+`services/bookings.service.ts`; tables in migrations `0530_enrollment_booking_rosters.sql` and
+`0531_enrollment_booking_roster_acceptance.sql`:
 
 - `booking_roster_members`: a person, or an invited contact with no record yet; `invited`,
   `joined` or `removed`. One live row per booking and person, and one open row per booking and
@@ -976,28 +977,61 @@ the people the renter brings. `services/booking-rosters.service.ts`, beside
   the lifecycle only moves forward (transition guard); rows are never deleted.
 - `booking_roster_invitations`: the invitation behind an invited row (token hash, expiry;
   `pending` then `accepted`, `declined`, `revoked` or `expired`), modelled on `team_invitations`.
-  One pending invitation per roster row; nothing about who was invited can be rewritten.
+  One pending invitation per roster row; nothing about who was invited can be rewritten. An
+  accepted invitation records who joined (`accepted_for_person_id`), who acted
+  (`accepted_by_person_id`) and in what capacity (`accepted_as`: `self` or `representative`;
+  `legacy` only for rows accepted before migration 0531, whose capacity was never checked).
 - Lifecycles: `BookingRosterMemberMachine` and `BookingRosterInvitationMachine`
   (`enrollment.state-machines.ts`).
 
-| Route                                                     | Who                                                                                             | Needs the capability |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------- |
-| `GET /v1/bookings/{id}/roster`                            | the renter; staff at the facility; anyone else 404                                              | no                   |
-| `POST /v1/bookings/{id}/roster`                           | staff (anyone); the renter or a joined member, for themselves or someone they may register      | yes                  |
-| `POST /v1/bookings/{id}/roster/invitations`               | the renter; staff                                                                               | yes                  |
-| `POST /v1/bookings/{id}/roster/members/{memberId}/remove` | the renter; staff; the member or someone who may register them                                  | no                   |
-| `GET /v1/me/booking-roster-invitations`                   | the open invitations that name the signed-in person                                             | no                   |
-| `GET /v1/booking-roster-invitations/{id}`                 | the person it names; the token holder; the renter; staff                                        | no                   |
-| `POST /v1/booking-roster-invitations/{id}/accept`         | the person it names (no token), or the token holder for themselves or someone they may register | yes                  |
-| `POST /v1/booking-roster-invitations/{id}/decline`        | the person it names, or the token holder                                                        | no                   |
-| `POST /v1/booking-roster-invitations/{id}/revoke`         | the renter; staff                                                                               | no                   |
+| Route                                                     | Who                                                                                                                                | Needs the capability |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `GET /v1/bookings/{id}/roster`                            | the renter; staff at the facility; anyone else 404                                                                                 | no                   |
+| `POST /v1/bookings/{id}/roster`                           | staff (anyone); the renter or a joined member, for themselves or someone they may register                                         | yes                  |
+| `POST /v1/bookings/{id}/roster/invitations`               | staff (a contact, or any active person); the renter (a contact, or themselves or someone they may register)                        | yes                  |
+| `POST /v1/bookings/{id}/roster/members/{memberId}/remove` | the renter; staff; the member or someone who may register them                                                                     | no                   |
+| `GET /v1/me/booking-roster-invitations`                   | the open invitations that name the signed-in person or someone they may register                                                   | no                   |
+| `GET /v1/booking-roster-invitations/{id}`                 | the person it names or someone who may register them; the renter; staff                                                            | no                   |
+| `POST /v1/booking-roster-invitations/{id}/open`           | the holder of a contact invitation's token (token in the body; a read)                                                             | no                   |
+| `POST /v1/booking-roster-invitations/{id}/accept`         | the person it names or someone who may register them (no token); or a contact invitation's token holder, for themselves or a child | yes                  |
+| `POST /v1/booking-roster-invitations/{id}/decline`        | the person it names or someone who may register them; or a contact invitation's token holder                                       | no                   |
+| `POST /v1/booking-roster-invitations/{id}/revoke`         | the renter; staff                                                                                                                  | no                   |
 
 - Only a live rental has a roster that can be added to (`ROSTER_RENTAL_ONLY`, `BOOKING_NOT_LIVE`);
   an ended booking's roster stays readable.
-- The roster read carries each member's waiver status for the rental offering's required waiver
-  families, from `PolicyPort.waiverStatuses` (the worst when several are required): `current`,
-  `lapsed`, `missing`, or `not_evaluated` when liability waivers are off, the offering requires no
-  waiver, the row has no person yet, or the row is removed. `waiver.state` says which.
+- The roster read carries each joined member's waiver status for the rental offering's required
+  waiver families, from `PolicyPort.waiverStatuses` (the worst when several are required):
+  `current`, `lapsed`, `missing`, or `not_evaluated` when liability waivers are off, the offering
+  requires no waiver, the row has not joined, or the row is removed. `waiver.state` says which.
+- **Whose person may be named, shown and joined** (security review M-1 and L-1, 2026-11-14;
+  **Verified** by the `whose person may be named, shown and joined` tests and the migration 0531
+  database test):
+  - A renter or member names a person by reference only when that person is themselves or
+    someone they hold registering authority for (`CustomerScope.subjectIds`, the rule a
+    registration uses; a staff role held elsewhere never widens it), when adding and when
+    inviting. Any other reference, whether or not it names anybody, gets one answer
+    (`ROSTER_INVITE_BY_CONTACT` when inviting, `ROSTER_INVITATION_REQUIRED` when adding) and no
+    lookup is made. Everybody else is invited by contact. Staff name any active person.
+  - A person's details are theirs until they join. A row that has never joined (`invited`, or
+    removed before joining) shows no display name and no waiver status to any reader, and nothing
+    is read about its person. Its person reference is returned only to staff and to a reader who
+    may act for that person; the renter sees the contact they typed, or only that somebody is
+    invited. The same holds for the invitation a renter reads or withdraws: when staff invited
+    somebody by name, the renter's answer carries no `recipientPersonId`.
+  - An invitation that names a person joins that person and nobody else, and is read, accepted
+    and declined only by that person or by somebody who may register them. Its token is neither
+    needed nor enough. A contact invitation is opened and answered by the holder of its token and
+    joins the signed-in caller or a child they may register; the roster row becomes that joiner.
+  - The database refuses an acceptance that joins somebody other than the person named
+    (`booking_roster_invitations_named_joiner`), that misstates whether the acting person is the
+    joiner (`booking_roster_invitations_capacity`), or whose roster row is not joined as the
+    recorded joiner (`booking_roster_invitations_joiner`, a trigger). Whether a representative
+    holds registering authority is a relationship fact of the identity module: the service checks
+    it inside the unit of work and the audit record names the actor.
+  - The token is returned once and is not kept with the idempotency record
+    (`@Idempotent({ withhold: ['token'] })`); a replay answers `IDEMPOTENCY_SECRET_WITHHELD`. A
+    token is read from a request body only (`POST .../open`, `accept`, `decline`), never from a
+    query string, and is compared in constant time.
 - **A missing waiver is shown and never blocks the booking** (the assumed default; **Pending
   decision** DEC-103). Nothing in this service reads or changes the booking's state.
 - **Being on a roster grants nothing else.** The service writes only its two tables: no
@@ -1009,10 +1043,14 @@ the people the renter brings. `services/booking-rosters.service.ts`, beside
 
 **Deviations from the team invitation model, and known gaps:**
 
-- An invitation that names a person is accepted by that person signed in, without the token
-  (signing in proves who they are). The token is required only for an invitation to a contact. No
-  messaging channel delivers tokens (DEC-012, DEC-062), so the inviter is shown the token once and
-  passes it on.
+- An invitation that names a person is accepted by that person signed in (or by somebody who may
+  register them), without the token: signing in proves who they are. The token is required only
+  for an invitation to a contact, and does nothing for one that names a person. No messaging
+  channel delivers tokens (DEC-012, DEC-062), so the inviter is shown the token once and passes it
+  on.
+- A renter cannot name another adult by reference, so a known adult is invited by contact, or by
+  staff. **Pending decision** (DEC-103): whether a renter should be able to find and name people
+  they already share a team or a household with.
 - A contact invitation is accepted by whoever holds its token; the contact is **not** matched
   against a verified contact point of the acceptor (a team invitation is). A roster grants nothing,
   so the exposure is a name on a list the renter can remove. **Proposed** to match the contact
@@ -1021,8 +1059,9 @@ the people the renter brings. `services/booking-rosters.service.ts`, beside
   meanwhile. There is no periodic job, so an unanswered expired invitation keeps its roster row
   `invited` until somebody removes it.
 - The invitation expiry default (14 days) is an engineering default, **Proposed**.
-- The renter and staff see members' display names, children included. **Pending decision**
+- The renter and staff see joined members' display names, children included. **Pending decision**
   (DEC-103, with J1 and D18) whether a renter should see a child's name or only "a child of ...".
+  Staff see no name on an invited row either; the person record is where staff read a name.
 - How regular renters are billed (I2) is not touched by this amendment.
 
 ## Tiers, days, add-ons and uniforms of a registration (PA-03, PA-07): implemented behind capability switches
@@ -1084,7 +1123,11 @@ amendments leave open are **Pending decision**.
   `POST /v1/uniform-orders/{id}/hand-over-corrections` (`enrollment.hand_over_uniform`, capability
   `uniforms`) record who handed it over and when, and undo that only by a correction with a
   reason; both write the append-only `uniform_handover_events`, the audit log and
-  `enrollment.uniform_order_changed`. The list stays readable with the capability off.
+  `enrollment.uniform_order_changed`. The list stays readable with the capability off. The two
+  hand-over commands answer a caller who may not hand uniforms over at the order's facility (a
+  customer, the family itself included, or staff without the role or the scope) exactly as they
+  answer an unknown order (`errors.protectedNotFound`, §4.10; security review L-5; **Verified**
+  in `__tests__/uniform-orders-visibility.spec.ts`).
 - `SESSION_ROSTER_PORT` (`services/session-roster.ts`, for the entry module):
   `expectedAtSession(organizationId, offeringId, sessionId)` names the participants of confirmed
   registrations whose selection includes the session, each with the add-ons bought for that day.

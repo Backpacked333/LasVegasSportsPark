@@ -1,9 +1,17 @@
 import { newId, type Principal } from '@sportspark/contracts';
 import { isCheckViolation, isForeignKeyViolation, isUniqueViolation, json } from '@sportspark/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestApp, setCapability, staffPrincipal, type TestApp } from '../../../testing';
+import { loadConfig } from '../../../kernel';
+import {
+  createTestApp,
+  setCapability,
+  staffPrincipal,
+  TEST_CONFIG_ENV,
+  type TestApp,
+} from '../../../testing';
 import { EventsService } from '../services/events.service';
 import { SchedulingModule } from '../scheduling.module';
+import { SchedulingSettings } from '../scheduling.settings';
 import { at, createScheduledEvent, seedResource } from '../testing/scheduling-fixtures';
 
 type Json = Record<string, unknown>;
@@ -156,6 +164,8 @@ describe('public facility schedule (SPK-SCHED-010)', () => {
       facilityName: 'Main complex',
       timezone: 'America/Los_Angeles',
       date: DAY,
+      // yesterday to 14 days ahead, in the facility's zone (proposed default)
+      window: { from: '2026-11-20', to: '2026-12-05' },
       fields: ['Field 1', 'Field 2'],
       computedAt: t.clock.now().toISOString(),
       cacheSeconds: 30,
@@ -214,12 +224,15 @@ describe('public facility schedule (SPK-SCHED-010)', () => {
         'entries',
         'facilityName',
         'fields',
+        'from',
         'kind',
         'organizationName',
         'score',
         'startsAt',
         'timezone',
         'title',
+        'to',
+        'window',
       ].sort(),
     );
     const text = JSON.stringify(res.body);
@@ -244,6 +257,112 @@ describe('public facility schedule (SPK-SCHED-010)', () => {
       'Not available',
       'League game',
     ]);
+  });
+
+  it('SPK-SCHED-010 (security review L-3): the public day schedule answers only for a window around today in the facility’s zone; any other day is "not available" like an unknown code', async () => {
+    const unknownCode = answerOf(await read(slug, '0'.repeat(24)));
+    expect(unknownCode.status).toBe(404);
+    // The clock is 2026-11-21 10:00 in the facility's zone: yesterday to 14 days ahead.
+    const inside = ['2026-11-20', '2026-11-21', '2026-11-22', '2026-12-05'];
+    for (const date of inside) {
+      const res = await read(slug, code, `?date=${date}`);
+      expect(res.status, date).toBe(200);
+      expect(res.body.date).toBe(date);
+      expect(res.body.window).toEqual({ from: '2026-11-20', to: '2026-12-05' });
+    }
+    // The facility's history and its forward booking state are not an anonymous read: one day
+    // before the window, one day after it, last year, next year.
+    const outside = ['2026-11-19', '2026-12-06', '2025-11-21', '2027-11-21', '2026-01-01'];
+    for (const date of outside) {
+      expect(answerOf(await read(slug, code, `?date=${date}`)), date).toEqual(unknownCode);
+    }
+    // Something is scheduled on a day outside the window: it is not shown either.
+    const field = await t.db
+      .selectFrom('resources')
+      .select('id')
+      .where('organization_id', '=', t.organizationId)
+      .where('name', '=', 'Field 1')
+      .executeTakeFirstOrThrow();
+    await createScheduledEvent(events, {
+      organizationId: t.organizationId,
+      facilityId: t.facilityId,
+      resourceIds: [field.id],
+      start: at('2026-12-20', '09:00'),
+      end: at('2026-12-20', '10:00'),
+      kind: 'rental',
+      title: names.renter,
+      sourceType: 'booking',
+    });
+    expect(answerOf(await read(slug, code, '?date=2026-12-20'))).toEqual(unknownCode);
+
+    // The window follows the facility's local day, not UTC: at 23:30 local on the 21st it is
+    // already the 22nd in UTC, and the window is still the one of the 21st.
+    t.clock.advance(13.5 * 3_600_000);
+    try {
+      expect(t.clock.now().toISOString()).toBe('2026-11-22T07:30:00.000Z');
+      const late = await read(slug, code, '');
+      expect(late.body).toMatchObject({
+        date: '2026-11-21',
+        window: { from: '2026-11-20', to: '2026-12-05' },
+      });
+      expect((await read(slug, code, '?date=2026-12-06')).status).toBe(404);
+      // Half an hour later the local day turns, and the window moves with it.
+      t.clock.advance(3_600_000);
+      const next = await read(slug, code, '');
+      expect(next.body).toMatchObject({
+        date: '2026-11-22',
+        window: { from: '2026-11-21', to: '2026-12-06' },
+      });
+      expect((await read(slug, code, '?date=2026-12-06')).status).toBe(200);
+      expect(answerOf(await read(slug, code, '?date=2026-11-20'))).toEqual(unknownCode);
+    } finally {
+      t.clock.advance(-14.5 * 3_600_000);
+    }
+    // A date that is not a calendar date is a validation answer, as before.
+    expect((await read(slug, code, '?date=2026-13-40')).status).toBe(400);
+  });
+
+  it('SPK-SCHED-010: the window is a technical setting of the scheduling module, validated at boot (Proposed defaults, DEC-100)', async () => {
+    expect(SchedulingSettings.schema.parse({})).toEqual({
+      PUBLIC_SCHEDULE_DAYS_BACK: 1,
+      PUBLIC_SCHEDULE_DAYS_AHEAD: 14,
+    });
+    expect(() =>
+      loadConfig({ ...TEST_CONFIG_ENV, SCHEDULING_PUBLIC_SCHEDULE_DAYS_AHEAD: 'many' }),
+    ).toThrow(/SCHEDULING_PUBLIC_SCHEDULE_DAYS_AHEAD/);
+    expect(() =>
+      loadConfig({ ...TEST_CONFIG_ENV, SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK: '-1' }),
+    ).toThrow(/SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK/);
+    const narrow = await createTestApp({
+      imports: [SchedulingModule],
+      clockStart: '2026-11-21T18:00:00Z',
+      capabilities: ['public_schedule'],
+      env: {
+        SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK: '0',
+        SCHEDULING_PUBLIC_SCHEDULE_DAYS_AHEAD: '2',
+      },
+    });
+    try {
+      await narrow.db
+        .updateTable('organizations')
+        .set({ slug: 'narrow-park' })
+        .where('id', '=', narrow.organizationId)
+        .execute();
+      const enabled = await narrow.http
+        .post(`/v1/facilities/${narrow.facilityId}/public-schedule-view/enable`)
+        .set(await narrow.authHeader(staffPrincipal(narrow.organizationId, ['scheduler'])))
+        .set('Idempotency-Key', `narrow-${narrow.facilityId}`)
+        .send({});
+      expect(enabled.status, JSON.stringify(enabled.body)).toBe(200);
+      const path = `/v1/public/narrow-park/schedule/${enabled.body.publicCode as string}`;
+      const today = await narrow.http.get(path);
+      expect(today.body.window).toEqual({ from: '2026-11-21', to: '2026-11-23' });
+      expect((await narrow.http.get(`${path}?date=2026-11-23`)).status).toBe(200);
+      expect((await narrow.http.get(`${path}?date=2026-11-20`)).status).toBe(404);
+      expect((await narrow.http.get(`${path}?date=2026-11-24`)).status).toBe(404);
+    } finally {
+      await narrow.close();
+    }
   });
 
   it('SPK-SCHED-010: an unknown organization, an unknown code, a malformed code, a disabled view and the capability turned off all answer the same "not available"', async () => {

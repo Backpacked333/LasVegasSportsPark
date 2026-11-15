@@ -1,9 +1,12 @@
 /**
  * Making a competition public or private (SPK-SCHED-010, proposed amendment PA-06; capability
  * `public_schedule`): whether it is public, the links of its public pages, and what blocks
- * publishing. A competition is private until league staff publish it; one with a division for
- * players under 18 cannot be published (proposed rule, pending decision DEC-100). The links are
- * built from the organization's slug and public codes; they carry no record id.
+ * publishing. A competition is private until league staff publish it. It can be public only when
+ * every division of its seasons states a minimum age of 18 or more, and no competition, season or
+ * division name suggests players under 18 (the rule fails closed; proposed, pending decision
+ * DEC-100). The panel lists each reason the API gives, with what to set. While any reason stands,
+ * a competition that is already public is not served, and the panel says so. The links are built
+ * from the organization's slug and public codes; they carry no record id.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useApiCommand } from '../../api/useApiCommand';
@@ -46,6 +49,11 @@ function Links({ publication }: { publication: Publication }) {
               <div className="row-text">
                 <span className="row-title">{season.name}</span>
                 <a href={`${base}/standings`}>{`${origin}${base}/standings`}</a>
+                {season.hasDivisions ? null : (
+                  <span className="caption">
+                    Not shown yet: this season has no division, so nothing says who plays in it.
+                  </span>
+                )}
                 <span className="caption">
                   Fixtures, results and standings share this link; add the code{' '}
                   <code>{season.publicCode}</code> to a lobby display with <code>?seasons=</code>.
@@ -78,7 +86,8 @@ function Controls({ publication }: { publication: Publication }) {
     publish.reset();
     void unpublish.submit(request).catch(() => undefined);
   };
-  const blocked = publication.minorDivisions.length > 0;
+  const blocked = publication.blockers.length > 0;
+  const isPublic = publication.visibility === 'public';
   return (
     <div className="form">
       <p>
@@ -87,23 +96,23 @@ function Controls({ publication }: { publication: Publication }) {
           label={publication.visibility === 'public' ? 'Public' : 'Private'}
         />{' '}
         <span className="caption">
-          {publication.visibility === 'public'
-            ? 'Fixtures, results, standings and bracket are readable without sign-in: team names, scores, times and fields only.'
-            : 'Nothing of this competition is readable without sign-in.'}
+          {isPublic && blocked
+            ? 'Made public, but not shown: nothing of this competition is readable without sign-in until the reasons below are resolved.'
+            : isPublic
+              ? 'Fixtures, results, standings and bracket are readable without sign-in: team names, scores, times and fields only.'
+              : 'Nothing of this competition is readable without sign-in.'}
         </span>
       </p>
       {blocked ? (
         <div>
           <StatusBadge tone="warning" label="Cannot be public" />{' '}
           <span className="caption">
-            A competition with a division for players under 18 is not shown publicly. Proposed rule,
-            pending decision DEC-100.
+            A competition is shown publicly only when every division states a minimum age of 18 or
+            more and no name suggests players under 18. Proposed rule, pending decision DEC-100.
           </span>
-          <ul className="list" aria-label="Divisions for players under 18">
-            {publication.minorDivisions.map((division) => (
-              <li key={`${division.seasonName}-${division.divisionName}`}>
-                {division.divisionName} ({division.seasonName})
-              </li>
+          <ul className="list" aria-label="Why it cannot be public">
+            {publication.blockers.map((blocker, index) => (
+              <li key={`${index}-${blocker.scope}-${blocker.reason}`}>{blocker.message}</li>
             ))}
           </ul>
         </div>

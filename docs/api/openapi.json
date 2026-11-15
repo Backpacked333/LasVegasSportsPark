@@ -10329,6 +10329,27 @@
           "id"
         ]
       },
+      "WaiverOverrideActivityRef": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "offering",
+              "offering_session",
+              "scheduling_event"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ]
+      },
       "WaiverOverride": {
         "type": "object",
         "properties": {
@@ -10506,7 +10527,7 @@
             "pattern": "^[a-z0-9][a-z0-9_-]{0,99}$"
           },
           "activity": {
-            "$ref": "#/components/schemas/WaiverActivityRef"
+            "$ref": "#/components/schemas/WaiverOverrideActivityRef"
           },
           "expectedRevision": {
             "type": "integer",
@@ -25986,6 +26007,23 @@
             "type": "string",
             "format": "date"
           },
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
           "fields": {
             "type": "array",
             "items": {
@@ -26011,6 +26049,7 @@
           "facilityName",
           "timezone",
           "date",
+          "window",
           "fields",
           "entries",
           "computedAt",
@@ -26534,6 +26573,50 @@
           "cacheSeconds"
         ]
       },
+      "PublicationBlocker": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "competition",
+              "season",
+              "division"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "no_divisions",
+              "age_not_stated",
+              "under_18",
+              "name_suggests_minors"
+            ]
+          },
+          "seasonName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "divisionName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "reason",
+          "seasonName",
+          "divisionName",
+          "message"
+        ]
+      },
       "CompetitionPublication": {
         "type": "object",
         "properties": {
@@ -26589,13 +26672,23 @@
                       "type": "null"
                     }
                   ]
+                },
+                "hasDivisions": {
+                  "type": "boolean"
                 }
               },
               "required": [
                 "seasonId",
                 "name",
-                "publicCode"
+                "publicCode",
+                "hasDivisions"
               ]
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicationBlocker"
             }
           },
           "minorDivisions": {
@@ -26628,6 +26721,7 @@
           "publicCode",
           "changedAt",
           "seasons",
+          "blockers",
           "minorDivisions",
           "revision"
         ]
@@ -39736,6 +39830,19 @@
           }
         ]
       },
+      "OpenBookingRosterInvitationRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
       "AccessDeviceKind": {
         "type": "string",
         "enum": [
@@ -45589,7 +45696,13 @@
           "ceilingMinor": {
             "type": "integer"
           },
+          "enteredTotalMinor": {
+            "type": "integer"
+          },
           "approvalRequired": {
+            "type": "boolean"
+          },
+          "awaitingApproval": {
             "type": "boolean"
           },
           "approval": {
@@ -45635,7 +45748,9 @@
           "revenueCategory",
           "enteredByPersonId",
           "ceilingMinor",
+          "enteredTotalMinor",
           "approvalRequired",
+          "awaitingApproval",
           "approval",
           "policyVersionId"
         ]
@@ -46386,7 +46501,13 @@
           "ceilingMinor": {
             "type": "integer"
           },
+          "enteredTotalMinor": {
+            "type": "integer"
+          },
           "approvalRequired": {
+            "type": "boolean"
+          },
+          "awaitingApproval": {
             "type": "boolean"
           },
           "approval": {
@@ -46438,7 +46559,9 @@
           "enteredByPersonId",
           "enteredAt",
           "ceilingMinor",
+          "enteredTotalMinor",
           "approvalRequired",
+          "awaitingApproval",
           "approval",
           "returnedQuantity"
         ]
@@ -85668,7 +85791,7 @@
             }
           },
           "404": {
-            "description": "Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same",
+            "description": "Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same",
             "content": {
               "application/json": {
                 "schema": {
@@ -86006,7 +86129,7 @@
             }
           },
           "404": {
-            "description": "Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same",
+            "description": "Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same",
             "content": {
               "application/json": {
                 "schema": {
@@ -86090,7 +86213,7 @@
             }
           },
           "404": {
-            "description": "Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same",
+            "description": "Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same",
             "content": {
               "application/json": {
                 "schema": {
@@ -86174,7 +86297,7 @@
             }
           },
           "404": {
-            "description": "Not available: an unknown organization or code, a view that is not public, or public views turned off all answer the same",
+            "description": "Not available: an unknown organization or code, a view that is not public, a day outside the days a schedule view answers for, or public views turned off all answer the same",
             "content": {
               "application/json": {
                 "schema": {
@@ -86322,7 +86445,7 @@
             }
           },
           "400": {
-            "description": "Validation failed (a division for players under 18)",
+            "description": "Validation failed (COMPETITION_NOT_KNOWN_ADULT: a division is not known to be an adult division, or a name suggests players under 18)",
             "content": {
               "application/json": {
                 "schema": {
@@ -86426,7 +86549,7 @@
             }
           },
           "400": {
-            "description": "Validation failed (a division for players under 18)",
+            "description": "Validation failed (COMPETITION_NOT_KNOWN_ADULT: a division is not known to be an adult division, or a name suggests players under 18)",
             "content": {
               "application/json": {
                 "schema": {
@@ -101941,7 +102064,7 @@
     },
     "/bookings/{id}/roster/invitations": {
       "post": {
-        "summary": "Invite a person or a contact to the roster; the one-time token is returned once (SPK-COND-005, proposed)",
+        "summary": "Invite a contact, or a person the caller may name (staff: anyone; a renter: themselves or someone they register), to the roster; the one-time token is returned once (SPK-COND-005, proposed)",
         "tags": [
           "Enrollment"
         ],
@@ -102216,7 +102339,7 @@
     },
     "/booking-roster-invitations/{id}": {
       "get": {
-        "summary": "Read a roster invitation: the invited person, the token holder, the renter or staff (SPK-COND-005, proposed)",
+        "summary": "Read a roster invitation: the person it names or somebody who acts for them, the renter or staff (SPK-COND-005, proposed)",
         "tags": [
           "Enrollment"
         ],
@@ -102229,16 +102352,6 @@
             "required": true,
             "name": "id",
             "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 16,
-              "maxLength": 200
-            },
-            "required": false,
-            "name": "token",
-            "in": "query"
           },
           {
             "$ref": "#/components/parameters/ClientInfo"
@@ -102288,9 +102401,82 @@
         }
       }
     },
+    "/booking-roster-invitations/{id}/open": {
+      "post": {
+        "summary": "Read an invitation to a contact with its token, sent in the body (a pure read; SPK-COND-005, proposed)",
+        "tags": [
+          "Enrollment"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "$ref": "#/components/parameters/ClientInfo"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenBookingRosterInvitationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The invitation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingRosterInvitationView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible (also a wrong token)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "CLIENT_UPDATE_REQUIRED: this app build is below the minimum supported version for its platform (details.minimumVersion; SPK-AT-027, DEC-061, DEC-092)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/booking-roster-invitations/{id}/accept": {
       "post": {
-        "summary": "Accept a roster invitation for yourself or your child (SPK-COND-005, proposed)",
+        "summary": "Accept a roster invitation: the person it names (or somebody who acts for them), or the token holder of a contact invitation for themselves or their child (SPK-COND-005, proposed)",
         "tags": [
           "Enrollment"
         ],
