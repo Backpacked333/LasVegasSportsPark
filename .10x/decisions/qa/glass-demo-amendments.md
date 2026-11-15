@@ -34,8 +34,10 @@ or a uniform size (the API's instruction is shown instead), and no screen conver
 - Intermittent tests found and fixed at their cause (a control pressed or an option read before
   the second read it depends on): the glass smoke test, two rental roster tests, the team waiting
   list test, and a waiver test whose order depended on random keys.
-- One intermittent test from `main` is not root-caused (`ContributionScreen`, "Check again");
-  under investigation in the last fix round.
+- The intermittent `ContributionScreen` test from `main` is root-caused and fixed: the test helper
+  waited for an idle query cache, but the answer reaches the screen in a later task, so the press
+  landed while "Check again" was still busy. Reproduced 8 times in 200 repetitions before the fix,
+  none in 600 after; the whole customer app suite then passed five runs in a row.
 
 ## Looked at in a browser
 
