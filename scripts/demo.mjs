@@ -107,7 +107,16 @@ process.on('SIGINT', stopAll);
 process.on('SIGTERM', stopAll);
 
 // The API and the worker's loops in one process (PGlite allows one process to open the database).
-start('API', ['--filter', '@sportspark/api', 'exec', 'node', 'dist/dev-all.js'], apiEnv);
+// The demo API signs anyone in as a seeded account, so it answers this machine only. A phone
+// running the customer app needs it on the local network: `--mobile` opens it there.
+const apiArgs = ['--filter', '@sportspark/api', 'exec', 'node', 'dist/dev-all.js'];
+if (args.has('--mobile')) {
+  apiArgs.push('--lan');
+  console.log(
+    'The demo API is reachable from this network while --mobile runs (it has no real sign-in).',
+  );
+}
+start('API', apiArgs, apiEnv);
 start('Staff dashboard', ['--filter', '@sportspark/staff', 'dev:demo'], {
   ...process.env,
   VITE_DEMO_ACCOUNTS: JSON.stringify(accounts),

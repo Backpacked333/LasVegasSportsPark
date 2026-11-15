@@ -39,9 +39,13 @@ function idIn(path: string | undefined): string {
   return id;
 }
 
+/**
+ * Row counts of every table of the test database's schema. `current_schema()`, not `public`: on
+ * PostgreSQL (`TEST_DATABASE_URL`) each test file migrates into a schema of its own.
+ */
 async function tableCounts(t: TestApp): Promise<Record<string, number>> {
   const tables = await sql<{ tablename: string }>`
-    select tablename from pg_tables where schemaname = 'public' order by tablename
+    select tablename from pg_tables where schemaname = current_schema() order by tablename
   `.execute(t.db);
   const counts: Record<string, number> = {};
   for (const { tablename } of tables.rows) {

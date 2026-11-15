@@ -122,6 +122,7 @@ process (**Verified**: `apps/api/src/dev-all.ts`, loops in `kernel/workers/inlin
 ```bash
 export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
 pnpm dev:all -- --seed      # migrates, creates the development seed, serves :3000 with the worker loops
+pnpm dev:all -- --lan       # also answers other machines on the network (a phone running the customer app)
 ```
 
 To run them as separate processes, as production does, use one PostgreSQL database:

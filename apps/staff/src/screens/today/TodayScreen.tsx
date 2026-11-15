@@ -34,7 +34,7 @@ import { Button } from '../../ui/Button';
 import { CommandError } from '../../ui/CommandFeedback';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
+import { plainWords, StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { Icon } from '../../ui/Icon';
 import { Kpi, KpiRow } from '../../ui/Page';
 import { formatDateTime, formatMinutes, formatTime, formatTimeRange } from '../../ui/time';
@@ -168,8 +168,10 @@ function IssueRow({
         {item.title}
       </span>
       <span className="caption">
-        {item.affected ? `Affects ${item.affected.type} ${item.affected.id}` : 'No linked record'} ·
-        Owner: {item.ownerQueue}
+        {item.affected
+          ? `Affects ${plainWords(item.affected.type)} ${item.affected.id}`
+          : 'No linked record'}{' '}
+        · Owner: {plainWords(item.ownerQueue)}
         {item.facilityId ? ` · ${facilityLabel(item.facilityId, names)}` : ''}
         {item.ageMinutes !== null ? ` · Open ${formatMinutes(item.ageMinutes)}` : ''}
         {item.deadlineAt ? ` · Due ${formatDateTime(item.deadlineAt, zone)}` : ''}

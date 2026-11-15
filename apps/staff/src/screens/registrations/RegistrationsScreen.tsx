@@ -286,7 +286,7 @@ export function RegistrationsScreen() {
                       {screen.title}
                     </Link>
                     <span className="caption">{screen.purpose}</span>
-                    <span className="caption">{screen.id}</span>
+                    <span className="caption screen-id">{screen.id}</span>
                   </div>
                 </li>
               ))}

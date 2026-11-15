@@ -2,4 +2,4 @@
 
 ## Features
 
-- `glass-demo-amendments`: written when its phase completes.
+- `glass-demo-amendments`: `glass-demo-amendments.md`.

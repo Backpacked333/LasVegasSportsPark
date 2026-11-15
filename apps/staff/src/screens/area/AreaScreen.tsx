@@ -35,7 +35,12 @@ export function AreaScreen({ area }: { area: StaffArea }) {
   return (
     <section aria-labelledby={`area-${area.id}`} className="area">
       <PageHeader
-        eyebrow={`${area.group} · ${area.screenIds}`}
+        eyebrow={
+          <>
+            {area.group}
+            <span className="screen-id"> · {area.screenIds}</span>
+          </>
+        }
         title={area.title}
         titleId={`area-${area.id}`}
         intro={area.purpose}
@@ -60,7 +65,7 @@ export function AreaScreen({ area }: { area: StaffArea }) {
                 </span>
                 <span className="area-tile-text">
                   <Link to={link.path}>{link.title}</Link>
-                  <span className="label-caps">{link.screenIds}</span>
+                  <span className="label-caps screen-id">{link.screenIds}</span>
                 </span>
                 <span className="area-tile-chevron" aria-hidden="true">
                   <Icon name="chevron_right" size={20} />

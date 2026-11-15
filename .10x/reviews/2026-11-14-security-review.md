@@ -560,7 +560,9 @@ in the module READMEs. L-2, L-6, L-7 and the informational items were not in sco
   compared in constant time, and read from a request body only
   (`POST /booking-roster-invitations/{id}/open` replaces the query parameter). A contact
   invitation is still not matched to a verified contact point (DEC-103).
-- **L-2** Not handled here: being decided elsewhere.
+- **L-2** Accepted, **Pending decision** (DEC-100): the directory lists what the operator made
+  public, so a code is an address, not a secret. Taking something down is done by disabling the
+  schedule view or making the competition private, not by changing its code.
 - **L-3** Fixed: "Public schedule: the day read answers for a window around today only
   (SPK-SCHED-010, SPK-SCHED-008; security review L-3)". The suspected exposure of internal rooms
   as `fields` was not examined.
@@ -571,8 +573,13 @@ in the module READMEs. L-2, L-6, L-7 and the informational items were not in sco
 - **L-5** Fixed: the commit named under L-4 (required waivers of an offering) and "Team place
   offers and uniform hand-over: not yours answers like does not exist (SPK-COMP-006, SPK-REG-012,
   §4.10; security review L-5)". The person-id oracle of the roster invitation is fixed with M-1.
-- **L-6** Not handled here: being decided elsewhere.
-- **L-7** Not handled here: handled elsewhere.
+- **L-6** Accepted, **Pending decision** (DEC-099): a sequence manager's reach matches the
+  existing compose path. Narrowing both to the sender's facility scope is one change to make
+  together.
+- **L-7** Fixed: the development entry point (`apps/api/src/dev-all.ts`) listens on this machine
+  only; `--lan` opens it to the local network, and the demo launcher passes it only with
+  `--mobile`, saying so. The launcher still passes the starting shell's environment to its
+  children.
 
 Verified by tests on PGlite only: nothing was run against PostgreSQL, a deployed host or a
 browser. Not verified: that exactly one proxy is in front of the staging function

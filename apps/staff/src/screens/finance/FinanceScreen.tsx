@@ -700,7 +700,7 @@ export function FinanceScreen() {
                   {screen.title}
                 </Link>
                 <span className="caption">{screen.purpose}</span>
-                <span className="label-caps">{screen.id}</span>
+                <span className="label-caps screen-id">{screen.id}</span>
               </div>
             </li>
           ))}
@@ -719,7 +719,9 @@ export function FinanceScreen() {
                   {screen.title}
                 </Link>
                 <span className="caption">{screen.purpose}</span>
-                <span className="label-caps">{screen.id}, used only when turned on (DEC-016)</span>
+                <span className="label-caps">
+                  <span className="screen-id">{screen.id}, </span>Used only when turned on (DEC-016)
+                </span>
               </div>
             </li>
           ))}
