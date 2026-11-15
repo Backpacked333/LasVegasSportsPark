@@ -66,6 +66,32 @@ describe('development seed (K-14, §5.2)', () => {
     ]);
   });
 
+  it('§5.2: each seeded account has one primary verified email <subject>@example.test, also after a second run', async () => {
+    const first = await seedDevelopment(t.app);
+    await seedDevelopment(t.app);
+    const contacts = await t.db
+      .selectFrom('contact_points')
+      .select(['person_id', 'kind', 'value', 'is_primary', 'verified_at'])
+      .where(
+        'person_id',
+        'in',
+        first.accounts.map((a) => a.personId),
+      )
+      .execute();
+    expect(contacts).toHaveLength(first.accounts.length);
+    for (const account of first.accounts) {
+      const mine = contacts.filter((c) => c.person_id === account.personId);
+      expect(mine).toEqual([
+        expect.objectContaining({
+          kind: 'email',
+          value: `${account.subject}@example.test`,
+          is_primary: true,
+        }),
+      ]);
+      expect(mine[0]?.verified_at).not.toBeNull();
+    }
+  });
+
   it('the seed refuses NODE_ENV=production', () => {
     expect(() => assertSeedAllowed({ NODE_ENV: 'production', AUTH_MODE: 'local' })).toThrow(
       /NODE_ENV=production/,

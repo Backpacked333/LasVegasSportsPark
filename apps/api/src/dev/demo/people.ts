@@ -147,20 +147,9 @@ async function ensureStaff(
 }
 
 export async function seedStaff(ctx: DemoContext): Promise<DemoStaff> {
-  const people = service(ctx, PeopleService);
   const seeded = async (subject: string): Promise<DemoAdult> => {
+    // The development seed has given the account its primary verified email already.
     const principal = await requirePrincipal(ctx, subject);
-    // The development seed gives its accounts no contact point; without one every notice to them
-    // is an undeliverable email and an exception for the front desk.
-    const person = await people.getPerson(ctx.system, principal.personId as string);
-    if (person.contactPoints.length === 0) {
-      await people.addContactPoint(
-        ctx.system,
-        person.id,
-        { kind: 'email', value: `${subject}@example.test`, isPrimary: true, verified: true },
-        null,
-      );
-    }
     return {
       subject,
       personId: principal.personId as string,
@@ -319,18 +308,6 @@ export async function seedFamilies(
   }
   // The seeded parent's household is the twelfth family (its child comes from the development seed).
   const parent = await requirePrincipal(ctx, 'dev-parent');
-  const parentPerson = await service(ctx, PeopleService).getPerson(
-    ctx.system,
-    parent.personId as string,
-  );
-  if (parentPerson.contactPoints.length === 0) {
-    await service(ctx, PeopleService).addContactPoint(
-      ctx.system,
-      parentPerson.id,
-      { kind: 'email', value: 'dev-parent@example.test', isPrimary: true, verified: true },
-      null,
-    );
-  }
   const seededFamily: DemoFamily = {
     key: 'dev',
     adult: {
