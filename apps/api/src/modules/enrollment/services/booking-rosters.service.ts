@@ -231,7 +231,10 @@ export class BookingRostersService {
       // Throws the answer an unknown invitation gets unless the caller is its recipient.
       await this.recipientOf(principal, row, token);
     }
-    return this.invitationView(organizationId, row, booking);
+    return this.withoutRecipient(
+      await this.invitationView(organizationId, row, booking),
+      await this.viewer(principal, access),
+    );
   }
 
   /**
@@ -647,8 +650,9 @@ export class BookingRostersService {
     if (!access.staff && !access.booker) {
       throw errors.protectedNotFound('booking_roster_invitation');
     }
+    const viewer = await this.viewer(principal, access);
     const now = this.clock.now();
-    return this.uow.run(async ({ trx }) => {
+    const revoked = await this.uow.run(async ({ trx }) => {
       const invitation = await this.loadInvitation(trx, organizationId, invitationId, true);
       if (!invitation) throw errors.protectedNotFound('booking_roster_invitation');
       assertExpectedRevision(body.expectedRevision, invitation.revision);
@@ -664,6 +668,7 @@ export class BookingRostersService {
         correlationId,
       });
     });
+    return this.withoutRecipient(revoked, viewer);
   }
 
   /** The renter, staff, the member themselves or someone who may register them. */
@@ -1077,6 +1082,17 @@ export class BookingRostersService {
       correlationId: input.correlationId,
       details: { bookingId: invitation.booking_id, memberId: invitation.member_id },
     });
+  }
+
+  /**
+   * An invitation as a renter reads it when staff invited somebody by name: the renter learns
+   * that an invitation is out, not whom it names. The person's reference is kept for staff, for
+   * the person and for whoever may act for them (security review M-1).
+   */
+  private withoutRecipient<T extends BookingRosterInvitation>(invitation: T, viewer: Viewer): T {
+    const named = invitation.recipientPersonId;
+    if (named === null || viewer.staff || viewer.ownIds.has(named)) return invitation;
+    return { ...invitation, recipientPersonId: null };
   }
 
   private toInvitation(row: InvitationRow, now: Date): BookingRosterInvitation {

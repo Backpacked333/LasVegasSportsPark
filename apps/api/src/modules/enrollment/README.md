@@ -1016,7 +1016,8 @@ the people the renter brings. `services/booking-rosters.service.ts`, beside
     removed before joining) shows no display name and no waiver status to any reader, and nothing
     is read about its person. Its person reference is returned only to staff and to a reader who
     may act for that person; the renter sees the contact they typed, or only that somebody is
-    invited.
+    invited. The same holds for the invitation a renter reads or withdraws: when staff invited
+    somebody by name, the renter's answer carries no `recipientPersonId`.
   - An invitation that names a person joins that person and nobody else, and is read, accepted
     and declined only by that person or by somebody who may register them. Its token is neither
     needed nor enough. A contact invitation is opened and answered by the holder of its token and

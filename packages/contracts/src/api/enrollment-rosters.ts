@@ -50,6 +50,10 @@ export const BookingRosterInvitationSchema = z
     id: z.uuid(),
     bookingId: z.uuid(),
     memberId: z.uuid(),
+    /**
+     * The person the invitation names; null for an invitation to a contact, and for a renter
+     * reading an invitation staff made to somebody the renter may not act for.
+     */
     recipientPersonId: z.uuid().nullable(),
     recipientContact: BookingRosterContactSchema.nullable(),
     message: z.string().nullable(),

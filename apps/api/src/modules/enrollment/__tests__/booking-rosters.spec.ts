@@ -873,6 +873,24 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
       expect(asRenter.counts).toEqual({ joined: 0, invited: 3, waiverOutstanding: 0 });
       expect(JSON.stringify(asRenter)).not.toContain(invitee.personId);
       expect(JSON.stringify(asRenter)).not.toContain(decliner.personId);
+      // The invitation itself, read by the renter: one is out, not whom it names. Staff and
+      // the person it names read the reference.
+      const invitationPath = `/v1/booking-roster-invitations/${invited.body.id}`;
+      const renterRead = await t.http.get(invitationPath).set(renter.header);
+      expect(renterRead.status).toBe(200);
+      expect(renterRead.body).toMatchObject({ id: invited.body.id, recipientPersonId: null });
+      expect(JSON.stringify(renterRead.body)).not.toContain(invitee.personId);
+      expect((await t.http.get(invitationPath).set(desk.header)).body.recipientPersonId).toBe(
+        invitee.personId,
+      );
+      expect((await t.http.get(invitationPath).set(invitee.header)).body.recipientPersonId).toBe(
+        invitee.personId,
+      );
+      // ... and of the renter's own child, the reference the renter gave.
+      expect(
+        (await t.http.get(`/v1/booking-roster-invitations/${ownInvite.body.id}`).set(renter.header))
+          .body.recipientPersonId,
+      ).toBe(ownChild);
       // staff keep the reference they invited by, and see no name or waiver either
       const asStaff = await rosterOf(desk, bookingId);
       expect(row(asStaff, invited.body.memberId)).toMatchObject({
@@ -891,6 +909,19 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
       });
       expect(row(asRenter, invited.body.memberId)?.displayName).toEqual(expect.any(String));
       expect(asRenter.counts).toEqual({ joined: 1, invited: 2, waiverOutstanding: 1 });
+
+      // Withdrawing an invitation staff made to somebody else tells the renter no more.
+      const another = await adult(t);
+      const byStaff = await invite(desk, bookingId, { recipientPersonId: another.personId });
+      const revoked = await post(
+        t,
+        `/v1/booking-roster-invitations/${byStaff.body.id}/revoke`,
+        renter.header,
+        { reason: 'Not coming after all' },
+      );
+      expect(revoked.status, JSON.stringify(revoked.body)).toBe(200);
+      expect(revoked.body).toMatchObject({ status: 'revoked', recipientPersonId: null });
+      expect(JSON.stringify(revoked.body)).not.toContain(another.personId);
     });
 
     it('SPK-COND-005 / SPK-IAM-003: an invitation that names a person is answered only by that person or somebody who may act for them, and its token never lets anybody else read it, decline it or mark the person as joined', async () => {
