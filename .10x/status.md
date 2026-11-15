@@ -25,7 +25,7 @@ Feature: `glass-demo-amendments` · Branch: `claude/jolly-johnson-gd61vv` · Pul
 | 2    | E     | PA-05 message templates and sequences       | Merged  |
 | 2    | F     | PA-08 open-amount register line             | Merged  |
 | 2    | H     | Mobile glass (not device-tested)            | Done    |
-| 3    | G     | Demo mode (base merged), dataset, tours     | Partly  |
+| 3    | G     | Demo mode, dataset, tours                   | Merged  |
 | 4    | —     | Verification and delivery                   | Pending |
 
 ## Blockers

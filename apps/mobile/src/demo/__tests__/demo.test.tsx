@@ -2,6 +2,8 @@
  * Demo mode in the customer app (src/demo): parent sign-in with the seeded account, the family
  * tour, and that it shows only when the app config asks for demo mode.
  */
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { readDemoAccounts } from '../../config/app-config';
 import { SignInScreen } from '../../screens/sign-in/SignInScreen';
@@ -107,5 +109,43 @@ describe('demo overlay', () => {
     fireEvent.press(screen.getByRole('button', { name: 'End demo' }));
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/sign-in'));
     expect(await app.sessionStore.load()).toBeNull();
+  });
+});
+
+describe('family tour', () => {
+  it('has every step on a route the app has', () => {
+    const app = path.resolve(__dirname, '../../../app');
+    for (const step of FAMILY_TOUR) {
+      const route = step.path === '/' ? 'index' : step.path.slice(1);
+      const files = [`${route}.tsx`, `${route}/index.tsx`, `(tabs)/${route}.tsx`];
+      expect({ path: step.path, found: files.some((f) => existsSync(path.join(app, f))) }).toEqual({
+        path: step.path,
+        found: true,
+      });
+    }
+  });
+
+  it('walks through the new features the app has a screen for', () => {
+    const steps = FAMILY_TOUR.map((s) => [s.path, `${s.title} ${s.body}`.toLowerCase()] as const);
+    const on = (route: string, topic: string) =>
+      steps.some(([p, text]) => p === route && text.includes(topic));
+    // Accepting a waiver, the class price explanation, a camp with a tier and an add-on, the
+    // rental roster invitation, and the public schedule the signed-out Discover screen links to.
+    expect(on('/forms', 'waiver')).toBe(true);
+    expect(on('/discover', 'per class')).toBe(true);
+    expect(on('/discover', 'member price')).toBe(true);
+    expect(on('/discover', 'single days')).toBe(true);
+    expect(on('/discover', 'lunch')).toBe(true);
+    expect(on('/discover', 'jersey')).toBe(true);
+    expect(on('/booking-roster-invitations', 'roster')).toBe(true);
+    expect(on('/public/schedule', 'without signing in')).toBe(true);
+  });
+
+  it('says each step in a short title and one or two plain sentences', () => {
+    for (const step of FAMILY_TOUR) {
+      expect(step.title.length).toBeLessThanOrEqual(40);
+      expect(step.body.split(/[.!?] /).length).toBeLessThanOrEqual(2);
+      expect(`${step.title} ${step.body}`).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}|SPK-|DEC-|_/);
+    }
   });
 });

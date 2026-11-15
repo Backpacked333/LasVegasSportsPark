@@ -10,11 +10,18 @@ import { useApp } from '../providers/AppProviders';
 import { Button } from '../ui/Button';
 import { StateView } from '../ui/StateView';
 import { demoAccountsFromEnv, type DemoAccounts } from './accounts';
+import { demoLinksFromEnv, stepPath, type DemoLinks } from './links';
 import { DEMO_ROLES, type DemoRole } from './roles';
 import { setDemoState } from './store';
 import './demo.css';
 
-export function DemoRolePicker({ accounts = demoAccountsFromEnv() }: { accounts?: DemoAccounts }) {
+export function DemoRolePicker({
+  accounts = demoAccountsFromEnv(),
+  links = demoLinksFromEnv(),
+}: {
+  accounts?: DemoAccounts;
+  links?: DemoLinks;
+}) {
   const { signIn } = useApp();
   const navigate = useNavigate();
   const mint = useApiCommand('post', '/dev/tokens');
@@ -29,7 +36,8 @@ export function DemoRolePicker({ accounts = demoAccountsFromEnv() }: { accounts?
       const token = await mint.submit({ body: { accountId } });
       setDemoState({ roleId: role.id, step: 0, open: true });
       await signIn({ token: token.token, expiresAt: token.expiresAt, accountId: token.accountId });
-      navigate(role.tour[0]?.path ?? '/today', { replace: true });
+      const first = role.tour[0];
+      navigate(first ? stepPath(first, links) : '/today', { replace: true });
     } catch {
       // Shown below from mint.error.
     } finally {
