@@ -9,7 +9,7 @@ import {
   runWithTransaction,
 } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
-import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
+import { CompetitionModule, FORMS_CHECK_IMPL, TEAM_PLAYER_COMMITMENTS_IMPL } from '../competition';
 import { CommunicationsModule, SESSION_AUDIENCE_IMPL } from '../communications';
 import { IdentityEvents, IdentityModule } from '../identity';
 import { FacilitiesModule } from '../facilities';
@@ -89,6 +89,7 @@ import { SessionBookingsService } from './services/session-bookings.service';
 import { SessionCanceledFollowUp } from './services/session-canceled-follow-up';
 import { SessionRetimedFollowUp } from './services/session-retimed-follow-up';
 import { SessionParticipants } from './services/session-participants';
+import { TeamPlayerCommitmentsReader } from './services/team-player-commitments';
 import { TrialsService } from './services/trials.service';
 import { WaitlistService } from './services/waitlist.service';
 import { YouthProgressionService } from './services/youth-progression.service';
@@ -170,6 +171,9 @@ const providers: Provider[] = [
   // required forms, checked against catalog acknowledgments.
   CompetitionFormsCheck,
   { provide: FORMS_CHECK_IMPL, useExisting: CompetitionFormsCheck },
+  // SPK-COMP-006 (QA M-5): what the players of a team hold when the team is moved to waiting.
+  TeamPlayerCommitmentsReader,
+  { provide: TEAM_PLAYER_COMMITMENTS_IMPL, useExisting: TeamPlayerCommitmentsReader },
 ];
 
 /**

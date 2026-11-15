@@ -182,11 +182,20 @@ describe('SPK-COMP-006 team waiting list (staff screens)', () => {
     const app = createTestApp({
       routes: {
         ...routes,
+        // QA M-5: the answer says what the team's players still hold (counts only).
         'POST /team-entries/{id}/wait': ok(
-          teamEntry({ status: 'waiting', waitingDivisionId: ID.division }),
+          teamEntry({
+            status: 'waiting',
+            waitingDivisionId: ID.division,
+            playerCommitments: { confirmedRegistrations: 2, uniformOrders: 1 },
+          }),
         ),
         'POST /team-entries/{id}/approve': ok(
-          teamEntry({ status: 'waiting', waitingDivisionId: ID.division }),
+          teamEntry({
+            status: 'waiting',
+            waitingDivisionId: ID.division,
+            playerCommitments: { confirmedRegistrations: 0, uniformOrders: 0 },
+          }),
         ),
       },
     });
@@ -209,6 +218,10 @@ describe('SPK-COMP-006 team waiting list (staff screens)', () => {
     expect(await screen.findByText('Entry waiting')).toBeInTheDocument();
     const wait = app.fake.requests.find((r) => r.route === '/team-entries/{id}/wait');
     expect(wait?.body).toEqual({ expectedRevision: 3, divisionId: ID.division });
+    // QA M-5: staff are told at that moment what stays with the players, and who decides.
+    const held =
+      'Players of this team hold 2 confirmed registrations and 1 uniform order. Nothing was refunded or canceled: finance has been asked to decide what happens to them.';
+    expect(screen.getByText(held)).toBeInTheDocument();
 
     await user.click(within(entries).getByRole('button', { name: 'Approve' }));
     const approve = screen.getByRole('form', { name: 'Approve the entry' });
@@ -224,6 +237,8 @@ describe('SPK-COMP-006 team waiting list (staff screens)', () => {
     expect(
       await screen.findByText('The division is full: the team is now waiting'),
     ).toBeInTheDocument();
+    // players who hold nothing: nothing more is said
+    expect(screen.queryByText(/Players of this team hold/)).toBeNull();
   });
 
   it('SPK-COMP-006: a waiting entry reads as waiting, with since when and for which division, and cannot be approved directly', async () => {

@@ -248,6 +248,17 @@ export function evaluateRegistrationEligibility(input: EligibilityInput): Eligib
         source: { type: 'team_entry', id: null },
         requiredAction: 'name_team_entry',
       });
+    } else if (input.teamEntry.status === 'waiting') {
+      // SPK-COMP-006 (QA M-5): a team on the waiting list is not closed and another team is the
+      // wrong advice. Its players register once it has a place.
+      reasons.push({
+        code: 'team_entry_waiting',
+        severity: 'blocking',
+        message:
+          'The team is waiting for a place in the season. Registration opens when the team is placed.',
+        source: { type: 'team_entry', id: input.teamEntry.id },
+        requiredAction: 'wait_for_team_place',
+      });
     } else if (!['applied', 'approved'].includes(input.teamEntry.status)) {
       reasons.push({
         code: 'team_entry_not_open',

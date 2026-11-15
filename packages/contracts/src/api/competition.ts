@@ -642,6 +642,20 @@ export const EligibilityEvaluationSchema = z
   .openapi('EligibilityEvaluation');
 export type EligibilityEvaluation = z.infer<typeof EligibilityEvaluationSchema>;
 
+/**
+ * SPK-COMP-006 (QA M-5): what the players of a team entry hold when it is moved onto the waiting
+ * list. Counts only; the move itself refunds and cancels nothing.
+ */
+export const TeamPlayerCommitmentsSchema = z
+  .object({
+    /** Confirmed (charged) registrations of players who joined this entry. */
+    confirmedRegistrations: z.number().int().nonnegative(),
+    /** Uniform orders of this entry that are not canceled. */
+    uniformOrders: z.number().int().nonnegative(),
+  })
+  .openapi('TeamPlayerCommitments');
+export type TeamPlayerCommitments = z.infer<typeof TeamPlayerCommitmentsSchema>;
+
 export const TeamEntrySchema = z
   .object({
     id: z.uuid(),
@@ -668,6 +682,12 @@ export const TeamEntrySchema = z
     waitingSince: Instant.nullable(),
     /** SPK-COMP-006: the division whose list the entry waits on; null waits for the season. */
     waitingDivisionId: z.uuid().nullable(),
+    /**
+     * SPK-COMP-006 (QA M-5): present only in the answer of a command that moved the entry onto
+     * the waiting list. What its players hold at that moment; null when it could not be read.
+     * When either count is above zero an operational exception asks finance to decide.
+     */
+    playerCommitments: TeamPlayerCommitmentsSchema.nullable().optional(),
     /** Derived from the effective roster against the rule set (never stored, SPK-COMP-004). */
     rosterComplete: z.boolean(),
     rosterCount: z.number().int(),

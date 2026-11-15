@@ -846,9 +846,40 @@ the capability `team_waitlist`, which is off unless an organization turns it on 
 
 **Pending decision** (DEC-104): whether this is how waiting teams are tracked; whether offers
 must follow the order; how long an offer stands; whether waiting carries over to the next season.
-No notice is sent to a captain when a place is offered: the events
-`competition.team_place_offered` and `competition.team_place_offer_resolved` are published and
-no module consumes them yet.
+
+### What the captain is told, and what a waiting team's players hold (QA M-5, M-7) — 2026-11-15
+
+**Verified**:
+
+- The events `competition.team_place_offered`, `competition.team_place_offer_resolved` and
+  `competition.team_entry_status_changed` are consumed by communications
+  (`communications/services/team-waiting-notices.ts`, in the event handler manifest): the team's
+  captain and co-captains are told of an offer with its expiry, of what became of it, and when
+  the team joins or leaves the waiting list (`communications/__tests__/team-waiting-notices.spec.ts`).
+  Communications reads the division's name through `TeamEntryQueryPort.findDivision`
+  (`__tests__/season-port.spec.ts`).
+- Moving an entry onto the waiting list (`POST /team-entries/{id}/wait`, and the automatic wait
+  of a placement into a full division) changes no money and cancels nothing. The command's answer
+  carries `playerCommitments`: how many confirmed registrations and live uniform orders the
+  team's players hold (counts, no names; `null` when it could not be read). When either count is
+  above zero one operational exception `competition.waiting_entry_player_commitments` is raised
+  for the `finance_operator` queue (the queue that owns the money side of a registration), one
+  open exception per entry. The counts come from enrollment through
+  `TEAM_PLAYER_COMMITMENTS_PORT` (`competition-matches.ports.ts`; implementation registered by
+  enrollment under `TEAM_PLAYER_COMMITMENTS_IMPL`); competition reads none of enrollment's
+  tables. Tests: `__tests__/team-waiting-commitments.spec.ts` (answer, exception, automatic wait,
+  nothing for a team without registrations, nothing on a refused move),
+  `enrollment/__tests__/team-player-commitments.spec.ts` (the counts and the assembled command).
+- The staff entry screen shows the counts in a sentence after the move
+  (`apps/staff/src/screens/teams/__tests__/TeamWaitingList.test.tsx`).
+
+**Proposed**: the finance queue owns the exception; the exception is not closed by itself when
+the team is later placed, withdrawn or rejected (a person closes it with what was decided).
+
+**Pending decision** (DEC-104, DEC-009): what happens to the players' registrations and uniform
+orders of a team that waits, is not placed, or is withdrawn from the list (refund, credit, keep);
+nothing is refunded automatically. The uniform list of a team that is not placed still offers
+"Hand over" (QA M-5, not changed here).
 
 ## Public competition views (SPK-SCHED-010, proposed amendment PA-06) — 2026-11-14
 

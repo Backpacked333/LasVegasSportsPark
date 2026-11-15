@@ -35,6 +35,9 @@ export const NotificationKindSchema = z
     'activity_reminder',
     // SPK-RESULT-001: league staff remind captains of a missing result (migration 1012)
     'result_reminder',
+    // SPK-COMP-006: a place offered to a waiting team, and the team's waiting state (migration 1014)
+    'team_place_offer',
+    'team_waiting_list',
   ])
   .openapi('NotificationKind');
 export type NotificationKindValue = z.infer<typeof NotificationKindSchema>;

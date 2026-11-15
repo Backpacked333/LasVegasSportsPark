@@ -5,7 +5,11 @@ import { UnitOfWork } from '../../../kernel';
 import { createTestApp, type TestApp } from '../../../testing';
 import { CompetitionModule } from '../competition.module';
 import { TEAM_ENTRY_QUERY_PORT, type TeamEntryQueryPort } from '../ports';
-import { createCompetitionFixture, createSeasonFixture } from '../testing/competition-fixtures';
+import {
+  createCompetitionFixture,
+  createDivisionFixture,
+  createSeasonFixture,
+} from '../testing/competition-fixtures';
 
 /**
  * `TeamEntryQueryPort.findSeason` (SPK-COMMS-009, proposed amendment PA-05): the read-only season
@@ -78,5 +82,38 @@ describe('TeamEntryQueryPort.findSeason (SPK-COMMS-009)', () => {
       id: foreign.seasonId,
       organizationId: other.organizationId,
     });
+  });
+
+  it("SPK-COMP-006: findDivision answers a division's own name, season and facility, inside or outside a transaction, and nothing for an unknown division or another organization's", async () => {
+    const { seasonId } = await createSeasonFixture(t, {});
+    const withFacility = await createDivisionFixture(t, {
+      seasonId,
+      name: 'Monday Premier',
+      facilityId: t.facilityId,
+    });
+    const without = await createDivisionFixture(t, {
+      seasonId,
+      name: 'Tuesday Open',
+      facilityId: null,
+    });
+    const expected = {
+      id: withFacility,
+      organizationId: t.organizationId,
+      seasonId,
+      name: 'Monday Premier',
+      facilityId: t.facilityId,
+    };
+    expect(await port.findDivision(t.organizationId, withFacility)).toEqual(expected);
+    const inside = await t.app
+      .get(UnitOfWork)
+      .run(({ trx }) => port.findDivision(t.organizationId, withFacility, trx));
+    expect(inside).toEqual(expected);
+    expect(await port.findDivision(t.organizationId, without)).toMatchObject({
+      name: 'Tuesday Open',
+      facilityId: null,
+    });
+    expect(await port.findDivision(t.organizationId, newId())).toBeNull();
+    const other = await seedOrganization(t.db, { slug: `other-${newId()}` });
+    expect(await port.findDivision(other.organizationId, withFacility)).toBeNull();
   });
 });

@@ -174,3 +174,32 @@ export const changeNoticesUnknown: ChangeNoticeCheckPort = {
     },
   ],
 };
+
+/**
+ * SPK-COMP-006 (QA M-5): what the players of a team entry hold with enrollment when the entry is
+ * moved onto the waiting list. Counts only: no person is named (§4.14).
+ */
+export interface TeamPlayerCommitments {
+  /** Confirmed (charged) registrations of players who joined this entry. */
+  confirmedRegistrations: number;
+  /** Uniform orders of this entry that are not canceled (ordered, paid or handed over). */
+  uniformOrders: number;
+}
+
+/**
+ * Enrollment: the registrations and uniform orders made for a team entry. Enrollment owns both
+ * tables (§4.2); competition reads the counts through this port and never the tables. Until the
+ * implementing module registers, the answer is `null` (unknown), never zero.
+ */
+export interface TeamPlayerCommitmentsPort {
+  commitmentsOfEntry(
+    organizationId: string,
+    teamEntryId: string,
+    trx?: Trx,
+  ): Promise<TeamPlayerCommitments | null>;
+}
+export const TEAM_PLAYER_COMMITMENTS_PORT = Symbol('TEAM_PLAYER_COMMITMENTS_PORT');
+export const TEAM_PLAYER_COMMITMENTS_IMPL = Symbol('TEAM_PLAYER_COMMITMENTS_IMPL');
+export const playerCommitmentsUnknown: TeamPlayerCommitmentsPort = {
+  commitmentsOfEntry: async () => null,
+};

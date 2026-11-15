@@ -117,6 +117,8 @@ describe('team waiting list (SPK-COMP-006)', () => {
     });
     expect(waited.status, JSON.stringify(waited.body)).toBe(200);
     expect(waited.body).toMatchObject({ status: 'waiting', divisionId: null });
+    // QA M-5: without the enrollment module what the players hold is unknown, never zero.
+    expect(waited.body.playerCommitments).toBeNull();
 
     // The list shows the order and that no place is free.
     expect(await list(season.seasonId, divisionId)).toMatchObject({

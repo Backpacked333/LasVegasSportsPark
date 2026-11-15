@@ -50,6 +50,19 @@ export interface SeasonSummary {
   revision: number;
 }
 
+/**
+ * A division's own facts (SPK-COMP-006, QA M-7: a notice to a captain names the division a place
+ * was offered in). The name is the operator's own text; `facilityId` is null when the division
+ * names no facility.
+ */
+export interface DivisionSummary {
+  id: string;
+  organizationId: string;
+  seasonId: string;
+  name: string;
+  facilityId: string | null;
+}
+
 export interface PersonEntryMembership {
   teamEntryId: string;
   seasonId: string;
@@ -87,6 +100,15 @@ export interface TeamEntryQueryPort {
    * cross-organization id. A read: it writes nothing.
    */
   findSeason(organizationId: string, seasonId: string, trx?: Trx): Promise<SeasonSummary | null>;
+  /**
+   * SPK-COMP-006 (QA M-7): a division's own facts, or null for an unknown or cross-organization
+   * id. A read: it writes nothing.
+   */
+  findDivision(
+    organizationId: string,
+    divisionId: string,
+    trx?: Trx,
+  ): Promise<DivisionSummary | null>;
   /** Entries a person is effectively on (roster or role) at the instant. */
   entriesOfPerson(
     organizationId: string,

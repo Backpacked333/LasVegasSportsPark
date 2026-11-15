@@ -66449,7 +66449,7 @@ export type components = {
             recipients: components["schemas"]["NotificationRecipient"][];
         };
         /** @enum {string} */
-        NotificationKind: "registration_outcome" | "team_invitation" | "placement" | "waitlist_offer" | "schedule_published" | "schedule_changed" | "cancellation" | "payment_attention" | "assignment_offer" | "result_published" | "renewal_opportunity" | "youth_feedback" | "staff_broadcast" | "availability_request" | "activity_reminder" | "result_reminder";
+        NotificationKind: "registration_outcome" | "team_invitation" | "placement" | "waitlist_offer" | "schedule_published" | "schedule_changed" | "cancellation" | "payment_attention" | "assignment_offer" | "result_published" | "renewal_opportunity" | "youth_feedback" | "staff_broadcast" | "availability_request" | "activity_reminder" | "result_reminder" | "team_place_offer" | "team_waiting_list";
         NotificationPage: {
             items: components["schemas"]["Notification"][];
             nextCursor: string | null;
@@ -71351,6 +71351,7 @@ export type components = {
             financialStatusRef: string | null;
             /** Format: uuid */
             id: string;
+            playerCommitments?: components["schemas"]["TeamPlayerCommitments"] | null;
             /** Format: date-time */
             rejectedAt: string | null;
             rejectionReason: string | null;
@@ -71537,6 +71538,10 @@ export type components = {
         TeamPlaceOfferOutcome: {
             entry: components["schemas"]["TeamEntry"];
             offer: components["schemas"]["TeamEntryPlaceOffer"];
+        };
+        TeamPlayerCommitments: {
+            confirmedRegistrations: number;
+            uniformOrders: number;
         };
         /** @enum {string} */
         TeamRole: "captain" | "co_captain" | "member";

@@ -14,9 +14,9 @@ PA-05, message templates and sequences), see
 [Message templates and sequences](#message-templates-and-sequences-spk-comms-009-proposed-amendment-pa-05).
 
 **Migration range:** `packages/db/migrations/1000_communications_*.sql` … `1099` (this module uses
-`1000` to `1013`; stage 3 added `1004` to `1008`, review rounds `1009` to `1011`, the result
-reminder kind `1012`, message templates and sequences `1013`; `1014` to `1019` are reserved for
-that amendment and unused).
+`1000` to `1014`; stage 3 added `1004` to `1008`, review rounds `1009` to `1011`, the result
+reminder kind `1012`, message templates and sequences `1013`, the team waiting list kinds `1014`;
+`1015` to `1019` are reserved for the amendments and unused).
 
 **Depends on:** identity (`PERSON_DIRECTORY_PORT` incl. `displayNames` and `personIdsResolvingTo`
 (IF-09), `AUTHORITY_LOOKUP_PORT`, `STAFF_DIRECTORY_PORT`, `PeopleService` for contact points;
@@ -560,6 +560,43 @@ write. No template or sequence ships with the module.
 - Not verified here: PostgreSQL (`TEST_DATABASE_URL`); every test ran on PGlite. The sending job
   claims rows with `FOR UPDATE SKIP LOCKED` and the unique index answers a second insert, but two
   truly concurrent workers were not exercised.
+
+## Team waiting list notices (SPK-COMP-006, QA M-5 and M-7) — 2026-11-15
+
+**Verified** (`services/team-waiting-notices.ts`; `__tests__/team-waiting-notices.spec.ts`, every
+test driven by competition's own commands over the API and the outbox):
+
+- Migration `1014_communications_team_waiting_kinds.sql` adds the operational kinds
+  `team_place_offer` and `team_waiting_list` (`categoryByKind`: both `operational`, never
+  promotional). The existing notification path delivers them: no new provider, no new channel.
+- `communications.notify_team_place_offered` (`competition.team_place_offered`): one protected
+  `team_place_offer` notice to the people holding captain or co-captain on the entry at the
+  clock (subjects, so whoever holds `receive_messages` over a youth captain hears too). It names
+  the team and the division, says until when the offer is open (the division's facility zone,
+  SPK-SCHED-008; UTC, and it says so, when the division names no facility) and that it is
+  answered in the app.
+- `communications.notify_team_place_offer_resolved` (`competition.team_place_offer_resolved`):
+  one short `team_waiting_list` notice when the offer was accepted, declined, withdrawn by staff
+  or expired. An offer closed because the team itself was withdrawn or rejected composes nothing
+  here (the next notice says it once).
+- `communications.notify_team_waiting_status` (`competition.team_entry_status_changed`): one
+  `team_waiting_list` notice when the entry is moved onto the waiting list (by staff, or by a
+  placement into a full division) and one when it leaves the list by withdrawal or rejection.
+  Leaving it by accepting a place is told by the offer notice; any other status change composes
+  nothing.
+- Each handler is in the event handler manifest and idempotent under replay (keyed on the source
+  event id). Recipients are resolved at send time and re-checked before dispatch; each person's
+  channel preferences apply as for any operational notice.
+- With `team_waitlist` off, competition refuses to wait, offer and accept, so none of these facts
+  is announced and no notice is composed; the handlers themselves read no capability, because
+  declining, withdrawing and expiring stay possible with the switch off and are still told.
+
+**Proposed**: the wording of the five notices; that a declined offer is also told (so that the
+other role holder learns of it).
+
+**Not built**: the customer app's Home does not list these kinds in a section of their own (they
+are in the inbox and go out by push and email as any operational notice); a rostered player who
+is not a captain or co-captain is not told.
 
 ## Stage 3 (COM-01 … COM-06)
 

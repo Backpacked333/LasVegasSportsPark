@@ -38,6 +38,7 @@ import {
   CLOCK,
   DATABASE,
   FacilityDirectory,
+  OperationalExceptions,
   OperationsService,
   Outbox,
   UnitOfWork,
@@ -50,8 +51,10 @@ import {
 import { PeopleService } from '../../identity';
 import {
   FINANCIAL_CONDITIONS_PORT,
+  TEAM_PLAYER_COMMITMENTS_PORT,
   type FinancialConditionsPort,
   type TeamEntryFinancialStatus,
+  type TeamPlayerCommitmentsPort,
 } from '../competition-matches.ports';
 import {
   divisionPlaces,
@@ -62,7 +65,10 @@ import {
 } from '../competition-waitlist.queries';
 import { CompetitionActions } from '../competition.actions';
 import { CompetitionEvents } from '../competition.events';
-import { WORKSPACE_UPCOMING_FIXTURES } from '../competition.policy';
+import {
+  WAITING_ENTRY_PLAYER_COMMITMENTS,
+  WORKSPACE_UPCOMING_FIXTURES,
+} from '../competition.policy';
 import {
   countRoster,
   effectiveRoles,
@@ -91,6 +97,7 @@ import {
 } from '../competition.shared';
 import { TeamEntryMachine, TeamEntryPlaceOfferMachine } from '../competition.state-machines';
 import type {
+  DivisionSummary,
   PersonEntryMembership,
   RecordFinancialStatusRefInput,
   SeasonSummary,
@@ -188,6 +195,9 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     @Inject(FINANCIAL_CONDITIONS_PORT) private readonly finance: FinancialConditionsPort,
     private readonly facilities: FacilityDirectory,
     private readonly capabilities: CapabilityService,
+    private readonly exceptions: OperationalExceptions,
+    @Inject(TEAM_PLAYER_COMMITMENTS_PORT)
+    private readonly playerCommitments: TeamPlayerCommitmentsPort,
   ) {}
 
   private readonly logger = new Logger(TeamEntriesService.name);
@@ -829,7 +839,38 @@ export class TeamEntriesService implements TeamEntryQueryPort {
       CompetitionActions.waitTeamEntry.id,
       { waitingDivisionId: divisionId, cause },
     );
-    return this.entryViewById(trx, organizationId, entry.id, now);
+    // QA M-5: the move changes no money. Players who joined while the entry was applied keep
+    // their confirmed registrations and uniform orders, so the answer says how many there are and
+    // the finance queue gets one exception to decide what happens to them (counts, never names).
+    const commitments = await this.playerCommitments.commitmentsOfEntry(
+      organizationId,
+      entry.id,
+      trx,
+    );
+    if (commitments && commitments.confirmedRegistrations + commitments.uniformOrders > 0) {
+      await this.exceptions.raise(trx, {
+        organizationId,
+        category: WAITING_ENTRY_PLAYER_COMMITMENTS.category,
+        severity: WAITING_ENTRY_PLAYER_COMMITMENTS.severity,
+        title: `Team moved to the waiting list: ${plural(commitments.confirmedRegistrations, 'confirmed player registration')} and ${plural(commitments.uniformOrders, 'uniform order')} to decide`,
+        affectedType: 'team_entry',
+        affectedId: entry.id,
+        ownerQueue: WAITING_ENTRY_PLAYER_COMMITMENTS.ownerQueue,
+        dedupeKey: `waiting_entry_player_commitments:${entry.id}`,
+        details: {
+          teamEntryId: entry.id,
+          seasonId: entry.season_id,
+          waitingDivisionId: divisionId,
+          cause,
+          confirmedRegistrations: commitments.confirmedRegistrations,
+          uniformOrders: commitments.uniformOrders,
+        },
+      });
+    }
+    return {
+      ...(await this.entryViewById(trx, organizationId, entry.id, now)),
+      playerCommitments: commitments,
+    };
   }
 
   /**
@@ -1582,6 +1623,31 @@ export class TeamEntriesService implements TeamEntryQueryPort {
     return toTeamEntrySummary(context.entry, context.team, context.season.competition_id);
   }
 
+  /**
+   * SPK-COMP-006 (QA M-7): a division's own facts (its name is the operator's own text), or null
+   * for an unknown or cross-organization id. A read: it writes nothing.
+   */
+  async findDivision(
+    organizationId: string,
+    divisionId: string,
+    trx?: Trx,
+  ): Promise<DivisionSummary | null> {
+    const row = await (trx ?? executorFor(this.db))
+      .selectFrom('divisions')
+      .select(['id', 'season_id', 'name', 'facility_id'])
+      .where('organization_id', '=', organizationId)
+      .where('id', '=', divisionId)
+      .executeTakeFirst();
+    if (!row) return null;
+    return {
+      id: row.id,
+      organizationId,
+      seasonId: row.season_id,
+      name: row.name,
+      facilityId: row.facility_id,
+    };
+  }
+
   async listSeasonEntries(
     organizationId: string,
     seasonId: string,
@@ -1843,6 +1909,10 @@ function isEffective(
   const to =
     row.effective_to === null ? Number.POSITIVE_INFINITY : new Date(row.effective_to).getTime();
   return from <= at.getTime() && at.getTime() < to;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 export { rolesByPerson };

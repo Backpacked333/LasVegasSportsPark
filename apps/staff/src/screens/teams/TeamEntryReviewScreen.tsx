@@ -297,6 +297,12 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
             : `Entry ${success.status}`}
         </SuccessNote>
       ) : null}
+      {/* SPK-COMP-006 (QA M-5): the move to waiting changes no money; staff are told what stays. */}
+      {success?.status === 'waiting' && heldByPlayers(success) ? (
+        <p className="caption" role="status">
+          {heldByPlayers(success)}
+        </p>
+      ) : null}
       <CommandError
         error={failure}
         onRetry={
@@ -309,6 +315,17 @@ function EntryActions({ entry, divisions }: { entry: TeamEntry; divisions: reado
       />
     </div>
   );
+}
+
+/**
+ * SPK-COMP-006 (QA M-5): what the players of a team just moved to waiting still hold, as the
+ * command answered it (counts only). Null when they hold nothing or it could not be read.
+ */
+function heldByPlayers(entry: TeamEntry): string | null {
+  const held = entry.playerCommitments;
+  if (!held || held.confirmedRegistrations + held.uniformOrders === 0) return null;
+  const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+  return `Players of this team hold ${count(held.confirmedRegistrations, 'confirmed registration')} and ${count(held.uniformOrders, 'uniform order')}. Nothing was refunded or canceled: finance has been asked to decide what happens to them.`;
 }
 
 function EntryRow({ entry, divisions }: { entry: TeamEntry; divisions: readonly Division[] }) {

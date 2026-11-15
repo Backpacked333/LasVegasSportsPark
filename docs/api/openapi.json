@@ -10659,7 +10659,9 @@
           "staff_broadcast",
           "availability_request",
           "activity_reminder",
-          "result_reminder"
+          "result_reminder",
+          "team_place_offer",
+          "team_waiting_list"
         ]
       },
       "NotificationCategory": {
@@ -19273,6 +19275,23 @@
           "evaluatedAt"
         ]
       },
+      "TeamPlayerCommitments": {
+        "type": "object",
+        "properties": {
+          "confirmedRegistrations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uniformOrders": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "confirmedRegistrations",
+          "uniformOrders"
+        ]
+      },
       "TeamEntry": {
         "type": "object",
         "properties": {
@@ -19386,6 +19405,16 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "playerCommitments": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamPlayerCommitments"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "rosterComplete": {
             "type": "boolean"

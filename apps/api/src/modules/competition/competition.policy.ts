@@ -167,6 +167,17 @@ export const TEAM_INVITATION_DEFAULT_HOURS = 24 * 7;
  * `COMPETITION_TEAM_PLACE_OFFER_HOURS` is not set. Proposed default; the value is pending DEC-104.
  */
 export const TEAM_PLACE_OFFER_DEFAULT_HOURS = 48;
+/**
+ * SPK-COMP-006 (QA M-5): raised when an entry is moved onto the waiting list while its players
+ * hold confirmed registrations or uniform orders. Nothing is refunded or canceled by the move
+ * (refunds are a staff decision); the finance queue, which owns the money side of registrations
+ * (as for an accepted cancellation), decides. One open exception per entry.
+ */
+export const WAITING_ENTRY_PLAYER_COMMITMENTS = {
+  category: 'competition.waiting_entry_player_commitments',
+  ownerQueue: 'finance_operator',
+  severity: 'warning',
+} as const;
 /** Upcoming fixtures shown in the captain workspace. */
 export const WORKSPACE_UPCOMING_FIXTURES = 20;
 

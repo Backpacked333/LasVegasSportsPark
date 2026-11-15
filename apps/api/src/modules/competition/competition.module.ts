@@ -29,12 +29,16 @@ import {
   FINANCIAL_CONDITIONS_PORT,
   FORMS_CHECK_IMPL,
   FORMS_CHECK_PORT,
+  TEAM_PLAYER_COMMITMENTS_IMPL,
+  TEAM_PLAYER_COMMITMENTS_PORT,
   financialConditionsUnknown,
   formsUnknown,
   noAssignments,
+  playerCommitmentsUnknown,
   type AssignmentCheckPort,
   type FinancialConditionsPort,
   type FormsCheckPort,
+  type TeamPlayerCommitmentsPort,
 } from './competition-matches.ports';
 import { BracketsController } from './controllers/brackets.controller';
 import { CompetitionOperationsController } from './controllers/competition-operations.controller';
@@ -199,6 +203,18 @@ const providers: Provider[] = [
         'no CHANGE_NOTICE_CHECK_IMPL registered: change notice delivery is reported as unknown',
       ),
   },
+  {
+    // SPK-COMP-006 (QA M-5): enrollment answers what a waiting team's players hold.
+    provide: TEAM_PLAYER_COMMITMENTS_PORT,
+    inject: [ModuleRef],
+    useFactory: (moduleRef: ModuleRef): TeamPlayerCommitmentsPort =>
+      lazyPort<TeamPlayerCommitmentsPort>(
+        moduleRef,
+        TEAM_PLAYER_COMMITMENTS_IMPL,
+        playerCommitmentsUnknown,
+        'no TEAM_PLAYER_COMMITMENTS_IMPL registered: what the players of a waiting team hold is unknown',
+      ),
+  },
   CompetitionsService,
   SeasonsService,
   TeamsService,
@@ -305,6 +321,7 @@ const providers: Provider[] = [
     FORMS_CHECK_PORT,
     FINANCIAL_CONDITIONS_PORT,
     CHANGE_NOTICE_CHECK_PORT,
+    TEAM_PLAYER_COMMITMENTS_PORT,
   ],
 })
 export class CompetitionModule implements OnModuleInit {

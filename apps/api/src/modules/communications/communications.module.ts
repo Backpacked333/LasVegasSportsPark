@@ -69,6 +69,7 @@ import { CalendarFeedsService } from './services/calendar-feeds.service';
 import { CompetitionTeamMembership } from './services/competition-team-membership';
 import { ChangeNoticeCheck } from './services/change-notice-check';
 import { CompetitionNotices } from './services/competition-notices';
+import { TeamWaitingNotices } from './services/team-waiting-notices';
 import { DeliveryReconciliationService } from './services/delivery-reconciliation.service';
 import { DeliveryRetryService } from './services/delivery-retry.service';
 import { DeliveryWorker } from './services/delivery-worker';
@@ -138,6 +139,7 @@ const providers: Provider[] = [
   DeliveryRetryService,
   DeliveryReconciliationService,
   CompetitionNotices,
+  TeamWaitingNotices,
   PersonMergeFollowUp,
   ActivityReminders,
   // Fixture readiness "Material change notifications" (SPK-READY-001): this module's delivery
@@ -212,6 +214,7 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
     private readonly impactContributors: ClosureImpactContributors,
     private readonly pushDevices: PushDevicesService,
     private readonly competitionNotices: CompetitionNotices,
+    private readonly teamWaitingNotices: TeamWaitingNotices,
     private readonly mergeFollowUp: PersonMergeFollowUp,
     private readonly reminders: ActivityReminders,
     private readonly messageSchedule: MessageScheduleService,
@@ -371,6 +374,26 @@ export class CommunicationsModule implements OnModuleInit, OnModuleDestroy {
       FieldEvents.resultReminderRequested.type,
       'communications.notify_result_reminder',
       (event, ctx) => this.competitionNotices.onResultReminderRequested(ctx.trx, event),
+      { failureOwner: 'league_manager' },
+    );
+    // SPK-COMP-006 (QA M-5, M-7): the captain and co-captains hear about a place offered to their
+    // waiting team, about what became of the offer, and when the team joins or leaves the list.
+    this.registry.on<EventPayload<typeof CompetitionEvents.teamPlaceOffered>>(
+      CompetitionEvents.teamPlaceOffered.type,
+      'communications.notify_team_place_offered',
+      (event, ctx) => this.teamWaitingNotices.onTeamPlaceOffered(ctx.trx, event),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof CompetitionEvents.teamPlaceOfferResolved>>(
+      CompetitionEvents.teamPlaceOfferResolved.type,
+      'communications.notify_team_place_offer_resolved',
+      (event, ctx) => this.teamWaitingNotices.onTeamPlaceOfferResolved(ctx.trx, event),
+      { failureOwner: 'league_manager' },
+    );
+    this.registry.on<EventPayload<typeof CompetitionEvents.teamEntryStatusChanged>>(
+      CompetitionEvents.teamEntryStatusChanged.type,
+      'communications.notify_team_waiting_status',
+      (event, ctx) => this.teamWaitingNotices.onTeamEntryStatusChanged(ctx.trx, event),
       { failureOwner: 'league_manager' },
     );
     // SPK-COMMS-009 (proposed amendment PA-05, capability message_sequences). A new season or a
