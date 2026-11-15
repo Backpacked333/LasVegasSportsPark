@@ -109,6 +109,7 @@ other people do reach customers in existing responses (for example `invitedByPer
 `addedByPersonId` here, team rosters elsewhere).
 
 **Fix.**
+
 - In `accept`, when `recipient_person_id` is set, require
   `selfIds.includes(invitation.recipient_person_id)`; the token must not stand in for the named
   person. Add a database check in `booking_roster_invitations_guard` that an accepted invitation
@@ -244,6 +245,7 @@ a hash; never keep it with the idempotency key".
 **Fix.** `@Idempotent({ withhold: ['token'] })` on `invite`.
 
 Related, same area:
+
 - `GET /v1/booking-roster-invitations/{id}?token=...` carries the token in the query string
   (`booking-rosters.controller.ts:96-103`). The API's own access log drops query strings, but a
   proxy or browser history will not. Prefer a header or a POST body.
@@ -415,6 +417,7 @@ demo API to `127.0.0.1` unless `--mobile` is given.
 ## Checked and found sound
 
 **Unauthenticated surface**
+
 - Routes this branch marks `@Public()`: `GET /v1/public/{organization}/schedule/{code}`
   (`scheduling/public/public-schedule.controller.ts`), `.../directory`, `.../competitions/{code}`,
   `.../seasons/{code}` (`competition/public/public-competition.controller.ts`), and
@@ -432,12 +435,14 @@ demo API to `127.0.0.1` unless `--mobile` is given.
 - Disable and unpublish are never capability-gated; enable and publish are.
 
 **Cross-organization**
+
 - Every query in the new services reviewed filters on the principal's `organization_id`; every
   foreign key in the 34 new migrations is `(organization_id, ...)` composite (checked by
   listing every `references` clause).
 
 **Waivers** (`catalog/services/waivers.service.ts`, `acknowledgments.service.ts`,
 `waiver-status.reader.ts`, migration 0220)
+
 - Person read is `protected: true` with self or `complete_forms`; overrides are staff-only in
   the answer. Acceptance goes through the existing signing path; paper is staff-only in service
   and database; the signing time is the server's; a digital acceptance must be of the version in
@@ -445,16 +450,19 @@ demo API to `127.0.0.1` unless `--mobile` is given.
   append-only. The replaced `acknowledgments_guard` only adds columns to the immutable set.
 
 **Team waiting list** (`competition/services/team-waitlist.service.ts`, migration 0467)
+
 - Accept and decline require league staff or the entry's captain (`teamRole: 'captain'`,
   `protected: true`), inside the unit of work under entry and offer locks; expiry is checked at
   accept; one open offer per entry; an open offer counts against capacity. The replaced
   `team_entries_check_division_capacity` keeps every rule of 0400 and adds held places.
 
 **Uniforms** (`enrollment/services/uniform-orders.service.ts`, migration 0523)
+
 - List and hand-over are staff-only at the offering's facility; names are read after
   authorization; "already holds the uniform" is derived server-side, not sent by the client.
 
 **Open-amount lines** (see M-4 for what is not sound)
+
 - Second-person rule, approval-before-tender and paid-transition guards in the database; the
   0686 and 0695 replacements of `pos_sale_lines_apply` keep every rule of the function they
   replace (compared line by line).
@@ -462,6 +470,7 @@ demo API to `127.0.0.1` unless `--mobile` is given.
 **Pricing** (`finance/pricing/line-pricing.service.ts`, `quote-calculator.ts`,
 `enrollment/services/registration-extras.ts`, `membership-pricing.ts`, migrations 0211, 0215,
 0216, 0217, 0521, 0522, 0687, 0690, 0691)
+
 - No client-sent amount enters a quote. Tier, sessions counted, member standing, add-on and
   uniform prices are read from catalog and the membership ledger at the quote instant and stored
   as the line's basis. Add-on quantity is the number of selected sessions the participant
@@ -471,6 +480,7 @@ demo API to `127.0.0.1` unless `--mobile` is given.
   add-on or uniform of their offering.
 
 **Capability gating**
+
 - Every new write checks its capability with `capabilities.require(..., trx)` inside the unit of
   work: waivers (accept, override, set required, draft a waiver policy), price rule fields,
   tiers, add-ons, uniforms, basket selections, quotes of gated lines, message templates,
@@ -480,6 +490,7 @@ demo API to `127.0.0.1` unless `--mobile` is given.
   reads answer "not available" while off.
 
 **Messages** (`communications/sequences/*`, migration 1013)
+
 - Placeholders are filled in one pass from a fixed vocabulary; a value containing `{{` or `}}`
   or an unfillable placeholder refuses confirmation, and a database check refuses a confirmed
   text with placeholder marks. Nothing unconfirmed is sent. The job claims a row with
@@ -489,6 +500,7 @@ demo API to `127.0.0.1` unless `--mobile` is given.
   audience is marked protected.
 
 **Demo mode and development sign-in**
+
 - Staff: demo imports are behind the build-time literal `__DEMO__`; the development sign-in is
   behind `import.meta.env.DEV` or `VITE_STAGING`; `pnpm build` runs the bundle check with demo
   markers added. Mobile: demo modules are required only under `__DEV__`; markers added to the
@@ -497,6 +509,7 @@ demo API to `127.0.0.1` unless `--mobile` is given.
   without a passcode; `assertSeedAllowed` refuses production and non-local identity.
 
 **Secrets and logging**
+
 - No secret or credential was found in the new code. The access log drops query strings and
   replaces UUIDs. Public codes are not written to audit records or events.
 
