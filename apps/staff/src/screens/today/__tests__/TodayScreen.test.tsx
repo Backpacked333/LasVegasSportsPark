@@ -100,7 +100,7 @@ describe('SCR-S-01 TodayScreen issues', () => {
     expect(
       within(row).getByText(
         new RegExp(
-          `Affects payment_attempt ${PAYMENT_ID} · Owner: finance · North Park 1 · Open 1 h 30 min`,
+          `Affects payment attempt ${PAYMENT_ID} · Owner: finance · North Park 1 · Open 1 h 30 min`,
         ),
       ),
     ).toBeInTheDocument();

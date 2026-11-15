@@ -11,6 +11,7 @@
  * the detail rail; colour and pattern are never the only signal, and the text list of the calendar
  * ("Bookings by space") carries the same information.
  */
+import { plainWords } from '../../ui/StatusBadge';
 import type { Schema } from '@sportspark/api-client';
 import { KIND_TOKEN, kindTokenOf, sportLabel } from '../../features/schedule-facilities/sport';
 import { Fragment, type CSSProperties } from 'react';
@@ -171,7 +172,9 @@ export function groupRows(rows: readonly Row[]): { label: string; rows: Row[] }[
 
 function resourceSub(resource: Resource, parent: string | null): string {
   const parts = [RESOURCE_KIND_LABEL[resource.kind]];
-  if (resource.compatibleFormats.length > 0) parts.push(resource.compatibleFormats.join(', '));
+  if (resource.compatibleFormats.length > 0) {
+    parts.push(plainWords(resource.compatibleFormats.join(', ')));
+  }
   if (parent) parts.push(`part of ${parent}`);
   return parts.join(' · ');
 }
