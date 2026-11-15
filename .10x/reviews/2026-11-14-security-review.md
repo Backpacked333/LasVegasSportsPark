@@ -535,3 +535,45 @@ demo API to `127.0.0.1` unless `--mobile` is given.
 - The standings computation used by the public season view (which entries and results count).
 - Timing differences between the "not available" branches (one to three queries); not measured.
 - Hosting configuration (`apps/api/vercel.json`, `docs/deploy/*`) beyond the `TRUST_PROXY` rows.
+
+## Resolution
+
+Recorded 2026-11-15. Each finding was checked against the code before it was changed; the nine
+handled here all held as described. "Fixed" names the commit subject; the proving tests are named
+in the module READMEs. L-2, L-6, L-7 and the informational items were not in scope of this pass.
+
+- **M-1** Fixed: "Rental roster: a person is named, shown and joined only by someone who may act
+  for them (SPK-COND-005, SPK-IAM-003; security review M-1, L-1)" and "Rental roster: a renter
+  reading or withdrawing an invitation staff made by name is not told whom it names
+  (SPK-COND-005; security review M-1)". Migration 0531.
+- **M-2** Fixed: "Public competitions: the under-18 rule fails closed (SPK-SCHED-010; security
+  review M-2)" and "Public competitions: publication blockers are ordered by code unit
+  (SPK-SCHED-010; security review M-2)". Migration 0471.
+- **M-3** Fixed: "Rate limits: production names the proxies in front of it (§4.14; security
+  review M-3)". The second bucket per organization and the server-side cache the review suggests
+  were not added.
+- **M-4** Fixed for one sale: "Open-amount lines: the ceiling applies to what one person enters on
+  one sale (SPK-PAY-016; security review M-4)". Migration 0697. Totals across separate sales of a
+  register session are not limited; they are visible in the session's open-amount report
+  (pending decision DEC-102).
+- **L-1** Fixed with M-1, in the same commit: the token is withheld from the idempotency record,
+  compared in constant time, and read from a request body only
+  (`POST /booking-roster-invitations/{id}/open` replaces the query parameter). A contact
+  invitation is still not matched to a verified contact point (DEC-103).
+- **L-2** Not handled here: being decided elsewhere.
+- **L-3** Fixed: "Public schedule: the day read answers for a window around today only
+  (SPK-SCHED-010, SPK-SCHED-008; security review L-3)". The suspected exposure of internal rooms
+  as `fields` was not examined.
+- **L-4** Fixed: "Waiver overrides: a resolved activity and one waiver version (SPK-REG-011;
+  security review L-4, L-5)". Migration 0221. A booking can no longer be named as the activity of
+  an override, because no port resolves one for the catalog. An override has no expiry of its own
+  beyond its waiver version (DEC-095).
+- **L-5** Fixed: the commit named under L-4 (required waivers of an offering) and "Team place
+  offers and uniform hand-over: not yours answers like does not exist (SPK-COMP-006, SPK-REG-012,
+  §4.10; security review L-5)". The person-id oracle of the roster invitation is fixed with M-1.
+- **L-6** Not handled here: being decided elsewhere.
+- **L-7** Not handled here: handled elsewhere.
+
+Verified by tests on PGlite only: nothing was run against PostgreSQL, a deployed host or a
+browser. Not verified: that exactly one proxy is in front of the staging function
+(`TRUST_PROXY=1`, see `docs/deploy/staging.md`).
