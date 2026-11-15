@@ -224,6 +224,11 @@ describe('SCR-S-14 OfferingSetupScreen', () => {
       ).toEqual({ basePriceMinor: 12550, currency: 'USD', chargeLines: [] }),
     );
 
+    // The first command's answer arrives on its own: until it has, the button is busy and a
+    // press on it does nothing (quality review m-7).
+    await waitFor(() =>
+      expect(f.getByRole('button', { name: 'Create price rule version' })).toBeEnabled(),
+    );
     // A later start asks for the instant and refuses to send without one.
     await user.selectOptions(starts, 'later');
     expect(f.getByLabelText(/^Effective from/)).toBeInTheDocument();

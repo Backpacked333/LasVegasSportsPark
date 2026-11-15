@@ -571,7 +571,8 @@ describe('SCR-S-55 open-amount lines (SPK-PAY-016, proposed)', () => {
     expect(rows[2]).toHaveTextContent('Locker key 14 Returned.');
     expect(rows[2]).toHaveTextContent('Not needed: within the ceiling of $50.00');
     // The sales list is still its own list beside it.
-    expect(screen.getByRole('list', { name: 'Sales in this session' })).toBeInTheDocument();
+    // It comes from a read of its own: wait for it.
+    expect(await screen.findByRole('list', { name: 'Sales in this session' })).toBeInTheDocument();
   });
 
   it('SPK-PAY-016, DEC-016: with the switch off the session page lists no other amounts and does not ask for them', async () => {

@@ -4,9 +4,14 @@
  * own lists (`/me/baskets`, `/me/registration-checkouts`, `/me/waitlist-entries`) answer empty
  * pages unless a test gives them.
  */
-import { waitFor } from '@testing-library/react-native';
+import { screen, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { createTestApp, TEST_SESSION, type TestAppOptions } from '../../../testing/test-app';
+import {
+  createTestApp,
+  settleQueries,
+  TEST_SESSION,
+  type TestAppOptions,
+} from '../../../testing/test-app';
 import {
   memoryProgressBackend,
   RegistrationProgressProvider,
@@ -55,10 +60,22 @@ export function createRegistrationTestApp(
     app.fake.requests
       .filter((r) => r.method === method && r.route === route)
       .map((r) => r.headers['idempotency-key']);
-  /** Waits until no query or command is in flight, so no update lands after the test. */
-  const settle = () =>
-    waitFor(() => expect(app.queryClient.isFetching() + app.queryClient.isMutating()).toBe(0));
+  /**
+   * Waits until no query or command is in flight and the screen shows it (`settleQueries`), so no
+   * update lands after the test and what the test presses next is in the state the cache is in.
+   */
+  const settle = () => settleQueries(app.queryClient);
   return { ...app, wrapper, progressStore, progressBackend: backend, keysOf, settle };
+}
+
+/**
+ * Waits until the "Add to your basket" button of the registration intent screen can be pressed.
+ * It stays disabled until the customer's baskets have been read, which is a request of its own:
+ * the participants a test has just ticked come from another read, so finding them proves nothing
+ * about this one, and a press on a disabled button does nothing (quality review m-7).
+ */
+export async function basketButtonReady(name = 'Add to your basket'): Promise<void> {
+  await waitFor(() => expect(screen.getByRole('button', { name })).toBeEnabled());
 }
 
 /** A mock of expo-router's `useRouter`, recording navigation for assertions. */

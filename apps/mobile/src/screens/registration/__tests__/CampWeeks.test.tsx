@@ -21,7 +21,10 @@ import {
   optionsHandler,
   page,
 } from '../../../features/registration/testing/fixtures';
-import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
+import {
+  basketButtonReady,
+  createRegistrationTestApp,
+} from '../../../features/registration/testing/registration-test-app';
 import { placesStatus, previewLines } from '../../../features/registration/CampWeeks';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
 
@@ -198,6 +201,7 @@ describe('SCR-C-09 camp weeks and live total', () => {
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(await screen.findByRole('checkbox', { name: /^Winter Camp Week 2/ }));
+    await basketButtonReady();
     fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     await screen.findByRole('checkbox', { name: 'Ada. Added to your basket' });
 

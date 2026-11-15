@@ -26,7 +26,10 @@ import {
   quote,
   quoteLine,
 } from '../../../features/registration/testing/fixtures';
-import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
+import {
+  basketButtonReady,
+  createRegistrationTestApp,
+} from '../../../features/registration/testing/registration-test-app';
 import { mePermissions } from '../../../testing/test-app';
 import { BasketScreen } from '../BasketScreen';
 import { QuoteReviewScreen } from '../QuoteReviewScreen';
@@ -181,6 +184,7 @@ describe('Tier, day, add-on and uniform choices in registration (SPK-PAY-014, SP
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     expect(screen.queryByText(/^Options for/i)).toBeNull();
+    await basketButtonReady();
     fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     await waitFor(() =>
       expect(app.fake.requests.find((r) => r.route === '/baskets/{id}/lines')?.body).toEqual({
@@ -215,6 +219,7 @@ describe('Tier, day, add-on and uniform choices in registration (SPK-PAY-014, SP
     });
 
     // Nothing chosen yet: the missing choices are said in words and nothing is sent.
+    await basketButtonReady();
     fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     expect(await screen.findByText('✕ Choose an option.')).toBeOnTheScreen();
     expect(screen.getByText('✕ Choose a size for the Club kit.')).toBeOnTheScreen();
@@ -237,6 +242,7 @@ describe('Tier, day, add-on and uniform choices in registration (SPK-PAY-014, SP
       ),
     ).toBeOnTheScreen();
 
+    await basketButtonReady();
     fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     await waitFor(() =>
       expect(app.fake.requests.find((r) => r.route === '/baskets/{id}/lines')?.body).toEqual({

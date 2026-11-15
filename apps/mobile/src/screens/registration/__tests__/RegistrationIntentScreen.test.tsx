@@ -29,7 +29,10 @@ import {
   registrationOptions,
 } from '../../../features/registration/testing/fixtures';
 import { mePermissions } from '../../../testing/test-app';
-import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
+import {
+  basketButtonReady,
+  createRegistrationTestApp,
+} from '../../../features/registration/testing/registration-test-app';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -266,6 +269,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
+    await basketButtonReady();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
@@ -281,6 +285,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ben. Eligible' }));
     expect(screen.getByRole('checkbox', { name: 'Ada. Eligible' })).toBeChecked();
 
+    await basketButtonReady('Add 2 people to your basket');
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
     });
@@ -337,6 +342,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ben. Eligible' }));
+    await basketButtonReady('Add 2 people to your basket');
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
     });
@@ -388,6 +394,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ben. Eligible' }));
+    await basketButtonReady('Add 2 people to your basket');
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
     });
@@ -396,6 +403,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
     });
     await waitFor(() => expect(screen.queryByText(/Error code: STALE_REVISION/)).toBeNull());
+    await basketButtonReady();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
@@ -416,6 +424,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    await basketButtonReady();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
@@ -438,6 +447,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
+    await basketButtonReady();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
@@ -470,6 +480,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     expect(viewOnly).toBeDisabled();
 
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ada. Eligible' }));
+    await basketButtonReady();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
@@ -490,6 +501,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
+    await basketButtonReady();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
@@ -542,6 +554,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     expect(screen.getByRole('button', { name: 'Add to your basket' })).toBeDisabled();
 
     fireEvent.press(screen.getByRole('checkbox', { name: 'Ada. Eligible' }));
+    await basketButtonReady();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
