@@ -621,12 +621,15 @@ export class PeopleService implements PersonDirectoryPort {
    * GET /v1/person-names (ID-02, SPK-IAM-002/003, §4.10, §4.14): names only, each person decided
    * with identity.read_person as a protected record. A person the caller may not view is left
    * out (never a 404 that would confirm the id). A merged person is shown when the caller may view
-   * it or its surviving record, with `canonicalPersonId` naming the survivor.
+   * it or its surviving record, with `canonicalPersonId` naming the survivor. In process, an
+   * empty list (or ids that are not record ids) answers an empty list, never a SQL error: the
+   * HTTP query asks for 1 to 100 uuids, but callers in this process pass what they hold.
    */
   async personNames(principal: Principal, ids: readonly string[]): Promise<PersonName[]> {
     const organizationId = principal.organizationId;
     if (!organizationId) throw errors.authenticationRequired();
-    const unique = [...new Set(ids)];
+    const unique = [...new Set(ids)].filter(isUuid);
+    if (unique.length === 0) return [];
     const rows = await this.db
       .selectFrom('persons')
       .select(['id', 'given_name', 'family_name', 'kind', 'merged_into_person_id'])

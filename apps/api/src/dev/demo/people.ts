@@ -252,13 +252,10 @@ async function ensureChildren(
     ctx.organizationId,
     adult.personId,
   );
-  const names =
-    authorities.length === 0
-      ? []
-      : await people.personNames(
-          ctx.system,
-          authorities.map((a) => a.subjectPersonId),
-        );
+  const names = await people.personNames(
+    ctx.system,
+    authorities.map((a) => a.subjectPersonId),
+  );
   const out: Array<{ personId: string; givenName: string }> = [];
   for (const [givenName, age] of children) {
     const known = names.find((n) => n.givenName === givenName && n.familyName === familyName);

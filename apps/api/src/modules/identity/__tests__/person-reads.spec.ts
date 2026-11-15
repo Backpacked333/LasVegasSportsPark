@@ -1,7 +1,8 @@
-import { newId } from '@sportspark/contracts';
+import { newId, systemPrincipal } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../../../testing/test-app';
 import { IdentityModule } from '../identity.module';
+import { PeopleService } from '../services/people.service';
 import {
   authHeaderForPerson,
   createContactPointFixture,
@@ -70,6 +71,20 @@ describe('person names and staff person search (ID-02; SPK-IAM-002, SPK-IAM-003,
     expect((await t.http.get('/v1/person-names?ids=').set(parent)).status).toBe(400);
     const tooMany = Array.from({ length: 101 }, () => newId()).join(',');
     expect((await t.http.get(`/v1/person-names?ids=${tooMany}`).set(parent)).status).toBe(400);
+  });
+
+  it('SPK-IAM-002: in process, person names of an empty list (or of ids that are not record ids) are an empty list, not a SQL error', async () => {
+    const people = t.app.get(PeopleService);
+    const system = systemPrincipal(t.organizationId, 'test:person-names');
+    await expect(people.personNames(system, [])).resolves.toEqual([]);
+    await expect(people.personNames(system, ['not-an-id'])).resolves.toEqual([]);
+    const named = await createPersonFixture(t, {
+      kind: 'adult',
+      givenName: 'Ines',
+      familyName: 'Empty',
+    });
+    const found = await people.personNames(system, ['not-an-id', named]);
+    expect(found.map((n) => n.personId)).toEqual([named]);
   });
 
   it('a merged person is named with its survivor as canonicalPersonId when the caller may view the survivor', async () => {
