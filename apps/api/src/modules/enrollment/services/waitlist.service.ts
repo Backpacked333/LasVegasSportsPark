@@ -708,8 +708,11 @@ export class WaitlistService implements WaitlistPort {
 
   async list(principal: Principal, query: ListWaitlistQuery): Promise<WaitlistEntry[]> {
     const organizationId = organizationOf(principal);
-    // §4.3, §4.14: the queue of an offering is read at the offering's facility.
-    await this.authorization.require(principal, EnrollmentActions.manageWaitlist, {
+    // §4.3, §4.14: the queue of an offering is read at the offering's facility. Reading it is
+    // `read_waitlist` (the front desk answers families about their place, SPK-REG-008); the
+    // commands on it keep `manage_waitlist`. The target names no subject person, so a customer's
+    // own authority never lists a whole queue (their entries are `GET /me/waitlist-entries`).
+    await this.authorization.require(principal, EnrollmentActions.readWaitlist, {
       type: 'waitlist_entry',
       organizationId,
       facilityId: await this.scope.facilityOf(organizationId, query.offeringId),

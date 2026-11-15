@@ -155,7 +155,8 @@ export const EnrollmentActions = defineActions({
   },
   manageWaitlist: {
     id: 'enrollment.manage_waitlist',
-    description: 'List a waitlist and set priority (staff)',
+    description:
+      'Offer a waitlist place, set priority, remove an entry and read the cross-offering queue (staff)',
     staffRoles: PROGRAM_ADMIN,
     requirements: ['SPK-REG-008'],
   },
