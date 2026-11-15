@@ -101,7 +101,7 @@ export const DEFAULT_RATE_LIMITS = {
   dev_tokens: { limit: 10, windowSeconds: 60 },
   /** Claim token acceptance (token guessing, SPK-IAM-002). */
   claims: { limit: 20, windowSeconds: 600 },
-  /** Invitation acceptance, customer and staff (SPK-IAM-004). */
+  /** Invitation acceptance by token: account, staff, team and rental-roster invitations (SPK-IAM-004, SPK-CAP-001, SPK-COND-005). */
   invitations: { limit: 30, windowSeconds: 600 },
   /** Account relink, the staff-assisted recovery path (§4.14 rate-limited recovery). */
   account_recovery: { limit: 10, windowSeconds: 600 },

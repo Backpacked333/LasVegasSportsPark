@@ -20,6 +20,7 @@ import {
   CurrentPrincipal,
   Idempotent,
   NoRecordAuthority,
+  RateLimited,
   ZodBody,
   ZodParams,
 } from '../../../kernel';
@@ -108,6 +109,8 @@ export class BookingRostersController {
    * review L-1). A pure read: nothing changes, so no idempotency key is required.
    */
   @Post('booking-roster-invitations/:id/open')
+  // §4.14: the token-bearing routes share the invitations limit per address, as account invitations.
+  @RateLimited('invitations')
   @HttpCode(200)
   @NoRecordAuthority('Reading a roster invitation changes no record')
   open(
@@ -119,6 +122,7 @@ export class BookingRostersController {
   }
 
   @Post('booking-roster-invitations/:id/accept')
+  @RateLimited('invitations')
   @HttpCode(200)
   @Idempotent()
   @NoRecordAuthority(NOT_A_RECORD)
@@ -133,6 +137,7 @@ export class BookingRostersController {
   }
 
   @Post('booking-roster-invitations/:id/decline')
+  @RateLimited('invitations')
   @HttpCode(200)
   @Idempotent()
   @NoRecordAuthority(NOT_A_RECORD)

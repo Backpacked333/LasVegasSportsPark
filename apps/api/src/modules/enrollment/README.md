@@ -1031,7 +1031,9 @@ the people the renter brings. `services/booking-rosters.service.ts`, beside
   - The token is returned once and is not kept with the idempotency record
     (`@Idempotent({ withhold: ['token'] })`); a replay answers `IDEMPOTENCY_SECRET_WITHHELD`. A
     token is read from a request body only (`POST .../open`, `accept`, `decline`), never from a
-    query string, and is compared in constant time.
+    query string, and is compared in constant time. Those three routes count against the
+    `invitations` rate limit per client address, like account, staff and team invitations
+    (**Verified**: `booking-rosters.spec.ts`, "…share the `invitations` limit per address").
 - **A missing waiver is shown and never blocks the booking** (the assumed default; **Pending
   decision** DEC-103). Nothing in this service reads or changes the booking's state.
 - **Being on a roster grants nothing else.** The service writes only its two tables: no

@@ -1466,3 +1466,45 @@ describe('rental-group rosters (SPK-COND-005, proposed amendment PA-09)', () => 
     });
   });
 });
+
+describe('rental roster invitations rate limit (SPK-COND-005, §4.14)', () => {
+  it('SPK-COND-005, §4.14: opening, accepting and declining a roster invitation by token share the `invitations` limit per address', async () => {
+    const t = await enrollmentTestApp({
+      capabilities: ['rental_rosters'],
+      clockStart: '2026-11-02T15:00:05Z',
+      env: { RATE_LIMITS: 'invitations=3/600' },
+    });
+    try {
+      const guesser = await adult(t);
+      const token = 'x'.repeat(32);
+      const id = newId();
+      // Within the limit each guess is answered as the route answers an unknown invitation.
+      for (const route of ['open', 'accept', 'decline']) {
+        const answered = await post(
+          t,
+          `/v1/booking-roster-invitations/${id}/${route}`,
+          guesser.header,
+          { token },
+        );
+        expect(answered.status, route).not.toBe(429);
+      }
+      // Then every token-bearing route is refused before anything is looked up.
+      for (const route of ['open', 'accept', 'decline']) {
+        const refused = await post(
+          t,
+          `/v1/booking-roster-invitations/${id}/${route}`,
+          guesser.header,
+          { token },
+        );
+        expect(refused.status, route).toBe(429);
+        expect(refused.body.code).toBe('RATE_LIMITED');
+        expect(refused.headers['retry-after']).toBe('595');
+      }
+      // A read without a token is not counted.
+      const read = await t.http.get(`/v1/booking-roster-invitations/${id}`).set(guesser.header);
+      expect(read.status).not.toBe(429);
+    } finally {
+      await t.close();
+    }
+  });
+});
