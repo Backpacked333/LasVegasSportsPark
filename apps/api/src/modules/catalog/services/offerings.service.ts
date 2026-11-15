@@ -1723,6 +1723,15 @@ export class OfferingsService implements OfferingLookupPort {
     const priceTiersVisible =
       [...prices.values()].some((price) => price.tiers.length > 0) &&
       (await this.capabilities.isEnabled(organizationId, 'price_tiers_addons', db));
+    // Quality review M-6 (SPK-PAY-013, SPK-PAY-015): the price shown agrees with what a quote
+    // made now would do. Each switch is read only when a rule in view has its field, so an
+    // organization that never used the amendments reads nothing more than before.
+    const memberPricingOn =
+      ![...prices.values()].some((price) => price.memberPriceMinor !== null) ||
+      (await this.capabilities.isEnabled(organizationId, 'member_pricing', db));
+    const perSessionPricingOn =
+      perSessionIds.length === 0 ||
+      (await this.capabilities.isEnabled(organizationId, 'per_session_pricing', db));
     const forms = await this.requiredFormIds(db, organizationId, ids);
     // SPK-SCHED-008: the facility's IANA zone travels with every offering view (K-04).
     const facilities = await this.facilities.describe(
@@ -1753,6 +1762,8 @@ export class OfferingsService implements OfferingLookupPort {
         remainingSessionCount:
           price?.pricingBasis === 'per_session' ? (remainingSessions.get(row.id) ?? 0) : null,
         priceTiersVisible,
+        memberPricingOn,
+        perSessionPricingOn,
         requiredFormPolicyVersionIds: forms.get(row.id) ?? [],
         facility: { id: facility.id, name: facility.name, timezone: facility.timezone },
         bookingTermsPolicyVersionId:

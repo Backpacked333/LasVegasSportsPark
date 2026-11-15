@@ -165,6 +165,15 @@ export interface OfferingViewContext {
    * on); absent or false shows none, as before the amendment.
    */
   priceTiersVisible?: boolean;
+  /**
+   * Quality review M-6 (SPK-PAY-013, SPK-PAY-015): what a quote made now would do under the
+   * organization's switches. `memberPricingOn` false: a quote charges the standard price, so no
+   * member price is shown. `perSessionPricingOn` false: a quote of a per-session rule is
+   * refused, so the offering is shown as not open for online registration. Read only for a rule
+   * that has the field; absent means on (a rule without the field is unaffected).
+   */
+  memberPricingOn?: boolean;
+  perSessionPricingOn?: boolean;
   requiredFormPolicyVersionIds: string[];
   /** SPK-SCHED-008: the facility and its IANA zone (kernel facility directory, K-04). */
   facility: OfferingFacility;
@@ -183,8 +192,14 @@ export function eligibilityReferenceDateOf(row: OfferingRow): string {
   return row.eligibility_reference_date ?? row.starts_on;
 }
 
+/** The plain reason shown instead of a per-session price while `per_session_pricing` is off. */
+export const PER_SESSION_PRICING_OFF_MESSAGE =
+  'This activity is priced per class, and per-class pricing is turned off for this organization. It is not open for online registration; ask the front desk.';
+
 export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): PublicOffering {
   const location = row.location as OfferingLocation;
+  const perSession = ctx.price?.pricingBasis === 'per_session';
+  const quotable = !perSession || ctx.perSessionPricingOn !== false;
   return {
     id: row.id,
     programId: row.program_id,
@@ -210,14 +225,16 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
           currency: ctx.price.currency,
           chargeLines: ctx.price.chargeLines,
           pricingBasis: ctx.price.pricingBasis,
-          remainingSessionCount:
-            ctx.price.pricingBasis === 'per_session' ? (ctx.remainingSessionCount ?? 0) : null,
+          remainingSessionCount: perSession && quotable ? (ctx.remainingSessionCount ?? 0) : null,
           remainingSessionsPriceMinor:
-            ctx.price.pricingBasis === 'per_session'
+            perSession && quotable
               ? ctx.price.basePriceMinor * (ctx.remainingSessionCount ?? 0)
               : null,
           memberPrice:
-            ctx.price.memberPriceMinor !== null && ctx.price.memberEntitlementDefinitionId
+            ctx.memberPricingOn !== false &&
+            quotable &&
+            ctx.price.memberPriceMinor !== null &&
+            ctx.price.memberEntitlementDefinitionId
               ? {
                   priceMinor: ctx.price.memberPriceMinor,
                   entitlementDefinitionId: ctx.price.memberEntitlementDefinitionId,
@@ -225,6 +242,9 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
                 }
               : null,
           tiers: ctx.priceTiersVisible ? ctx.price.tiers : [],
+          notQuotable: quotable
+            ? null
+            : { code: 'per_session_pricing_off', message: PER_SESSION_PRICING_OFF_MESSAGE },
         }
       : null,
     eligibilityPolicyVersionId: row.eligibility_policy_version_id,

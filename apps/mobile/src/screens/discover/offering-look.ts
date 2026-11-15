@@ -40,7 +40,8 @@ export function offeringSummary(offering: PublicOffering): string {
     ageBandLabel(offering.ageBand),
     offeringDates(offering),
     offering.locationLabel,
-    offering.price
+    // Quality review M-6: a price no quote would give is not advertised.
+    offering.price && !offering.price.notQuotable
       ? `From ${formatMoney(offering.price.basePriceMinor, offering.price.currency)}`
       : null,
   ]

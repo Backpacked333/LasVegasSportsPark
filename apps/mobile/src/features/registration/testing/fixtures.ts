@@ -79,6 +79,7 @@ export function offering(overrides: Partial<Schema<'Offering'>> = {}): Schema<'O
       pricingBasis: 'term',
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
+      notQuotable: null,
       memberPrice: null,
       tiers: [],
     },

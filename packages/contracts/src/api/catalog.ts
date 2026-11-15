@@ -916,7 +916,22 @@ export const PublicMemberPriceSchema = z
   .openapi('PublicMemberPrice');
 export type PublicMemberPrice = z.infer<typeof PublicMemberPriceSchema>;
 
-/** Public price summary shown in discovery: the effective base price and its charge lines. */
+/**
+ * Why a quote of the offering would be refused under the organization's current switches
+ * (quality review M-6): the price rule is per session and `per_session_pricing` is turned off.
+ */
+export const PublicPriceNotQuotableSchema = z
+  .object({ code: z.enum(['per_session_pricing_off']), message: z.string() })
+  .openapi('PublicPriceNotQuotable');
+export type PublicPriceNotQuotable = z.infer<typeof PublicPriceNotQuotableSchema>;
+
+/**
+ * Public price summary shown in discovery: the effective base price and its charge lines. What
+ * it advertises agrees with what a quote made now would do under the organization's switches
+ * (quality review M-6): no member price while `member_pricing` is off, no tier while
+ * `price_tiers_addons` is off, and a per-session price is `notQuotable` while
+ * `per_session_pricing` is off.
+ */
 export const PublicPriceSchema = z
   .object({
     priceRuleId: z.uuid(),
@@ -927,18 +942,28 @@ export const PublicPriceSchema = z
     pricingBasis: PricingBasisSchema,
     /**
      * For a `per_session` price, the offering's scheduled sessions that start after the view
-     * instant (the count a quote made now would use); null for a `term` price. Informational:
-     * the quote counts again at its own instant.
+     * instant (the count a quote made now would use); null for a `term` price, and while the
+     * price is `notQuotable`. Informational: the quote counts again at its own instant.
      */
     remainingSessionCount: z.number().int().nullable(),
     /**
      * For a `per_session` price, `basePriceMinor` x `remainingSessionCount`: what joining at the
      * view instant costs at the standard price, before discounts and charges (clients show the
-     * product, they do not work it out); null for a `term` price.
+     * product, they do not work it out); null for a `term` price, and while the price is
+     * `notQuotable`.
      */
     remainingSessionsPriceMinor: z.number().int().nullable(),
-    /** SPK-PAY-015 (PA-04): the member price, when the effective rule carries one. */
+    /**
+     * SPK-PAY-015 (PA-04): the member price, when the effective rule carries one and
+     * `member_pricing` is on; null otherwise (a quote then charges the standard price).
+     */
     memberPrice: PublicMemberPriceSchema.nullable(),
+    /**
+     * Null while a quote would price the offering. Otherwise why it would refuse: the offering
+     * is not open for online registration, `basePriceMinor` is not a price a customer can get,
+     * and a client shows the message instead of an amount.
+     */
+    notQuotable: PublicPriceNotQuotableSchema.nullable(),
     /**
      * SPK-PAY-014 (PA-03): the price tiers of the effective rule, while `price_tiers_addons` is
      * on; empty otherwise. With tiers, `basePriceMinor` is not what a line costs: its tier is.

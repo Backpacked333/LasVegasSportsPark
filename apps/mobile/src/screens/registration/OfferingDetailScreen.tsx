@@ -75,6 +75,15 @@ function PriceSection({ offering }: { offering: Offering }) {
   const price = offering.price;
   const perSession = price?.pricingBasis === 'per_session';
   const perSessionLine = price ? listedPerSessionLine(price) : null;
+  // SPK-PAY-013 (quality review M-6): where a quote of this price would be refused under the
+  // organization's switches, the reason is shown instead of a price the customer cannot get.
+  if (price?.notQuotable) {
+    return (
+      <Section title="Price">
+        <Body>{price.notQuotable.message}</Body>
+      </Section>
+    );
+  }
   return (
     <Section title="Price">
       {price ? (
@@ -303,6 +312,14 @@ function RegistrationAction({ offering }: { offering: Offering }) {
     return (
       <Section title="Registration">
         <Body>Registration is not open for this activity right now.</Body>
+      </Section>
+    );
+  }
+  // Quality review M-6: a price no quote would give is not registered for online.
+  if (offering.price?.notQuotable) {
+    return (
+      <Section title="Registration">
+        <Body>This activity is not open for online registration. Ask the front desk.</Body>
       </Section>
     );
   }

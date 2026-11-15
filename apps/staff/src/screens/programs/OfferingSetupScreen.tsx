@@ -326,6 +326,9 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
   const permissions = usePermissions();
   const perSessionOn = permissions.isCapabilityEnabled('per_session_pricing') === true;
   const memberOn = permissions.isCapabilityEnabled('member_pricing') === true;
+  // Known to be off (not merely unread yet): what the price list says customers are shown.
+  const perSessionOff = permissions.isCapabilityEnabled('per_session_pricing') === false;
+  const memberOff = permissions.isCapabilityEnabled('member_pricing') === false;
   // SPK-PAY-014 (PA-03): tier rows exist only while `price_tiers_addons` is on.
   const tiersOn = permissions.isCapabilityEnabled('price_tiers_addons') === true;
   const [tierRows, setTierRows] = useState<TierRow[]>([]);
@@ -447,6 +450,20 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
                       <span className="caption">
                         Joining costs this price for each session still to come when the quote is
                         made.
+                      </span>
+                    ) : null}
+                    {/* SPK-PAY-013, SPK-PAY-015 (quality review M-6): what customers are shown
+                        follows the organization's switches, and so does this list. */}
+                    {rule.pricingBasis === 'per_session' && perSessionOff ? (
+                      <span className="caption">
+                        Per-session pricing is turned off: a quote of this price is refused, and
+                        customers see this offering as not open for online registration.
+                      </span>
+                    ) : null}
+                    {rule.memberPriceMinor !== null && memberOff ? (
+                      <span className="caption">
+                        Member pricing is turned off: every participant is quoted the standard
+                        price, and customers are not shown the member price.
                       </span>
                     ) : null}
                     {rule.memberPriceMinor !== null ? (

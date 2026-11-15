@@ -45,6 +45,7 @@ const camp = (overrides: Parameters<typeof offering>[0]) =>
       pricingBasis: 'term',
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
+      notQuotable: null,
       memberPrice: null,
       tiers: [],
     },

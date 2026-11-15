@@ -409,6 +409,7 @@ export function membershipOffering(
       pricingBasis: 'term',
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
+      notQuotable: null,
       memberPrice: null,
       tiers: [],
     },

@@ -172,6 +172,7 @@ describe('price rule amendments (SPK-PAY-013, SPK-PAY-015; migration 0211)', () 
       pricingBasis: 'per_session',
       remainingSessionCount: 6,
       remainingSessionsPriceMinor: 14_400,
+      notQuotable: null,
       memberPrice: null,
     });
 
@@ -272,12 +273,105 @@ describe('price rule amendments (SPK-PAY-013, SPK-PAY-015; migration 0211)', () 
       pricingBasis: 'term',
       remainingSessionCount: null,
       remainingSessionsPriceMinor: null,
+      notQuotable: null,
       memberPrice: {
         priceMinor: 25_000,
         entitlementDefinitionId: membershipDefinitionId,
         entitlementName: 'Annual membership',
       },
     });
+  });
+
+  it('SPK-PAY-013, SPK-PAY-015 (QA M-6): the price an offering shows agrees with what a quote would do: with member pricing off no member price is shown, and with per-session pricing off a per-session offering is shown as not open for online registration with the reason, not as a price', async () => {
+    const offeringWith = async (rule: Partial<Parameters<typeof createPriceRuleFixture>[1]>) => {
+      const offering = await createOfferingFixture(t, {
+        responsibleManagerPersonId: managerPersonId,
+        basePriceMinor: null,
+      });
+      await createPriceRuleFixture(t, {
+        offeringId: offering.offeringId,
+        basePriceMinor: 30_000,
+        effectiveFrom: new Date(NOW - DAY),
+        ...rule,
+      });
+      return offering.offeringId;
+    };
+    const camp = await offeringWith({
+      memberPriceMinor: 25_000,
+      memberEntitlementDefinitionId: membershipDefinitionId,
+    });
+    const klass = await offeringWith({ basePriceMinor: 2_400, pricingBasis: 'per_session' });
+    for (let week = 1; week <= 7; week += 1) {
+      await createOfferingSessionFixture(t, {
+        offeringId: klass,
+        scheduledStart: new Date(NOW + week * 7 * DAY),
+        scheduledEnd: new Date(NOW + week * 7 * DAY + HOUR),
+      });
+    }
+    const plain = await offeringWith({});
+    const priceOf = async (id: string) =>
+      (await t.http.get(`/v1/offerings/${id}`).set(customer)).body.price as Record<string, unknown>;
+    const listed = async (id: string) => {
+      const page = await t.http.get('/v1/offerings?limit=100').set(customer);
+      expect(page.status, JSON.stringify(page.body)).toBe(200);
+      return (page.body.items as Array<{ id: string; price: Record<string, unknown> }>).find(
+        (offering) => offering.id === id,
+      )?.price;
+    };
+    const memberPrice = {
+      priceMinor: 25_000,
+      entitlementDefinitionId: membershipDefinitionId,
+      entitlementName: 'Annual membership',
+    };
+    const quotedPerSession = {
+      basePriceMinor: 2_400,
+      pricingBasis: 'per_session',
+      remainingSessionCount: 7,
+      remainingSessionsPriceMinor: 16_800,
+      notQuotable: null,
+    };
+
+    await setCapability(db, t.organizationId, 'member_pricing', true);
+    await setCapability(db, t.organizationId, 'per_session_pricing', true);
+    expect(await priceOf(camp)).toMatchObject({ memberPrice, notQuotable: null });
+    expect(await priceOf(klass)).toMatchObject(quotedPerSession);
+    expect(await listed(klass)).toMatchObject(quotedPerSession);
+    const before = await priceOf(plain);
+    expect(before).toMatchObject({ basePriceMinor: 30_000, memberPrice: null, notQuotable: null });
+
+    // Member pricing off: a quote charges the standard price, so only that price is shown.
+    await setCapability(db, t.organizationId, 'member_pricing', false);
+    expect(await priceOf(camp)).toMatchObject({
+      basePriceMinor: 30_000,
+      memberPrice: null,
+      notQuotable: null,
+    });
+    expect(await listed(camp)).toMatchObject({ memberPrice: null });
+    expect(await priceOf(klass)).toMatchObject(quotedPerSession);
+
+    // Per-session pricing off: a quote of this rule is refused, so no price is advertised.
+    await setCapability(db, t.organizationId, 'per_session_pricing', false);
+    const closed = {
+      pricingBasis: 'per_session',
+      remainingSessionCount: null,
+      remainingSessionsPriceMinor: null,
+      memberPrice: null,
+      notQuotable: {
+        code: 'per_session_pricing_off',
+        message:
+          'This activity is priced per class, and per-class pricing is turned off for this organization. It is not open for online registration; ask the front desk.',
+      },
+    };
+    expect(await priceOf(klass)).toMatchObject(closed);
+    expect(await listed(klass)).toMatchObject(closed);
+    // An offering that never used either amendment reads exactly as it did.
+    expect(await priceOf(plain)).toEqual(before);
+
+    // Turned on again, the prices are shown again.
+    await setCapability(db, t.organizationId, 'member_pricing', true);
+    await setCapability(db, t.organizationId, 'per_session_pricing', true);
+    expect(await priceOf(camp)).toMatchObject({ memberPrice });
+    expect(await priceOf(klass)).toMatchObject(quotedPerSession);
   });
 
   describe('enforced by the database (migration 0211)', () => {
