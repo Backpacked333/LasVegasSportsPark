@@ -281,11 +281,21 @@ DEC-102). **Verified** by `__tests__/open-amount-lines.spec.ts` (migration
   because it is what a reviewer reads.
 - `sales_by_product_line` leaves the `open_amount` kind out of the point-of-sale product lines
   and lists each open-amount line as its own row (source `point_of_sale_open_amount`) after the
-  product lines, with `revenueCategory`, `description`, `saleNumber` and `secondApproval` (given, or not
-  needed); its return is shown beside it. MET-109 and MET-110 add these lines up by
+  product lines, with `revenueCategory`, `description`, `saleNumber` and `secondApproval` (`approved`,
+  `awaiting approval` or `not needed`, from the view's `awaiting_approval`, migration 1311); its
+  return is shown beside it. MET-109 and MET-110 add these lines up by
   reason category under that source, with the revenue category as a dimension. Rows of the other
   sources carry null in the four new columns. With the capability off no such line exists and the
   report is as before.
+- Migration `1311_reporting_open_amount_awaiting_approval.sql` adds `awaiting_approval` to
+  `reporting_pos_open_amount_lines_v`, with the condition of finance's
+  `pos_sale_awaits_line_approval` (0697) for the one line. Since the ceiling applies to what one
+  person entered on one sale, a line that needed an approval when it was entered stops needing
+  one once other lines of that person are removed: the report says `not needed`, never
+  "missing". A paid sale cannot hold a line awaiting approval while the finance guards stand, so
+  `awaiting approval` appears only for data written without them (the test produces it with the
+  triggers off). **Verified** by `open-amount-lines.spec.ts` ("…approved, awaiting approval or
+  not needed…").
 - Who entered and who approved a line is not in the report; the finance module's own read of a
   register session (`GET /v1/pos-register-sessions/{id}/open-amount-lines`) shows them.
 

@@ -141,7 +141,7 @@ describe('sales by product line: open-amount register lines apart (SPK-PAY-016, 
         productLine: 'field_damage_fee',
         revenueCategory: 'facility_fees',
         description: 'Goal net torn on field 3',
-        secondApproval: 'given',
+        secondApproval: 'approved',
         salesMinor: 12_000,
         returnsMinor: 0,
       }),
@@ -198,5 +198,109 @@ describe('sales by product line: open-amount register lines apart (SPK-PAY-016, 
       sql`delete from reporting_pos_open_amount_return_lines_v`.execute(t.db),
       RESTRICT,
     );
+  });
+
+  it('SPK-PAY-016: the second approval of an open-amount line reads approved, awaiting approval or not needed; a line that stopped needing one once other lines were removed is not needed (migration 1311)', async () => {
+    const register = await post(t, '/v1/pos-registers', manager, {
+      facilityId: t.facilityId,
+      code: 'OAR2',
+      name: 'Ceiling desk',
+    });
+    const session = await post(t, `/v1/pos-registers/${register.body.id}/sessions`, desk, {
+      currency: 'USD',
+      openingFloatMinor: 0,
+    });
+    // Two lines of the same person on one sale: each within the 50.00 ceiling of the front desk,
+    // together above it, so the second needed an approval when it was entered.
+    const twoLines = async (first: string, second: string) => {
+      const sale = await post(t, '/v1/pos-sales', desk, { registerSessionId: session.body.id });
+      const a = await post(t, `/v1/pos-sales/${sale.body.id}/lines`, desk, {
+        description: first,
+        amountMinor: 3_000,
+        reasonCategory: 'one_off_service',
+      });
+      const b = await post(t, `/v1/pos-sales/${sale.body.id}/lines`, desk, {
+        description: second,
+        amountMinor: 3_000,
+        reasonCategory: 'one_off_service',
+      });
+      expect(b.status, JSON.stringify(b.body)).toBe(201);
+      const lineOf = (description: string) =>
+        (b.body.lines as Row[]).find(
+          (l) => (l.openAmount as unknown as Row | null)?.description === description,
+        )!;
+      expect((lineOf(second).openAmount as unknown as Row).awaitingApproval).toBe(true);
+      return { saleId: sale.body.id as string, revision: b.body.revision as number, a, lineOf };
+    };
+
+    // Not needed any more: the first line is removed, the total is within the ceiling again.
+    const lifted = await twoLines('Ball pump loan', 'Court sweep');
+    const firstId = (lifted.a.body.lines as Row[]).find(
+      (l) => (l.openAmount as unknown as Row | null)?.description === 'Ball pump loan',
+    )!.id as string;
+    const removed = await post(
+      t,
+      `/v1/pos-sales/${lifted.saleId}/lines/${firstId}/quantity`,
+      desk,
+      { quantity: 0, expectedRevision: lifted.revision },
+    );
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+    const paid = await post(t, `/v1/pos-sales/${lifted.saleId}/tenders`, desk, {
+      kind: 'cash',
+      amountMinor: 3_000,
+    });
+    expect(paid.body.status, JSON.stringify(paid.body)).toBe('paid');
+
+    // Awaiting approval: the database refuses to pay such a sale (finance 0697), so the state is
+    // produced as data written before that guard would be, with the triggers off for one update.
+    const stuck = await twoLines('Net repair', 'Line paint');
+    await t.db.transaction().execute(async (trx) => {
+      await sql`set local session_replication_role = replica`.execute(trx);
+      await sql`update pos_sales set status = 'paid', paid_at = ${t.clock.now()} where id = ${stuck.saleId}`.execute(
+        trx,
+      );
+    });
+
+    const view = await t.db
+      .selectFrom('reporting_pos_open_amount_lines_v')
+      .select(['description', 'approval_required', 'approved', 'awaiting_approval'])
+      .where('description', 'in', ['Court sweep', 'Net repair', 'Line paint'])
+      .orderBy('description')
+      .execute();
+    expect(view).toEqual([
+      {
+        description: 'Court sweep',
+        approval_required: true,
+        approved: false,
+        awaiting_approval: false,
+      },
+      {
+        description: 'Line paint',
+        approval_required: true,
+        approved: false,
+        awaiting_approval: true,
+      },
+      {
+        description: 'Net repair',
+        approval_required: false,
+        approved: false,
+        awaiting_approval: false,
+      },
+    ]);
+
+    const today = t.clock.now().toISOString().slice(0, 10);
+    const res = await get(t, '/v1/reports/sales-by-product-line', finance, {
+      facilityId: t.facilityId,
+      from: '2027-02-01',
+      to: today,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const approvalOf = (description: string) =>
+      (res.body.rows as Row[]).find((r) => r.description === description)?.secondApproval;
+    expect(approvalOf('Court sweep')).toBe('not needed');
+    expect(approvalOf('Line paint')).toBe('awaiting approval');
+    expect(approvalOf('Net repair')).toBe('not needed');
+    expect(approvalOf('Goal net torn on field 3')).toBe('approved');
+    expect((res.body.rows as Row[]).some((r) => r.secondApproval === 'missing')).toBe(false);
   });
 });

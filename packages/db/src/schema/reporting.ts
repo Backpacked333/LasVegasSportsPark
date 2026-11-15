@@ -681,6 +681,8 @@ export interface ReportingPosOpenAmountLinesView {
   approved: V<boolean>;
   approved_at: V<Date | null>;
   paid_at: V<Date>;
+  /** Migration 1311: the line still waits for its second approval (finance 0697's condition). */
+  awaiting_approval: V<boolean>;
 }
 
 /** Migration 1310: returned open-amount register lines, under the same categories. */

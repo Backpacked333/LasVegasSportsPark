@@ -140,8 +140,8 @@ export class SalesReport {
         'description',
         'currency',
         'line_total_minor',
-        'approval_required',
         'approved',
+        'awaiting_approval',
       ])
       .where('organization_id', '=', ctx.organizationId)
       .where('facility_id', '=', facility.id)
@@ -248,7 +248,13 @@ export class SalesReport {
         revenueCategory: l.revenue_category,
         description: l.description,
         saleNumber: l.sale_number,
-        secondApproval: l.approval_required ? (l.approved ? 'given' : 'missing') : 'not needed',
+        // Three plain states (1311): a line that needed an approval when it was entered may no
+        // longer need one once other lines of its enterer were removed (SPK-PAY-016).
+        secondApproval: l.approved
+          ? 'approved'
+          : l.awaiting_approval
+            ? 'awaiting approval'
+            : 'not needed',
         currency: l.currency,
         lines: 1,
         salesMinor: Number(l.line_total_minor),
