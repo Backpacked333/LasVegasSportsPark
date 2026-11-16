@@ -7,9 +7,11 @@
 // Signs in through the demo parent sign-in with role and name locators, so a run is also an
 // end-to-end smoke test of the web build against the demo API, then visits the main routes in both
 // themes (classic and Legends) at two phone sizes with reduced motion, and ends each set with one
-// offline view. Writes
+// offline view. The first target is the design system gallery (`/dev-gallery`, development builds
+// only), captured page by page down its whole length so every component shows. Writes
 //
 //   screenshots/<label>/<theme>/<width>x<height>/NN-name.png
+//   screenshots/<label>/<theme>/<width>x<height>/01-gallery-PP.png  (the gallery's pages 02, 03, ...)
 //   screenshots/<label>/index.html        (contact sheet)
 //
 // under apps/mobile (git-ignored). Exits 1 when sign-in fails or the page reported an error, after
@@ -53,9 +55,12 @@ const outDir = path.join(appDir, 'screenshots', label);
 
 /**
  * The routes to capture, in order. A route with `needs` uses an id read from the API after sign-in
- * (`readIds`); without one it is skipped and the contact sheet says so.
+ * (`readIds`); without one it is skipped and the contact sheet says so. A route with `pages` is
+ * captured screen by screen down its scrolling content (`capturePages`), not only its first screen.
  */
 const ROUTES = [
+  // The design system gallery (src/dev-gallery, ADR-008): every component, in the set's theme.
+  { name: 'gallery', path: '/dev-gallery', pages: true },
   { name: 'home', path: '/' },
   { name: 'discover', path: '/discover' },
   { name: 'offering', needs: 'offering', path: (ids) => `/registration/offering/${ids.offering}` },
@@ -140,6 +145,53 @@ async function settle(page) {
   await page.waitForTimeout(600);
 }
 
+/** At most this many screens of one route with `pages`. */
+const MAX_PAGES = 40;
+/** Each page after the first repeats this much of the one before, so nothing falls between. */
+const PAGE_OVERLAP = 48;
+
+/**
+ * Captures a long screen as consecutive screenshots: finds the screen's main scroll view (the
+ * scrollable element that scrolls furthest), then scrolls it one viewport at a time. Returns the
+ * files written (`<stem>.png`, `<stem>-02.png`, ...).
+ */
+async function capturePages(page, dir, stem) {
+  const count = await page.evaluate(
+    ({ overlap, max }) => {
+      const scrollers = [...globalThis.document.querySelectorAll('*')].filter((el) => {
+        const overflow = globalThis.getComputedStyle(el).overflowY;
+        return (overflow === 'auto' || overflow === 'scroll') && el.scrollHeight > el.clientHeight;
+      });
+      const main = scrollers.sort(
+        (a, b) => b.scrollHeight - b.clientHeight - (a.scrollHeight - a.clientHeight),
+      )[0];
+      if (!main) return 1;
+      main.setAttribute('data-screenshot-scroller', '');
+      const step = Math.max(1, main.clientHeight - overlap);
+      return Math.min(max, Math.ceil((main.scrollHeight - main.clientHeight) / step) + 1);
+    },
+    { overlap: PAGE_OVERLAP, max: MAX_PAGES },
+  );
+  const files = [];
+  for (let index = 0; index < count; index += 1) {
+    if (index > 0) {
+      await page.evaluate(
+        ({ index: i, overlap }) => {
+          const main = globalThis.document.querySelector('[data-screenshot-scroller]');
+          if (main) main.scrollTop = i * Math.max(1, main.clientHeight - overlap);
+        },
+        { index, overlap: PAGE_OVERLAP },
+      );
+      // Lists render what scrolled into view, and images decode, after the scroll.
+      await page.waitForTimeout(400);
+    }
+    const file = index === 0 ? `${stem}.png` : `${stem}-${String(index + 1).padStart(2, '0')}.png`;
+    await page.screenshot({ path: path.join(dir, file) });
+    files.push(file);
+  }
+  return files;
+}
+
 /**
  * The demo banner and tour card (src/demo/DemoOverlay.tsx) sit over every screen in demo mode;
  * they are not part of the app customers get, so they are hidden from the screenshots.
@@ -205,6 +257,18 @@ async function captureSet(browser, theme, viewport) {
     const target = typeof route.path === 'function' ? route.path(ids) : route.path;
     await page.goto(`${base}${target}`, { waitUntil: 'load', timeout: 120_000 });
     await settle(page);
+    if (route.pages) {
+      const stem = file.replace(/\.png$/, '');
+      const files = await capturePages(page, dir, stem);
+      files.forEach((pageFile, index) =>
+        shots.push({
+          name: index === 0 ? route.name : `${route.name} ${index + 1}`,
+          file: pageFile,
+          path: target,
+        }),
+      );
+      continue;
+    }
     await page.screenshot({ path: path.join(dir, file) });
     shots.push({ name: route.name, file, path: target });
   }
