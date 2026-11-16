@@ -86,7 +86,7 @@ import { NightCard, PassCard } from './PassCard';
 import { usePassStore, type StoredPass } from './pass-store';
 import { pendingMessage } from '../../copy/pending';
 
-export { groupReference } from './PassCard';
+export { groupReference, referenceRuns } from './PassCard';
 
 type MyPass = Schema<'MyPass'>;
 

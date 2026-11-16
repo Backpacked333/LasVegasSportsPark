@@ -36,6 +36,9 @@ import { createTestApp } from '../../../testing/test-app';
 import { pullToRefresh } from '../../../testing/ui-surfaces';
 import { Artwork } from '../../../ui/Artwork';
 import { HomeScreen } from '../HomeScreen';
+import { legendsTheme } from '../../../ui/theme';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Dimensions } from 'react-native';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -122,6 +125,36 @@ describe('SCR-C-03 Home look (ADR-008)', () => {
     expect(await screen.findByRole('header', { name: 'Hi, Alex' })).toBeOnTheScreen();
     expect(screen.getByTestId('home-band-night', hidden)).toBeOnTheScreen();
     expect(screen.queryByTestId('home-band-day', hidden)).toBeNull();
+  });
+
+  it('ADR-008: Legends mode always shows the night band, and the greeting sits on a gradient scrim', async () => {
+    // At the default text size the greeting sits over the band (the renderer's default is 2x).
+    const large = Dimensions.get('window');
+    const normal = { ...large, fontScale: 1 };
+    Dimensions.set({ window: normal, screen: normal });
+    // 12:30 Denver time: the day band in classic.
+    const app = createTestApp({
+      theme: 'legends',
+      now: () => new Date('2026-10-24T18:30:00.000Z'),
+      routes: routes({
+        'GET /me/family-calendar': ok(calendar([calendarItem({ timezone: DENVER })])),
+      }),
+    });
+    render(<HomeScreen />, { wrapper: app.wrapper });
+    expect(await screen.findByRole('header', { name: 'Hi, Alex' })).toBeOnTheScreen();
+    const hidden = { includeHiddenElements: true };
+    expect(screen.getByTestId('home-band-night', hidden)).toBeOnTheScreen();
+    expect(screen.queryByTestId('home-band-day', hidden)).toBeNull();
+    // A fade from the clear scrim into the solid one: no hard-edged block over the picture.
+    // The greeting band is the first picture on Home.
+    expect(screen.UNSAFE_getAllByType(LinearGradient)[0]?.props.colors).toEqual([
+      legendsTheme.colors.scrimStart,
+      legendsTheme.colors.scrimEnd,
+    ]);
+    expect(screen.getByTestId('home-greeting-scrim')).toHaveStyle({
+      backgroundColor: legendsTheme.colors.scrimEnd,
+    });
+    Dimensions.set({ window: large, screen: large });
   });
 
   it('SPK-UX-009: "Up next" is one hero element with a combined name; the RSVP and the change are their own elements', async () => {

@@ -6,7 +6,7 @@
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import * as SecureStore from 'expo-secure-store';
-import { AccessibilityInfo, StyleSheet, type TextStyle } from 'react-native';
+import { AccessibilityInfo, StyleSheet, type TextStyle, type ViewStyle } from 'react-native';
 import type { ReactNode } from 'react';
 import { me, ok, SELF } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, dropAnswers, TEST_SESSION, waitForAbsent } from '../../../testing/test-app';
@@ -19,6 +19,7 @@ import {
 } from '../pass-store';
 import {
   groupReference,
+  referenceRuns,
   heldPassState,
   ISSUE_WITHHELD_LABEL,
   otherActivePasses,
@@ -28,6 +29,7 @@ import {
   WITHDRAW_REASON,
 } from '../PassScreen';
 import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
+import { classicTheme } from '../../../ui/theme';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -504,7 +506,22 @@ describe('SCR-C-05 the pass card (ADR-008, PA-11)', () => {
     const style = StyleSheet.flatten(reference.props.style) as TextStyle;
     expect(style.fontVariant).toEqual(['tabular-nums']);
     expect(style.fontSize).toBeGreaterThanOrEqual(40);
+    // A monospaced face (distinct l, I, 1 and O, 0), in groups of four; the digits stand out.
+    expect(style.fontFamily).toBe('Menlo');
+    expect(groupReference('spp_OQ0lI1x')).toBe('spp_ OQ0l I1x');
+    expect(referenceRuns('OQ0l')).toEqual([
+      ['OQ', false],
+      ['0', true],
+      ['l', false],
+    ]);
     const card = screen.getByTestId('pass-card');
+    // Solid plates of the card's colour behind the words: no pitch line runs through the
+    // reference or the "Issued" line.
+    const plateColour = (id: string) =>
+      (StyleSheet.flatten(within(card).getByTestId(id).props.style) as ViewStyle).backgroundColor;
+    expect(plateColour('pass-reference')).toBe(classicTheme.colors.night);
+    expect(plateColour('pass-words')).toBe(classicTheme.colors.night);
+    expect(within(screen.getByTestId('pass-words')).getByTestId('pass-issued')).toBeOnTheScreen();
     expect(within(card).getByText('Show this at the front desk')).toBeOnTheScreen();
     expect(within(card).getByText('Works offline')).toBeOnTheScreen();
     expect(within(card).getByTestId('pass-issued')).toHaveTextContent(

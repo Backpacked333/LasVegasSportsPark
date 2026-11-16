@@ -11,9 +11,10 @@
  * small action, such as a save button) sits beside the card's element, never inside it, so it
  * stays its own control.
  *
- * Words over a picture sit only on the scrim: a short fade from `scrimStart` into a solid
- * `scrimEnd` band under the text, which keeps `onMedia` and `onMediaMuted` at 4.5:1 over any
- * pixel (theme test). At large text sizes (font scale 1.3 and above) the words move below the
+ * Words over a picture sit only on the scrim (`MediaScrim`, also used by Home's greeting band): a
+ * gradient from `scrimStart` (clear) into `scrimEnd`, drawn with expo-linear-gradient, then a band
+ * of `scrimEnd` under the text, which keeps `onMedia` and `onMediaMuted` at 4.5:1 over any pixel
+ * (theme test). The text only ever sits on the `scrimEnd` part; the fade above it has no hard edge. At large text sizes (font scale 1.3 and above) the words move below the
  * picture, in the page's own text colours, so nothing is clipped or crowded over the image.
  *
  * Pressed, the card shrinks slightly (`PressableScale`) only when motion is not reduced and always
@@ -40,6 +41,41 @@ import {
 } from './theme';
 
 export type MediaCardForm = 'hero' | 'tile' | 'compact';
+
+/** Height of the fade above the words: tall enough that the scrim never shows a step. */
+export const SCRIM_FADE_HEIGHT = 56;
+
+/**
+ * The scrim under words over a picture, laid at the bottom of the picture: a smooth fade from
+ * `scrimStart` to `scrimEnd`, then the words on `scrimEnd`. Decorative: draws no element of its
+ * own for screen readers.
+ */
+export function MediaScrim({
+  children,
+  fadeHeight = SCRIM_FADE_HEIGHT,
+  bandStyle,
+  testID,
+}: {
+  children: ReactNode;
+  fadeHeight?: number;
+  bandStyle?: StyleProp<ViewStyle>;
+  testID?: string;
+}) {
+  const theme = useTheme();
+  const styles = useStyles();
+  return (
+    <View style={styles.overlay} pointerEvents="box-none">
+      <LinearGradient
+        colors={[theme.colors.scrimStart, theme.colors.scrimEnd]}
+        style={{ height: fadeHeight }}
+        pointerEvents="none"
+      />
+      <View style={[styles.band, bandStyle]} testID={testID}>
+        {children}
+      </View>
+    </View>
+  );
+}
 
 /** From this font scale up, the words go below the picture instead of over it. */
 export const LARGE_TEXT_SCALE = 1.3;
@@ -153,16 +189,7 @@ export function MediaCard({
   ) : onMedia ? (
     <View>
       {picture}
-      <View style={styles.overlay}>
-        <LinearGradient
-          colors={[theme.colors.scrimStart, theme.colors.scrimEnd]}
-          style={styles.fade}
-          pointerEvents="none"
-        />
-        <View style={styles.band} testID={testID ? `${testID}-scrim` : undefined}>
-          {words}
-        </View>
-      </View>
+      <MediaScrim testID={testID ? `${testID}-scrim` : undefined}>{words}</MediaScrim>
     </View>
   ) : (
     <>
@@ -228,7 +255,6 @@ const useStyles = makeStyles(({ colors }) => ({
   scaled: { transform: [{ scale: motionTokens.pressScale }] },
   thumb: { width: 72 },
   overlay: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  fade: { height: spacing.xxxl },
   band: {
     backgroundColor: colors.scrimEnd,
     paddingHorizontal: spacing.lg,

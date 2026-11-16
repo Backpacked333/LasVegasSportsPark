@@ -5,9 +5,11 @@
  * family calendar states for its activities (the same read Home makes, so no extra request), else
  * the device's zone. The time comes from the injected clock (`useNow`), never the system clock.
  *
+ * In Legends mode (the night theme) the band is the night one at every hour.
+ *
  * The band is decorative (`Artwork`); the greeting is the page's header for screen readers. Words
- * sit on the scrim token over the picture; at large text sizes they move below it, as on
- * `MediaCard`. The cart, pass and inbox actions are in the tab header above (`HeaderActions`).
+ * sit on the scrim over the picture (`MediaScrim`: a smooth gradient into the scrim token, never a
+ * hard-edged block); at large text sizes they move below it, as on `MediaCard`. The cart, pass and inbox actions are in the tab header above (`HeaderActions`).
  */
 import { useWindowDimensions, View } from 'react-native';
 import { homeBandFor } from '../../artwork/artworkFor';
@@ -15,9 +17,16 @@ import { SCHEDULE_WINDOW_DAYS, useCalendarWindow, useMe } from '../../features/t
 import { displayZone, formatDay, localHour, zoneOf } from '../../features/today/time';
 import { useNow } from '../../providers/AppProviders';
 import { Artwork } from '../../ui/Artwork';
-import { mediaTextPlacement } from '../../ui/MediaCard';
+import { MediaScrim, mediaTextPlacement } from '../../ui/MediaCard';
 import { Text } from '../../ui/Text';
-import { continuousCorners, layout, makeStyles, radius, spacing } from '../../ui/theme';
+import {
+  continuousCorners,
+  layout,
+  makeStyles,
+  radius,
+  spacing,
+  useLegendsMode,
+} from '../../ui/theme';
 
 /** The band's picture: 21:9, as the artwork is drawn. */
 const BAND_ASPECT = 21 / 9;
@@ -30,7 +39,8 @@ export function GreetingBand() {
   // Same key as Home's next-activity read (device zone window), so this is a cache hit.
   const calendar = useCalendarWindow(now, SCHEDULE_WINDOW_DAYS, displayZone(null).zone);
   const zone = zoneOf(...(calendar.data?.items ?? []).map((item) => item.timezone)).zone;
-  const band = homeBandFor(localHour(now, zone));
+  const { legends } = useLegendsMode();
+  const band = homeBandFor(localHour(now, zone), { legends });
   const given = me.data?.person?.givenName?.trim();
   const over = mediaTextPlacement(fontScale) === 'over';
   const words = (
@@ -52,26 +62,25 @@ export function GreetingBand() {
           rounded={false}
           testID={`home-band-${band.band}`}
         />
-        {over ? <View style={styles.scrim}>{words}</View> : null}
+        {over ? (
+          <MediaScrim
+            fadeHeight={spacing.xxl}
+            bandStyle={styles.scrim}
+            testID="home-greeting-scrim"
+          >
+            {words}
+          </MediaScrim>
+        ) : null}
       </View>
       {over ? null : <View style={styles.below}>{words}</View>}
     </View>
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
+const useStyles = makeStyles(() => ({
   root: { paddingHorizontal: layout.gutter, paddingTop: spacing.xs },
   frame: { borderRadius: radius.xl, ...continuousCorners, overflow: 'hidden' },
-  scrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: colors.scrimEnd,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.md,
-  },
+  scrim: { paddingHorizontal: spacing.lg, paddingTop: 0, paddingBottom: spacing.md },
   below: { paddingTop: spacing.sm },
   words: { gap: spacing.xxs },
 }));

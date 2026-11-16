@@ -9,11 +9,16 @@
  *   symbol is drawn until the desk scanners are decided (the "More" fold of the pass says so).
  * - The reference is one element for screen readers, spelled out character by character so it is
  *   read as written, then "Show this at the front desk." (SPK-UX-009).
+ * - On screen it is shown in groups of four (the stored value is unchanged) in a monospaced face
+ *   (Menlo, the platform monospace) whose zero is slashed or dotted and whose l, I and 1 differ, and its digits are drawn in the
+ *   floodlight colour so a digit never passes for a letter when it is read out at the desk.
+ * - The words sit on solid plates of the card's own colour, so the pitch lines never run through
+ *   text.
  * - Fills the height of the screen it sits on (most of the window), so the pass reads at a glance
  *   at a busy desk (SPK-UX-010); with large text it grows instead of clipping.
  */
 import type { ReactNode } from 'react';
-import { StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Platform, Text as RNText, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Line, Rect } from 'react-native-svg';
 import { Icon } from '../../ui/Icon';
 import { Text } from '../../ui/Text';
@@ -33,6 +38,21 @@ import {
 export function groupReference(reference: string): string {
   return reference.match(/.{1,4}/g)?.join(' ') ?? reference;
 }
+
+/**
+ * The reference's runs for drawing: each group of four, split into runs of digits and of other
+ * characters (`"aB12" → [["aB", false], ["12", true]]`).
+ */
+export function referenceRuns(group: string): [string, boolean][] {
+  return (group.match(/\d+|\D+/g) ?? []).map((run) => [run, /^\d/.test(run)]);
+}
+
+/** A monospaced face with distinct l/I/1 and O/0 on each platform. */
+const REFERENCE_FONT = Platform.select({
+  ios: 'Menlo',
+  android: 'monospace',
+  default: 'ui-monospace, Menlo, Consolas, "Roboto Mono", monospace',
+});
 
 /** What a screen reader hears for the reference: every character on its own, then the action. */
 export function referenceLabel(reference: string): string {
@@ -111,24 +131,40 @@ export function PassCard({ reference, issued }: { reference: string; issued: str
   const { colors } = useTheme();
   return (
     <NightCard fill testID="pass-card">
-      <View style={styles.top}>
+      <View style={[styles.top, styles.plate]}>
         <Icon name="sports_soccer" size={22} color={colors.floodlight} />
         <Text variant="label" tone="inverse">
           Facility pass
         </Text>
       </View>
       <View
-        style={styles.reference}
+        style={[styles.reference, styles.plate]}
         accessible
         // Spelled out, so VoiceOver and TalkBack read the reference itself (SPK-UX-009).
         accessibilityLabel={referenceLabel(reference)}
         testID="pass-reference"
       >
         <Text tabular selectable style={styles.referenceText}>
-          {groupReference(reference)}
+          {groupReference(reference)
+            .split(' ')
+            .map((group, g) => (
+              // Plain nested spans: they inherit the reference's face and colour.
+              <RNText key={`${group}-${g}`}>
+                {g > 0 ? ' ' : ''}
+                {referenceRuns(group).map(([run, digits], r) =>
+                  digits ? (
+                    <RNText key={r} style={styles.digits}>
+                      {run}
+                    </RNText>
+                  ) : (
+                    run
+                  ),
+                )}
+              </RNText>
+            ))}
         </Text>
       </View>
-      <View style={styles.bottom}>
+      <View style={[styles.bottom, styles.plate]} testID="pass-words">
         <Text variant="title3" tone="inverse">
           Show this at the front desk
         </Text>
@@ -162,15 +198,26 @@ const useStyles = makeStyles(({ colors, dark }) => ({
     justifyContent: 'space-between',
   },
   top: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  reference: { paddingVertical: spacing.lg },
+  // A solid plate of the card's colour behind words, so no pitch line crosses them.
+  plate: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.night,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    marginHorizontal: -spacing.sm,
+  },
+  reference: { paddingVertical: spacing.md },
   referenceText: {
     ...tabular(type.largeTitle),
-    ...fonts.extrabold,
+    fontFamily: REFERENCE_FONT,
+    fontWeight: '700',
     fontSize: 40,
     lineHeight: 50,
-    letterSpacing: 1.5,
+    letterSpacing: 0.5,
     color: colors.onNight,
   },
+  digits: { color: colors.floodlight },
   bottom: { gap: spacing.md },
   chip: {
     flexDirection: 'row',
