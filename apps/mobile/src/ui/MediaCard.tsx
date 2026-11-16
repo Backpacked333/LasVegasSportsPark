@@ -16,20 +16,15 @@
  * pixel (theme test). At large text sizes (font scale 1.3 and above) the words move below the
  * picture, in the page's own text colours, so nothing is clipped or crowded over the image.
  *
- * Pressed, the card shrinks slightly only when motion is not reduced and always dims a little.
+ * Pressed, the card shrinks slightly (`PressableScale`) only when motion is not reduced and always
+ * dims a little.
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import type { ReactNode } from 'react';
-import {
-  Pressable,
-  Text,
-  useWindowDimensions,
-  View,
-  type StyleProp,
-  type ViewStyle,
-} from 'react-native';
+import { Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Artwork, type ArtworkSource } from './Artwork';
 import { useMotion } from './motion';
+import { PressableScale } from './PressableScale';
 import { Tag } from './Tag';
 import {
   continuousCorners,
@@ -177,9 +172,10 @@ export function MediaCard({
   );
 
   const mainStyle = compact ? styles.compactMain : styles.main;
-  // TODO(1b): PressableScale once it lands; until then the scale is applied here.
+  // PressableScale springs the card to the press scale while motion is on; the pressed style
+  // names the same scale (what the card settles at), and the animated style drawn after it wins.
   const main = onPress ? (
-    <Pressable
+    <PressableScale
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityHint={accessibilityHint}
@@ -191,7 +187,7 @@ export function MediaCard({
       ]}
     >
       {body}
-    </Pressable>
+    </PressableScale>
   ) : (
     <View style={mainStyle} accessible accessibilityLabel={label}>
       {body}

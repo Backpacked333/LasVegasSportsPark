@@ -11,13 +11,14 @@
  *   mode. Without it a card looks exactly as before.
  * - `onPress` makes the whole card one button (SPK-UX-009): one focusable element, named by
  *   `accessibilityLabel` or else by the words inside it, with a disabled state. A pressed card
- *   shrinks slightly (`motionTokens.pressScale`) only when motion is not reduced, and always shows
- *   the soft pressed fill, so the feedback never depends on motion.
+ *   shrinks slightly (`motionTokens.pressScale`, through `PressableScale`) only when motion is not
+ *   reduced, and always shows the soft pressed fill, so the feedback never depends on motion.
  */
 import type { ReactNode } from 'react';
-import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { ListRowLayout, useRowLayout } from './ListRow';
 import { useMotion } from './motion';
+import { PressableScale } from './PressableScale';
 import {
   continuousCorners,
   elevation as elevationStyle,
@@ -71,9 +72,10 @@ export function Card({
           : styles.card;
   const content = <ListRowLayout layout="flat">{children}</ListRowLayout>;
   if (onPress) {
-    // TODO(1b): PressableScale once it lands; until then the scale is applied here.
+    // PressableScale springs the card to the press scale while motion is on; the pressed style
+    // names the same scale (what the card settles at), and the animated style drawn after it wins.
     return (
-      <Pressable
+      <PressableScale
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
         accessibilityHint={accessibilityHint}
@@ -93,7 +95,7 @@ export function Card({
         testID={testID}
       >
         {content}
-      </Pressable>
+      </PressableScale>
     );
   }
   return (
