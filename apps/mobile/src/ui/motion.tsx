@@ -11,20 +11,16 @@
  * screen depends on an animation finishing. Inside a provider, motion stays reduced until the
  * device has answered, and when it cannot answer.
  *
- * The durations are **Proposed** values of the visual system v2 (ADR-008); the motion tokens of
- * `src/ui/theme.ts` (phase 1a of the redesign) are to take them over.
+ * The durations are the motion tokens of `src/ui/theme.ts` (`motionTokens`, `durationsFor`), the
+ * **Proposed** values of the visual system v2 (ADR-008).
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, type EmitterSubscription } from 'react-native';
+import { durationsFor, motionTokens, type DurationToken } from './theme';
 
-export const MOTION_DURATIONS = {
-  instant: 0,
-  fast: 120,
-  base: 220,
-  slow: 320,
-} as const;
+export const MOTION_DURATIONS = motionTokens.durations;
 
-export type MotionToken = keyof typeof MOTION_DURATIONS;
+export type MotionToken = DurationToken;
 
 export interface Motion {
   /** The device asked for reduced motion, has not answered yet, or there is no provider. */
@@ -37,7 +33,7 @@ export interface Motion {
 export function motionFor(reduced: boolean): Motion {
   return {
     reduced,
-    duration: (token) => (reduced ? 0 : MOTION_DURATIONS[token]),
+    duration: (token) => durationsFor(reduced)[token],
   };
 }
 

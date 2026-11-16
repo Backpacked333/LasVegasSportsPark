@@ -17,6 +17,14 @@
  * Fonts are bundled (`@expo-google-fonts/archivo`, `material-symbols`) and loaded by the root
  * layout before anything renders (`FONT_ASSETS`). Each font token names the face and its matching
  * weight, so a face that failed to load still falls back to a system font of the same weight.
+ *
+ * Tokens v2 (ADR-008, **Proposed** customer visual system v2) add, in both themes: raised, sheet,
+ * toast, tonal and count-badge surfaces with their own text colours; a scrim for text over artwork;
+ * skeleton fills; initials-avatar tones; four elevation levels (`elevation`: a shadow on classic, a
+ * lighter surface and a hairline border in Legends mode, where shadows do not show on black); more
+ * type, spacing, layout, radius and button-height steps; and the motion tokens that
+ * `src/ui/motion.tsx` reads. Tokens with alpha are `#RRGGBBAA`; their contrast is computed after
+ * compositing (`__tests__/theme.test.tsx`).
  */
 import { Archivo_400Regular } from '@expo-google-fonts/archivo/400Regular';
 import { Archivo_600SemiBold } from '@expo-google-fonts/archivo/600SemiBold';
@@ -24,7 +32,7 @@ import { Archivo_700Bold } from '@expo-google-fonts/archivo/700Bold';
 import { Archivo_800ExtraBold } from '@expo-google-fonts/archivo/800ExtraBold';
 import { MaterialSymbols_400Regular } from '@expo-google-fonts/material-symbols/400Regular';
 import { createContext, useContext } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, type TextStyle, type ViewStyle } from 'react-native';
 
 /** The classic park palette: night pitch, pitch green and floodlight on desert sand. */
 const classicColors = {
@@ -77,6 +85,37 @@ const classicColors = {
   info: '#1A4FD6',
   neutral: '#4A5651',
   pending: '#5B3FA8',
+  // Tokens v2 (ADR-008).
+  /** A raised card (`elevation(theme, 'raised')`); on classic the shadow lifts it, not the fill. */
+  elevated: '#FFFFFF',
+  /** Bottom sheets and their text. */
+  sheet: '#FFFFFF',
+  onSheet: '#111614',
+  /** Behind an open sheet: night pitch at 50%. */
+  backdrop: '#0C221980',
+  /**
+   * The scrim under text on artwork, from `scrimStart` (clear, at the top) to `scrimEnd` (under the
+   * text). `onMedia` and `onMediaMuted` over `scrimEnd` reach 4.5:1 on any artwork pixel, from pure
+   * white to pure black.
+   */
+  scrimStart: '#0C221900',
+  scrimEnd: '#0C2219B8',
+  onMedia: '#FFFFFF',
+  onMediaMuted: '#E3F1E8',
+  /** Loading placeholders: the fill and the moving highlight (static while motion is reduced). */
+  skeleton: '#E8E7E2',
+  skeletonHighlight: '#F4F3EF',
+  /** A tonal button and a selected tonal chip. */
+  tonal: '#E2F0E7',
+  onTonal: '#0A5C35',
+  /** Toasts: a dark capsule over the light page. */
+  toast: '#1B2420',
+  onToast: '#FFFFFF',
+  /** Shadow colour of the elevation levels (opacity is set per level). */
+  shadow: '#0C2219',
+  /** Count badges (unread notices, items in a list). */
+  countBadge: '#B3261E',
+  onCountBadge: '#FFFFFF',
 } as const;
 
 /** Every colour token of a theme; the two themes carry the same names. */
@@ -121,6 +160,24 @@ const legendsColors: ThemeColors = {
   info: '#7DB2FF',
   neutral: '#B4B4BB',
   pending: '#B9A2FF',
+  // Tokens v2 (ADR-008): lighter surfaces instead of shadows.
+  elevated: '#1B1B1E',
+  sheet: '#1C1C1F',
+  onSheet: '#F5F5F7',
+  backdrop: '#000000B3',
+  scrimStart: '#00000000',
+  scrimEnd: '#000000B8',
+  onMedia: '#F5F5F7',
+  onMediaMuted: '#D6D6DB',
+  skeleton: '#1F1F22',
+  skeletonHighlight: '#2A2A2E',
+  tonal: '#2B2413',
+  onTonal: '#F0C75A',
+  toast: '#2C2C30',
+  onToast: '#F5F5F7',
+  shadow: '#000000',
+  countBadge: '#FF7B72',
+  onCountBadge: '#17120A',
 };
 
 /** Tint behind each status tone (pills, notices, icon tiles); the tone colour is the text. */
@@ -167,6 +224,33 @@ const legendsKindColors: ThemeKindColors = {
   dropin: '#A6A6AD',
 };
 
+/**
+ * Initials avatars: a tint and the initials drawn on it (4.5:1 or more). `avatarToneFor` picks the
+ * same tone for the same person everywhere; the name is always next to or on the avatar.
+ */
+export interface AvatarTone {
+  readonly background: string;
+  readonly foreground: string;
+}
+
+const classicAvatarTones: readonly AvatarTone[] = [
+  { background: '#DCEFE3', foreground: '#0B5A33' },
+  { background: '#E0E8FB', foreground: '#1D409E' },
+  { background: '#FBEBCB', foreground: '#734600' },
+  { background: '#F8DDE8', foreground: '#8E2152' },
+  { background: '#E9E2F8', foreground: '#4E3497' },
+  { background: '#D9EEF0', foreground: '#0E5A62' },
+];
+
+const legendsAvatarTones: readonly AvatarTone[] = [
+  { background: '#173322', foreground: '#7FE0A6' },
+  { background: '#18264A', foreground: '#9DBBFF' },
+  { background: '#3A2810', foreground: '#F2B865' },
+  { background: '#3A1828', foreground: '#F59AC3' },
+  { background: '#272044', foreground: '#C4B2FF' },
+  { background: '#123236', foreground: '#7FD6DE' },
+];
+
 export type ThemeName = 'classic' | 'legends';
 
 /** Everything that changes with the theme. Spacing, radii and type are the same in both. */
@@ -177,6 +261,8 @@ export interface Theme {
   readonly colors: ThemeColors;
   readonly toneBackgrounds: ThemeToneBackgrounds;
   readonly kindColors: ThemeKindColors;
+  /** Initials-avatar tones; the same number in both themes, so a person keeps their slot. */
+  readonly avatarTones: readonly AvatarTone[];
 }
 
 export const classicTheme: Theme = {
@@ -185,6 +271,7 @@ export const classicTheme: Theme = {
   colors: classicColors,
   toneBackgrounds: classicToneBackgrounds,
   kindColors: classicKindColors,
+  avatarTones: classicAvatarTones,
 };
 
 export const legendsTheme: Theme = {
@@ -193,12 +280,105 @@ export const legendsTheme: Theme = {
   colors: legendsColors,
   toneBackgrounds: legendsToneBackgrounds,
   kindColors: legendsKindColors,
+  avatarTones: legendsAvatarTones,
 };
 
 export const THEMES: Readonly<Record<ThemeName, Theme>> = {
   classic: classicTheme,
   legends: legendsTheme,
 };
+
+/** The avatar tone for a stable key (a person's id): the same key gets the same tone. */
+export function avatarToneFor(theme: Theme, key: string): AvatarTone {
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return theme.avatarTones[hash % theme.avatarTones.length] as AvatarTone;
+}
+
+/** The four elevation levels (ADR-008): a card, a raised card, a sheet and a sticky bottom bar. */
+export type ElevationLevel = 'card' | 'raised' | 'sheet' | 'bar';
+
+/** `#RRGGBB` at an opacity, as `#RRGGBBAA`. Internal: screens use tokens, not derived colours. */
+function withAlpha(hex: string, opacity: number): string {
+  const alpha = Math.round(opacity * 255)
+    .toString(16)
+    .padStart(2, '0');
+  return `${hex.slice(0, 7)}${alpha}`.toUpperCase();
+}
+
+/** Shadow layers of each level on classic: [offset y, blur, opacity]; bars and sheets cast upwards. */
+const SHADOW_LAYERS: Readonly<
+  Record<ElevationLevel, readonly (readonly [number, number, number])[]>
+> = {
+  card: [
+    [1, 2, 0.06],
+    [2, 8, 0.04],
+  ],
+  raised: [
+    [2, 4, 0.06],
+    [8, 20, 0.08],
+  ],
+  sheet: [
+    [-2, 12, 0.08],
+    [-8, 32, 0.1],
+  ],
+  bar: [
+    [-1, 0, 0.05],
+    [-4, 16, 0.06],
+  ],
+};
+
+const ELEVATION_SURFACE: Readonly<Record<ElevationLevel, keyof ThemeColors>> = {
+  card: 'background',
+  raised: 'elevated',
+  sheet: 'sheet',
+  bar: 'background',
+};
+
+/** Hairline colour of each level in a dark theme: higher levels get the stronger line. */
+const ELEVATION_LINE: Readonly<Record<ElevationLevel, keyof ThemeColors>> = {
+  card: 'border',
+  raised: 'control',
+  sheet: 'control',
+  bar: 'border',
+};
+
+const elevationCache = new WeakMap<Theme, Map<ElevationLevel, ViewStyle>>();
+
+/**
+ * The style of an elevation level, with its surface colour: spread it first in a style and override
+ * after it. A light theme gets a layered `boxShadow` in the `shadow` colour; a dark theme gets the
+ * level's lighter surface and a hairline border instead (shadows do not show on black). The same
+ * object is returned for the same theme and level.
+ */
+export function elevation(theme: Theme, level: ElevationLevel): ViewStyle {
+  let levels = elevationCache.get(theme);
+  if (!levels) {
+    levels = new Map();
+    elevationCache.set(theme, levels);
+  }
+  let style = levels.get(level);
+  if (!style) {
+    const { colors } = theme;
+    const backgroundColor = colors[ELEVATION_SURFACE[level]];
+    style = theme.dark
+      ? {
+          backgroundColor,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: colors[ELEVATION_LINE[level]],
+        }
+      : {
+          backgroundColor,
+          boxShadow: SHADOW_LAYERS[level]
+            .map(
+              ([y, blur, opacity]) => `0px ${y}px ${blur}px ${withAlpha(colors.shadow, opacity)}`,
+            )
+            .join(', '),
+        };
+    levels.set(level, style);
+  }
+  return style;
+}
 
 /**
  * The theme in use and the Legends mode switch. The default (no provider above, as in a component
@@ -252,13 +432,20 @@ export function makeStyles<T extends NamedStyles<T> | NamedStyles<unknown>>(
   };
 }
 
-export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 } as const;
+export const spacing = { xxs: 2, xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 40 } as const;
+
+/**
+ * Page layout (ADR-008): the side gutter of a screen, the gap between cards in a list and the gap
+ * between sections.
+ */
+export const layout = { gutter: 20, cardGap: 12, sectionGap: 28 } as const;
 
 /**
  * Corner radii. Cards (`lg`) and hero bands (`xl`) hold their content 16 pt in, so what sits inside
  * them uses a smaller radius (`sm`): nested corners stay roughly concentric. `pill` is a capsule.
+ * `image` rounds artwork and photos; `sheet` is the top corners of a bottom sheet.
  */
-export const radius = { sm: 10, md: 14, lg: 20, xl: 24, pill: 999 } as const;
+export const radius = { sm: 10, md: 14, image: 16, lg: 20, xl: 24, sheet: 28, pill: 999 } as const;
 
 /**
  * Continuous (squircle) corners where the platform draws them (iOS); elsewhere the plain radius.
@@ -296,7 +483,78 @@ export const type = {
   eyebrow: { ...fonts.semibold, fontSize: 13, lineHeight: 18 },
   body: { ...fonts.regular, fontSize: 16, lineHeight: 23 },
   caption: { ...fonts.regular, fontSize: 14, lineHeight: 20 },
+  // Tokens v2 (ADR-008): the rest of the scale, size/line height in pt.
+  /** The big title at the top of a tab (34/41). */
+  largeTitle: { ...fonts.display, fontSize: 34, lineHeight: 41, letterSpacing: -0.6 },
+  /** A hero or sheet title (26/32). */
+  title1: { ...fonts.display, fontSize: 26, lineHeight: 32, letterSpacing: -0.4 },
+  /** A card title in a list (19/24). */
+  title3: { ...fonts.semibold, fontSize: 19, lineHeight: 24, letterSpacing: -0.2 },
+  /** Secondary lines next to body text (15/21). */
+  callout: { ...fonts.regular, fontSize: 15, lineHeight: 21 },
+  /** Notes under a control or a card (13/18). */
+  footnote: { ...fonts.regular, fontSize: 13, lineHeight: 18 },
+  /** Badges and tab labels only (12/16): never body text. */
+  micro: { ...fonts.semibold, fontSize: 12, lineHeight: 16 },
 } as const;
+
+/**
+ * Tabular (fixed-width) figures for times, scores, amounts and the pass, so digits do not shift as
+ * they change: `[type.title1, tabularFigures]` or `tabular(type.title1)`.
+ */
+export const tabularFigures: TextStyle = { fontVariant: ['tabular-nums'] };
+
+/** A type style with tabular figures. */
+export function tabular<T extends TextStyle>(style: T): T & TextStyle {
+  return { ...style, ...tabularFigures };
+}
 
 /** Minimum touch target (44 pt, iOS HIG; 48 dp on Android is met with padding). */
 export const MIN_TOUCH_SIZE = 44;
+
+/**
+ * Button heights: `compact` 44 (the minimum target), `regular` 48 (the usual capsule) and `sticky`
+ * 56 (the primary action in a bar pinned to the bottom of a screen).
+ */
+export const buttonHeight = { compact: 44, regular: 48, sticky: 56 } as const;
+
+/**
+ * Motion tokens (ADR-008; SPK-UX-010 asks for restrained animation). `src/ui/motion.tsx` reads
+ * them; animated components get their durations through `useMotion()`, never from here, so reduced
+ * motion always applies.
+ *
+ * - `durations` in milliseconds.
+ * - `easings` as cubic-bezier control points (`Easing.bezier(...motionTokens.easings.standard)`):
+ *   `standard` for moves on screen, `enter` for things arriving, `exit` for things leaving.
+ * - `springs` as damping, stiffness and mass: `press` for a pressed control, `snappy` for small
+ *   things settling (chips, toggles), `sheet` for a sheet snapping to a point.
+ * - `pressScale`: what a pressed card or button shrinks to; not applied while motion is reduced.
+ */
+export const motionTokens = {
+  durations: { instant: 0, fast: 120, base: 220, slow: 320 },
+  easings: {
+    standard: [0.2, 0, 0, 1],
+    enter: [0, 0, 0, 1],
+    exit: [0.3, 0, 1, 1],
+  },
+  springs: {
+    press: { damping: 24, stiffness: 420, mass: 1 },
+    snappy: { damping: 20, stiffness: 300, mass: 1 },
+    sheet: { damping: 28, stiffness: 260, mass: 1 },
+  },
+  pressScale: 0.97,
+} as const;
+
+export type DurationToken = keyof typeof motionTokens.durations;
+
+const NO_DURATIONS: Readonly<Record<DurationToken, number>> = {
+  instant: 0,
+  fast: 0,
+  base: 0,
+  slow: 0,
+};
+
+/** The durations to animate with: every one 0 while motion is reduced (SPK-UX-009). */
+export function durationsFor(reduced: boolean): Readonly<Record<DurationToken, number>> {
+  return reduced ? NO_DURATIONS : motionTokens.durations;
+}

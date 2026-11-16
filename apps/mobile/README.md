@@ -211,6 +211,31 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
     setup).
   - **Not verified**: any of it on a device (motion, gestures, sheets, haptic feel).
 
+### Tokens v2 (ADR-008, **Proposed** visual system v2)
+
+`src/ui/theme.ts` carries the tokens the v2 component library builds on; no screen uses them yet.
+
+- **Colours, in both themes:** `elevated`, `sheet`/`onSheet`, `backdrop`, `scrimStart`/`scrimEnd`
+  with `onMedia`/`onMediaMuted` (text over artwork), `skeleton`/`skeletonHighlight`,
+  `tonal`/`onTonal`, `toast`/`onToast`, `shadow`, `countBadge`/`onCountBadge`, and six
+  `avatarTones` (`avatarToneFor(theme, id)` gives a person the same tone everywhere). Tokens with
+  alpha are `#RRGGBBAA`.
+- **Elevation:** `elevation(theme, 'card' | 'raised' | 'sheet' | 'bar')` returns the level's
+  surface with a layered `boxShadow` on classic, and a lighter surface with a hairline border in
+  Legends mode (shadows do not show on black).
+- **Type:** `largeTitle` 34/41, `title1` 26/32, `title3` 19/24, `callout` 15/21, `footnote` 13/18,
+  `micro` 12/16 next to the existing styles; `tabular(style)` / `tabularFigures` for times, scores
+  and the pass.
+- **Spacing and shape:** spacing `xxs` 2, `xxl` 32, `xxxl` 40; `layout` gutter 20, card gap 12,
+  section gap 28; radius `image` 16, `sheet` 28; `buttonHeight` 44, 48 and 56 (sticky bars).
+- **Motion:** `motionTokens` (durations 0/120/220/320 ms, cubic-bezier easings, springs, press
+  scale 0.97) and `durationsFor(reduced)` (all 0 while reduced); `useMotion()` reads them.
+- **Verified** in jest (`src/ui/__tests__/theme.test.tsx`): every new text pairing reaches 4.5:1
+  in both themes, `onMedia` and `onMediaMuted` over `scrimEnd` reach 4.5:1 composited on pure white
+  and on pure black, count badges stand 3:1 from the surfaces around them, the elevation styles of
+  each theme, and the token values. **Not verified**: how shadows, hairlines, tabular figures in
+  Archivo and the motion curves look or feel on a device; contrast is by calculation.
+
 ### What is verified
 
 - **Verified** in jest: every accessible name, role, state and status phrase the screens had
