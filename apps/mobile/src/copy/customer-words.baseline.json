@@ -1,0 +1,204 @@
+[
+  "src/features/registration/CampWeeks.tsx :: basket :: …l week can still be added: your basket offers its waitlist.",
+  "src/features/registration/CampWeeks.tsx :: quote :: Estimate before credits. Your quote gives the binding price.",
+  "src/features/registration/CampWeeks.tsx :: quote :: … be shown here for these weeks. Your quote gives the price.",
+  "src/features/registration/CampWeeks.tsx :: quote :: … total could not be worked out. Your quote gives the price.",
+
+  "src/features/registration/InProgressCard.tsx :: basket :: Your basket",
+
+  "src/features/registration/PurchaseChoices.tsx :: basket :: Places are limited each day and held with your basket.",
+  "src/features/registration/PurchaseChoices.tsx :: basket :: …registration. Places are limited and held with your basket.",
+
+  "src/features/registration/SessionBooking.tsx :: session package :: your session package",
+
+  "src/features/registration/intents.ts :: enrollment :: Youth enrollment",
+  "src/features/registration/intents.ts :: session package :: Session package",
+
+  "src/features/registration/status.ts :: basket :: In your basket. No place is held yet.",
+  "src/features/registration/status.ts :: basket :: This basket is no longer active",
+
+  "src/features/teams/ContactOperations.tsx :: DEC- :: …till being decided (DEC-015), so no response time is given.",
+
+  "src/features/teams/ObligationTotals.tsx :: DEC- :: …nt policy, which is still being decided (DEC-008, POL-015).",
+  "src/features/teams/ObligationTotals.tsx :: POL- :: …nt policy, which is still being decided (DEC-008, POL-015).",
+
+  "src/features/today/RsvpControl.tsx :: DEC- :: …ardian answer for a child is still being decided (DEC-090).",
+  "src/features/today/RsvpControl.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
+  "src/features/today/RsvpControl.tsx :: DEC- :: …ve. Answering for a child is still being decided (DEC-090).",
+  "src/features/today/RsvpControl.tsx :: fixture :: This fixture no longer takes availability answers.",
+  "src/features/today/RsvpControl.tsx :: fixture :: You cannot answer for this fixture.",
+  "src/features/today/RsvpControl.tsx :: fixture :: Your availability for this fixture",
+  "src/features/today/RsvpControl.tsx :: fixture :: … a roster for this fixture, so there is no answer for you …",
+
+  "src/navigation/RootNavigator.tsx :: fixture :: Fixture",
+  "src/navigation/RootNavigator.tsx :: session package :: Session packages",
+
+  "src/screens/account/FormsScreen.tsx :: acknowledgment :: Forms and acknowledgments",
+  "src/screens/account/FormsScreen.tsx :: acknowledgment :: …t be undone; signing it again records a new acknowledgment.",
+
+  "src/screens/account/components/account-data.ts :: acknowledgment :: Sign forms and acknowledgments",
+
+  "src/screens/activity/FixtureDetailScreen.tsx :: DEC- :: …ill being decided (DEC-090); these are the answers recorde…",
+  "src/screens/activity/FixtureDetailScreen.tsx :: fixture :: Fixture",
+  "src/screens/activity/FixtureDetailScreen.tsx :: fixture :: This fixture is not available. Check the link, or contact t…",
+  "src/screens/activity/FixtureDetailScreen.tsx :: fixture :: the fixture",
+  "src/screens/activity/FixtureDetailScreen.tsx :: fixture :: this fixture",
+
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Go to basket",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Open the basket",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Open the basket",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Opens the basket where this booking is paid",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Payment in progress: open the basket for its outcome",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: The basket's checkout completed. This booking shows it is p…",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Your basket shows the price where your account may see it.",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: …d taxes and fees, and any deposit are shown in your basket.",
+  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: …d's expiry cannot be shown right now; your basket shows it.",
+  "src/screens/bookings/BookingDetailScreen.tsx :: quote :: … and credits. Your quote at checkout gives the binding pri…",
+  "src/screens/bookings/BookingDetailScreen.tsx :: quote :: …t for part of this booking yet. Your quote shows the price.",
+
+  "src/screens/bookings/BookingFlowScreen.tsx :: POL- :: …booking terms yet (POL-040), so it cannot be booked. The f…",
+  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: Go to basket",
+  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: Holds the time and opens the payment step in your basket",
+  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: Opens the basket where this booking is paid",
+  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: …u then pay in your basket, which shows the price, taxes an…",
+
+  "src/screens/bookings/CancelBooking.tsx :: basket :: Open the basket",
+  "src/screens/bookings/CancelBooking.tsx :: basket :: Open the basket",
+  "src/screens/bookings/CancelBooking.tsx :: basket :: … released and your basket is emptied. Nothing has been cha…",
+
+  "src/screens/credits/CreditsScreen.tsx :: DEC- :: Credit expiry rules are not decided yet (DEC-058, Finance).",
+
+  "src/screens/discover/DiscoverScreen.tsx :: DEC- :: …; whether each is offered is still being decided (DEC-016).",
+  "src/screens/discover/DiscoverScreen.tsx :: DEC- :: …yet: it depends on DEC-003, which has not been decided (ow…",
+
+  "src/screens/enrollments/CancelEnrollmentScreen.tsx :: enrollment :: Back to enrollments",
+
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: basket :: …Forms are signed from the registration basket or from Home.",
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: Enrollment",
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: Opens the earlier enrollment",
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: Opens the new enrollment",
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: The old and new enrollments stay linked, and attendance his…",
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: the enrollment",
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: this enrollment",
+  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: …es not change this enrollment: it stays confirmed while in…",
+
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Enrollments and participation",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: No enrollments yet",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Opens the enrollment made after the trial",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Opens the enrollment, with cancellation and transfer",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Show enrollments for",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: enrollments",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: enrollments",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: … enrollments",
+  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: …. A trial is not an enrollment.",
+
+  "src/screens/enrollments/MembershipSection.tsx :: basket :: Add the renewal to your basket",
+  "src/screens/enrollments/MembershipSection.tsx :: basket :: …membership to your basket. Nothing is charged until you ch…",
+
+  "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: Opens the new enrollment",
+  "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: The old and new enrollments stay linked, and attendance his…",
+  "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: the enrollment",
+
+  "src/screens/family-calendar/FamilyCalendarScreen.tsx :: fixture :: Opens the fixture",
+  "src/screens/family-calendar/FamilyCalendarScreen.tsx :: fixture :: Team fixtures could not be loaded.",
+  "src/screens/family-calendar/FamilyCalendarScreen.tsx :: fixture :: team fixtures",
+
+  "src/screens/family/HouseholdsSection.tsx :: household :: A household groups people for billing and messages. …",
+  "src/screens/family/HouseholdsSection.tsx :: household :: Create a household",
+  "src/screens/family/HouseholdsSection.tsx :: household :: Create household",
+  "src/screens/family/HouseholdsSection.tsx :: household :: Household name",
+  "src/screens/family/HouseholdsSection.tsx :: household :: Households",
+  "src/screens/family/HouseholdsSection.tsx :: household :: No household yet",
+  "src/screens/family/HouseholdsSection.tsx :: household :: Shown next to their name in this household.",
+  "src/screens/family/HouseholdsSection.tsx :: household :: This person or household is not available to you.",
+  "src/screens/family/HouseholdsSection.tsx :: household :: You become the household's first member. …",
+  "src/screens/family/HouseholdsSection.tsx :: household :: You cannot create a household",
+  "src/screens/family/HouseholdsSection.tsx :: household :: adding someone to a household",
+  "src/screens/family/HouseholdsSection.tsx :: household :: creating a household",
+  "src/screens/family/HouseholdsSection.tsx :: household :: your households",
+
+  "src/screens/home/HomeScreen.tsx :: fixture :: View fixture",
+  "src/screens/home/HomeScreen.tsx :: fixture :: Your team fixtures could not be loaded.",
+  "src/screens/home/HomeScreen.tsx :: fixture :: your fixtures",
+
+  "src/screens/inbox/InboxScreen.tsx :: fixture :: Open fixture",
+
+  "src/screens/memberships/RenewMembership.tsx :: basket :: Add the renewal to a basket",
+  "src/screens/memberships/RenewMembership.tsx :: basket :: …e renewal to a new basket; nothing is charged until checko…",
+  "src/screens/memberships/RenewMembership.tsx :: basket :: …ou choose to a new basket. Nothing is charged until you ch…",
+
+  "src/screens/onboarding/AccountRecoveryScreen.tsx :: household :: …. Access is never restored from household membership alone.",
+
+  "src/screens/pass/PassScreen.tsx :: household :: …desk. Passes for a household are issued by staff at the de…",
+
+  "src/screens/payments/OrderSections.tsx :: enrollment :: …do not change your enrollment: it stays confirmed while th…",
+
+  "src/screens/payments/PaymentsScreen.tsx :: obligation :: Payments and obligations",
+
+  "src/screens/registration/BasketScreen.tsx :: basket :: A line in this basket needs approval by staff before you ca…",
+  "src/screens/registration/BasketScreen.tsx :: basket :: All places in this basket are confirmed together, or none a…",
+  "src/screens/registration/BasketScreen.tsx :: basket :: Basket",
+  "src/screens/registration/BasketScreen.tsx :: basket :: Nothing in your basket",
+  "src/screens/registration/BasketScreen.tsx :: basket :: Nothing in your basket",
+  "src/screens/registration/BasketScreen.tsx :: basket :: Remove … from the basket",
+  "src/screens/registration/BasketScreen.tsx :: basket :: The payment for this basket could not be looked up.",
+  "src/screens/registration/BasketScreen.tsx :: basket :: Your basket",
+  "src/screens/registration/BasketScreen.tsx :: basket :: your basket",
+  "src/screens/registration/BasketScreen.tsx :: basket :: your basket",
+  "src/screens/registration/BasketScreen.tsx :: basket :: …ce and checking out need a connection. Your basket is kept.",
+  "src/screens/registration/BasketScreen.tsx :: quote :: Your quote adds approved taxes and fees, discounts and cred…",
+
+  "src/screens/registration/CheckoutScreen.tsx :: basket :: Back to your basket",
+  "src/screens/registration/CheckoutScreen.tsx :: basket :: …d. Go back to your basket to start again or join a waitlis…",
+  "src/screens/registration/CheckoutScreen.tsx :: quote :: Your quote has nothing due now.",
+
+  "src/screens/registration/OfferingDetailScreen.tsx :: quote :: Your quote shows the final price for each participant, with…",
+  "src/screens/registration/OfferingDetailScreen.tsx :: quote :: … a cancellation policy. Its wording is shown on your quote.",
+
+  "src/screens/registration/PlacementInformationScreen.tsx :: basket :: Back to your basket",
+  "src/screens/registration/PlacementInformationScreen.tsx :: basket :: your basket",
+
+  "src/screens/registration/QuoteReviewScreen.tsx :: basket :: Back to your basket",
+
+  "src/screens/registration/RegistrationIntentScreen.tsx :: basket :: Add to your basket",
+  "src/screens/registration/RegistrationIntentScreen.tsx :: basket :: Add … people to your basket",
+  "src/screens/registration/RegistrationIntentScreen.tsx :: basket :: Adding to your basket needs a connection. Your choices are …",
+
+  "src/screens/registration/RequiredFormsScreen.tsx :: basket :: Back to your basket",
+
+  "src/screens/registration/WaitlistScreen.tsx :: basket :: Holds the place in a basket so you can pay",
+
+  "src/screens/schedule/ScheduleScreen.tsx :: fixture :: Opens the fixture",
+  "src/screens/schedule/ScheduleScreen.tsx :: fixture :: View fixture",
+  "src/screens/schedule/ScheduleScreen.tsx :: fixture :: Your team fixtures could not be loaded.",
+  "src/screens/schedule/ScheduleScreen.tsx :: fixture :: your fixtures",
+
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: A session package holds sessions to book. It is not money a…",
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: No session packages",
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: Session package",
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: Session packages",
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: Your session packages",
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: session packages",
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: session packages",
+  "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: your session packages",
+
+  "src/screens/support/SupportScreen.tsx :: DEC- :: …ly is not set yet (DEC-015). Notes and internal details st…",
+  "src/screens/support/SupportScreen.tsx :: enrollment :: Open enrollments",
+  "src/screens/support/SupportScreen.tsx :: enrollment :: … registration from Enrollments, where you see the refund, …",
+
+  "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
+  "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
+
+  "src/screens/teams/ContributionScreen.tsx :: obligation :: Team obligation",
+
+  "src/screens/teams/RosterScreen.tsx :: POL- :: … league's invitation policy (POL-044, still being decided).",
+
+  "src/screens/teams/TeamContributionsScreen.tsx :: contribution request :: A contribution request asks one player to pay part of this …",
+  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: No team obligation",
+  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: Remaining on the team obligation: …",
+  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: the team's obligations",
+  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: … part of this team obligation. It does not add to the team…",
+
+  "src/screens/teams/TeamWorkspaceScreen.tsx :: DEC- :: Not shown: waiting on a decision (DEC-002, DEC-028)",
+  "src/screens/teams/TeamWorkspaceScreen.tsx :: obligation :: No obligation recorded yet"
+]
