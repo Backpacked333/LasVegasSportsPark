@@ -50,7 +50,11 @@ import {
   type RegistrationOptions,
 } from './options';
 import type { Participant } from './participants';
-import { Body, ButtonRow, ChoiceRow, Section } from './ui';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
+import { PersonCard } from './WhoCards';
 
 type Offering = Schema<'Offering'>;
 type OfferingSession = Schema<'OfferingSession'>;
@@ -172,14 +176,12 @@ function BookingOutcome({
       {status === null && !trialBooking.error ? (
         <StateView variant="loading" label="the trial booking" />
       ) : null}
-      {sessionText ? <Body>{sessionText}</Body> : null}
-      <ButtonRow>
-        <Button
-          label="See your registrations"
-          variant="secondary"
-          onPress={() => router.push(moneyRoutes.enrollments())}
-        />
-      </ButtonRow>
+      {sessionText ? <Text variant="body">{sessionText}</Text> : null}
+      <Button
+        label="See your registrations"
+        variant="secondary"
+        onPress={() => router.push(moneyRoutes.enrollments())}
+      />
     </Section>
   );
 }
@@ -197,6 +199,7 @@ export function SessionBookingFlow({
   options: RegistrationOptions;
   permissions: PermissionsState;
 }) {
+  const styles = useStyles();
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -259,7 +262,7 @@ export function SessionBookingFlow({
           ...(free ? [{ basis: { kind: 'purchase' } as Basis, label: 'No charge' }] : []),
           ...packageChoices.map((p) => ({
             basis: { kind: 'package', id: p.id } as Basis,
-            label: `Use a credit from ${p.offeringName ?? 'your session package'}`,
+            label: `Use a credit from ${p.offeringName ?? 'your class pack'}`,
             detail: `${p.remainingCredits} of ${p.credits} left`,
           })),
           ...membershipChoices.map((m) => ({
@@ -326,27 +329,30 @@ export function SessionBookingFlow({
   return (
     <View>
       <Section title={intent === 'trial' ? 'Who is trying it?' : 'Who is taking part?'}>
-        <View accessibilityRole="radiogroup" accessibilityLabel="Participant">
+        <View accessibilityRole="radiogroup" accessibilityLabel="Participant" style={styles.list}>
           {participants.map((p) => {
             const allowed = mayRegister(options, p.personId);
             const result = eligibilityOf(options, p.personId, intent);
             const blocked = result ? blockingEligibilityReasons(result).length > 0 : false;
             const messages = result ? eligibilityMessages(result) : null;
-            const detail = !allowed
-              ? 'Not available: your account can view this person but not register them.'
-              : result
-                ? [
-                    eligibilityStatus(result).label,
-                    ...(messages?.reasons ?? []),
-                    ...(messages?.alternatives ?? []),
-                  ].join('. ')
-                : undefined;
             return (
-              <ChoiceRow
+              <PersonCard
                 key={p.personId}
+                personId={p.personId}
+                name={p.displayName}
                 mode="radio"
-                label={p.displayName}
-                detail={detail}
+                summary={
+                  !allowed
+                    ? 'Not available: your account can view this person but not register them.'
+                    : result
+                      ? eligibilityStatus(result).label
+                      : undefined
+                }
+                lines={
+                  allowed && result
+                    ? [...(messages?.reasons ?? []), ...(messages?.alternatives ?? [])]
+                    : []
+                }
                 checked={participantId === p.personId}
                 disabled={!allowed || blocked}
                 onToggle={() => {
@@ -369,33 +375,43 @@ export function SessionBookingFlow({
             <StateView variant="loading" label="the sessions" />
           )
         ) : (
-          <View accessibilityRole="radiogroup" accessibilityLabel="Session">
+          <View accessibilityRole="radiogroup" accessibilityLabel="Session" style={styles.list}>
             {upcoming.length === 0 ? (
-              <Body muted>No upcoming session of this activity can be booked right now.</Body>
+              <Text variant="caption" tone="muted">
+                No upcoming session of this activity can be booked right now.
+              </Text>
             ) : null}
-            {upcoming.map((s) => (
-              <ChoiceRow
-                key={s.id}
-                mode="radio"
-                label={sessionLabel(s)}
-                detail={formatInstant(s.scheduledStart, timeZone)}
-                checked={sessionChoice === s.id}
-                onToggle={() => {
-                  setSessionChoice(s.id);
-                  reset();
-                }}
-              />
-            ))}
+            {upcoming.map((s) => {
+              const label = sessionLabel(s);
+              const detail = formatInstant(s.scheduledStart, timeZone);
+              return (
+                <ChoiceCard
+                  key={s.id}
+                  option={{ value: s.id, label, description: detail }}
+                  mode="single"
+                  checked={sessionChoice === s.id}
+                  onPress={() => {
+                    setSessionChoice(s.id);
+                    reset();
+                  }}
+                  accessibilityLabel={`${label}. ${detail}`}
+                />
+              );
+            })}
             {intent === 'trial' ? (
-              <ChoiceRow
-                mode="radio"
-                label="No session yet"
-                detail="The front desk arranges the time of the trial with you."
+              <ChoiceCard
+                option={{
+                  value: 'none',
+                  label: 'No session yet',
+                  description: 'The front desk arranges the time of the trial with you.',
+                }}
+                mode="single"
                 checked={sessionChoice === 'none'}
-                onToggle={() => {
+                onPress={() => {
                   setSessionChoice('none');
                   reset();
                 }}
+                accessibilityLabel="No session yet. The front desk arranges the time of the trial with you."
               />
             ) : null}
           </View>
@@ -412,61 +428,77 @@ export function SessionBookingFlow({
             <QueryErrorView error={memberships.error} onRetry={() => void memberships.refetch()} />
           ) : null}
           {bases.length > 0 ? (
-            <View accessibilityRole="radiogroup" accessibilityLabel="Payment">
+            <View accessibilityRole="radiogroup" accessibilityLabel="Payment" style={styles.list}>
               {bases.map((b) => (
-                <ChoiceRow
+                <ChoiceCard
                   key={basisKey(b.basis)}
-                  mode="radio"
-                  label={b.label}
-                  detail={b.detail}
+                  option={{ value: basisKey(b.basis), label: b.label, description: b.detail }}
+                  mode="single"
                   checked={basisKey(chosenBasis) === basisKey(b.basis)}
-                  onToggle={() => {
+                  onPress={() => {
                     setBasis(b.basis);
                     reset();
                   }}
+                  accessibilityLabel={b.detail ? `${b.label}. ${b.detail}` : b.label}
                 />
               ))}
             </View>
           ) : null}
           {!creditsLoading && bases.length === 0 ? (
-            <Body muted>
+            <Text variant="caption" tone="muted">
               Paying for a single session is not available in the app yet. The front desk can book
               it for you.
-            </Body>
+            </Text>
           ) : null}
         </Section>
       ) : null}
 
       {intent === 'trial' ? (
         <Section title="After the trial">
-          <ChoiceRow
-            label="Staff may use what they learn in this trial to offer a place afterwards"
+          <ChoiceCard
+            option={{
+              value: 'follow-up',
+              label: 'Staff may use what they learn in this trial to offer a place afterwards',
+            }}
+            mode="multiple"
             checked={followUpConsent}
-            onToggle={() => {
+            onPress={() => {
               setFollowUpConsent((v) => !v);
               reset();
             }}
+            accessibilityLabel="Staff may use what they learn in this trial to offer a place afterwards"
             testID="trial-follow-up"
           />
           {!canPay && sessionChoice !== null ? (
-            <Body muted>
+            <Text variant="caption" tone="muted">
               Paying for a trial session is not available in the app yet. Choose &quot;No session
               yet&quot; or ask the front desk.
-            </Body>
+            </Text>
           ) : null}
         </Section>
       ) : null}
 
       <CommandError error={failure} onRetry={() => void submit()} onReload={reset} />
-      <ButtonRow>
+      <View style={styles.actions}>
         <Button
           label={intent === 'trial' ? 'Book the trial' : 'Book the session'}
           onPress={() => void submit()}
           disabled={!ready || offline}
           busy={bookSession.isProcessing || bookTrial.isProcessing}
+          size="lg"
+          block
         />
-        {offline ? <Body muted>Booking needs a connection. Your choices are kept.</Body> : null}
-      </ButtonRow>
+        {offline ? (
+          <Text variant="caption" tone="muted">
+            Booking needs a connection. Your choices are kept.
+          </Text>
+        ) : null}
+      </View>
     </View>
   );
 }
+
+const useStyles = makeStyles(() => ({
+  list: { gap: spacing.sm },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
+}));

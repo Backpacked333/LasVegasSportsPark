@@ -69,12 +69,12 @@ export function createRegistrationTestApp(
 }
 
 /**
- * Waits until the "Add to your basket" button of the registration intent screen can be pressed.
+ * Waits until the "Add to cart" button of the registration intent screen can be pressed.
  * It stays disabled until the customer's baskets have been read, which is a request of its own:
  * the participants a test has just ticked come from another read, so finding them proves nothing
  * about this one, and a press on a disabled button does nothing (quality review m-7).
  */
-export async function basketButtonReady(name = 'Add to your basket'): Promise<void> {
+export async function basketButtonReady(name = 'Add to cart'): Promise<void> {
   await waitFor(() => expect(screen.getByRole('button', { name })).toBeEnabled());
 }
 

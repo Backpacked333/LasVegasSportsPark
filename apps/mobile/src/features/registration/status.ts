@@ -71,7 +71,7 @@ export function basketStatus(basket: Basket, now: Date): StatusBadgeProps {
     case 'open':
       return basket.approvalPending
         ? { tone: 'pending', label: 'Awaiting approval' }
-        : { tone: 'neutral', label: 'In your basket. No place is held yet.' };
+        : { tone: 'neutral', label: 'In your cart. No spots are saved yet.' };
     case 'held':
       return basket.holdExpiresAt
         ? holdStatus(basket.holdExpiresAt, now)
@@ -86,7 +86,7 @@ export function basketStatus(basket: Basket, now: Date): StatusBadgeProps {
     case 'released':
       return { tone: 'warning', label: 'Your held place was released' };
     case 'abandoned':
-      return { tone: 'neutral', label: 'This basket is no longer active' };
+      return { tone: 'neutral', label: 'This cart is no longer active' };
   }
 }
 

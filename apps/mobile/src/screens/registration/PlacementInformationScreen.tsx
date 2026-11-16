@@ -32,7 +32,8 @@ import { fieldMessages } from '../../features/registration/format';
 import { useRegistrationOptions } from '../../features/registration/options';
 import { useParticipantNames } from '../../features/registration/participants';
 import { param, registrationRoutes } from '../../features/registration/routes';
-import { Body, ButtonRow, ChoiceRow, Section, TextField } from '../../features/registration/ui';
+import { RegistrationSteps } from '../../features/registration/steps';
+import { pendingMessageFor } from '../../copy/pending';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveText } from '../../ui/announce';
@@ -40,8 +41,12 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
+import { Section } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { Text as UiText } from '../../ui/Text';
+import { fonts, layout, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 type Basket = Schema<'Basket'>;
 type AvailabilityWindow = Schema<'AvailabilityWindow'>;
@@ -94,25 +99,32 @@ function CompetitionChoice({
           <StateView variant="loading" label="the competitions" />
         )
       ) : (
-        <View accessibilityRole="radiogroup" accessibilityLabel="Preferred competition">
-          <ChoiceRow
-            mode="radio"
-            label="No preference"
+        <View
+          accessibilityRole="radiogroup"
+          accessibilityLabel="Preferred competition"
+          style={styles.editor}
+        >
+          <ChoiceCard
+            option={{ value: 'none', label: 'No preference' }}
+            mode="single"
             checked={value === null}
-            onToggle={() => onChange(null)}
+            onPress={() => onChange(null)}
+            accessibilityLabel="No preference"
           />
           {competitions.data.map((c) => (
-            <ChoiceRow
+            <ChoiceCard
               key={c.id}
-              mode="radio"
-              label={c.name}
-              detail={c.description ?? undefined}
+              option={{ value: c.id, label: c.name, description: c.description ?? undefined }}
+              mode="single"
               checked={value === c.id}
-              onToggle={() => onChange(c.id)}
+              onPress={() => onChange(c.id)}
+              accessibilityLabel={c.description ? `${c.name}. ${c.description}` : c.name}
             />
           ))}
           {competitions.data.length === 0 ? (
-            <Body muted>No competition is open to choose from right now.</Body>
+            <UiText variant="caption" tone="muted">
+              No competition is open to choose from right now.
+            </UiText>
           ) : null}
         </View>
       )}
@@ -229,7 +241,7 @@ function AvailabilityEditor({
       <Button label="Add this time" variant="secondary" onPress={add} />
       {windows.map((w, index) => (
         <View key={`${w.weekday}-${w.from}-${w.to}`} style={styles.window}>
-          <Body>{`${WEEKDAYS[w.weekday]} ${w.from} to ${w.to}`}</Body>
+          <UiText variant="body">{`${WEEKDAYS[w.weekday]} ${w.from} to ${w.to}`}</UiText>
           <Button
             label={`Remove ${WEEKDAYS[w.weekday]} ${w.from} to ${w.to}`}
             variant="secondary"
@@ -250,6 +262,7 @@ function PlacementForm({
   lineId: string;
   fields: readonly string[];
 }) {
+  const styles = useStyles();
   const router = useRouter();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -299,14 +312,16 @@ function PlacementForm({
       <View>
         <Section title="Placement information">
           <StatusBadge tone="info" label="Placement information sent" testID="placement-saved" />
-          <Body>Staff review placement. No team is assigned yet, and no place is reserved.</Body>
+          <UiText variant="body">
+            Staff review placement. No team is assigned yet, and no spot is saved.
+          </UiText>
         </Section>
-        <ButtonRow>
+        <View style={styles.actions}>
           <Button
-            label="Back to your basket"
+            label="Back to your cart"
             onPress={() => router.push(registrationRoutes.basket(basket.id))}
           />
-        </ButtonRow>
+        </View>
       </View>
     );
   }
@@ -342,11 +357,12 @@ function PlacementForm({
   };
   return (
     <View>
+      <RegistrationSteps step="Options" />
       <Section title={name === 'You' ? 'About you as a player' : `About ${name} as a player`}>
-        <Body muted>
+        <UiText variant="caption" tone="muted">
           Only the information below is collected. It is used by staff to place players and is never
           shown publicly.
-        </Body>
+        </UiText>
         {collect.includes('availability') ? (
           <AvailabilityEditor
             windows={availability}
@@ -392,19 +408,27 @@ function PlacementForm({
           />
         ) : null}
         {notInApp.length > 0 ? (
-          <Body muted>{`Not available in the app yet: ${notInApp.join(', ')}.`}</Body>
+          <UiText variant="caption" tone="muted">
+            {`Not available in the app yet: ${notInApp.join(', ')}.`}
+          </UiText>
         ) : null}
       </Section>
       <CommandError error={failure} onRetry={() => void submit()} />
-      <ButtonRow>
+      <View style={styles.actions}>
         <Button
           label="Save placement information"
           onPress={() => void submit()}
           busy={save.isProcessing}
           disabled={offline}
+          size="lg"
+          block
         />
-        {offline ? <Body muted>Saving needs a connection. Your answers are kept.</Body> : null}
-      </ButtonRow>
+        {offline ? (
+          <UiText variant="caption" tone="muted">
+            Saving needs a connection. Your answers are kept.
+          </UiText>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -430,13 +454,14 @@ export function PlacementInformationScreen({
           <StateView
             variant="pending-decision"
             subject="Placement information"
+            message={pendingMessageFor(['DEC-051', 'DEC-031'])}
             decisions={['DEC-051', 'DEC-031']}
             owner="Product and operations; Operator/privacy owner"
           />
         ) : (
           <QueryBoundary
             query={basket}
-            label="your basket"
+            label="your cart"
             empty={{ title: 'Not available', description: '' }}
             unavailableOffline={['Saving placement information']}
           >
@@ -481,5 +506,6 @@ const useStyles = makeStyles(({ colors }) => ({
   dayText: { ...type.caption, color: colors.text, ...fonts.bold },
   dayTextOn: { color: colors.primaryText },
   window: { gap: spacing.xs },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
   error: { ...type.caption, color: colors.danger },
 }));

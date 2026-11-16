@@ -8,7 +8,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { fakeResponse, type FakeHandler, type FakeRequest } from '@sportspark/api-client/testing';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   missingChoices,
   purchaseLineFields,
@@ -185,7 +185,7 @@ describe('Tier, day, add-on and uniform choices in registration (SPK-PAY-014, SP
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     expect(screen.queryByText(/^Options for/i)).toBeNull();
     await basketButtonReady();
-    fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     await waitFor(() =>
       expect(app.fake.requests.find((r) => r.route === '/baskets/{id}/lines')?.body).toEqual({
         participantPersonId: IDS.childA,
@@ -220,7 +220,7 @@ describe('Tier, day, add-on and uniform choices in registration (SPK-PAY-014, SP
 
     // Nothing chosen yet: the missing choices are said in words and nothing is sent.
     await basketButtonReady();
-    fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     expect(await screen.findByText('✕ Choose an option.')).toBeOnTheScreen();
     expect(screen.getByText('✕ Choose a size for the Club kit.')).toBeOnTheScreen();
     expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
@@ -243,7 +243,7 @@ describe('Tier, day, add-on and uniform choices in registration (SPK-PAY-014, SP
     ).toBeOnTheScreen();
 
     await basketButtonReady();
-    fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     await waitFor(() =>
       expect(app.fake.requests.find((r) => r.route === '/baskets/{id}/lines')?.body).toEqual({
         participantPersonId: IDS.childA,
@@ -282,6 +282,31 @@ describe('Tier, day, add-on and uniform choices in registration (SPK-PAY-014, SP
         { ...OPTIONS, uniform: null },
       ),
     ).toEqual(['Choose 2 days of your choice.']);
+  });
+});
+
+describe('PA-11 ADR-008: the Options step of registering', () => {
+  it('SPK-PAY-014, SPK-REG-012: choosing people moves the steps from Who to Options, with the options grouped per person', async () => {
+    const app = createRegistrationTestApp({
+      routes: intentRoutes({
+        'GET /me/permissions': mePermissions({ enabled: ['price_tiers_addons', 'uniforms'] }),
+      }),
+    });
+    render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    const ada = await screen.findByRole('checkbox', { name: 'Ada. Eligible' });
+    expect(screen.getByLabelText('Step 1 of 5, Who')).toBeOnTheScreen();
+    fireEvent.press(ada);
+    expect(await screen.findByLabelText('Step 2 of 5, Options')).toBeOnTheScreen();
+    const choices = within(screen.getByTestId(`choices-${IDS.childA}`));
+    expect(choices.getByRole('header', { name: 'Options for Ada' })).toBeOnTheScreen();
+    for (const group of ['Price', 'Add-ons', 'Uniform size']) {
+      expect(choices.getByText(group)).toBeOnTheScreen();
+    }
+    // Unticking the only person goes back to Who; nothing was sent.
+    fireEvent.press(screen.getByRole('checkbox', { name: 'Ada. Eligible' }));
+    expect(await screen.findByLabelText('Step 1 of 5, Who')).toBeOnTheScreen();
+    expect(app.fake.requests.some((r) => r.route === '/baskets/{id}/lines')).toBe(false);
+    await app.settle();
   });
 });
 

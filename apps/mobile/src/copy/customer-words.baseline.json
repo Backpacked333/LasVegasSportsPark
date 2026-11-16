@@ -1,22 +1,4 @@
 [
-  "src/features/registration/CampWeeks.tsx :: basket :: …l week can still be added: your basket offers its waitlist.",
-  "src/features/registration/CampWeeks.tsx :: quote :: Estimate before credits. Your quote gives the binding price.",
-  "src/features/registration/CampWeeks.tsx :: quote :: … be shown here for these weeks. Your quote gives the price.",
-  "src/features/registration/CampWeeks.tsx :: quote :: … total could not be worked out. Your quote gives the price.",
-
-  "src/features/registration/InProgressCard.tsx :: basket :: Your basket",
-
-  "src/features/registration/PurchaseChoices.tsx :: basket :: Places are limited each day and held with your basket.",
-  "src/features/registration/PurchaseChoices.tsx :: basket :: …registration. Places are limited and held with your basket.",
-
-  "src/features/registration/SessionBooking.tsx :: session package :: your session package",
-
-  "src/features/registration/intents.ts :: enrollment :: Youth enrollment",
-  "src/features/registration/intents.ts :: session package :: Session package",
-
-  "src/features/registration/status.ts :: basket :: In your basket. No place is held yet.",
-  "src/features/registration/status.ts :: basket :: This basket is no longer active",
-
   "src/features/teams/ContactOperations.tsx :: DEC- :: …till being decided (DEC-015), so no response time is given.",
 
   "src/features/teams/ObligationTotals.tsx :: DEC- :: …nt policy, which is still being decided (DEC-008, POL-015).",
@@ -155,14 +137,7 @@
   "src/screens/registration/OfferingDetailScreen.tsx :: quote :: Your quote shows the final price for each participant, with…",
   "src/screens/registration/OfferingDetailScreen.tsx :: quote :: … a cancellation policy. Its wording is shown on your quote.",
 
-  "src/screens/registration/PlacementInformationScreen.tsx :: basket :: Back to your basket",
-  "src/screens/registration/PlacementInformationScreen.tsx :: basket :: your basket",
-
   "src/screens/registration/QuoteReviewScreen.tsx :: basket :: Back to your basket",
-
-  "src/screens/registration/RegistrationIntentScreen.tsx :: basket :: Add to your basket",
-  "src/screens/registration/RegistrationIntentScreen.tsx :: basket :: Add … people to your basket",
-  "src/screens/registration/RegistrationIntentScreen.tsx :: basket :: Adding to your basket needs a connection. Your choices are …",
 
   "src/screens/registration/RequiredFormsScreen.tsx :: basket :: Back to your basket",
 

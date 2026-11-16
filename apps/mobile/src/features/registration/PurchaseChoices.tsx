@@ -9,14 +9,19 @@
  * before. Prices shown are the catalog's; the quote decides what is charged, and the app never
  * works out a total here. The API checks every choice again when the line is added.
  *
- * Accessibility (SPK-UX-009): every choice is a radio or checkbox row with its label, detail and
- * state; a missing choice is said in words next to its group, never by colour.
+ * Accessibility (SPK-UX-009): every choice is a radio or checkbox card (`ui/ChoiceList`) with its
+ * label, detail and state, under its group's name (Price, Days, Add-ons, Uniform size); a missing
+ * choice is said in words next to its group, never by colour. This is the Options step of
+ * registering (PA-11, ADR-008): shown per person once they are chosen.
  */
 import type { Schema } from '@sportspark/api-client';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatInstant, formatMoney } from './format';
-import { Body, ChoiceRow, Section } from './ui';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Section as UiSection } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type Options = Schema<'OfferingPurchaseOptions'>;
 type Tier = Options['tiers'][number];
@@ -148,6 +153,7 @@ export function PurchaseChoices({
   /** After a first attempt: say what is still missing. */
   showMissing: boolean;
 }) {
+  const styles = useStyles();
   const tier = options.tiers.find((t) => t.id === value.priceTierId);
   const currency = options.currency ?? options.addons[0]?.currency ?? 'USD';
   const days = sessions
@@ -160,35 +166,50 @@ export function PurchaseChoices({
   const uniform = options.uniform;
   const missing = showMissing ? missingChoices(value, options) : [];
   return (
-    <Section title={`Options for ${personName}`} testID={`choices-${personId}`}>
+    <UiSection
+      title={`Options for ${personName}`}
+      subtitle="Choose what to sign up for. The review shows the price."
+      testID={`choices-${personId}`}
+    >
       {options.tiers.length > 0 ? (
-        <View accessibilityRole="radiogroup">
-          {options.tiers.map((t) => (
-            <ChoiceRow
-              key={t.id}
-              mode="radio"
-              label={`${t.name}: ${formatMoney(t.priceMinor, currency)}${
-                options.pricingBasis === 'per_session' ? ' per day' : ''
-              }`}
-              detail={`Attends ${tierDays(t)}`}
-              checked={value.priceTierId === t.id}
-              onToggle={() =>
-                onChange({ ...value, priceTierId: t.id, selectedSessionIds: [], addons: {} })
-              }
-              testID={`tier-${personId}-${t.code}`}
-            />
-          ))}
+        <View accessibilityRole="radiogroup" style={styles.group}>
+          <Text variant="label" tone="muted">
+            Price
+          </Text>
+          {options.tiers.map((t) => {
+            const label = `${t.name}: ${formatMoney(t.priceMinor, currency)}${
+              options.pricingBasis === 'per_session' ? ' per day' : ''
+            }`;
+            const detail = `Attends ${tierDays(t)}`;
+            return (
+              <ChoiceCard
+                key={t.id}
+                option={{ value: t.id, label, description: detail }}
+                mode="single"
+                checked={value.priceTierId === t.id}
+                onPress={() =>
+                  onChange({ ...value, priceTierId: t.id, selectedSessionIds: [], addons: {} })
+                }
+                accessibilityLabel={`${label}. ${detail}`}
+                testID={`tier-${personId}-${t.code}`}
+              />
+            );
+          })}
         </View>
       ) : null}
       {tier?.attendance === 'chosen_sessions' ? (
-        <View>
-          <Body muted>{`Choose ${tierDays(tier)}.`}</Body>
+        <View style={styles.group}>
+          <Text variant="label" tone="muted">
+            Days
+          </Text>
+          <Text variant="caption" tone="muted">{`Choose ${tierDays(tier)}.`}</Text>
           {days.map((day) => (
-            <ChoiceRow
+            <ChoiceCard
               key={day.id}
-              label={day.label}
+              option={{ value: day.id, label: day.label }}
+              mode="multiple"
               checked={value.selectedSessionIds.includes(day.id)}
-              onToggle={() => {
+              onPress={() => {
                 const selectedSessionIds = toggled(value.selectedSessionIds, day.id);
                 onChange({
                   ...value,
@@ -202,80 +223,93 @@ export function PurchaseChoices({
                   ),
                 });
               }}
+              accessibilityLabel={day.label}
               testID={`day-${personId}-${day.id}`}
             />
           ))}
         </View>
       ) : null}
-      {options.addons.map((addon) =>
-        addon.selection === 'per_session' ? (
-          <View key={addon.id}>
-            <Body>{`${addon.name}: ${formatMoney(addon.priceMinor, addon.currency)} each day`}</Body>
-            {addon.capacity !== null ? (
-              <Body muted>Places are limited each day and held with your basket.</Body>
-            ) : null}
-            {attended.map((day) => (
-              <ChoiceRow
-                key={day.id}
-                label={`${addon.name} on ${day.label}`}
-                checked={(value.addons[addon.id] ?? []).includes(day.id)}
-                onToggle={() =>
-                  onChange({
-                    ...value,
-                    addons: {
-                      ...value.addons,
-                      [addon.id]: toggled(value.addons[addon.id] ?? [], day.id),
-                    },
-                  })
-                }
-                testID={`addon-${personId}-${addon.code}-${day.id}`}
+      {options.addons.length > 0 ? (
+        <View style={styles.group}>
+          <Text variant="label" tone="muted">
+            Add-ons
+          </Text>
+          {options.addons.map((addon) =>
+            addon.selection === 'per_session' ? (
+              <View key={addon.id} style={styles.group}>
+                <Text variant="body">{`${addon.name}: ${formatMoney(addon.priceMinor, addon.currency)} each day`}</Text>
+                {addon.capacity !== null ? (
+                  <Text variant="caption" tone="muted">
+                    Spots are limited each day and saved with your cart.
+                  </Text>
+                ) : null}
+                {attended.map((day) => {
+                  const label = `${addon.name} on ${day.label}`;
+                  return (
+                    <ChoiceCard
+                      key={day.id}
+                      option={{ value: day.id, label }}
+                      mode="multiple"
+                      checked={(value.addons[addon.id] ?? []).includes(day.id)}
+                      onPress={() =>
+                        onChange({
+                          ...value,
+                          addons: {
+                            ...value.addons,
+                            [addon.id]: toggled(value.addons[addon.id] ?? [], day.id),
+                          },
+                        })
+                      }
+                      accessibilityLabel={label}
+                      testID={`addon-${personId}-${addon.code}-${day.id}`}
+                    />
+                  );
+                })}
+              </View>
+            ) : (
+              <AddonOnce
+                key={addon.id}
+                addon={addon}
+                checked={value.addons[addon.id] !== undefined}
+                onPress={() => {
+                  const next = { ...value.addons };
+                  if (next[addon.id] !== undefined) delete next[addon.id];
+                  else next[addon.id] = [];
+                  onChange({ ...value, addons: next });
+                }}
+                testID={`addon-${personId}-${addon.code}`}
               />
-            ))}
-          </View>
-        ) : (
-          <ChoiceRow
-            key={addon.id}
-            label={`${addon.name}: ${formatMoney(addon.priceMinor, addon.currency)}`}
-            detail={
-              addon.capacity !== null
-                ? 'Once for this registration. Places are limited and held with your basket.'
-                : 'Once for this registration'
-            }
-            checked={value.addons[addon.id] !== undefined}
-            onToggle={() => {
-              const next = { ...value.addons };
-              if (next[addon.id] !== undefined) delete next[addon.id];
-              else next[addon.id] = [];
-              onChange({ ...value, addons: next });
-            }}
-            testID={`addon-${personId}-${addon.code}`}
-          />
-        ),
-      )}
+            ),
+          )}
+        </View>
+      ) : null}
       {uniform ? (
-        <View>
-          <Body>
+        <View style={styles.group}>
+          <Text variant="label" tone="muted">
+            Uniform size
+          </Text>
+          <Text variant="body">
             {`${uniform.name}${
               uniform.priceMinor !== null && uniform.currency
                 ? `: ${formatMoney(uniform.priceMinor, uniform.currency)}`
                 : ''
             }`}
-          </Body>
-          <Body muted>
+          </Text>
+          <Text variant="caption" tone="muted">
             {`${uniform.requirement === 'required' ? 'Required: choose a size.' : 'Optional: choose a size to add it.'}${
               uniform.returningHolderFree
                 ? ' If this person already has this uniform, it is not charged again.'
                 : ''
             }`}
-          </Body>
-          <View accessibilityRole="radiogroup">
+          </Text>
+          <View accessibilityRole="radiogroup" style={styles.sizes}>
             {uniform.sizes.map((size) => (
-              <ChoiceRow
+              <ChoiceCard
                 key={size}
-                mode="radio"
-                label={`Size ${size}`}
+                option={{ value: size, label: `Size ${size}` }}
+                mode="single"
                 checked={value.uniformSize === size}
-                onToggle={() =>
+                onPress={() =>
                   onChange({
                     ...value,
                     // An optional uniform is removed by choosing its size again.
@@ -285,6 +319,7 @@ export function PurchaseChoices({
                         : size,
                   })
                 }
+                accessibilityLabel={`Size ${size}`}
                 testID={`uniform-${personId}-${size}`}
               />
             ))}
@@ -292,8 +327,42 @@ export function PurchaseChoices({
         </View>
       ) : null}
       {missing.map((text) => (
-        <Body key={text}>{`✕ ${text}`}</Body>
+        <Text key={text} variant="body" tone="danger">{`✕ ${text}`}</Text>
       ))}
-    </Section>
+    </UiSection>
   );
 }
+
+/** An add-on chosen once for the registration. */
+function AddonOnce({
+  addon,
+  checked,
+  onPress,
+  testID,
+}: {
+  addon: Options['addons'][number];
+  checked: boolean;
+  onPress: () => void;
+  testID: string;
+}) {
+  const label = `${addon.name}: ${formatMoney(addon.priceMinor, addon.currency)}`;
+  const detail =
+    addon.capacity !== null
+      ? 'Once for this registration. Spots are limited and saved with your cart.'
+      : 'Once for this registration';
+  return (
+    <ChoiceCard
+      option={{ value: addon.id, label, description: detail }}
+      mode="multiple"
+      checked={checked}
+      onPress={onPress}
+      accessibilityLabel={`${label}. ${detail}`}
+      testID={testID}
+    />
+  );
+}
+
+const useStyles = makeStyles(() => ({
+  group: { gap: spacing.sm },
+  sizes: { gap: spacing.sm },
+}));

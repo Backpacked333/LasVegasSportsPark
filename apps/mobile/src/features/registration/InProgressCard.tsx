@@ -37,7 +37,8 @@ import { useRegistrationProgress } from './progress';
 import { useOfferingTimeZones } from './queries';
 import { registrationRoutes } from './routes';
 import { basketStatus, checkoutStatus, offerDeadlineStatus } from './status';
-import { Body, Section } from './ui';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 
 type Basket = Schema<'Basket'>;
 
@@ -124,7 +125,7 @@ export function InProgressCard() {
         {active.map((basket) => (
           <ListRow
             key={basket.id}
-            title="Your basket"
+            title="Your cart"
             detail={lineCount(basket)}
             status={basketStatus(basket, now)}
             onPress={() => router.push(registrationRoutes.basket(basket.id))}
@@ -147,7 +148,11 @@ export function InProgressCard() {
           />
         ))}
       </View>
-      {nothing ? <Body muted>Nothing in progress right now.</Body> : null}
+      {nothing ? (
+        <Text variant="caption" tone="muted">
+          Nothing in progress right now.
+        </Text>
+      ) : null}
       <View style={styles.more}>
         <Button
           label="Your waitlists"

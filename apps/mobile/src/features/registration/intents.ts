@@ -1,5 +1,7 @@
 /**
- * Registration intents (SPK-REG-001) as the customer sees them on SCR-C-09.
+ * Registration intents (SPK-REG-001) as the customer sees them on SCR-C-09: the registration
+ * types, in the customer vocabulary (PA-11, `src/copy/vocabulary.ts`: "Register a child", "Join as
+ * a player", "Enter a new team", "Class pack").
  *
  * Which intents an offering accepts is the API's answer: `GET /v1/offerings/{id}/registration-options`
  * `availableIntents` (ENR-05). Nothing here decides that; this file only says how the app carries
@@ -51,7 +53,7 @@ export const INTENT_CAPABILITY: Partial<Record<RegistrationIntent, CapabilityId>
 
 export const INTENT_LABELS: Record<RegistrationIntent, { title: string; description: string }> = {
   individual_league: {
-    title: 'Individual league entry',
+    title: 'Join as a player',
     description: 'Register one adult player; staff place individual players on a team.',
   },
   join_team: {
@@ -59,26 +61,26 @@ export const INTENT_LABELS: Record<RegistrationIntent, { title: string; descript
     description: 'Join a team that has invited you.',
   },
   create_team_entry: {
-    title: 'Create a team entry',
+    title: 'Enter a new team',
     description: 'Enter a team in this league as its organizer.',
   },
   youth: {
-    title: 'Youth enrollment',
-    description: 'Enroll a child in this program.',
+    title: 'Register a child',
+    description: 'Register a child in this program.',
   },
-  trial: { title: 'Trial', description: 'Try one session before enrolling.' },
+  trial: { title: 'Trial', description: 'Try one session before registering.' },
   makeup: { title: 'Makeup session', description: 'Use a makeup for a missed session.' },
   pickup: { title: 'Pickup session', description: 'Book a place in one pickup session.' },
   rental_request: { title: 'Rental request', description: 'Request this rental.' },
   membership: { title: 'Membership', description: 'Join this membership.' },
-  package_purchase: { title: 'Session package', description: 'Buy this package of sessions.' },
+  package_purchase: { title: 'Class pack', description: 'Buy this class pack.' },
   party_request: { title: 'Party booking', description: 'Book this party.' },
 };
 
 /** What the chooser says for an intent it does not carry as a basket line. */
 export const HANDLING_NOTE: Record<Exclude<IntentHandling, 'basket'>, string> = {
   booking: 'Choose a time and what you need on the next screen.',
-  makeup: 'A makeup is booked from the makeup sessions you have (Account, credits and makeups).',
-  team_invitation: 'Joining a team uses the invitation the team sends you (Account, invitations).',
+  makeup: 'A makeup is booked from the makeup sessions you have (You, credits and makeups).',
+  team_invitation: 'Joining a team uses the invitation the team sends you (You, invitations).',
   session: 'Choose the participant and the session on this screen.',
 };

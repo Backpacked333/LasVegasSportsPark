@@ -87,7 +87,7 @@ describe('SCR-C-11 BasketScreen', () => {
     renderBasket({ routes: routes() });
     expect(await screen.findByText('Ada: Autumn Youth Program')).toBeOnTheScreen();
     expect(screen.getByText('Ben: Autumn Youth Program')).toBeOnTheScreen();
-    expect(screen.getByLabelText('In your basket. No place is held yet.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('In your cart. No spots are saved yet.')).toBeOnTheScreen();
     expect(
       screen.getByText('All places in this basket are confirmed together, or none are.'),
     ).toBeOnTheScreen();

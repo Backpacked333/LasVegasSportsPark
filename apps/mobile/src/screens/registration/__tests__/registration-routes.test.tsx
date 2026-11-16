@@ -69,7 +69,7 @@ describe('registration routes (SCR-C-07 to SCR-C-16)', () => {
   });
 
   it.each([
-    [`/registration/start/${IDS.offering}`, 'How do you want to register?'],
+    [`/registration/start/${IDS.offering}`, "Who's going?"],
     [`/registration/basket/${IDS.basket}`, 'Your basket'],
     [`/registration/quote/${IDS.quote}`, 'Your price'],
     [`/registration/forms?basketId=${IDS.basket}`, 'Required forms'],
