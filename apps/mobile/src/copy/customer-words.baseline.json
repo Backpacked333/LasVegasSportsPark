@@ -114,9 +114,6 @@
   "src/screens/registration/CheckoutScreen.tsx :: basket :: …d. Go back to your basket to start again or join a waitlis…",
   "src/screens/registration/CheckoutScreen.tsx :: quote :: Your quote has nothing due now.",
 
-  "src/screens/registration/OfferingDetailScreen.tsx :: quote :: Your quote shows the final price for each participant, with…",
-  "src/screens/registration/OfferingDetailScreen.tsx :: quote :: … a cancellation policy. Its wording is shown on your quote.",
-
   "src/screens/registration/WaitlistScreen.tsx :: basket :: Holds the place in a basket so you can pay",
 
   "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: A session package holds sessions to book. It is not money a…",
