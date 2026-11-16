@@ -1,35 +1,43 @@
 /**
- * Layout pieces shared by the team screens (SCR-C-21 to SCR-C-29), built on the foundation theme.
- * Accessibility (SPK-UX-009): every control has a role, a label and its state (checked, disabled,
- * busy); every value row reads as one element "label: value"; text scales with the OS setting.
+ * Layout pieces shared by the team screens (SCR-C-21 to SCR-C-29): a thin adapter over the visual
+ * system v2 in `src/ui` (ADR-008, Phase 3), kept so existing imports compile while screens move to
+ * `src/ui` directly. Every export keeps its props and its accessible output: role, name, state and
+ * visible words. Accessibility (SPK-UX-009): every control has a role, a label and its state
+ * (checked, disabled, busy); every value row reads as one element "label: value"; text scales with
+ * the OS setting.
+ *
+ * Moved out: `ReasonList` (`ui/ReasonList`), `OfflineNotice` (`ui/OfflineNotice`) and the error
+ * detail readers (`api/error-details`), re-exported here. `CommandFailure` stays until the three
+ * command-failure views are merged.
  */
-import {
-  presentationForError,
-  recoveryActionFor,
-  type ApiError,
-  type Schema,
-} from '@sportspark/api-client';
+import { presentationForError, recoveryActionFor, type ApiError } from '@sportspark/api-client';
 import { createContext, useContext, type ReactNode } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { View } from 'react-native';
 import {
   mayHaveTakenEffect,
   refusedBeforeRunning,
   secretWithheldOf,
   tookEffectOutcomeLost,
 } from '../../api/command-outcome';
-import { SectionCard } from '../../ui/Card';
-import { LiveRegion, LiveText, sentences } from '../../ui/announce';
+import { detailCodeOf, eligibilityReasonsOf, fieldIssuesOf } from '../../api/error-details';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
-import { useInputChrome } from '../../ui/input';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Field, FieldErrorText, FieldInput, FieldValue, useFieldStyles } from '../../ui/Field';
 import { OutcomeLost } from '../../ui/OutcomeLost';
+import { ReasonList } from '../../ui/ReasonList';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
+import { Section as UiSection } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
-import { roleWords } from './format';
-import { severityStatus } from './status';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
-/** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
+export { detailCodeOf, eligibilityReasonsOf, fieldIssuesOf } from '../../api/error-details';
+export { OfflineNotice } from '../../ui/OfflineNotice';
+export { ReasonList } from '../../ui/ReasonList';
+
+/** A titled card (`ui/Section`): the title is announced as a header. */
 export function Section({
   title,
   children,
@@ -40,16 +48,16 @@ export function Section({
   testID?: string;
 }) {
   return (
-    <SectionCard title={title} testID={testID}>
+    <UiSection title={title} testID={testID}>
       {children}
-    </SectionCard>
+    </UiSection>
   );
 }
 
 export function Title({ children }: { children: string }) {
   const styles = useStyles();
   return (
-    <Text style={styles.title} accessibilityRole="header">
+    <Text variant="title1" heading style={styles.title}>
       {children}
     </Text>
   );
@@ -57,17 +65,21 @@ export function Title({ children }: { children: string }) {
 
 /** A heading inside a section (announced as a header, one level below the section's). */
 export function Subheading({ children }: { children: string }) {
-  const styles = useStyles();
   return (
-    <Text style={styles.subheading} accessibilityRole="header">
+    <Text variant="headline" heading>
       {children}
     </Text>
   );
 }
 
 export function Body({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
-  const styles = useStyles();
-  return <Text style={muted ? styles.caption : styles.body}>{children}</Text>;
+  return muted ? (
+    <Text variant="caption" tone="muted">
+      {children}
+    </Text>
+  ) : (
+    <Text variant="body">{children}</Text>
+  );
 }
 
 /** One "label: value" fact, read as a single element by screen readers. */
@@ -80,18 +92,7 @@ export function Detail({
   value: string;
   testID?: string;
 }) {
-  const styles = useStyles();
-  return (
-    <View
-      style={styles.detail}
-      accessible
-      accessibilityLabel={`${label}: ${value}`}
-      testID={testID}
-    >
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
-    </View>
-  );
+  return <FieldValue label={label} value={value} layout="inline" testID={testID} />;
 }
 
 export function ButtonRow({ children }: { children: ReactNode }) {
@@ -103,9 +104,9 @@ export function ButtonRow({ children }: { children: ReactNode }) {
 const ChoiceErrorContext = createContext<string | null>(null);
 
 /**
- * A radio row: role and checked state are announced; the mark is a glyph, never colour only. While
- * its group shows an error ("Choose the player to ask."), the error is the row's hint, so it is
- * read with the choice (SPK-UX-009).
+ * A radio row (`ui/ChoiceList` `ChoiceCard`): role and checked state are announced; the mark is a
+ * glyph, never colour only. Its name is "Label, Detail". While its group shows an error ("Choose
+ * the player to ask."), the error is the row's hint, so it is read with the choice (SPK-UX-009).
  */
 export function RadioRow({
   label,
@@ -122,35 +123,17 @@ export function RadioRow({
   disabled?: boolean;
   testID?: string;
 }) {
-  const styles = useStyles();
   const groupError = useContext(ChoiceErrorContext);
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={detail ? `${label}, ${detail}` : label}
-      accessibilityHint={groupError ? `Error: ${groupError}` : undefined}
-      accessibilityState={{ checked, disabled }}
+    <ChoiceCard
+      option={{ value: label, label, description: detail }}
+      mode="single"
+      checked={checked}
       disabled={disabled}
+      error={groupError}
       onPress={onSelect}
-      style={({ pressed }) => [
-        styles.choice,
-        pressed && styles.pressed,
-        disabled && styles.inactive,
-      ]}
       testID={testID}
-    >
-      <Text
-        style={styles.mark}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-      >
-        {checked ? '◉' : '○'}
-      </Text>
-      <View style={styles.choiceText}>
-        <Text style={styles.choiceLabel}>{label}</Text>
-        {detail ? <Text style={styles.caption}>{detail}</Text> : null}
-      </View>
-    </Pressable>
+    />
   );
 }
 
@@ -169,6 +152,7 @@ export function RadioGroup({
   children: ReactNode;
 }) {
   const styles = useStyles();
+  const field = useFieldStyles();
   return (
     <View
       accessibilityRole="radiogroup"
@@ -176,7 +160,7 @@ export function RadioGroup({
       accessibilityHint={error ? `Error: ${error}` : undefined}
       style={styles.group}
     >
-      <Text style={styles.fieldLabel}>{label}</Text>
+      <Text style={field.label}>{label}</Text>
       <ChoiceErrorContext.Provider value={error ?? null}>{children}</ChoiceErrorContext.Provider>
     </View>
   );
@@ -188,13 +172,7 @@ export function RadioGroup({
  * person who sends a form without choosing hears why nothing was sent.
  */
 export function FieldError({ error, testID }: { error?: string | null; testID?: string }) {
-  const styles = useStyles();
-  if (!error) return null;
-  return (
-    <LiveText style={styles.error} announcement={error} accessibilityRole="alert" testID={testID}>
-      {`▲ ${error}`}
-    </LiveText>
-  );
+  return <FieldErrorText error={error} glyph="▲" testID={testID} />;
 }
 
 /** Labelled text input; the error is part of the accessible label so it is read with the field. */
@@ -221,14 +199,9 @@ export function TextField({
   editable?: boolean;
   testID?: string;
 }) {
-  const styles = useStyles();
-  const input = useInputChrome();
   return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      {hint ? <Text style={styles.caption}>{hint}</Text> : null}
-      <TextInput
-        {...input.props}
+    <Field label={label} hint={hint}>
+      <FieldInput
         accessibilityLabel={error ? `${label}. ${error}` : label}
         accessibilityHint={hint}
         accessibilityState={{ disabled: !editable }}
@@ -238,94 +211,12 @@ export function TextField({
         multiline={multiline}
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize}
-        style={[
-          styles.input,
-          input.focusStyle,
-          multiline && styles.multiline,
-          !editable && styles.inactive,
-        ]}
+        invalid={!!error}
         testID={testID}
       />
-      {error ? (
-        <LiveText style={styles.error} announcement={error}>
-          {`▲ ${error}`}
-        </LiveText>
-      ) : null}
-    </View>
+      <FieldErrorText error={error} glyph="▲" alert={false} />
+    </Field>
   );
-}
-
-type Reason = Pick<
-  Schema<'EligibilityReason'>,
-  'code' | 'severity' | 'message' | 'responsibleRole' | 'requiredAction'
->;
-
-/**
- * Eligibility or readiness reasons with who resolves them (SPK-READY-003, SPK-CAP-004). A rule that
- * needs league approval is shown as a pending approval, never as a denial (SCR-C-26).
- */
-export function ReasonList({ reasons, testID }: { reasons: Reason[]; testID?: string }) {
-  const styles = useStyles();
-  return (
-    <View accessibilityRole="list" style={styles.group} testID={testID}>
-      {reasons.map((reason, index) => (
-        <View key={`${reason.code}-${index}`} style={styles.reason}>
-          <StatusBadge
-            {...(reason.code === 'approval_required'
-              ? { tone: 'pending' as const, label: 'League approval required' }
-              : severityStatus(reason.severity))}
-          />
-          <Text style={styles.body}>{reason.message}</Text>
-          <Text style={styles.caption}>
-            {`${roleWords(reason.responsibleRole)}: ${reason.requiredAction}`}
-          </Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function isReason(value: unknown): value is Reason {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as Record<string, unknown>;
-  return typeof v.code === 'string' && typeof v.message === 'string';
-}
-
-/** `details.reasons` of an ELIGIBILITY_FAILED answer, when the API sent them. */
-export function eligibilityReasonsOf(error: ApiError): Reason[] {
-  const details = error.details as { reasons?: unknown } | undefined;
-  if (!details || !Array.isArray(details.reasons)) return [];
-  return details.reasons.filter(isReason).map((r) => ({
-    code: r.code,
-    severity: (['blocking', 'warning', 'info', 'unknown'] as const).includes(r.severity)
-      ? r.severity
-      : 'unknown',
-    message: r.message,
-    responsibleRole: typeof r.responsibleRole === 'string' ? r.responsibleRole : 'league_manager',
-    requiredAction: typeof r.requiredAction === 'string' ? r.requiredAction : '',
-  }));
-}
-
-/** Field issues of a VALIDATION_FAILED answer from the API's request validation. */
-export function fieldIssuesOf(error: ApiError): string[] {
-  if (!Array.isArray(error.details)) return [];
-  return error.details
-    .filter(
-      (d): d is { path: string; message: string } =>
-        !!d && typeof d === 'object' && typeof (d as { message?: unknown }).message === 'string',
-    )
-    .map((d) => (d.path ? `${d.path}: ${d.message}` : d.message));
-}
-
-/**
- * The rule code of a refusal whose `details` is an object with a `code` (for example the handover
- * rules ROLE_NOT_HELD or CAPTAIN_MUST_BE_ADULT under VALIDATION_FAILED, CMP-13), or null.
- */
-export function detailCodeOf(error: ApiError): string | null {
-  const details = error.details;
-  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
-  const code = (details as { code?: unknown }).code;
-  return typeof code === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(code) ? code : null;
 }
 
 /**
@@ -438,12 +329,12 @@ export function CommandFailure({
       occurrence={error}
     >
       <StatusBadge tone={unknown || withheld ? 'warning' : 'danger'} label={label} />
-      <Text style={styles.body}>{error.message}</Text>
+      <Text variant="body">{error.message}</Text>
       {issues.map((issue) => (
-        <Text key={issue} style={styles.body}>{`▲ ${issue}`}</Text>
+        <Text key={issue} variant="body">{`▲ ${issue}`}</Text>
       ))}
       {reasons.length > 0 ? <ReasonList reasons={reasons} /> : null}
-      <Text style={styles.caption} selectable>
+      <Text variant="caption" tone="muted" selectable>
         {`Error code: ${error.code}${rule ? ` (${rule})` : ''}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`}
       </Text>
       {stale && onReload ? (
@@ -457,76 +348,19 @@ export function CommandFailure({
           }
         />
       ) : (
-        <Text style={styles.body}>{nextAction}</Text>
+        <Text variant="body">{nextAction}</Text>
       )}
     </LiveRegion>
   );
 }
 
-/** A command that needs a connection while the device is offline (SPK-UX-008, §4.15). */
-export function OfflineNotice({ what }: { what: string }) {
-  const styles = useStyles();
-  return (
-    <View style={styles.notice} accessible accessibilityLabel={`${what} needs a connection`}>
-      <StatusBadge tone="warning" label="Needs a connection" />
-      <Text style={styles.body}>
-        {`${what} needs a connection. Nothing is queued: your entries are kept on this screen.`}
-      </Text>
-    </View>
-  );
-}
-
-const useStyles = makeStyles(({ colors }) => ({
+const useStyles = makeStyles(() => ({
   title: {
-    ...type.display,
-    fontSize: 30,
-    lineHeight: 32,
-    color: colors.text,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: layout.gutter,
     paddingTop: spacing.md,
     paddingBottom: spacing.xs,
   },
-  body: { ...type.body, color: colors.text },
-  subheading: { ...type.body, color: colors.text, ...fonts.bold },
-  caption: { ...type.caption, color: colors.textMuted },
-  detail: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    paddingVertical: 2,
-  },
-  detailLabel: { ...type.caption, color: colors.textMuted, minWidth: 120, paddingTop: 1 },
-  detailValue: { ...type.body, color: colors.text, flexShrink: 1, ...fonts.semibold },
   buttonRow: { gap: spacing.sm, paddingTop: spacing.xs },
-  group: { gap: spacing.xs },
-  choice: {
-    minHeight: MIN_TOUCH_SIZE,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  choiceText: { flex: 1 },
-  choiceLabel: { ...type.body, color: colors.text },
-  mark: { ...type.heading, fontSize: 22, color: colors.primary },
-  pressed: { opacity: 0.7 },
-  inactive: { opacity: 0.55 },
-  field: { gap: spacing.xs },
-  fieldLabel: { ...type.body, color: colors.text, ...fonts.semibold },
-  input: {
-    ...type.body,
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: colors.control,
-    borderRadius: radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: spacing.sm,
-    color: colors.text,
-    backgroundColor: colors.background,
-  },
-  multiline: { minHeight: 88, textAlignVertical: 'top' },
-  error: { ...type.caption, color: colors.danger },
-  reason: { gap: spacing.xs, paddingVertical: spacing.xs },
+  group: { gap: spacing.sm },
   failure: { gap: spacing.sm, paddingVertical: spacing.sm },
-  notice: { gap: spacing.xs, paddingVertical: spacing.xs },
 }));
