@@ -52,8 +52,6 @@
 
   "src/screens/onboarding/AccountRecoveryScreen.tsx :: household :: …. Access is never restored from household membership alone.",
 
-  "src/screens/pass/PassScreen.tsx :: household :: …desk. Passes for a household are issued by staff at the de…",
-
   "src/screens/payments/OrderSections.tsx :: enrollment :: …do not change your enrollment: it stays confirmed while th…",
 
   "src/screens/payments/PaymentsScreen.tsx :: obligation :: Payments and obligations",

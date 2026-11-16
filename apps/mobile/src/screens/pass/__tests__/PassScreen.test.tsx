@@ -6,7 +6,7 @@
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import * as SecureStore from 'expo-secure-store';
-import { AccessibilityInfo } from 'react-native';
+import { AccessibilityInfo, StyleSheet, type TextStyle } from 'react-native';
 import type { ReactNode } from 'react';
 import { me, ok, SELF } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, dropAnswers, TEST_SESSION, waitForAbsent } from '../../../testing/test-app';
@@ -24,9 +24,10 @@ import {
   otherActivePasses,
   PassScreen,
   REPLACE_REASON,
+  SCANNABLE_CODE_MESSAGE,
   WITHDRAW_REASON,
 } from '../PassScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -83,6 +84,11 @@ function listed(id: string, overrides: Record<string, unknown> = {}) {
 
 const myPasses = (...rows: unknown[]): FakeHandler => ok(rows);
 
+/** Opens the pass's "More" fold, where "Replace pass" and the scanner note are (ADR-008). */
+async function openMore() {
+  fireEvent.press(await screen.findByRole('button', { name: 'More' }));
+}
+
 const STORED: StoredPass = {
   passId: PASS_ONE,
   reference: REF_ONE,
@@ -137,10 +143,14 @@ describe('SCR-C-05 PassScreen', () => {
     });
     // No name, household or child detail anywhere on the pass (§4.14).
     expect(screen.queryByText(/Alex|Morgan/)).toBeNull();
-    // The scannable symbol waits on the scanner decision.
+    // The scannable symbol waits on the scanner decision; the note is in the "More" fold.
+    await openMore();
     expect(
-      screen.getByLabelText("A scannable code for this pass. This isn't available in the app yet."),
+      screen.getByLabelText(`A scannable code for this pass. ${SCANNABLE_CODE_MESSAGE}`),
     ).toBeOnTheScreen();
+    expect(SCANNABLE_CODE_MESSAGE).toBe(
+      'For now, show or read out the reference at the front desk.',
+    );
     await openSupportDetails(screen);
     expect(screen.getByText('Decision: DEC-023')).toBeOnTheScreen();
   });
@@ -164,6 +174,7 @@ describe('SCR-C-05 PassScreen', () => {
       },
       { stored: STORED },
     );
+    await openMore();
     fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
     expect(screen.getByText(/the current one stops working/)).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
@@ -187,10 +198,13 @@ describe('SCR-C-05 PassScreen', () => {
       },
       { stored: STORED },
     );
+    await openMore();
     fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
     fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
     expect(await screen.findByLabelText('Previous pass may still be active')).toBeOnTheScreen();
-    expect(screen.getByText(/error code INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
+    // The code is in the "Details for support" fold (PA-11).
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
     expect(screen.getByText(groupReference(REF_TWO))).toBeOnTheScreen();
   });
 
@@ -208,6 +222,7 @@ describe('SCR-C-05 PassScreen', () => {
       },
       { stored: STORED },
     );
+    await openMore();
     fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
     fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
     expect(
@@ -246,6 +261,7 @@ describe('SCR-C-05 PassScreen', () => {
       },
       { stored: STORED },
     );
+    await openMore();
     fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
     fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
     const lost = await screen.findByTestId('pass-revoke-outcome-lost');
@@ -279,6 +295,7 @@ describe('SCR-C-05 PassScreen', () => {
       },
       { stored: STORED },
     );
+    await openMore();
     fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
     fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
     expect(await screen.findByTestId('pass-revoke-problem')).toBeOnTheScreen();
@@ -300,6 +317,7 @@ describe('SCR-C-05 PassScreen', () => {
     store.save = jest.fn(async () => {
       throw new Error('keychain locked');
     });
+    await openMore();
     fireEvent.press(await screen.findByRole('button', { name: 'Replace pass' }));
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
@@ -476,6 +494,82 @@ describe('SCR-C-05 PassScreen', () => {
   });
 });
 
+describe('SCR-C-05 the pass card (ADR-008, PA-11)', () => {
+  it('SPK-ENTRY-002 ADR-008: shows the reference in large tabular figures on a night card, with "Show this at the front desk" and "Works offline"', async () => {
+    setup(
+      { 'GET /me': ok(me()), 'GET /me/passes': myPasses(listed(PASS_ONE)) },
+      { stored: STORED },
+    );
+    const reference = await screen.findByText(groupReference(REF_ONE));
+    const style = StyleSheet.flatten(reference.props.style) as TextStyle;
+    expect(style.fontVariant).toEqual(['tabular-nums']);
+    expect(style.fontSize).toBeGreaterThanOrEqual(40);
+    const card = screen.getByTestId('pass-card');
+    expect(within(card).getByText('Show this at the front desk')).toBeOnTheScreen();
+    expect(within(card).getByText('Works offline')).toBeOnTheScreen();
+    expect(within(card).getByTestId('pass-issued')).toHaveTextContent(
+      'Issued Thu, Oct 22, 10:00 AM PDT (1 day ago).',
+    );
+    // The pitch lines are decorative: hidden from screen readers.
+    expect(
+      within(card).getByTestId('pass-pitch-lines', { includeHiddenElements: true }),
+    ).toHaveProp('importantForAccessibility', 'no-hide-descendants');
+    // Nothing on the card names the holder (SPK-ENTRY-002).
+    expect(within(card).queryByText(/Alex|Morgan/)).toBeNull();
+  });
+
+  it('SPK-ENTRY-002: "Replace pass" and the scanner note are behind the "More" fold, closed at first', async () => {
+    const { app } = setup(
+      { 'GET /me': ok(me()), 'GET /me/passes': myPasses(listed(PASS_ONE)) },
+      { stored: STORED },
+    );
+    const more = await screen.findByRole('button', { name: 'More' });
+    expect(more).toHaveProp('accessibilityState', expect.objectContaining({ expanded: false }));
+    expect(screen.queryByRole('button', { name: 'Replace pass' })).toBeNull();
+    fireEvent.press(more);
+    expect(screen.getByRole('button', { name: 'More' })).toHaveProp(
+      'accessibilityState',
+      expect.objectContaining({ expanded: true }),
+    );
+    expect(screen.getByRole('button', { name: 'Replace pass' })).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'The pass carries no name or family details. At the front desk, staff choose who is arriving.',
+      ),
+    ).toBeOnTheScreen();
+    // Opening the fold sends nothing.
+    expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
+  });
+
+  it('SPK-ENTRY-002: with no pass on this device, says so on the card and offers "Get my pass"', async () => {
+    setup({ 'GET /me': ok(me()), 'GET /me/passes': myPasses() });
+    expect(await screen.findByRole('header', { name: 'No pass on this device' })).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Get your own pass to show at the front desk. A pass for your whole family comes from the front desk.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Get my pass' })).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+  });
+
+  it('SPK-UX-008: pull to refresh reads the passes again', async () => {
+    const { app } = setup(
+      { 'GET /me': ok(me()), 'GET /me/passes': myPasses(listed(PASS_ONE)) },
+      { stored: STORED },
+    );
+    await screen.findByLabelText('Active');
+    const reads = app.fake.requests.filter((r) => r.route === '/me/passes').length;
+    await pullToRefresh(screen);
+    await waitFor(() =>
+      expect(app.fake.requests.filter((r) => r.route === '/me/passes').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    expect(screen.getByText(groupReference(REF_ONE))).toBeOnTheScreen();
+  });
+});
+
 describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
   it('SPK-ENTRY-002: says the pass on this device is active, with when it was checked', async () => {
     const { app } = setup(
@@ -517,6 +611,8 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
     // No staff reason is shown (the API withholds it) and the dead reference is not offered.
     expect(screen.queryByText(groupReference(REF_ONE))).toBeNull();
     expect(screen.queryByRole('button', { name: 'Replace pass' })).toBeNull();
+    // Nothing to replace: a revoked pass has no "More" fold either.
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
 
     fireEvent.press(screen.getByRole('button', { name: 'Get a new pass' }));
     expect(await screen.findByText(groupReference(REF_TWO))).toBeOnTheScreen();
@@ -539,6 +635,7 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
       { stored: STORED },
     );
     await screen.findByLabelText('Active');
+    await openMore();
     fireEvent.press(screen.getByRole('button', { name: 'Replace pass' }));
     fireEvent.press(screen.getByRole('button', { name: 'Replace' }));
     expect(await screen.findByText(groupReference(REF_TWO))).toBeOnTheScreen();
