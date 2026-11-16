@@ -100,10 +100,98 @@ describe('primary navigation (SPK-UX-002)', () => {
     expect(app.haptics.events).toEqual(['selection']);
   });
 
-  it('PA-11 SCR-C-19: /family-calendar still renders the family calendar until Calendar absorbs it', async () => {
-    const { router } = renderApp('/family-calendar');
-    expect(await screen.findByRole('button', { name: 'Previous week' })).toBeOnTheScreen();
-    expect(router.getPathname()).toBe('/family-calendar');
+  it('PA-11 SCR-C-19: /family-calendar opens Calendar with "Everyone" selected, its person chips and the week\'s overlap warning', async () => {
+    // The family's week as the API serves it: two Saturday sessions of a child that overlap.
+    const self = '0192f1a0-0000-7000-8000-00000000a001';
+    const child = '0192f1a0-0000-7000-8000-00000000a002';
+    const item = (id: string, title: string, start: string, end: string) => ({
+      id,
+      personId: child,
+      kind: 'enrollment_session',
+      enrollmentId: null,
+      sessionBookingId: null,
+      bookingKind: null,
+      offeringId: null,
+      sessionId: null,
+      title,
+      start,
+      end,
+      status: 'confirmed',
+      facilityId: null,
+      timezone: 'America/Los_Angeles',
+    });
+    const skills = item(
+      'enrollment:skills',
+      'Junior Skills',
+      '2026-10-24T17:00:00.000Z',
+      '2026-10-24T18:00:00.000Z',
+    );
+    const swim = item(
+      'enrollment:swim',
+      'Swim club',
+      '2026-10-24T17:30:00.000Z',
+      '2026-10-24T18:30:00.000Z',
+    );
+    const { router } = renderApp('/family-calendar', {
+      'GET /me': {
+        status: 200,
+        body: {
+          principal: {
+            kind: 'customer',
+            organizationId: '0192f1a0-0000-7000-8000-00000000f001',
+            accountId: '0192f1a0-0000-7000-8000-0000000000aa',
+            personId: self,
+            staffRoles: [],
+            facilityIds: [],
+          },
+          person: {
+            id: self,
+            kind: 'adult',
+            givenName: 'Alex',
+            familyName: 'Morgan',
+            dateOfBirth: null,
+            status: 'active',
+            mergedIntoPersonId: null,
+            revision: 1,
+            createdAt: '2026-10-20T12:00:00.000Z',
+            updatedAt: '2026-10-20T12:00:00.000Z',
+          },
+          staffMemberships: [],
+          authorities: [{ subjectPersonId: child, permissions: ['view'] }],
+        },
+      },
+      'GET /me/family-calendar': {
+        status: 200,
+        body: {
+          from: '2026-10-24T00:00:00.000Z',
+          to: '2026-11-21T00:00:00.000Z',
+          participantPersonIds: [self, child],
+          items: [skills, swim],
+          overlaps: [
+            {
+              itemIds: [skills.id, swim.id],
+              personIds: [child],
+              start: '2026-10-24T17:30:00.000Z',
+              end: '2026-10-24T18:00:00.000Z',
+            },
+          ],
+        },
+      },
+      'GET /me/fixtures': { status: 200, body: [] },
+      'GET /me/team-entries': { status: 200, body: [] },
+    });
+    // The rendered destination: Calendar, with "Everyone" selected and the overlap warned of.
+    expect(
+      await screen.findByLabelText(
+        '1 overlapping commitment this week. Overlaps are highlighted so you can plan around them.',
+      ),
+    ).toBeOnTheScreen();
+    expect(router.getPathname()).toBe('/schedule');
+    expect(router.getSearchParams()).toEqual({ people: 'everyone' });
+    expect(screen.getByRole('header', { name: 'Calendar' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Show activities for')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Everyone' })).toBeSelected();
+    expect(screen.getByRole('button', { name: 'Previous week' })).toBeOnTheScreen();
     expect(screen.queryByLabelText('Link not available')).toBeNull();
   });
 

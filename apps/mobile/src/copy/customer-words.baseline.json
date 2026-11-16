@@ -81,10 +81,6 @@
   "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: The old and new enrollments stay linked, and attendance his…",
   "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: the enrollment",
 
-  "src/screens/family-calendar/FamilyCalendarScreen.tsx :: fixture :: Opens the fixture",
-  "src/screens/family-calendar/FamilyCalendarScreen.tsx :: fixture :: Team fixtures could not be loaded.",
-  "src/screens/family-calendar/FamilyCalendarScreen.tsx :: fixture :: team fixtures",
-
   "src/screens/family/HouseholdsSection.tsx :: household :: A household groups people for billing and messages. …",
   "src/screens/family/HouseholdsSection.tsx :: household :: Create a household",
   "src/screens/family/HouseholdsSection.tsx :: household :: Create household",
