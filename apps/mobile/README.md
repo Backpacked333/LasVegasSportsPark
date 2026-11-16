@@ -45,12 +45,33 @@ SPORTSPARK_API_BASE_URL=http://localhost:3000/v1 pnpm --filter @sportspark/mobil
 
 ## Commands
 
-| Command                                       | What it checks                                                                |
-| --------------------------------------------- | ----------------------------------------------------------------------------- |
-| `pnpm --filter @sportspark/mobile test`       | jest-expo and React Native Testing Library (also run by the root `pnpm test`) |
-| `pnpm --filter @sportspark/mobile typecheck`  | TypeScript strict (also run by the root `pnpm typecheck`)                     |
-| `pnpm --filter @sportspark/mobile lint`       | Root ESLint config, including React hooks rules                               |
-| `pnpm --filter @sportspark/mobile export:ios` | Release bundle export, then `scripts/check-release-bundle.mjs` (CI runs this) |
+| Command                                        | What it checks                                                                |
+| ---------------------------------------------- | ----------------------------------------------------------------------------- |
+| `pnpm --filter @sportspark/mobile test`        | jest-expo and React Native Testing Library (also run by the root `pnpm test`) |
+| `pnpm --filter @sportspark/mobile typecheck`   | TypeScript strict (also run by the root `pnpm typecheck`)                     |
+| `pnpm --filter @sportspark/mobile lint`        | Root ESLint config, including React hooks rules                               |
+| `pnpm --filter @sportspark/mobile export:ios`  | Release bundle export, then `scripts/check-release-bundle.mjs` (CI runs this) |
+| `pnpm --filter @sportspark/mobile screenshots` | Browser screenshots and contact sheet (needs `pnpm demo --web`; see below)    |
+
+## Browser preview and screenshots (development only)
+
+**Verified** (2026-11-16, by running it): `pnpm demo --fresh --web` (repository root) seeds the demo
+database, starts the demo API with `CORS_ALLOWED_ORIGINS=http://localhost:8081` and serves the app
+in demo mode in a browser on <http://localhost:8081> (Expo web, `web.output: 'single'` in
+`app.config.ts`). Then `pnpm --filter @sportspark/mobile screenshots --label <name>` signs in through
+the demo parent sign-in by role and name (so it is also an end-to-end smoke test), visits the five
+tabs, an activity, a basket, the family calendar, a team, the Account screens, the pass and the
+inbox, in classic and Legends at 390×844 and 375×667 (scale 2, reduced motion), plus one offline
+view, and writes `screenshots/<name>/` with an `index.html` contact sheet (git-ignored). The demo
+banner and tour card are hidden in the screenshots. The script exits 1 if sign-in fails or the page
+reports an error.
+
+- The browser has no secure store: `*.web.ts` stand-ins (theme, session, pass, registration
+  progress) keep those values in `localStorage` or `sessionStorage`. Each carries the marker
+  `Browser preview storage`, and `scripts/check-release-bundle.mjs` fails a native bundle that
+  contains it (or `Design system gallery`).
+- Glass is solid on the web, motion follows the browser's reduced-motion setting and haptics are
+  silent. A browser render is not native acceptance (§6.2).
 
 ## What is here and how it is verified
 
@@ -174,7 +195,8 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
     hero band in both themes, and the device's "Reduce Transparency" setting (everything solid).
   - **Pending decision**: glass on Android. `expo-blur` can blur there only through an
     experimental method that needs each screen wrapped in a blur target; it is left off until it
-    can be tried on devices.
+    can be tried on devices. The glass provider no longer asks the device off iOS (the answer is
+    solid there anyway; the web has no reduce-transparency setting to ask about).
 - **Motion and haptics** (ADR-008, **Proposed** visual system v2; groundwork only, no screen uses
   them yet). `useMotion()` (`src/ui/motion.tsx`) gives `reduced` and `duration(token)` (0, 120, 220
   and 320 ms, all 0 while reduced), following the device's reduce-motion setting through
@@ -200,11 +222,11 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
   no source file outside `src/ui/theme.ts` holds a colour literal; text fields show focus and
   follow the theme (`src/ui/__tests__/input.test.tsx`).
 - **Looked at in a browser, not on a device**: both themes were rendered once at phone size
-  through a temporary web build (react-native-web and an in-memory stand-in for the secure store,
-  neither committed: this app has no web target) against the development API, signed out and
-  signed in: the five tabs, the pass, family, enrollments, payments, credits, forms, preferences,
-  support, invitations and the inbox. In Legends mode no screen kept a light surface or
-  unreadable text. A browser render is not native acceptance (§6.2).
+  through a temporary web build against the development API, signed out and signed in: the five
+  tabs, the pass, family, enrollments, payments, credits, forms, preferences, support, invitations
+  and the inbox. In Legends mode no screen kept a light surface or unreadable text. The browser
+  preview is now committed (see "Browser preview and screenshots"). A browser render is not native
+  acceptance (§6.2).
 - **Not verified** (needs devices): the status bar and keyboard following the theme, continuous
   corners, the Android ripple, the platform switch's own colours, and the stored choice across a
   reinstall or a restore from backup. Contrast was checked by calculation, not measured on a

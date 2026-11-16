@@ -11,10 +11,10 @@
  * semantics returns the existing checkout for that quote, or creates none twice (§4.9, §4.11).
  *
  * Only that opaque quote id is kept, scoped to the signed-in account, in the platform secure store
- * (expo-secure-store, readable only while unlocked, never restored to another device). A value
- * written by an earlier build (basket, checkout and waitlist ids) is ignored.
+ * (expo-secure-store, readable only while unlocked, never restored to another device; see
+ * `progress-storage.ts`, which has a browser stand-in for the web preview build). A value written by
+ * an earlier build (basket, checkout and waitlist ids) is ignored.
  */
-import * as SecureStore from 'expo-secure-store';
 import {
   createContext,
   useCallback,
@@ -25,6 +25,9 @@ import {
   type ReactNode,
 } from 'react';
 import { useApp } from '../../providers/AppProviders';
+import { PROGRESS_STORAGE_KEY, secureProgressBackend } from './progress-storage';
+
+export { PROGRESS_STORAGE_KEY, secureProgressBackend };
 
 export interface RegistrationProgress {
   /**
@@ -39,22 +42,11 @@ export const EMPTY_PROGRESS: RegistrationProgress = Object.freeze({
   pendingCheckoutQuoteId: null,
 }) as RegistrationProgress;
 
-export const PROGRESS_STORAGE_KEY = 'sportspark.registration-progress';
-
 /** Where the serialized progress lives: the secure store on devices, memory in tests. */
 export interface ProgressBackend {
   read(): Promise<string | null>;
   write(value: string): Promise<void>;
 }
-
-const SECURE_OPTIONS: SecureStore.SecureStoreOptions = {
-  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-};
-
-export const secureProgressBackend: ProgressBackend = {
-  read: () => SecureStore.getItemAsync(PROGRESS_STORAGE_KEY, SECURE_OPTIONS),
-  write: (value) => SecureStore.setItemAsync(PROGRESS_STORAGE_KEY, value, SECURE_OPTIONS),
-};
 
 export function memoryProgressBackend(initial: string | null = null): ProgressBackend & {
   value: string | null;

@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint .",
     "export:ios": "expo export --platform ios --output-dir dist && node scripts/check-release-bundle.mjs dist",
-    "export:android": "expo export --platform android --output-dir dist && node scripts/check-release-bundle.mjs dist"
+    "export:android": "expo export --platform android --output-dir dist && node scripts/check-release-bundle.mjs dist",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/archivo": "0.4.2",

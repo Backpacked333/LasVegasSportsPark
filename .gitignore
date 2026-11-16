@@ -19,6 +19,8 @@ coverage/
 expo-env.d.ts
 apps/mobile/ios/
 apps/mobile/android/
+# Browser screenshots of the customer app (apps/mobile/scripts/screenshots.mjs)
+apps/mobile/screenshots/
 *.hbc
 # Vite (apps/staff): build output is dist/ above (demo builds: dist-demo/); local env files are .env.* above
 dist-demo/
