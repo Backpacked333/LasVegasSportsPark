@@ -6,8 +6,9 @@
  * tab bar.
  *
  * The summary is one element for screen readers ("Total, $240.00"), with tabular figures; the
- * action is a block button whose busy and disabled states are exposed (SPK-UX-009). `children`
- * replace the summary when a screen needs more than a label and a value.
+ * action is a large block button (`buttonHeight.sticky`, 56 pt) whose busy and disabled states
+ * are exposed (SPK-UX-009). `children` replace the summary when a screen needs more than a label
+ * and a value.
  */
 import type { ReactNode } from 'react';
 import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
@@ -63,7 +64,6 @@ export function StickyActionBar({
           {summaryNote ? <Text style={styles.label}>{summaryNote}</Text> : null}
         </View>
       ) : null}
-      {/* TODO(1b): Button v2 size "lg" (buttonHeight.sticky) once it lands. */}
       <View style={hasSummary ? styles.actionBeside : styles.actionAlone}>
         <Button
           label={action.label}
@@ -72,6 +72,7 @@ export function StickyActionBar({
           busy={action.busy}
           accessibilityHint={action.accessibilityHint}
           icon={action.icon}
+          size="lg"
           block
         />
       </View>

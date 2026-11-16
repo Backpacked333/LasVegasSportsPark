@@ -7,10 +7,10 @@ import { StyleSheet, Text } from 'react-native';
 import { renderSurface } from '../../testing/ui-surfaces';
 import { MotionProvider } from '../motion';
 import { StickyActionBar } from '../StickyActionBar';
-import { classicTheme, elevation, legendsTheme } from '../theme';
+import { buttonHeight, classicTheme, elevation, legendsTheme } from '../theme';
 
 describe('StickyActionBar (ADR-008)', () => {
-  it('SPK-UX-009: reads the summary as one element and offers the action as a button of 44 pt or more', async () => {
+  it('SPK-UX-009: reads the summary as one element and offers the action as a 56 pt button (44 pt or more)', async () => {
     const onPress = jest.fn();
     await renderSurface(
       <StickyActionBar
@@ -23,7 +23,7 @@ describe('StickyActionBar (ADR-008)', () => {
     expect(screen.getByLabelText('Total, $240.00, Includes fees')).toBeOnTheScreen();
     expect(screen.getByText('$240.00')).toHaveStyle({ fontVariant: ['tabular-nums'] });
     const button = screen.getByRole('button', { name: 'Review' });
-    expect(StyleSheet.flatten(button.props.style).minHeight).toBeGreaterThanOrEqual(44);
+    expect(StyleSheet.flatten(button.props.style).minHeight).toBe(buttonHeight.sticky);
     fireEvent.press(button);
     expect(onPress).toHaveBeenCalledTimes(1);
   });
