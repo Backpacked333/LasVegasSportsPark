@@ -410,37 +410,52 @@ least two weeks earlier; the Expo set equals the `bundledNativeModules` of `expo
 dependencies were resolved with the same two-week floor. (`npx expo install --check` compares
 against later SDK 57 patches published after that floor.)
 
-| Package                               | Version | Published  | Why                                                                                                        |
-| ------------------------------------- | ------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
-| `expo`                                | 57.0.27 | 2026-10-06 | SDK, CLI (`expo start`, `expo export`), native module runtime                                              |
-| `react`                               | 19.2.3  | 2025-12-11 | Version required by SDK 57                                                                                 |
-| `react-native`                        | 0.86.3  | 2026-08-24 | Version required by SDK 57                                                                                 |
-| `expo-router`                         | 57.0.25 | 2026-10-06 | File-based native navigation, tabs and stack (SPK-UX-001/002)                                              |
-| `react-native-screens`                | 4.26.2  | 2026-07-16 | Native screens, required by expo-router                                                                    |
-| `react-native-safe-area-context`      | 5.7.0   | 2026-02-24 | Safe areas, required by expo-router                                                                        |
-| `expo-linking`                        | 57.0.12 | 2026-10-06 | Links, required by expo-router                                                                             |
-| `expo-constants`                      | 57.0.21 | 2026-10-06 | Reads `app.config.ts` (API base URL, app version)                                                          |
-| `@expo/metro-runtime`                 | 57.0.16 | 2026-09-18 | Metro runtime, required by expo-router                                                                     |
-| `@expo/log-box`                       | 57.0.4  | 2026-08-26 | Error overlay, required by expo-router                                                                     |
-| `expo-secure-store`                   | 57.0.4  | 2026-09-11 | Platform secure storage for the session (§4.13); also keeps the Legends mode choice (a display preference) |
-| `expo-network`                        | 57.0.2  | 2026-09-11 | Connectivity for SCR-C-40                                                                                  |
-| `expo-crypto`                         | 57.0.3  | 2026-09-11 | Secure random idempotency keys (React Native has no `crypto`)                                              |
-| `expo-glass-effect`                   | 57.0.5  | 2026-11-05 | The system's liquid glass on iOS 26 and later, behind `GlassSurface` only (ADR-001)                        |
-| `expo-blur`                           | 57.0.3  | 2026-09-11 | System material blur on earlier iOS, behind `GlassSurface` only (ADR-001)                                  |
-| `@tanstack/react-query`               | 5.104.1 | 2026-10-02 | Data layer: caching, refetch on focus and reconnect, data age                                              |
-| `jest` (dev)                          | 29.7.0  | 2023-09-12 | Test runner used by jest-expo                                                                              |
-| `jest-expo` (dev)                     | 57.0.5  | 2026-08-26 | Expo's documented Jest preset for SDK 57                                                                   |
-| `@react-native/jest-preset` (dev)     | 0.86.3  | 2026-08-24 | Required peer of jest-expo 57                                                                              |
-| `@testing-library/react-native` (dev) | 13.3.3  | 2025-08-26 | Component tests by role and label (14.x requires a `test-renderer@^1` peer with no published release)      |
-| `react-test-renderer` (dev)           | 19.2.3  | 2025-12-11 | Renderer for React Native Testing Library 13                                                               |
-| `@types/jest` (dev)                   | 29.5.14 | 2024-10-23 | Jest types                                                                                                 |
-| `@types/react` (dev)                  | 19.2.18 | 2026-07-30 | React types                                                                                                |
+| Package                                  | Version | Published  | Why                                                                                                                                                                                                |
+| ---------------------------------------- | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expo`                                   | 57.0.27 | 2026-10-06 | SDK, CLI (`expo start`, `expo export`), native module runtime                                                                                                                                      |
+| `react`                                  | 19.2.3  | 2025-12-11 | Version required by SDK 57                                                                                                                                                                         |
+| `react-native`                           | 0.86.3  | 2026-08-24 | Version required by SDK 57                                                                                                                                                                         |
+| `expo-router`                            | 57.0.25 | 2026-10-06 | File-based native navigation, tabs and stack (SPK-UX-001/002)                                                                                                                                      |
+| `react-native-screens`                   | 4.26.2  | 2026-07-16 | Native screens, required by expo-router                                                                                                                                                            |
+| `react-native-safe-area-context`         | 5.7.0   | 2026-02-24 | Safe areas, required by expo-router                                                                                                                                                                |
+| `expo-linking`                           | 57.0.12 | 2026-10-06 | Links, required by expo-router                                                                                                                                                                     |
+| `expo-constants`                         | 57.0.21 | 2026-10-06 | Reads `app.config.ts` (API base URL, app version)                                                                                                                                                  |
+| `@expo/metro-runtime`                    | 57.0.16 | 2026-09-18 | Metro runtime, required by expo-router                                                                                                                                                             |
+| `@expo/log-box`                          | 57.0.4  | 2026-08-26 | Error overlay, required by expo-router                                                                                                                                                             |
+| `expo-secure-store`                      | 57.0.4  | 2026-09-11 | Platform secure storage for the session (§4.13); also keeps the Legends mode choice (a display preference)                                                                                         |
+| `expo-network`                           | 57.0.2  | 2026-09-11 | Connectivity for SCR-C-40                                                                                                                                                                          |
+| `expo-crypto`                            | 57.0.3  | 2026-09-11 | Secure random idempotency keys (React Native has no `crypto`)                                                                                                                                      |
+| `expo-glass-effect`                      | 57.0.5  | 2026-11-05 | The system's liquid glass on iOS 26 and later, behind `GlassSurface` only (ADR-001)                                                                                                                |
+| `expo-blur`                              | 57.0.3  | 2026-09-11 | System material blur on earlier iOS, behind `GlassSurface` only (ADR-001)                                                                                                                          |
+| `@tanstack/react-query`                  | 5.104.1 | 2026-10-02 | Data layer: caching, refetch on focus and reconnect, data age                                                                                                                                      |
+| `react-native-reanimated`                | 4.5.1   | 2026-07-02 | Motion of the visual system v2 (ADR-008), always through `useMotion()` (`src/ui/motion.tsx`)                                                                                                       |
+| `react-native-worklets`                  | 0.10.1  | 2026-07-01 | Required by reanimated 4; its Babel plugin is added by `babel-preset-expo` when installed                                                                                                          |
+| `react-native-gesture-handler`           | 2.32.0  | 2026-06-11 | Gestures for sheets and pressables; `GestureHandlerRootView` wraps the root layout                                                                                                                 |
+| `expo-image`                             | 57.0.5  | 2026-09-11 | Bundled activity images and illustrations with caching (ADR-008)                                                                                                                                   |
+| `expo-linear-gradient`                   | 57.0.2  | 2026-09-11 | Scrims behind text over artwork (ADR-008)                                                                                                                                                          |
+| `react-native-svg`                       | 15.15.4 | 2026-03-18 | Vector shapes (pass pattern, progress steps) (ADR-008)                                                                                                                                             |
+| `expo-haptics`                           | 57.0.3  | 2026-09-11 | Selection, impact and outcome haptics behind the injected `haptics` service (`src/providers/haptics.ts`)                                                                                           |
+| `@react-native-community/datetimepicker` | 9.1.0   | 2026-03-17 | The platform date picker for date fields (ADR-008)                                                                                                                                                 |
+| `@gorhom/bottom-sheet`                   | 5.2.14  | 2026-05-09 | Sheets (ADR-008). Not in the SDK's list: the newest 5.x, its peer ranges (`react-native-reanimated >=3.16.0 \|\| >=4.0.0-`, `react-native-gesture-handler >=2.16.1`) accept the installed versions |
+| `jest` (dev)                             | 29.7.0  | 2023-09-12 | Test runner used by jest-expo                                                                                                                                                                      |
+| `jest-expo` (dev)                        | 57.0.5  | 2026-08-26 | Expo's documented Jest preset for SDK 57                                                                                                                                                           |
+| `@react-native/jest-preset` (dev)        | 0.86.3  | 2026-08-24 | Required peer of jest-expo 57                                                                                                                                                                      |
+| `@testing-library/react-native` (dev)    | 13.3.3  | 2025-08-26 | Component tests by role and label (14.x requires a `test-renderer@^1` peer with no published release)                                                                                              |
+| `react-test-renderer` (dev)              | 19.2.3  | 2025-12-11 | Renderer for React Native Testing Library 13                                                                                                                                                       |
+| `@types/jest` (dev)                      | 29.5.14 | 2024-10-23 | Jest types                                                                                                                                                                                         |
+| `@types/react` (dev)                     | 19.2.18 | 2026-07-30 | React types                                                                                                                                                                                        |
+| `react-native-web` (dev)                 | 0.21.4  | 2026-10-08 | The browser preview build for screenshots (`pnpm demo --web`); development only                                                                                                                    |
+| `react-dom` (dev)                        | 19.2.3  | 2025-12-11 | Required by react-native-web; the version SDK 57 names                                                                                                                                             |
+| `@playwright/test` (dev)                 | 1.63.0  | 2026-09-04 | Browser for `scripts/screenshots.mjs`; the staff app's version, so the lockfile holds one copy                                                                                                     |
 
-`expo-router` brings `react-native-reanimated` and `react-native-worklets` in as peers of optional
-features (drawer, `@expo/ui`); pnpm installs them (4.7.1 and 0.13.0, not the SDK 57 versions) and
-the app does not import them. Whether native autolinking would include them has not been checked:
-there is no native build here. A screen that needs them must add the SDK 57 versions (4.5.1 and
-0.10.1) as direct dependencies.
+The visual system v2 libraries (ADR-008, added 2026-11-16) were added with `npx expo install`, so
+the SDK 57 versions were chosen, then pinned exactly; their new transitive dependencies were all
+published before 2026-11-02. `react-native-reanimated` and `react-native-worklets` are now direct
+dependencies at the SDK 57 versions (4.5.1 and 0.10.1), replacing the 4.7.1 and 0.13.0 that pnpm
+had installed as peers of optional `expo-router` features. `expo-image` and the date picker are
+listed as config plugins in `app.config.ts`, as `npx expo install` asks. **Not verified here:**
+none of these libraries has run in a native build; Jest uses each library's own mock or test setup
+(`src/testing/jest.setup.ts`) and the browser preview uses their web implementations (§6.2).
 
 ## Package G customer flows (conditional, behind their capability switches)
 

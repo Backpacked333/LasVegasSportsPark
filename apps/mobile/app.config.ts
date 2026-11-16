@@ -60,7 +60,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     version: APP_VERSION,
     scheme: 'sportspark',
     userInterfaceStyle: 'automatic',
-    plugins: ['expo-router'],
+    // expo-image and the date picker add their native configuration at prebuild (ADR-008).
+    plugins: ['expo-router', 'expo-image', '@react-native-community/datetimepicker'],
     // Over-the-air updates, when added (expo-updates, DEC-061 update behavior), apply only to
     // builds of the same app version.
     runtimeVersion: { policy: 'appVersion' },
