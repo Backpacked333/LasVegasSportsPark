@@ -140,6 +140,11 @@ export interface ChoiceCardProps {
   /** The group's error, read after the card's name. */
   error?: string | null;
   onPress: () => void;
+  /** Replaces the name from `choiceName` (a feature kit's own wording; ADR-008 Phase 3). */
+  accessibilityLabel?: string;
+  /** Replaces the hint ("Error: …" by default), for a kit that reads more after the name. */
+  accessibilityHint?: string;
+  testID?: string;
 }
 
 /** One radio or checkbox card. `ChoiceList` draws these; `Select` draws them in its sheet. */
@@ -150,6 +155,9 @@ export function ChoiceCard({
   disabled = false,
   error,
   onPress,
+  accessibilityLabel,
+  accessibilityHint,
+  testID,
 }: ChoiceCardProps) {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -164,11 +172,12 @@ export function ChoiceCard({
   return (
     <Pressable
       accessibilityRole={mode === 'single' ? 'radio' : 'checkbox'}
-      accessibilityLabel={choiceName(option)}
-      accessibilityHint={error ? `Error: ${error}` : undefined}
+      accessibilityLabel={accessibilityLabel ?? choiceName(option)}
+      accessibilityHint={accessibilityHint ?? (error ? `Error: ${error}` : undefined)}
       accessibilityState={{ checked, disabled }}
       disabled={disabled}
       onPress={onPress}
+      testID={testID}
       style={({ pressed }) => [
         styles.card,
         checked ? styles.checked : null,

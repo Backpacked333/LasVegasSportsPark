@@ -22,6 +22,7 @@ import {
   View,
   type StyleProp,
   type TextInputProps,
+  type TextStyle,
   type ViewStyle,
 } from 'react-native';
 import { Icon } from './Icon';
@@ -331,4 +332,157 @@ export const useFieldStyles = makeStyles(({ colors }) => ({
     justifyContent: 'center',
   },
   pressed: { opacity: 0.7 },
+}));
+
+/*
+ * Additions for the feature kits' adapters (ADR-008, Phase 3): pieces of a field that a kit
+ * composes itself when its accessible words differ from `TextField`'s, so it keeps them exactly
+ * while it draws with the shared field styles. They add to the exports above and change none.
+ */
+
+export interface FieldErrorTextProps {
+  error?: string | null;
+  /** The glyph before the words ("✕", or "▲" on the team and money screens). */
+  glyph?: string;
+  /** What is announced when it appears; the bare message by default. */
+  announcement?: string | null;
+  /** Exposed as an alert (default true); some kits announce a field's error without the role. */
+  alert?: boolean;
+  testID?: string;
+}
+
+/**
+ * A field's error in words with its glyph, announced when it appears (`LiveText`; SPK-UX-008,
+ * SPK-UX-009). Unlike `FieldError` it announces the bare message unless told otherwise, as the
+ * feature kits always have.
+ */
+export function FieldErrorText({
+  error,
+  glyph = '✕',
+  announcement,
+  alert = true,
+  testID,
+}: FieldErrorTextProps) {
+  const styles = useFieldStyles();
+  if (!error) return null;
+  return (
+    <LiveText
+      style={styles.error}
+      announcement={announcement === undefined ? error : announcement}
+      accessibilityRole={alert ? 'alert' : undefined}
+      testID={testID}
+    >
+      {`${glyph} ${error}`}
+    </LiveText>
+  );
+}
+
+export interface FieldInputProps extends Omit<TextInputProps, 'style' | 'editable'> {
+  /** Draws the error border (the words are the caller's, with `FieldErrorText`). */
+  invalid?: boolean;
+  editable?: boolean;
+  /** Further styles after the shared box (a kit's own dimming). */
+  style?: StyleProp<TextStyle>;
+}
+
+/**
+ * The outlined text input of a field, with the focus and theme chrome (`useInputChrome`), and no
+ * accessible words of its own: the caller passes `accessibilityLabel`, `accessibilityHint` and
+ * `accessibilityState` as it needs them. The error border wins over the focus colour.
+ */
+export function FieldInput({
+  invalid = false,
+  editable = true,
+  multiline,
+  onFocus,
+  onBlur,
+  style,
+  ...input
+}: FieldInputProps) {
+  const styles = useFieldStyles();
+  const chrome = useInputChrome();
+  return (
+    <TextInput
+      {...chrome.props}
+      {...input}
+      onFocus={(event) => {
+        chrome.props.onFocus();
+        onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        chrome.props.onBlur();
+        onBlur?.(event);
+      }}
+      editable={editable}
+      multiline={multiline}
+      style={[
+        styles.box,
+        styles.input,
+        chrome.focusStyle,
+        multiline ? styles.multiline : null,
+        invalid ? styles.boxError : null,
+        editable ? null : styles.boxDisabled,
+        style,
+      ]}
+    />
+  );
+}
+
+export interface FieldValueProps {
+  label: string;
+  value: string;
+  /**
+   * `stacked`: the label above the value (a record's facts). `inline`: label and value on one
+   * line, the value at the end, wrapping as text grows.
+   */
+  layout?: 'stacked' | 'inline';
+  /** Both in bold (a total). */
+  emphasis?: boolean;
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+}
+
+/** A read-only "label: value" fact, read by screen readers as one element (SPK-UX-009). */
+export function FieldValue({
+  label,
+  value,
+  layout = 'stacked',
+  emphasis = false,
+  style,
+  testID,
+}: FieldValueProps) {
+  const styles = useFieldValueStyles();
+  const inline = layout === 'inline';
+  return (
+    <View
+      style={[inline ? styles.inline : styles.stacked, style]}
+      accessible
+      accessibilityLabel={`${label}: ${value}`}
+      testID={testID}
+    >
+      <Text style={[styles.label, inline && styles.inlineLabel, emphasis && styles.emphasis]}>
+        {label}
+      </Text>
+      <Text style={[styles.value, inline && styles.inlineValue, emphasis && styles.emphasis]}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+const useFieldValueStyles = makeStyles(({ colors }) => ({
+  stacked: { gap: spacing.xxs },
+  inline: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    gap: spacing.sm,
+    paddingVertical: spacing.xxs,
+  },
+  label: { ...type.footnote, color: colors.textMuted },
+  inlineLabel: { flexShrink: 1 },
+  value: { ...type.body, color: colors.text },
+  inlineValue: { ...fonts.semibold, flexShrink: 1, textAlign: 'right' },
+  emphasis: { ...fonts.bold, color: colors.text },
 }));
