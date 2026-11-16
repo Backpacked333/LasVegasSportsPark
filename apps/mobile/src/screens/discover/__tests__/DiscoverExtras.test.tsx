@@ -2,6 +2,8 @@
  * SCR-C-07 Discover additions of the park UI redesign: free-text search (`GET /v1/offerings?q=`),
  * promotion badges from `PublicOffering.promotions` (automatic discounts only), and "Picked for
  * <child>" from `GET /v1/me/offering-suggestions` (age band only, never an eligibility decision).
+ * Explore v2 (ADR-008): the search box searches on the keyboard's search key or after a pause,
+ * promotions are tags on the picture card, suggestions are picture tiles with person chips.
  */
 import { apiErrorBody, fakeResponse } from '@sportspark/api-client/testing';
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
@@ -74,7 +76,7 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
     expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
 
     fireEvent.changeText(screen.getByLabelText('Search activities'), 'zumba');
-    fireEvent.press(screen.getByRole('button', { name: 'Search' }));
+    fireEvent(screen.getByLabelText('Search activities'), 'submitEditing');
     expect(
       await screen.findByRole('header', { name: 'No activities match "zumba"' }),
     ).toBeOnTheScreen();
@@ -96,7 +98,7 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
     const before = app.fake.requests.filter((r) => r.route === '/offerings').length;
 
     fireEvent.changeText(screen.getByLabelText('Search activities'), 'a');
-    fireEvent.press(screen.getByRole('button', { name: 'Search' }));
+    fireEvent(screen.getByLabelText('Search activities'), 'submitEditing');
     expect(screen.getByText('✕ Type at least 2 characters.')).toBeOnTheScreen();
     expect(app.fake.requests.filter((r) => r.route === '/offerings')).toHaveLength(before);
     expect(searchProblem('  ab ')).toBeNull();
@@ -109,7 +111,7 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
     const row = await screen.findByTestId(`offering-${IDS.offering2}`);
     expect(within(row).getByLabelText('Early bird: 10% off until Nov 15')).toBeOnTheScreen();
     // The row's one label reads the promotion after the status.
-    expect(row.props.accessibilityLabel).toMatch(
+    expect(within(row).getByRole('button').props.accessibilityLabel).toMatch(
       /Registration open, Early bird: 10% off until Nov 15$/,
     );
     expect(promotionText(SIBLINGS, 'America/Los_Angeles')).toBe(
@@ -132,22 +134,26 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
     const card = await screen.findByTestId('picked-for');
     expect(within(card).getByRole('header', { name: 'Picked for Ada' })).toBeOnTheScreen();
     const suggestion = await within(card).findByTestId(`suggestion-${IDS.offering2}`);
-    expect(suggestion.props.accessibilityLabel).toContain('Ada is 9 on Dec 21, 2026');
+    expect(within(suggestion).getByRole('button').props.accessibilityLabel).toContain(
+      'Ada is 9 on Dec 21, 2026',
+    );
     expect(
       within(card).getByText(
         'Suggested by age only. Whether someone can take part is checked when you register.',
       ),
     ).toBeOnTheScreen();
     // A view-only family member is never offered (the account may not register them).
-    expect(within(card).queryByRole('radio', { name: 'Cy' })).toBeNull();
+    expect(within(card).queryByRole('button', { name: 'Cy' })).toBeNull();
 
-    fireEvent.press(within(card).getByRole('radio', { name: 'Ben' }));
+    fireEvent.press(within(card).getByRole('button', { name: 'Ben' }));
     expect(await within(card).findByRole('header', { name: 'Picked for Ben' })).toBeOnTheScreen();
     expect(
       app.fake.requests.filter((r) => r.route === '/me/offering-suggestions').at(-1)?.query,
     ).toEqual({ participantPersonId: IDS.childB, limit: '3' });
 
-    fireEvent.press(await within(card).findByTestId(`suggestion-${IDS.offering2}`));
+    fireEvent.press(
+      within(await within(card).findByTestId(`suggestion-${IDS.offering2}`)).getByRole('button'),
+    );
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/offering/${IDS.offering2}`);
     await app.settle();
   });
@@ -174,7 +180,7 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
       ),
     ).toBeOnTheScreen();
 
-    fireEvent.press(screen.getByRole('radio', { name: 'Ben' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Ben' }));
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(
@@ -194,7 +200,7 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
     });
     render(<DiscoverScreen />, { wrapper: app.wrapper });
     expect(await screen.findByTestId('picked-for')).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('radio', { name: 'Camp' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Camps' }));
     expect(screen.queryByTestId('picked-for')).toBeNull();
     await app.settle();
   });

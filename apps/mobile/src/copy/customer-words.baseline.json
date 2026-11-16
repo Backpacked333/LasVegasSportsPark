@@ -50,9 +50,6 @@
 
   "src/screens/credits/CreditsScreen.tsx :: DEC- :: Credit expiry rules are not decided yet (DEC-058, Finance).",
 
-  "src/screens/discover/DiscoverScreen.tsx :: DEC- :: …; whether each is offered is still being decided (DEC-016).",
-  "src/screens/discover/DiscoverScreen.tsx :: DEC- :: …yet: it depends on DEC-003, which has not been decided (ow…",
-
   "src/screens/enrollments/CancelEnrollmentScreen.tsx :: enrollment :: Back to enrollments",
 
   "src/screens/enrollments/EnrollmentDetailScreen.tsx :: basket :: …Forms are signed from the registration basket or from Home.",

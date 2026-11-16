@@ -1,88 +1,93 @@
 /**
- * SCR-C-07 Discover (SPK-UX-002, SPK-CAT-001, SPK-CAT-002, SPK-CAT-004, SPK-SCHED-008, §4.14;
- * journey A1). Browses the public catalog `GET /v1/offerings`: published offerings with
- * child-safe fields only, each with its registration window state ("Registration opens <date>" in
- * the facility's time zone, "Registration open", "Registration paused", never a paused offering
- * shown as closed). Private or draft offerings are simply absent: the API does not return them.
+ * SCR-C-07 Discover, shown as Explore (SPK-UX-002, SPK-CAT-001, SPK-CAT-002, SPK-CAT-004,
+ * SPK-SCHED-008, §4.14; journey A1; PA-11 **Proposed** label and customer words; ADR-008 visual
+ * system v2). Browses the public catalog `GET /v1/offerings`: published activities with child-safe
+ * fields only, each as a picture card with its registration window ("Registration opens <date>" in
+ * the facility's time zone, "Registration open", "Registration paused", never a paused activity
+ * shown as closed). Private or draft activities are simply absent: the API does not return them.
  *
- * Filters (CAT-01): kind, exact format and a date range (`format`, `from`, `to`), applied by the
- * API; a malformed date or a range that ends before it starts is a field message (validation
- * failure) and nothing is sent. Each applied filter is a new read of the list (its loading state
- * while it answers), and the fields always show the filter that is applied. Filtering by age band waits on
- * DEC-003 (Product and operations): the API has no age filter, and age bands are shown on every
- * item. Pickup sessions, rentals, parties, packages and memberships are conditional capabilities
- * (DEC-016, DEC-072 to DEC-082, Product owner): a signed-in customer gets their filter only while
- * the organization's switch is on (`GET /v1/me/permissions`).
+ * Finding something. Every filter is applied by the API, each change is a new read of the list
+ * (its loading state while it answers), and the chips always show what is applied:
+ * - Search: free text (`q`, 2 to 100 characters; every word must appear in the activity's name,
+ *   description, activity type, format, location or program name, as the API matches it), sent
+ *   after a short pause in typing or at once on the keyboard's search key.
+ * - Category chips (`kind`): Leagues, Classes, Camps, Trials, Coaching. Pickup, rentals, parties,
+ *   class packs and memberships are conditional capabilities (K-12, DEC-016, DEC-072 to DEC-082):
+ *   a signed-in customer gets their chip only while the organization's switch is on
+ *   (`GET /v1/me/permissions`); with the switch off there is no chip and no note (PA-11).
+ * - Sport chips add their word to `q` (with the search text, if any), so no other parameter is
+ *   needed. "Format" (`format`, as the facility writes it) is a sheet at the end of that row.
+ * - When chips: "This week" (today to Sunday) and "This month" (today to its last day), from
+ *   today in the facility's zone (SPK-SCHED-008), and "Pick dates" (a range sheet). A range is
+ *   sent as `from` (activities ending on or after it starts) and `to` (starting on or before it
+ *   ends), so every activity that runs on any day of it is listed. A range that ends before it
+ *   starts cannot be applied.
+ * Filtering by age waits on DEC-003; no age filter is offered and each card shows its age band.
  *
- * A signed-out visitor is also offered today's schedule and the public league standings when the
- * organization has made them public (SPK-SCHED-010, proposed amendment PA-06; PublicViews.tsx).
- *
- * States: loading; empty (nothing published for the filter); ready; validation failure (filter
- * input); offline (cached list with its age); unavailable (catalog not reachable, retry); paged
- * with "Load more activities". A signed-out visitor browses the organization configured for this
- * build (deployment setting); without one they are asked to sign in. Signed in, "In progress"
- * lists what the customer can come back to, from the API (SPK-UX-001).
- *
- * Look (park system): kind chips with an icon (the selected one on night pitch, marked "✓" too),
- * the format and date filters in a card, and each activity as a card with a tile in its kind's
- * colour.
- *
- * Search: free text (`q`, at least 2 characters; every word must appear in the offering's name,
- * description, activity type, format, location or program name, as the API matches it), applied
- * with "Search" like the other filters. Promotions: each activity shows the automatic discounts
- * the API lists for it now (`promotions`, never promo codes) as labelled pills; the quote decides
- * what is applied. Signed in, "Picked for <child>" (PickedFor.tsx) lists offerings whose age band
- * fits a family member (`GET /v1/me/offering-suggestions`), by age only, never as eligibility.
+ * States: loading; empty (nothing published for the filter, with the search illustration and
+ * "Show all activities"); ready; validation failure (search or a filter sheet); offline (cached
+ * list with its age); unavailable (catalog not reachable, retry, the code in "Details for
+ * support"); paged with "Load more activities"; pull to refresh. A signed-out visitor browses the
+ * organization configured for this build (deployment setting), and is also offered today's
+ * schedule and the public standings when the organization has made them public (SPK-SCHED-010,
+ * proposed amendment PA-06; PublicViews.tsx); without an organization they are asked to sign in.
+ * Signed in, "In progress" lists what the customer can come back to, from the API (SPK-UX-001),
+ * and "Picked for <child>" (PickedFor.tsx) shows activities whose age band fits a family member
+ * (`GET /v1/me/offering-suggestions`) while no filter is applied, by age only, never as
+ * eligibility. Promotions: each card shows the automatic discounts the API lists for it now
+ * (`promotions`, never promo codes) as tags; the review decides what is applied.
  */
-import type { CapabilityId } from '@sportspark/api-client';
+import { presentationForError, type Schema } from '@sportspark/api-client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useRef, useState, type RefObject } from 'react';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
-import { OFFERING_KIND_LABELS, type OfferingKind } from '../../features/registration/format';
+import { artworkFor } from '../../artwork/artworkFor';
+import { illustrations } from '../../artwork/manifest';
+import type { OfferingKind } from '../../features/registration/format';
+import {
+  MY_BASKETS_KEY,
+  MY_CHECKOUTS_KEY,
+  MY_WAITLIST_KEY,
+} from '../../features/registration/in-progress';
 import { InProgressCard } from '../../features/registration/InProgressCard';
 import { registrationRoutes } from '../../features/registration/routes';
-import { promotionBadges } from '../../features/registration/promotions';
-import { registrationWindowStatus } from '../../features/registration/status';
-import { Body, ButtonRow, TextField } from '../../features/registration/ui';
-import { PublicLinks } from '../public/PublicViews';
-import { useApp } from '../../providers/AppProviders';
+import { useApp, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
-import { Card } from '../../ui/Card';
-import { Icon } from '../../ui/Icon';
-import { ListRow } from '../../ui/ListRow';
+import { Chip, ChipRow } from '../../ui/Chip';
+import { addIsoDays, DateRangeField, type DateRange } from '../../ui/DateField';
+import { todayIn, weekStartOf } from '../../ui/DateStrip';
+import { EmptyState } from '../../ui/EmptyState';
+import { FieldError, SearchField, TextField } from '../../ui/Field';
 import { LoadMore } from '../../ui/LoadMore';
+import { MediaCard } from '../../ui/MediaCard';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Sheet } from '../../ui/Sheet';
 import { StateView } from '../../ui/StateView';
-import { KIND_LOOK, offeringSummary } from './offering-look';
+import { layout, makeStyles, spacing } from '../../ui/theme';
+import { PublicLinks } from '../public/PublicViews';
+import {
+  CONDITIONAL_CATEGORIES,
+  EXPLORE_CATEGORIES,
+  EXPLORE_SPORTS,
+  KIND_WORD,
+  offeringCardLabel,
+  offeringCardLine,
+  offeringPlaceLine,
+  offeringTags,
+  shortDates,
+} from './offering-look';
 import { PickedFor } from './PickedFor';
-import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type, useTheme } from '../../ui/theme';
+
+type OfferingListItem = Schema<'OfferingListItem'>;
 
 export const DISCOVER_PAGE_SIZE = 50;
 
-/** Kinds that always have a filter. */
-export const DISCOVER_FILTER_KINDS: readonly OfferingKind[] = [
-  'season',
-  'term',
-  'camp',
-  'session',
-  'trial',
-  'private_coaching',
-];
-
-/** Package G kinds, each filterable only while its capability switch is on (DEC-016). */
-export const CONDITIONAL_FILTER_KINDS: readonly { kind: OfferingKind; capability: CapabilityId }[] =
-  [
-    { kind: 'pickup', capability: 'pickup_sessions' },
-    { kind: 'rental', capability: 'rentals' },
-    { kind: 'party', capability: 'parties' },
-    { kind: 'package', capability: 'session_packages' },
-    { kind: 'membership', capability: 'memberships' },
-  ];
-
-export { KIND_LOOK, offeringSummary };
+/** How long the search waits after the last keystroke before it is sent. */
+export const SEARCH_DEBOUNCE_MS = 400;
 
 export interface DiscoverFilter {
   format: string;
@@ -102,7 +107,7 @@ export function isCalendarDate(value: string): boolean {
   return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
 }
 
-/** Field messages for a filter as typed; empty when it can be sent. */
+/** Field messages for a filter as entered; empty when it can be sent. */
 export function filterProblems(
   filter: DiscoverFilter,
 ): Partial<Record<keyof DiscoverFilter, string>> {
@@ -127,183 +132,266 @@ export function searchProblem(text: string): string | null {
   return null;
 }
 
-function SearchBox({ applied, onApply }: { applied: string; onApply: (q: string) => void }) {
-  const [draft, setDraft] = useState(applied);
-  const [problem, setProblem] = useState<string | null>(null);
-  const search = () => {
-    const found = searchProblem(draft);
-    setProblem(found);
-    if (!found) onApply(draft.trim());
-  };
-  return (
-    <Card testID="discover-search">
-      <TextField
-        label="Search activities"
-        hint="Leagues, camps, classes, fields…"
-        value={draft}
-        onChangeText={setDraft}
-        error={problem ?? undefined}
-        testID="discover-q"
-      />
-      <ButtonRow>
-        {/* The one action of this card: solid, so it reads as the next step. */}
-        <Button label="Search" onPress={search} />
-        {applied ? (
-          <Button
-            label="Clear search"
-            variant="secondary"
-            onPress={() => {
-              setDraft('');
-              setProblem(null);
-              onApply('');
-            }}
-          />
-        ) : null}
-      </ButtonRow>
-    </Card>
-  );
+/** A "When" chip: a fixed range from today, or dates picked in the sheet. */
+export type WhenChoice = 'week' | 'month' | 'dates';
+
+/**
+ * The dates "This week" and "This month" send, from `today` (an ISO date in the facility's
+ * zone): today to the Sunday of its week (weeks start on Monday), or today to the month's last
+ * day.
+ */
+export function whenRange(when: 'week' | 'month', today: string): { from: string; to: string } {
+  if (when === 'week') return { from: today, to: addIsoDays(weekStartOf(today, 1), 6) };
+  const [y, m] = today.split('-').map(Number) as [number, number];
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: today, to: `${today.slice(0, 8)}${String(last).padStart(2, '0')}` };
 }
 
-function KindFilter({
-  kinds,
-  value,
-  onChange,
-}: {
-  kinds: readonly OfferingKind[];
-  value: OfferingKind | null;
-  onChange: (kind: OfferingKind | null) => void;
-}) {
-  const { colors } = useTheme();
-  const styles = useStyles();
-  const options: { kind: OfferingKind | null; label: string }[] = [
-    { kind: null, label: 'All activities' },
-    ...kinds.map((kind) => ({ kind, label: OFFERING_KIND_LABELS[kind] })),
-  ];
-  return (
-    <View style={styles.filters} accessibilityRole="radiogroup" accessibilityLabel="Activity type">
-      {options.map((option) => {
-        const checked = option.kind === value;
-        return (
-          <Pressable
-            key={option.label}
-            accessibilityRole="radio"
-            accessibilityLabel={option.label}
-            accessibilityState={{ checked }}
-            onPress={() => onChange(option.kind)}
-            style={[styles.chip, checked && styles.chipOn]}
-            testID={`discover-filter-${option.kind ?? 'all'}`}
-          >
-            <Icon
-              name={option.kind ? KIND_LOOK[option.kind][0] : 'apps'}
-              size={18}
-              color={checked ? colors.chipSelectedIcon : colors.text}
-            />
-            <Text style={[styles.chipText, checked && styles.chipTextOn]}>
-              {checked ? `✓ ${option.label}` : option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+/** What the screen has applied, as the list read sends it. */
+export interface ExploreSelection {
+  kind: OfferingKind | null;
+  /** The sport chip's word, added to `q`. */
+  sport: string | null;
+  /** The applied search text. */
+  search: string;
+  filter: DiscoverFilter;
 }
 
-function MoreFilters({
-  applied,
-  onApply,
-}: {
-  applied: DiscoverFilter;
-  onApply: (filter: DiscoverFilter) => void;
-}) {
-  const [draft, setDraft] = useState<DiscoverFilter>(applied);
-  const [problems, setProblems] = useState<Partial<Record<keyof DiscoverFilter, string>>>({});
-  const set = (key: keyof DiscoverFilter) => (value: string) =>
-    setDraft((current) => ({ ...current, [key]: value }));
-  const apply = () => {
-    const found = filterProblems(draft);
-    setProblems(found);
-    if (Object.keys(found).length > 0) return;
-    onApply({ format: draft.format.trim(), from: draft.from.trim(), to: draft.to.trim() });
-  };
-  const active = applied.format || applied.from || applied.to;
-  return (
-    <Card testID="discover-more-filters">
-      <TextField
-        label="Format"
-        hint="As the facility writes it, for example 7v7"
-        value={draft.format}
-        onChangeText={set('format')}
-        error={problems.format}
-        testID="discover-format"
-      />
-      <TextField
-        label="Ending on or after (YYYY-MM-DD)"
-        value={draft.from}
-        onChangeText={set('from')}
-        error={problems.from}
-        testID="discover-from"
-      />
-      <TextField
-        label="Starting on or before (YYYY-MM-DD)"
-        value={draft.to}
-        onChangeText={set('to')}
-        error={problems.to}
-        testID="discover-to"
-      />
-      <ButtonRow>
-        <Button label="Apply filters" variant="secondary" onPress={apply} />
-        {active ? (
-          <Button
-            label="Clear filters"
-            variant="secondary"
-            onPress={() => {
-              setDraft(EMPTY_FILTER);
-              setProblems({});
-              onApply(EMPTY_FILTER);
-            }}
-          />
-        ) : null}
-      </ButtonRow>
-      <Body muted>
-        Filtering by age is not available yet: it depends on DEC-003, which has not been decided
-        (owner: Product and operations). Each activity shows its age band.
-      </Body>
-    </Card>
-  );
+/** The `q` sent: the search text, then the sport's word. Empty when neither is applied. */
+export function searchQuery(selection: Pick<ExploreSelection, 'search' | 'sport'>): string {
+  return [selection.search.trim(), selection.sport ?? '']
+    .filter((part) => part !== '')
+    .join(' ')
+    .slice(0, 100);
 }
 
-export function DiscoverScreen() {
-  const { colors, kindColors } = useTheme();
-  const styles = useStyles();
-  const { session, services } = useApp();
-  const router = useRouter();
-  const [kind, setKind] = useState<OfferingKind | null>(null);
-  const [filter, setFilter] = useState<DiscoverFilter>(EMPTY_FILTER);
-  const [q, setQ] = useState('');
-  const signedIn = session.status === 'signed_in';
-  const permissions = usePermissions({ enabled: signedIn });
-  const slug = services.config.organizationSlug ?? null;
-  const canBrowse = signedIn || slug !== null;
-  const conditional = CONDITIONAL_FILTER_KINDS.filter(
-    (k) => signedIn && permissions.isCapabilityEnabled(k.capability) === true,
-  );
-  const kinds = [...DISCOVER_FILTER_KINDS, ...conditional.map((k) => k.kind)];
-  const query = {
+/** The query of `GET /v1/offerings` for a selection (only parameters the API accepts). */
+export function exploreQuery(
+  selection: ExploreSelection,
+  context: { signedIn: boolean; organizationSlug: string | null },
+) {
+  const q = searchQuery(selection);
+  const { filter, kind } = selection;
+  return {
     limit: DISCOVER_PAGE_SIZE,
     ...(kind ? { kind } : {}),
     ...(filter.format ? { format: filter.format } : {}),
     ...(filter.from ? { from: filter.from } : {}),
     ...(filter.to ? { to: filter.to } : {}),
     ...(q ? { q } : {}),
-    ...(!signedIn && slug ? { organization: slug } : {}),
+    ...(!context.signedIn && context.organizationSlug
+      ? { organization: context.organizationSlug }
+      : {}),
   };
+}
+
+function ActivityCard({ offering }: { offering: OfferingListItem }) {
+  const router = useRouter();
+  const styles = useStyles();
+  return (
+    <MediaCard
+      form="hero"
+      source={artworkFor(offering, 'wide').source}
+      aspectRatio={16 / 9}
+      eyebrow={KIND_WORD[offering.kind]}
+      title={offering.name}
+      meta={[offeringCardLine(offering), offeringPlaceLine(offering)].filter(Boolean)}
+      tags={offeringTags(offering)}
+      accessibilityLabel={offeringCardLabel(offering)}
+      accessibilityHint="Opens the activity"
+      onPress={() => router.push(registrationRoutes.offering(offering.id))}
+      style={styles.card}
+      testID={`offering-${offering.id}`}
+    />
+  );
+}
+
+/** "Pick dates": a range in a sheet; both dates are needed and the end is not before the start. */
+function DatesSheet({
+  open,
+  applied,
+  onApply,
+  onClose,
+  returnFocusTo,
+}: {
+  open: boolean;
+  applied: DateRange;
+  onApply: (range: { from: string; to: string } | null) => void;
+  onClose: () => void;
+  returnFocusTo: RefObject<View | null>;
+}) {
+  const [draft, setDraft] = useState<DateRange>(applied);
+  const complete = draft.start !== null && draft.end !== null && draft.start <= draft.end;
+  const hasApplied = applied.start !== null || applied.end !== null;
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Pick dates"
+      returnFocusTo={returnFocusTo}
+      footer={
+        <View style={{ gap: spacing.sm }}>
+          <Button
+            label="Apply"
+            size="lg"
+            block
+            disabled={!complete}
+            onPress={() =>
+              draft.start && draft.end ? onApply({ from: draft.start, to: draft.end }) : undefined
+            }
+          />
+          {hasApplied ? (
+            <Button label="Clear dates" variant="secondary" block onPress={() => onApply(null)} />
+          ) : null}
+        </View>
+      }
+    >
+      <DateRangeField
+        label="Dates"
+        hint="Activities that run on any day between these dates"
+        startLabel="From"
+        endLabel="To"
+        value={draft}
+        onChange={setDraft}
+      />
+    </Sheet>
+  );
+}
+
+/** "Format": the facility's own words for it ("7v7"), sent as `format`. */
+function FormatSheet({
+  open,
+  applied,
+  onApply,
+  onClose,
+  returnFocusTo,
+}: {
+  open: boolean;
+  applied: string;
+  onApply: (format: string) => void;
+  onClose: () => void;
+  returnFocusTo: RefObject<View | null>;
+}) {
+  const [draft, setDraft] = useState(applied);
+  const [problem, setProblem] = useState<string | null>(null);
+  const apply = () => {
+    const found = filterProblems({ ...EMPTY_FILTER, format: draft }).format ?? null;
+    setProblem(found);
+    if (!found) onApply(draft.trim());
+  };
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Format"
+      returnFocusTo={returnFocusTo}
+      footer={
+        <View style={{ gap: spacing.sm }}>
+          <Button label="Apply" size="lg" block onPress={apply} />
+          {applied ? (
+            <Button label="Clear format" variant="secondary" block onPress={() => onApply('')} />
+          ) : null}
+        </View>
+      }
+    >
+      <TextField
+        label="Format"
+        hint="As the facility writes it, for example 7v7"
+        value={draft}
+        onChangeText={setDraft}
+        error={problem}
+        onSubmitEditing={apply}
+        returnKeyType="done"
+      />
+    </Sheet>
+  );
+}
+
+export function DiscoverScreen() {
+  const styles = useStyles();
+  const { session, services } = useApp();
+  const router = useRouter();
+  const now = useNow();
+  const queryClient = useQueryClient();
+  const [kind, setKind] = useState<OfferingKind | null>(null);
+  const [sport, setSport] = useState<string | null>(null);
+  const [filter, setFilter] = useState<DiscoverFilter>(EMPTY_FILTER);
+  const [when, setWhen] = useState<WhenChoice | null>(null);
+  const [draft, setDraft] = useState('');
+  const [search, setSearch] = useState('');
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<'dates' | 'format' | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const datesTrigger = useRef<View>(null);
+  const formatTrigger = useRef<View>(null);
+  const signedIn = session.status === 'signed_in';
+  const permissions = usePermissions({ enabled: signedIn });
+  const slug = services.config.organizationSlug ?? null;
+  const canBrowse = signedIn || slug !== null;
+  const categories = [
+    ...EXPLORE_CATEGORIES,
+    ...CONDITIONAL_CATEGORIES.filter(
+      (c) => signedIn && permissions.isCapabilityEnabled(c.capability) === true,
+    ),
+  ];
+  const selection: ExploreSelection = { kind, sport, search, filter };
+  const q = searchQuery(selection);
   const pages = useApiPages({
     path: '/offerings',
-    request: { query },
+    request: { query: exploreQuery(selection, { signedIn, organizationSlug: slug }) },
     enabled: session.status !== 'loading' && canBrowse,
   });
-  const filtered =
-    kind !== null || filter.format !== '' || filter.from !== '' || filter.to !== '' || q !== '';
+  const dated = filter.from !== '' || filter.to !== '';
+  const chipsApplied = kind !== null || sport !== null || filter.format !== '' || dated;
+  const filtered = chipsApplied || search !== '';
+
+  const runSearch = (text: string) => {
+    const problem = searchProblem(text);
+    setSearchError(problem);
+    if (!problem) setSearch(text.trim());
+  };
+  const showAll = () => {
+    setKind(null);
+    setSport(null);
+    setFilter(EMPTY_FILTER);
+    setWhen(null);
+    setDraft('');
+    setSearch('');
+    setSearchError(null);
+  };
+  const clearChips = () => {
+    setKind(null);
+    setSport(null);
+    setFilter(EMPTY_FILTER);
+    setWhen(null);
+  };
+  const chooseWhen = (choice: 'week' | 'month') => {
+    if (when === choice) {
+      setWhen(null);
+      setFilter((f) => ({ ...f, from: '', to: '' }));
+      return;
+    }
+    // SPK-SCHED-008: "today" is the facility's day, read from the injected clock.
+    const today = todayIn(now, pages.data?.[0]?.facility.timezone ?? null);
+    setWhen(choice);
+    setFilter((f) => ({ ...f, ...whenRange(choice, today) }));
+  };
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        Promise.resolve(pages.refetch()),
+        queryClient.invalidateQueries({ queryKey: ['api', '/me/offering-suggestions'] }),
+        ...(signedIn
+          ? [MY_BASKETS_KEY, MY_CHECKOUTS_KEY, MY_WAITLIST_KEY].map((queryKey) =>
+              queryClient.invalidateQueries({ queryKey }),
+            )
+          : []),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (session.status === 'loading') {
     return (
@@ -318,102 +406,171 @@ export function DiscoverScreen() {
         <StateView
           variant="empty"
           title="Sign in to see activities"
-          description="Leagues, programs, camps and other activities appear here after you sign in."
+          description="Leagues, classes, camps and other activities appear here after you sign in."
           actionLabel="Sign in"
           onAction={() => router.push('/sign-in')}
         />
       </Screen>
     );
   }
+
+  // §4.10: once the API answers NOT_FOUND or ACCESS_DENIED, cached items are no longer shown.
+  const unavailable = pages.error !== null && presentationForError(pages.error) === 'unavailable';
+  const items = unavailable ? [] : (pages.data ?? []);
+  const emptyTitle = q
+    ? `No activities match "${q}"`
+    : kind
+      ? `No ${KIND_WORD[kind].toLowerCase()} activities`
+      : filtered
+        ? 'No activities match these filters'
+        : 'No activities';
+  const empty =
+    pages.data !== undefined && !unavailable ? (
+      <EmptyState
+        source={illustrations['empty-search']}
+        title={emptyTitle}
+        message={
+          filtered
+            ? 'Nothing matching this filter is published right now. Show all activities to see everything.'
+            : 'Leagues, classes, camps and other activities appear here when the facility publishes them.'
+        }
+        action={filtered ? { label: 'Show all activities', onPress: showAll } : undefined}
+        testID="discover-empty"
+      />
+    ) : null;
+
+  const pickedDates: DateRange =
+    when === 'dates'
+      ? { start: filter.from, end: filter.to }
+      : {
+          start: null,
+          end: null,
+        };
+
   return (
-    <Screen>
+    <Screen<OfferingListItem>
+      onRefresh={() => void refresh()}
+      refreshing={refreshing}
+      list={{
+        data: items,
+        keyExtractor: (offering) => offering.id,
+        renderItem: ({ item }) => <ActivityCard offering={item} />,
+        ListEmptyComponent: empty,
+        ListFooterComponent: <LoadMore pages={pages} label="activities" />,
+      }}
+    >
       {signedIn ? <InProgressCard /> : null}
       {/* SPK-SCHED-010: today's schedule and public standings need no sign-in. */}
       {!signedIn ? <PublicLinks /> : null}
-      {/* Keyed like the filters below: the field always shows the search that is applied. */}
-      <SearchBox key={`q:${q}`} applied={q} onApply={setQ} />
+      <View style={styles.search}>
+        <SearchField
+          label="Search activities"
+          placeholder="Leagues, camps, classes, fields…"
+          value={draft}
+          onChangeText={setDraft}
+          onSearch={runSearch}
+          debounceMs={SEARCH_DEBOUNCE_MS}
+          testID="discover-q"
+        />
+        <FieldError error={searchError} />
+      </View>
+      <View style={styles.chips}>
+        <ChipRow
+          mode="single"
+          label="Activity type"
+          allowEmpty
+          options={categories.map((c) => ({ value: c.kind, label: c.label, icon: c.icon }))}
+          value={kind}
+          onChange={setKind}
+          testID="discover-categories"
+        />
+        <ChipRow label="Sport" testID="discover-sports">
+          {EXPLORE_SPORTS.map((s) => (
+            <Chip
+              key={s.word}
+              label={s.label}
+              selected={sport === s.word}
+              onPress={() => setSport(sport === s.word ? null : s.word)}
+            />
+          ))}
+          <View ref={formatTrigger} collapsable={false}>
+            <Chip
+              label={filter.format ? `Format: ${filter.format}` : 'Format'}
+              icon="tune"
+              selected={filter.format !== ''}
+              accessibilityHint="Choose a format, such as 7v7"
+              onPress={() => setSheet('format')}
+            />
+          </View>
+        </ChipRow>
+        <ChipRow label="When" testID="discover-when">
+          <Chip label="This week" selected={when === 'week'} onPress={() => chooseWhen('week')} />
+          <Chip
+            label="This month"
+            selected={when === 'month'}
+            onPress={() => chooseWhen('month')}
+          />
+          <View ref={datesTrigger} collapsable={false}>
+            <Chip
+              label={
+                when === 'dates'
+                  ? shortDates({ startsOn: filter.from, endsOn: filter.to })
+                  : 'Pick dates'
+              }
+              accessibilityLabel={
+                when === 'dates'
+                  ? `Pick dates, ${shortDates({ startsOn: filter.from, endsOn: filter.to })}`
+                  : 'Pick dates'
+              }
+              icon="calendar_today"
+              selected={when === 'dates'}
+              onPress={() => setSheet('dates')}
+            />
+          </View>
+          {chipsApplied ? <Chip label="Clear filters" icon="close" onPress={clearChips} /> : null}
+        </ChipRow>
+      </View>
       {signedIn && !filtered ? <PickedFor /> : null}
-      <KindFilter kinds={kinds} value={kind} onChange={setKind} />
-      {/* Keyed by the applied filter: whenever it changes (applied, cleared, or "Show all
-          activities"), the fields show exactly what is applied, never stale text. */}
-      <MoreFilters key={JSON.stringify(filter)} applied={filter} onApply={setFilter} />
+      {/* The list's own state (loading, failure, offline with its age); the items follow. */}
       <QueryBoundary
         query={pages}
         label="activities"
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: q
-            ? `No activities match "${q}"`
-            : kind
-              ? `No ${OFFERING_KIND_LABELS[kind].toLowerCase()} activities`
-              : 'No activities',
-          description: filtered
-            ? 'Nothing matching this filter is published right now. Show all activities to see everything.'
-            : 'Leagues, programs, camps and other activities appear here when the facility publishes them.',
-          ...(filtered
-            ? {
-                actionLabel: 'Show all activities',
-                onAction: () => {
-                  setKind(null);
-                  setFilter(EMPTY_FILTER);
-                  setQ('');
-                },
-              }
-            : {}),
-        }}
+        empty={{ title: emptyTitle, description: '' }}
         unavailableOffline={['Registration']}
       >
-        {(items) => (
-          <View accessibilityRole="list">
-            {items.map((offering) => (
-              <ListRow
-                key={offering.id}
-                title={offering.name}
-                detail={offeringSummary(offering)}
-                status={registrationWindowStatus(offering)}
-                badges={promotionBadges(offering)}
-                icon={KIND_LOOK[offering.kind][0]}
-                iconTone={[kindColors[KIND_LOOK[offering.kind][1]], colors.primaryText]}
-                onPress={() => router.push(registrationRoutes.offering(offering.id))}
-                accessibilityHint="Opens the activity details"
-                testID={`offering-${offering.id}`}
-              />
-            ))}
-          </View>
-        )}
+        {() => null}
       </QueryBoundary>
-      <LoadMore pages={pages} label="activities" />
-      {conditional.length < CONDITIONAL_FILTER_KINDS.length ? (
-        <Text style={styles.caption}>
-          Pickup sessions, rentals, parties, packages and memberships are listed only where the
-          facility has turned them on; whether each is offered is still being decided (DEC-016).
-        </Text>
+      {sheet === 'dates' ? (
+        <DatesSheet
+          open
+          applied={pickedDates}
+          returnFocusTo={datesTrigger}
+          onClose={() => setSheet(null)}
+          onApply={(range) => {
+            setSheet(null);
+            setWhen(range ? 'dates' : null);
+            setFilter((f) => ({ ...f, from: range?.from ?? '', to: range?.to ?? '' }));
+          }}
+        />
+      ) : null}
+      {sheet === 'format' ? (
+        <FormatSheet
+          open
+          applied={filter.format}
+          returnFocusTo={formatTrigger}
+          onClose={() => setSheet(null)}
+          onApply={(format) => {
+            setSheet(null);
+            setFilter((f) => ({ ...f, format }));
+          }}
+        />
       ) : null}
     </Screen>
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  filters: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  chip: {
-    minHeight: MIN_TOUCH_SIZE,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 13,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.background,
-  },
-  chipOn: { backgroundColor: colors.chipSelected, borderColor: colors.chipSelected },
-  chipText: { ...type.caption, ...fonts.bold, color: colors.text },
-  chipTextOn: { color: colors.onChipSelected },
-  caption: { ...type.caption, color: colors.textMuted, padding: spacing.lg },
+const useStyles = makeStyles(() => ({
+  search: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm, gap: spacing.xs },
+  chips: { gap: spacing.sm, paddingVertical: spacing.md },
+  card: { marginHorizontal: layout.gutter, marginBottom: layout.cardGap },
 }));
