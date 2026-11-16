@@ -17,6 +17,7 @@ import { ErrorBoundary } from '../src/ui/ErrorBoundary';
 import { GlassProvider } from '../src/ui/GlassSurface';
 import { MotionProvider } from '../src/ui/motion';
 import { FONT_ASSETS } from '../src/ui/theme';
+import { ToastProvider } from '../src/ui/Toast';
 
 const services = createDeviceServices();
 const reporter = services.crashReporter ?? consoleCrashReporter;
@@ -35,8 +36,9 @@ export default function RootLayout() {
             {/* Motion follows the device's reduce-motion setting (src/ui/motion). */}
             <MotionProvider>
               <BottomSheetModalProvider>
-                {/* A ToastProvider goes here (a later phase of the redesign, ADR-008). */}
-                <RootNavigator />
+                <ToastProvider>
+                  <RootNavigator />
+                </ToastProvider>
               </BottomSheetModalProvider>
             </MotionProvider>
           </GlassProvider>
