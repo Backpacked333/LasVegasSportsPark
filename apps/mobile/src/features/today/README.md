@@ -15,8 +15,9 @@ No screen here has passed native acceptance on signed builds or devices (§6.2).
 Shared code lives here: time display and zones (`time.ts`), status vocabulary (`status.ts`),
 notice placement (`notices.ts`), calendar windows (`calendar.ts`), sessions and fixtures in one
 list (`entries.ts`), the fixture card (`fixture-model.ts`), the session card (`session-activity.ts`),
-the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`) and the reads
-(`queries.ts`). Test fixtures shaped like the API are in `__tests__/fixtures.ts`.
+the next-activity card (`NextActivityCard.tsx`), RSVP (`RsvpControl.tsx`; Home's inline "Going / Not
+going" is `RsvpInline.tsx`, sharing its `useRsvpAnswer` logic), the per-section read state
+(`read-state.tsx`) and the reads (`queries.ts`). Test fixtures shaped like the API are in `__tests__/fixtures.ts`.
 
 ## Screens
 

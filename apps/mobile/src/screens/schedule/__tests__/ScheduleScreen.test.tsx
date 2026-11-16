@@ -445,7 +445,7 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
     );
     const sheet = await waitFor(() => openSheet(screen));
     fireEvent.press(within(sheet).getByRole('radio', { name: 'Available' }));
-    expect(await within(sheet).findByText('You cannot answer for this fixture.')).toBeOnTheScreen();
+    expect(await within(sheet).findByText("You can't answer for this game.")).toBeOnTheScreen();
     expect(screen.queryByText(/ACCESS_DENIED/)).toBeNull();
   });
 

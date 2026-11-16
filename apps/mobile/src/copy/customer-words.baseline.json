@@ -8,7 +8,6 @@
   "src/features/today/RsvpControl.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
   "src/features/today/RsvpControl.tsx :: DEC- :: …ve. Answering for a child is still being decided (DEC-090).",
   "src/features/today/RsvpControl.tsx :: fixture :: This fixture no longer takes availability answers.",
-  "src/features/today/RsvpControl.tsx :: fixture :: You cannot answer for this fixture.",
   "src/features/today/RsvpControl.tsx :: fixture :: Your availability for this fixture",
   "src/features/today/RsvpControl.tsx :: fixture :: … a roster for this fixture, so there is no answer for you …",
 

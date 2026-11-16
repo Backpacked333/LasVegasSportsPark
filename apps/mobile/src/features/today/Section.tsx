@@ -7,14 +7,15 @@
  *
  * `Section` and `Caption` are thin adapters over the visual system v2 in `src/ui` (ADR-008,
  * Phase 3), keeping their props and accessible output while screens move to `src/ui` directly.
+ * `SectionQueryState` and `oldestUpdate` live in `read-state.tsx`, which is not a kit.
  */
-import { presentationForError, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
-import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Section as UiSection } from '../../ui/Section';
-import { StateView } from '../../ui/StateView';
 import { Text } from '../../ui/Text';
 import { layout, makeStyles } from '../../ui/theme';
+
+// The per-section read state moved out of the kit (`read-state.tsx`); re-exported for old imports.
+export { oldestUpdate, SectionQueryState, type ReadLike } from './read-state';
 
 export function Section({
   title,
@@ -32,60 +33,6 @@ export function Section({
       {children}
     </UiSection>
   );
-}
-
-export interface ReadLike {
-  data: unknown;
-  error: ApiError | null;
-  fetchStatus?: 'fetching' | 'paused' | 'idle';
-  refetch?: () => unknown;
-}
-
-/**
- * The state to show instead of a section's content while it has no data, or null once it has.
- * `unavailable` overrides the default "not available" wording for this section.
- */
-export function SectionQueryState({
-  read,
-  label,
-  unavailable,
-}: {
-  read: ReadLike;
-  label: string;
-  unavailable?: { title?: string; description?: string };
-}) {
-  const now = useNow();
-  const { reachable } = useConnectivity();
-  // A record the API no longer serves (NOT_FOUND, ACCESS_DENIED) is not available even when an
-  // older copy is cached (§4.10, §4.14).
-  if (read.error && presentationForError(read.error) === 'unavailable') {
-    return <StateView variant="unavailable" {...unavailable} />;
-  }
-  if (read.data !== undefined) return null;
-  const retry = read.refetch ? () => void read.refetch?.() : undefined;
-  if (read.error) {
-    const presentation = presentationForError(read.error);
-    if (presentation === 'unavailable') {
-      return <StateView variant="unavailable" {...unavailable} />;
-    }
-    if (presentation === 'offline') {
-      return (
-        <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
-      );
-    }
-    return <StateView variant="error" error={read.error} onRetry={retry} />;
-  }
-  if (read.fetchStatus === 'paused' || reachable === false) {
-    return <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />;
-  }
-  return <StateView variant="loading" label={label} />;
-}
-
-/** Oldest receipt time among the reads that have data: the age the page states (§4.15). */
-export function oldestUpdate(dates: readonly (Date | null)[]): Date | null {
-  let oldest: Date | null = null;
-  for (const d of dates) if (d && (!oldest || d < oldest)) oldest = d;
-  return oldest;
 }
 
 export function Caption({ children, testID }: { children: ReactNode; testID?: string }) {

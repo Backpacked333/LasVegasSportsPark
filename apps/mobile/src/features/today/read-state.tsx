@@ -1,0 +1,67 @@
+/**
+ * Per-section read state for screens built from several reads (SCR-C-03 Home, SCR-C-18 Schedule,
+ * SCR-C-20 detail). Each section shows its own SPK-UX-008 state, so one failed read never hides
+ * the others: loading, error with the API's code (in the support fold) and recovery, offline with
+ * nothing cached, and a protected NOT_FOUND or a denial as "not available" without implying a
+ * record exists (§4.10). The page shows the age of what it displays once, not per section.
+ *
+ * Built on `src/ui` only (ADR-008); moved out of the today `Section` kit so screens that leave the
+ * kits keep it.
+ */
+import { presentationForError, type ApiError } from '@sportspark/api-client';
+import { useConnectivity, useNow } from '../../providers/AppProviders';
+import { StateView } from '../../ui/StateView';
+
+export interface ReadLike {
+  data: unknown;
+  error: ApiError | null;
+  fetchStatus?: 'fetching' | 'paused' | 'idle';
+  refetch?: () => unknown;
+}
+
+/**
+ * The state to show instead of a section's content while it has no data, or null once it has.
+ * `unavailable` overrides the default "not available" wording for this section.
+ */
+export function SectionQueryState({
+  read,
+  label,
+  unavailable,
+}: {
+  read: ReadLike;
+  label: string;
+  unavailable?: { title?: string; description?: string };
+}) {
+  const now = useNow();
+  const { reachable } = useConnectivity();
+  // A record the API no longer serves (NOT_FOUND, ACCESS_DENIED) is not available even when an
+  // older copy is cached (§4.10, §4.14).
+  if (read.error && presentationForError(read.error) === 'unavailable') {
+    return <StateView variant="unavailable" {...unavailable} />;
+  }
+  if (read.data !== undefined) return null;
+  const retry = read.refetch ? () => void read.refetch?.() : undefined;
+  if (read.error) {
+    const presentation = presentationForError(read.error);
+    if (presentation === 'unavailable') {
+      return <StateView variant="unavailable" {...unavailable} />;
+    }
+    if (presentation === 'offline') {
+      return (
+        <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
+      );
+    }
+    return <StateView variant="error" error={read.error} onRetry={retry} />;
+  }
+  if (read.fetchStatus === 'paused' || reachable === false) {
+    return <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />;
+  }
+  return <StateView variant="loading" label={label} />;
+}
+
+/** Oldest receipt time among the reads that have data: the age the page states (§4.15). */
+export function oldestUpdate(dates: readonly (Date | null)[]): Date | null {
+  let oldest: Date | null = null;
+  for (const d of dates) if (d && (!oldest || d < oldest)) oldest = d;
+  return oldest;
+}

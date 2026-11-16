@@ -23,6 +23,7 @@
  *   on no roster (`rosterStatus: null`) is not offered the choices. Answers close at kickoff: the
  *   API answers INVALID_TRANSITION with `details.code: AVAILABILITY_CLOSED`, shown in those words.
  * - RSVP is neither attendance nor eligibility; the caption says so.
+ * - The answer logic is `useRsvpAnswer`, shared with Home's inline control (`RsvpInline.tsx`).
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -56,15 +57,15 @@ export interface RsvpControlProps {
   onReload?: () => void;
 }
 
-const NEEDS_CONNECTION =
+export const NEEDS_CONNECTION =
   'Answering needs a connection. Nothing is saved until you are back online.';
-const SAVING = 'Saving your answer…';
-const recordedText = (state: RsvpState) => `Answer recorded: ${rsvpStatus(state).label}.`;
+export const SAVING = 'Saving your answer…';
+export const recordedText = (state: RsvpState) => `Answer recorded: ${rsvpStatus(state).label}.`;
 
 /** `details.code` of the API's refusal of an answer after kickoff (CMP-04). */
 export const AVAILABILITY_CLOSED = 'AVAILABILITY_CLOSED';
 
-function detailsCode(error: ApiError): string | null {
+export function detailsCode(error: ApiError): string | null {
   const details = error.details as { code?: unknown } | null | undefined;
   return typeof details?.code === 'string' ? details.code : null;
 }
@@ -83,7 +84,7 @@ function rsvpErrorView(
         description={
           error.code === 'PARTICIPANT_AUTHORITY_REQUIRED'
             ? 'You cannot answer for this participant. Which permission lets a guardian answer for a child is still being decided (DEC-090).'
-            : 'You cannot answer for this fixture.'
+            : "You can't answer for this game."
         }
       />
     );
@@ -104,15 +105,17 @@ function rsvpErrorView(
   return <CommandFailure error={error} onRetry={onRetry} testID="rsvp-failure" />;
 }
 
-export function RsvpControl({
+/**
+ * The answer logic both RSVP controls share (this one and Home's `RsvpInline`): the command, the
+ * answer shown, whether answers are open, and "Check again" resending exactly the last request.
+ */
+export function useRsvpAnswer({
   fixtureId,
   fixtureStatus,
   myResponse,
   responseRevision,
   onRoster,
-  onReload,
-}: RsvpControlProps) {
-  const styles = useStyles();
+}: Omit<RsvpControlProps, 'onReload'>) {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const rsvp = useApiCommand('post', '/fixtures/{id}/availability', {
@@ -126,7 +129,6 @@ export function RsvpControl({
   const [lastRequest, setLastRequest] = useState<RsvpRequest | null>(null);
   const recorded = (rsvp.data?.state as RsvpState | undefined) ?? myResponse ?? null;
   const open = fixtureAcceptsRsvp(fixtureStatus) && onRoster !== false;
-  const current = rsvpStatus(recorded);
   // The revision this person last saw: the answer just recorded, else the fixture read's.
   const expectedRevision = rsvp.data?.revision ?? responseRevision ?? undefined;
 
@@ -141,6 +143,29 @@ export function RsvpControl({
       path: { id: fixtureId },
       body: expectedRevision === undefined ? { state } : { state, expectedRevision },
     });
+  const retry = () => {
+    if (lastRequest) send(lastRequest);
+  };
+  return { rsvp, recorded, open, offline, choose, retry };
+}
+
+export function RsvpControl({
+  fixtureId,
+  fixtureStatus,
+  myResponse,
+  responseRevision,
+  onRoster,
+  onReload,
+}: RsvpControlProps) {
+  const styles = useStyles();
+  const { rsvp, recorded, open, offline, choose, retry } = useRsvpAnswer({
+    fixtureId,
+    fixtureStatus,
+    myResponse,
+    responseRevision,
+    onRoster,
+  });
+  const current = rsvpStatus(recorded);
 
   return (
     <View style={styles.box} testID="rsvp">
@@ -211,16 +236,11 @@ export function RsvpControl({
         </LiveText>
       ) : null}
       {rsvp.error
-        ? rsvpErrorView(
-            styles,
-            rsvp.error,
-            () => lastRequest && send(lastRequest),
-            () => {
-              // Clear the stale answer before reloading, so the reloaded state stands alone.
-              rsvp.reset();
-              onReload?.();
-            },
-          )
+        ? rsvpErrorView(styles, rsvp.error, retry, () => {
+            // Clear the stale answer before reloading, so the reloaded state stands alone.
+            rsvp.reset();
+            onReload?.();
+          })
         : null}
       <Text style={styles.caption}>
         Your answer helps the team plan. It is not a check-in and does not affect eligibility.

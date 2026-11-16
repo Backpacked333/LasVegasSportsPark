@@ -121,6 +121,11 @@ export function addLocalDays(start: Date, days: number, zone: string): Date {
   return startOfLocalDay(new Date(start.getTime() + days * DAY_MS + DAY_MS / 2), zone);
 }
 
+/** The hour (0 to 23) on `zone`'s wall clock at `date`: Home's day or night band (SPK-SCHED-008). */
+export function localHour(date: Date, zone: string): number {
+  return wallClock(date, zone).hour;
+}
+
 /** "2026-10-25": the calendar day of an instant in `zone`, for grouping. */
 export function localDayKey(iso: string | Date, zone: string): string {
   const w = wallClock(typeof iso === 'string' ? new Date(iso) : iso, zone);
