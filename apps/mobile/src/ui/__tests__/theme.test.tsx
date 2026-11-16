@@ -9,8 +9,8 @@ import path from 'node:path';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import { StatusBar, StyleSheet, Text } from 'react-native';
-import { HeaderTitle } from '../../navigation/TabsNavigator';
 import { createTestApp } from '../../testing/test-app';
+import { AppHeader } from '../AppHeader';
 import { Button } from '../Button';
 import { Card } from '../Card';
 import { LegendsModeToggle } from '../LegendsModeToggle';
@@ -217,7 +217,7 @@ describe('the whole app follows the theme (SPK-UX-010)', () => {
     const setBarStyle = jest.spyOn(StatusBar, 'setBarStyle');
     renderThemed(
       <>
-        <HeaderTitle>Schedule</HeaderTitle>
+        <AppHeader title="Calendar" />
         <Card testID="card">
           <Text>content</Text>
         </Card>
@@ -227,7 +227,7 @@ describe('the whole app follows the theme (SPK-UX-010)', () => {
       'legends',
     );
     const { colors } = legendsTheme;
-    expect(flat(screen.getByRole('header', { name: 'Schedule' })).color).toBe(colors.text);
+    expect(flat(screen.getByRole('header', { name: 'Calendar' })).color).toBe(colors.text);
     expect(flat(screen.getByTestId('card')).backgroundColor).toBe(colors.background);
     expect(flat(screen.getByTestId('card')).borderColor).toBe(colors.border);
     expect(flat(screen.getByTestId('row')).backgroundColor).toBe(colors.background);

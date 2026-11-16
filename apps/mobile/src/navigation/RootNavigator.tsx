@@ -1,6 +1,8 @@
 /**
  * Root stack (SPK-UX-001 native navigation and back behaviour): the five-destination tabs, plus
- * the facility pass and the inbox as stack screens reachable from anywhere (SPK-UX-002). When the
+ * the facility pass (a modal over whatever is open) and the inbox as stack screens reachable from
+ * anywhere (SPK-UX-002). Stack titles are plain customer words (PA-11 SPK-UX-011, **Proposed**):
+ * Cart, Review, Checkout, Payments, Registrations, Forms and waivers, Family. When the
  * API says this build must be updated, the update screen covers everything (SCR-C-39). The
  * connectivity state is announced to VoiceOver once for the app here, not by each screen's banner
  * (SPK-UX-009, src/connectivity/ConnectivityBanner.tsx). Headers and the navigation library's
@@ -59,18 +61,22 @@ export function RootNavigator() {
       <UpdateGate>
         <Stack screenOptions={screenOptions}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="pass" options={{ title: 'Facility pass' }} />
+          <Stack.Screen name="pass" options={{ title: 'Facility pass', presentation: 'modal' }} />
           <Stack.Screen name="inbox" options={{ title: 'Notifications' }} />
           <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
           <Stack.Screen name="onboarding" options={{ title: 'Account setup' }} />
           <Stack.Screen name="recovery" options={{ title: 'Account recovery' }} />
           <Stack.Screen name="invitations/index" options={{ title: 'Invitations' }} />
           <Stack.Screen name="invitations/[id]" options={{ title: 'Invitation' }} />
-          <Stack.Screen name="family" options={{ title: 'Family and permissions' }} />
-          <Stack.Screen name="forms" options={{ title: 'Forms and acknowledgments' }} />
+          <Stack.Screen name="family" options={{ title: 'Family' }} />
+          <Stack.Screen name="forms" options={{ title: 'Forms and waivers' }} />
           <Stack.Screen name="preferences" options={{ title: 'Preferences' }} />
           <Stack.Screen name="link" options={{ title: 'Link' }} />
-          <Stack.Screen name="family-calendar" options={{ title: 'Family calendar' }} />
+          <Stack.Screen name="registration/basket/[basketId]" options={{ title: 'Cart' }} />
+          <Stack.Screen name="registration/quote/[quoteId]" options={{ title: 'Review' }} />
+          <Stack.Screen name="registration/checkout/[quoteId]" options={{ title: 'Checkout' }} />
+          <Stack.Screen name="payments/index" options={{ title: 'Payments' }} />
+          <Stack.Screen name="enrollments/index" options={{ title: 'Registrations' }} />
           <Stack.Screen name="fixtures/[id]" options={{ title: 'Fixture' }} />
           <Stack.Screen name="sessions/[sessionId]" options={{ title: 'Activity' }} />
           {/* Package G (conditional, behind their capability switches; reached from Account). */}
