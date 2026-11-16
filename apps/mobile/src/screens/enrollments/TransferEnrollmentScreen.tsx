@@ -46,7 +46,7 @@ import {
   type FinancialConsequence,
   type TransferPreview,
 } from '../../features/money/status';
-import { Body, ButtonRow, Caption, ChoiceRow, Field, Section } from '../../features/money/ui';
+import { ChoiceRow } from '../../features/money/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -57,6 +57,10 @@ import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { acceptedOf, consequenceConflict } from './participation';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
 
 type PublicOffering = Schema<'PublicOffering'>;
 type TransferBody = Schema<'TransferEnrollmentRequest'>;
@@ -111,7 +115,9 @@ function PreviewView({ preview }: { preview: TransferPreview }) {
           )}
         />
         {preview.affectedDates.overlapping ? (
-          <Caption>The two activities overlap in time.</Caption>
+          <Text variant="caption" tone="muted">
+            The two activities overlap in time.
+          </Text>
         ) : null}
         <Field
           label="Place"
@@ -128,7 +134,9 @@ function PreviewView({ preview }: { preview: TransferPreview }) {
           value={preview.eligibility.eligible ? 'Eligible' : 'Not eligible'}
         />
         {preview.eligibility.reasons.map((reason) => (
-          <Caption key={`${reason.code}-${reason.message}`}>▲ {reason.message}</Caption>
+          <Text variant="caption" tone="muted" key={`${reason.code}-${reason.message}`}>
+            ▲ {reason.message}
+          </Text>
         ))}
         <Field
           label="Approval"
@@ -137,7 +145,7 @@ function PreviewView({ preview }: { preview: TransferPreview }) {
       </Section>
       <Section title="Money" testID="money-consequence">
         <StatusBadge tone={summary.tone} label={summary.headline} testID="consequence" />
-        <Body>{summary.explanation}</Body>
+        <Text variant="body">{summary.explanation}</Text>
       </Section>
     </View>
   );
@@ -156,7 +164,9 @@ function Transferred({ preview }: { preview: TransferPreview }) {
         testID="transfer-success"
       />
       <Field label="Money consequence" value={recorded.headline} />
-      <Caption>The old and new enrollments stay linked, and attendance history is kept.</Caption>
+      <Text variant="caption" tone="muted">
+        The old and new registrations stay linked, and attendance history is kept.
+      </Text>
       {previous ? (
         <ListRow
           title={preview.existing.offeringName}
@@ -170,7 +180,7 @@ function Transferred({ preview }: { preview: TransferPreview }) {
           title={preview.proposed.offeringName}
           status={enrollmentStatus(next, { offeringName: preview.proposed.offeringName })}
           onPress={() => router.replace(moneyRoutes.enrollment(next.id))}
-          accessibilityHint="Opens the new enrollment"
+          accessibilityHint="Opens the new registration"
         />
       ) : null}
     </Section>
@@ -368,7 +378,7 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
             )}
           </QueryBoundary>
         )}
-        <ButtonRow>
+        <View style={buttonRow}>
           <Button
             label="Preview transfer"
             variant="secondary"
@@ -386,7 +396,7 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
               else setPreviewTarget(targetId);
             }}
           />
-        </ButtonRow>
+        </View>
         {previewTarget === targetId &&
         preview === undefined &&
         previewQuery.fetchStatus === 'fetching' ? (
@@ -433,8 +443,12 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
                   }}
                 />
               ) : null}
-              {offline ? <Caption>Needs a connection.</Caption> : null}
-              <ButtonRow>
+              {offline ? (
+                <Text variant="caption" tone="muted">
+                  Needs a connection.
+                </Text>
+              ) : null}
+              <View style={buttonRow}>
                 <Button
                   label="Transfer"
                   onPress={() => void confirm()}
@@ -442,7 +456,7 @@ function TransferForm({ enrollment, reload }: { enrollment: Enrollment; reload: 
                   busy={commitCmd.isProcessing || checking}
                   accessibilityHint="Moves the registration with the money consequence shown above"
                 />
-              </ButtonRow>
+              </View>
             </>
           )}
         </Section>
@@ -498,7 +512,7 @@ export function TransferEnrollmentScreen({ enrollmentId }: { enrollmentId: strin
       <RequireSession what="this transfer">
         <QueryBoundary
           query={enrollment}
-          label="the enrollment"
+          label="the registration"
           empty={{ title: 'Not available', description: '' }}
           unavailableOffline={['previewing a transfer', 'transferring']}
         >
@@ -519,3 +533,5 @@ export function TransferEnrollmentRoute() {
     </>
   );
 }
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

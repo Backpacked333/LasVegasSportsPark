@@ -1,5 +1,5 @@
 /**
- * SCR-C-32 Enrollments and participation, one record (SPK-REG-003, SPK-REG-010, SPK-PAY-006,
+ * SCR-C-32 Registrations, one record (the API's enrollment; SPK-REG-003, SPK-REG-010, SPK-PAY-006,
  * SPK-PLACE-002, SPK-YOUTH-003, SPK-UX-004, SPK-UX-008; §4.6 EnrollmentMachine, §4.11).
  *
  * `GET /v1/enrollments/{id}` with what the API lets this customer read around it: the offering
@@ -23,6 +23,10 @@
  * States: loading; empty: not applicable; ready; permission restriction and protected NOT_FOUND
  * read "not available" with no hint the record exists (§4.10); stale version: refreshed on
  * return; offline (cached with age, the previews need a connection); recovery required as above.
+ *
+ * Layout (PA-11, ADR-008): the activity's picture (`artworkFor`) heads the page, then the status in
+ * the journeys.md section 3 phrase, the facts, and the sections below. Customer words throughout:
+ * registration (never enrollment), cart (never basket).
  */
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -42,19 +46,24 @@ import {
   nextScheduledInstallment,
   type Enrollment,
 } from '../../features/money/status';
-import { Body, ButtonRow, Caption, Field, Section } from '../../features/money/ui';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { Artwork } from '../../ui/Artwork';
 import { Button } from '../../ui/Button';
+import { FieldValue as Field } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { layout, spacing } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { INTENT_LABELS, offeringLabel, recoveryContext } from './EnrollmentsScreen';
 import { MembershipSection } from './MembershipSection';
 import { enrollmentOffering } from './participation';
 import { pendingEnrollmentRecovery, recoveryIndex, RecoveryReadState } from './recovery';
+import { registrationArt } from './RegistrationCard';
 
 type Order = Schema<'Order'>;
 
@@ -154,13 +163,13 @@ function PaymentDetails({ order }: { order: Order }) {
           value={formatMoney(order.creditsAppliedMinor, order.currency)}
         />
       ) : null}
-      <ButtonRow>
+      <View style={styles.buttons}>
         <Button
           label="Open payments"
           variant="secondary"
           onPress={() => router.push(moneyRoutes.payments())}
         />
-      </ButtonRow>
+      </View>
     </Section>
   );
 }
@@ -202,17 +211,23 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
   const recorded = enrollment.cancellationConsequence
     ? consequenceSummary(enrollment.cancellationConsequence)
     : null;
+  const title =
+    about?.name ??
+    offeringLabel({
+      data: ctx.offering.data,
+      loading: ctx.offering.isPending && ctx.offering.fetchStatus === 'fetching',
+    });
   return (
     <View>
-      <Section
-        title={
-          about?.name ??
-          offeringLabel({
-            data: ctx.offering.data,
-            loading: ctx.offering.isPending && ctx.offering.fetchStatus === 'fetching',
-          })
-        }
-      >
+      <View style={styles.hero}>
+        <Artwork
+          source={registrationArt(enrollment.intent, title, ctx.offering.data, 'wide')}
+          aspectRatio={16 / 9}
+          rounded
+          testID="registration-art"
+        />
+      </View>
+      <Section title={title}>
         <StatusBadge {...status} testID="enrollment-status" />
         <Field label="Participant" value={nameOf(enrollment.participantPersonId)} />
         <Field label="Kind" value={INTENT_LABELS[enrollment.intent]} />
@@ -224,10 +239,10 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
         ) : null}
         {paymentUnknown ? (
           <View testID="enrollment-recovery-unknown">
-            <Caption>
+            <Text variant="caption" tone="muted">
               Whether the payment for this registration was received is not known yet. It shows here
               once it can be checked.
-            </Caption>
+            </Text>
             <RecoveryReadState
               checkouts={ctx.checkouts}
               operations={enrollment.lastOperationId ? [ctx.operation] : []}
@@ -235,19 +250,19 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
           </View>
         ) : null}
         {enrollment.status === 'pending' && !recoveryRequired && !paymentUnknown ? (
-          <Caption>
+          <Text variant="caption" tone="muted">
             {enrollment.pendingReason === 'forms'
-              ? 'A required form is not signed yet. Forms are signed from the registration basket or from Home.'
+              ? 'A required form is not signed yet. Forms are signed from your cart or from Home.'
               : enrollment.pendingReason === 'payment'
-                ? 'The payment for this registration is not finished. Open it from Discover, under In progress.'
+                ? 'The payment for this registration is not finished. Open your cart to finish it.'
                 : 'The facility has not confirmed this registration yet. Anything you need to do appears on Home.'}
-          </Caption>
+          </Text>
         ) : null}
         {recoveryRequired ? (
-          <Caption>
+          <Text variant="caption" tone="muted">
             Your payment was received. The facility is completing the registration; do not pay
             again.
-          </Caption>
+          </Text>
         ) : null}
       </Section>
 
@@ -258,10 +273,10 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
             label="Still to pay"
             value={formatMoney(ctx.plan.data.outstandingMinor, ctx.plan.data.currency)}
           />
-          <Caption>
-            A scheduled installment does not change this enrollment: it stays confirmed while
+          <Text variant="caption" tone="muted">
+            A scheduled installment does not change this registration: it stays confirmed while
             installments are paid.
-          </Caption>
+          </Text>
         </Section>
       ) : (
         <PaymentSummary order={ctx.order} enrollment={enrollment} />
@@ -278,11 +293,11 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
           {recorded ? (
             <>
               <StatusBadge tone={recorded.tone} label={recorded.headline} />
-              <Body>{recorded.explanation}</Body>
-              <Caption>
+              <Text variant="body">{recorded.explanation}</Text>
+              <Text variant="caption" tone="muted">
                 Refunds and credits are carried out by the facility. This app cannot show their
                 progress yet.
-              </Caption>
+              </Text>
             </>
           ) : null}
         </Section>
@@ -290,9 +305,9 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
 
       {target || source ? (
         <Section title="Transfer">
-          <Caption>
-            The old and new enrollments stay linked, and attendance history is kept.
-          </Caption>
+          <Text variant="caption" tone="muted">
+            The old and new registrations stay linked, and attendance history is kept.
+          </Text>
           {source ? (
             <ListRow
               title={`Transferred from ${
@@ -301,7 +316,7 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
               }`}
               status={enrollmentStatus(source)}
               onPress={() => router.push(moneyRoutes.enrollment(source.id))}
-              accessibilityHint="Opens the earlier enrollment"
+              accessibilityHint="Opens the earlier registration"
             />
           ) : null}
           {target ? (
@@ -312,7 +327,7 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
               }`}
               status={enrollmentStatus(target)}
               onPress={() => router.push(moneyRoutes.enrollment(target.id))}
-              accessibilityHint="Opens the new enrollment"
+              accessibilityHint="Opens the new registration"
             />
           ) : null}
         </Section>
@@ -324,12 +339,12 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
 
       {CANCELABLE.includes(enrollment.status) ? (
         <Section title="Change this registration">
-          <Caption>
+          <Text variant="caption" tone="muted">
             You see what a change means, including any refund, credit or charge, before anything is
             committed.
             {offline ? ' Needs a connection.' : ''}
-          </Caption>
-          <ButtonRow>
+          </Text>
+          <View style={styles.buttons}>
             <Button
               label="Review cancellation"
               variant="secondary"
@@ -344,7 +359,7 @@ function EnrollmentDetail({ enrollment }: { enrollment: Enrollment }) {
                 onPress={() => router.push(moneyRoutes.transfer(enrollment.id))}
               />
             ) : null}
-          </ButtonRow>
+          </View>
         </Section>
       ) : null}
     </View>
@@ -358,10 +373,10 @@ export function EnrollmentDetailScreen({ enrollmentId }: { enrollmentId: string 
   });
   return (
     <Screen>
-      <RequireSession what="this enrollment">
+      <RequireSession what="this registration">
         <QueryBoundary
           query={enrollment}
-          label="the enrollment"
+          label="the registration"
           empty={{ title: 'Not available', description: '' }}
           unavailableOffline={['canceling', 'transferring']}
         >
@@ -377,8 +392,13 @@ export function EnrollmentDetailRoute() {
   const id = param(useLocalSearchParams<{ id: string }>().id);
   return (
     <>
-      <Stack.Screen options={{ title: 'Enrollment' }} />
+      <Stack.Screen options={{ title: 'Registration' }} />
       {id ? <EnrollmentDetailScreen enrollmentId={id} /> : <NotFoundScreen />}
     </>
   );
 }
+
+const styles = {
+  hero: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm },
+  buttons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+} as const;

@@ -27,7 +27,7 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
 import { formatDateRange } from '../../features/money/format';
-import { ButtonRow, Caption, ChoiceRow, Field, Section } from '../../features/money/ui';
+import { ChoiceRow } from '../../features/money/ui';
 import { packageGRoutes } from '../../features/package-g/routes';
 import { formatInstant } from '../../features/registration/format';
 import {
@@ -42,6 +42,10 @@ import { CapabilityGate } from '../../ui/CapabilityGate';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
 
 type Enrollment = Schema<'Enrollment'>;
 type Membership = Schema<'Membership'>;
@@ -115,9 +119,9 @@ function Renewal({ enrollment }: { enrollment: Enrollment }) {
   };
   return (
     <Section title="Renew" testID="membership-renewal">
-      <Caption>
-        Renewing adds the membership to your basket. Nothing is charged until you check out.
-      </Caption>
+      <Text variant="caption" tone="muted">
+        Renewing adds the membership to your cart. Nothing is charged until you check out.
+      </Text>
       {targets.data === undefined ? (
         targets.error ? (
           <QueryErrorView error={targets.error} onRetry={() => void targets.refetch()} />
@@ -125,7 +129,9 @@ function Renewal({ enrollment }: { enrollment: Enrollment }) {
           <StateView variant="loading" label="memberships you can renew into" />
         )
       ) : open.length === 0 ? (
-        <Caption>No membership is open for registration right now.</Caption>
+        <Text variant="caption" tone="muted">
+          No membership is open for registration right now.
+        </Text>
       ) : (
         <View accessibilityRole="radiogroup" accessibilityLabel="Membership to renew into">
           {open.map((o) => (
@@ -163,15 +169,19 @@ function Renewal({ enrollment }: { enrollment: Enrollment }) {
           }}
         />
       ) : null}
-      <ButtonRow>
+      <View style={buttonRow}>
         <Button
-          label="Add the renewal to your basket"
+          label="Add the renewal to your cart"
           onPress={() => void submit()}
           disabled={!targetId || offline || baskets.data === undefined}
           busy={renew.isProcessing}
         />
-        {offline ? <Caption>Renewing needs a connection.</Caption> : null}
-      </ButtonRow>
+        {offline ? (
+          <Text variant="caption" tone="muted">
+            Renewing needs a connection.
+          </Text>
+        ) : null}
+      </View>
     </Section>
   );
 }
@@ -236,20 +246,22 @@ export function MembershipSection({
                 ))}
               </View>
             ) : null}
-            <Caption>
+            <Text variant="caption" tone="muted">
               Suspending a membership is arranged by the front desk; it is not available in the app.
-            </Caption>
+            </Text>
           </>
         ) : (
           <>
-            <Caption>The details of this membership are under Memberships.</Caption>
-            <ButtonRow>
+            <Text variant="caption" tone="muted">
+              The details of this membership are under Memberships.
+            </Text>
+            <View style={buttonRow}>
               <Button
                 label="Open memberships"
                 variant="secondary"
                 onPress={() => router.push(packageGRoutes.memberships())}
               />
-            </ButtonRow>
+            </View>
           </>
         )}
       </Section>
@@ -261,3 +273,5 @@ export function MembershipSection({
     </View>
   );
 }
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

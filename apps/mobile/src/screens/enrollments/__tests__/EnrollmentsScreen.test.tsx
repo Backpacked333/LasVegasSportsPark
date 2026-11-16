@@ -19,7 +19,8 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { EnrollmentsScreen } from '../EnrollmentsScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { activityArtwork } from '../../../artwork/manifest';
+import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -72,7 +73,7 @@ describe('SCR-C-32 EnrollmentsScreen', () => {
       }),
     });
     render(<EnrollmentsScreen />, { wrapper: app.wrapper });
-    const group = await screen.findByLabelText('Show enrollments for');
+    const group = await screen.findByLabelText('Show registrations for');
     expect(await within(group).findByRole('radio', { name: 'Family member' })).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
@@ -99,7 +100,7 @@ describe('SCR-C-32 EnrollmentsScreen', () => {
     render(<EnrollmentsScreen />, { wrapper: app.wrapper });
 
     // The group is a container (not one accessibility element), so the radios stay focusable.
-    const group = await screen.findByLabelText('Show enrollments for');
+    const group = await screen.findByLabelText('Show registrations for');
     expect(group).toHaveProp('accessibilityRole', 'radiogroup');
     const you = within(group).getByRole('radio', { name: 'You' });
     const sam = await within(group).findByRole('radio', { name: 'Sam' });
@@ -126,19 +127,34 @@ describe('SCR-C-32 EnrollmentsScreen', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(`/enrollments/${IDS.enrollment}`);
   });
 
+  it('PA-11 ADR-008: each registration is a card with its activity picture; the screen pulls to refresh', async () => {
+    const app = createTestApp({ routes: routes() });
+    render(<EnrollmentsScreen />, { wrapper: app.wrapper });
+    const card = await screen.findByTestId(`enrollment-${IDS.enrollment}`);
+    // Autumn U10 League, a youth program without an age band: the youth picture, square.
+    expect(
+      within(card).UNSAFE_getAllByProps({ source: activityArtwork['soccer-youth'].square }).length,
+    ).toBeGreaterThan(0);
+    const reads = () => app.fake.requests.filter((r) => r.route === '/enrollments').length;
+    const before = reads();
+    await pullToRefresh(screen);
+    await act(async () => undefined);
+    expect(reads()).toBeGreaterThan(before);
+  });
+
   it('SPK-YOUTH-003: a trial is labelled as a trial, distinct from a paid enrollment', async () => {
     const app = createTestApp({
       routes: routes({ 'GET /enrollments': page([enrollment({ intent: 'trial' })]) }),
     });
     render(<EnrollmentsScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByText(/Trial \(not a paid enrollment\)/)).toBeOnTheScreen();
+    expect(await screen.findByText(/Trial \(not a paid registration\)/)).toBeOnTheScreen();
   });
 
   it('shows the empty state with the way to find activities', async () => {
     const app = createTestApp({ routes: routes({ 'GET /enrollments': page([]) }) });
     render(<EnrollmentsScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByRole('header', { name: 'No enrollments yet' })).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Open Discover' }));
+    expect(await screen.findByRole('header', { name: 'No registrations yet' })).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/discover');
   });
 

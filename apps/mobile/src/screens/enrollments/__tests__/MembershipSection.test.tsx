@@ -110,7 +110,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     expect(await screen.findByLabelText('Membership renewal turned off')).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText(/DEC-016, DEC-072/)).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Add the renewal to your basket' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add the renewal to your cart' })).toBeNull();
     expect(renewals(app)).toHaveLength(0);
   });
 
@@ -119,7 +119,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
       'GET /me/permissions': mePermissions({ enabled: ['memberships'] }),
       'POST /enrollments/{id}/renew': { status: 201, body: { ...OPEN_BASKET, revision: 3 } },
     });
-    const add = await screen.findByRole('button', { name: 'Add the renewal to your basket' });
+    const add = await screen.findByRole('button', { name: 'Add the renewal to your cart' });
     expect(add).toBeDisabled();
     fireEvent.press(await screen.findByRole('radio', { name: /^Family membership 2027/ }));
     await waitFor(() => expect(add).not.toBeDisabled());
@@ -150,7 +150,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     });
     fireEvent.press(await screen.findByRole('radio', { name: /^Family membership 2027/ }));
     // The button waits for the open baskets, a read of its own (quality review m-7).
-    const add = screen.getByRole('button', { name: 'Add the renewal to your basket' });
+    const add = screen.getByRole('button', { name: 'Add the renewal to your cart' });
     await waitFor(() => expect(add).not.toBeDisabled());
     await act(async () => {
       fireEvent.press(add);
@@ -176,7 +176,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     const failed = await screen.findByTestId('renewal-baskets-error');
     await openSupportDetails(within(failed));
     expect(within(failed).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Add the renewal to your basket' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add the renewal to your cart' })).toBeDisabled();
     expect(renewals(app)).toHaveLength(0);
 
     failing = false;
@@ -192,7 +192,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     });
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'Add the renewal to your basket' }),
+        screen.getByRole('button', { name: 'Add the renewal to your cart' }),
       ).not.toBeDisabled(),
     );
   });

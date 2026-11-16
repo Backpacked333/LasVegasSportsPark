@@ -187,7 +187,14 @@ describe('SCR-C-37 YouthFeedbackScreen', () => {
       }),
     });
     expect(await screen.findByRole('header', { name: 'You' })).toBeOnTheScreen();
-    expect(screen.getByText(/\(DEC-054, DEC-055, Program manager\)/)).toBeOnTheScreen();
+    // PA-11: what to do now in plain words; the decisions and their owner only in the fold
+    expect(
+      screen.getByText("Ask the coach or the front desk about your child's progress."),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/DEC-054/)).toBeNull();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-054, DEC-055')).toBeOnTheScreen();
+    expect(screen.getByText('Owner: Program manager')).toBeOnTheScreen();
   });
 
   it('asks a signed-out user to sign in and sends no request', async () => {

@@ -21,6 +21,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { EnrollmentDetailScreen } from '../EnrollmentDetailScreen';
+import { activityArtwork } from '../../../artwork/manifest';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
@@ -48,6 +49,17 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
   afterEach(settleApps);
 
   beforeEach(() => mockRouter.push.mockClear());
+
+  it('PA-11 ADR-008: the registration opens with its activity picture above the name and status', async () => {
+    renderDetail(enrollment());
+    expect(await screen.findByRole('header', { name: 'Autumn U10 League' })).toBeOnTheScreen();
+    const art = screen.getByTestId('registration-art', { includeHiddenElements: true });
+    // A youth program with no age band: the youth picture, in the wide crop.
+    expect(
+      art.findAll((node) => node.props.source === activityArtwork['soccer-youth'].wide).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByTestId('enrollment-status')).toHaveTextContent(/Confirmed/);
+  });
 
   it('SPK-PAY-006: a confirmed enrollment with a future installment reads "Confirmed. Next payment due <date>."', async () => {
     const plan = installmentPlan();

@@ -44,34 +44,6 @@
 
   "src/screens/credits/CreditsScreen.tsx :: DEC- :: Credit expiry rules are not decided yet (DEC-058, Finance).",
 
-  "src/screens/enrollments/CancelEnrollmentScreen.tsx :: enrollment :: Back to enrollments",
-
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: basket :: …Forms are signed from the registration basket or from Home.",
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: Enrollment",
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: Opens the earlier enrollment",
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: Opens the new enrollment",
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: The old and new enrollments stay linked, and attendance his…",
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: the enrollment",
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: this enrollment",
-  "src/screens/enrollments/EnrollmentDetailScreen.tsx :: enrollment :: …es not change this enrollment: it stays confirmed while in…",
-
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Enrollments and participation",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: No enrollments yet",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Opens the enrollment made after the trial",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Opens the enrollment, with cancellation and transfer",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: Show enrollments for",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: enrollments",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: enrollments",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: … enrollments",
-  "src/screens/enrollments/EnrollmentsScreen.tsx :: enrollment :: …. A trial is not an enrollment.",
-
-  "src/screens/enrollments/MembershipSection.tsx :: basket :: Add the renewal to your basket",
-  "src/screens/enrollments/MembershipSection.tsx :: basket :: …membership to your basket. Nothing is charged until you ch…",
-
-  "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: Opens the new enrollment",
-  "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: The old and new enrollments stay linked, and attendance his…",
-  "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: the enrollment",
-
   "src/screens/inbox/InboxScreen.tsx :: fixture :: Open fixture",
 
   "src/screens/memberships/RenewMembership.tsx :: basket :: Add the renewal to a basket",

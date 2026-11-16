@@ -64,7 +64,7 @@ function routes(overrides: Record<string, FakeHandler> = {}): Record<string, Fak
 async function renderForChild(overrides: Record<string, FakeHandler> = {}) {
   const app = createTestApp({ routes: routes(overrides) });
   render(<EnrollmentsScreen />, { wrapper: app.wrapper });
-  const group = await screen.findByLabelText('Show enrollments for');
+  const group = await screen.findByLabelText('Show registrations for');
   fireEvent.press(await within(group).findByRole('radio', { name: 'Sam' }));
   return app;
 }
@@ -361,7 +361,7 @@ describe('SCR-C-32 participation records (stage-3 reads)', () => {
     // 01:00 UTC on Nov 3 is 5:00 PM on Nov 2 in Los Angeles (PST), the offering's facility zone.
     expect(
       await within(section).findByLabelText(
-        'Spring U10 League, Trial on Mon, Nov 2, 5:00 PM PST. A trial is not an enrollment., Trial booked',
+        'Spring U10 League, Trial on Mon, Nov 2, 5:00 PM PST. A trial is not a registration., Trial booked',
       ),
     ).toBeOnTheScreen();
     fireEvent.press(within(section).getByRole('button', { name: /Registered after the trial$/ }));
