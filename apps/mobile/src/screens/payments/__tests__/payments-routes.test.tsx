@@ -79,9 +79,9 @@ describe('stage-4 money routes (SCR-C-25, SCR-C-34, SCR-C-35)', () => {
     expect(app.fake.requests.filter((r) => r.route === '/team-entries/{id}')).toHaveLength(0);
   });
 
-  it('/session-packages opens the packages list', async () => {
+  it('/session-packages opens the class packs list (PA-11: "class pack")', async () => {
     renderAt('/session-packages');
-    expect(await screen.findByRole('header', { name: 'Your session packages' })).toBeOnTheScreen();
-    expect(await screen.findByLabelText('Package: Open skate 10-pack')).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'Your class packs' })).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Class pack: Open skate 10-pack')).toBeOnTheScreen();
   });
 });

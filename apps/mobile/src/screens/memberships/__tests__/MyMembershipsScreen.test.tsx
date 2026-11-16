@@ -35,6 +35,8 @@ import {
 } from '../../../features/package-g/__tests__/fixtures';
 import { MyMembershipsScreen } from '../MyMembershipsScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { illustrations } from '../../../artwork/manifest';
+import { Artwork } from '../../../ui/Artwork';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -183,14 +185,14 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
       screen.getByText(/Nothing is charged until you check out, where the price is shown\./),
     ).toBeOnTheScreen();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to a basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to your cart' }));
     });
     expect(screen.getByText('▲ Choose the membership to renew into.')).toBeOnTheScreen();
     expect(renewals(app)).toHaveLength(0);
 
     fireEvent.press(option);
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to a basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to your cart' }));
     });
     await waitFor(() =>
       expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${G.basketNew}`),
@@ -211,7 +213,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
     fireEvent.press(within(mine).getByRole('button', { name: 'Renew' }));
     const option = await screen.findByRole('radio', { name: /Adult membership 2027/ });
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to a basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to your cart' }));
     });
     const error = screen.getByTestId('renew-target-error');
     expect(error).toHaveTextContent('▲ Choose the membership to renew into.');
@@ -240,7 +242,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
     fireEvent.press(within(child).getByRole('button', { name: 'Renew' }));
     fireEvent.press(await screen.findByRole('radio', { name: /Adult membership 2027/ }));
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to a basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to your cart' }));
     });
     expect(await screen.findByText(/This is not available to your account\./)).toBeOnTheScreen();
     await settleApps();
@@ -258,7 +260,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
     fireEvent.press(within(mine).getByRole('button', { name: 'Renew' }));
     fireEvent.press(await screen.findByRole('radio', { name: /Adult membership 2027/ }));
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to a basket' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to your cart' }));
     });
     expect(await screen.findByLabelText('Memberships turned off')).toBeOnTheScreen();
     await openSupportDetails(screen);
@@ -442,5 +444,13 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
 
     renderScreen(routes({ 'GET /me/memberships': ok(page([])) }));
     expect(await screen.findByRole('header', { name: 'No memberships' })).toBeOnTheScreen();
+    // ADR-008: the payments illustration; PA-11: "Explore", not "Discover".
+    expect(
+      screen
+        .UNSAFE_getAllByType(Artwork)
+        .filter((a) => a.props.source === illustrations['empty-payments']),
+    ).toHaveLength(1);
+    fireEvent.press(screen.getByRole('button', { name: 'Open Explore' }));
+    expect(mockRouter.push).toHaveBeenCalledWith('/discover');
   });
 });

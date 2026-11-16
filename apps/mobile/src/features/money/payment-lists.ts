@@ -248,12 +248,12 @@ export function packageRefusal(error: { code: string; details?: unknown }): stri
   if (error.code !== 'RESOURCE_CONFLICT') return null;
   const details = (error.details ?? {}) as { code?: unknown; status?: unknown };
   if (details.code === 'PACKAGE_CREDITS_EXHAUSTED') {
-    return 'Not available: no sessions left on this package';
+    return 'Not available: no sessions left in this class pack';
   }
   if (details.code === 'PACKAGE_NOT_REDEEMABLE') {
-    if (details.status === 'exhausted') return 'Not available: no sessions left on this package';
-    if (details.status === 'revoked') return 'Not available: this package was revoked';
-    return 'Not available: this package has expired';
+    if (details.status === 'exhausted') return 'Not available: no sessions left in this class pack';
+    if (details.status === 'revoked') return 'Not available: this class pack was revoked';
+    return 'Not available: this class pack has expired';
   }
   return null;
 }

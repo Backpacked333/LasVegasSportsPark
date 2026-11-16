@@ -348,7 +348,7 @@ export const CREDIT_SOURCE_LABELS: Record<Credit['sourceKind'], string> = {
 
 export const CREDIT_USE_LABELS: Record<Credit['permittedUses'][number], string> = {
   registration: 'registrations',
-  obligation: 'balances due',
+  obligation: 'amounts due',
 };
 
 export const MAKEUP_ORIGIN_LABELS: Record<MakeupEntitlement['originKind'], string> = {

@@ -25,17 +25,22 @@
  * them with CAPABILITY_DISABLED otherwise). Membership terms and
  * member pricing stay pending (POL-038, DEC-007); no price is shown here.
  *
- * States: loading; empty ("No memberships", with Discover); ready; error with the code and "Try
+ * Visual system v2 (ADR-008) and customer words (PA-11): each membership is a `Card`; an empty
+ * list shows the payments illustration with "Open Explore"; pulling the page down reads it again.
+ * Customers reach this screen only while the switch is on (Account hides the row otherwise); a
+ * link opened while it is off still shows the memberships already held under the plain
+ * "Memberships turned off" notice.
+ *
+ * States: loading; empty ("No memberships", with Explore); ready; error with the code and "Try
  * again"; permission restriction (not available); offline or stale (cached with its age, renewal
  * and booking need a connection); turned off (notice above the list, no renewal or booking).
  */
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import { moneyRoutes } from '../../features/money/routes';
-import { Body, ButtonRow, Caption, Field } from '../../features/money/ui';
 import {
   appliesToText,
   attendanceText,
@@ -57,7 +62,11 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { makeStyles, radius, spacing, type } from '../../ui/theme';
+import { Card } from '../../ui/Card';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
+import { Actions, MoneyEmpty, usePullToRefresh } from '../../features/money/surfaces';
 import { BookWithMembership } from './BookWithMembership';
 import { RenewMembership } from './RenewMembership';
 
@@ -89,24 +98,32 @@ function MembershipCard({
   const included = membership.attendance?.mode === 'included_sessions';
   const notice = zoneNotice(zone, membership.createdAt);
   return (
-    <View style={styles.card} testID={`membership-${membership.enrollmentId}`}>
-      <Text style={styles.cardTitle} accessibilityRole="header">
+    <Card style={styles.card} testID={`membership-${membership.enrollmentId}`}>
+      <Text variant="headline" accessibilityRole="header">
         {membership.offeringName ?? 'Membership'}
       </Text>
       <StatusBadge {...status} />
       <Field label="For" value={forWhom} />
       <Field label="Term" value={termText(membership, zone.zone)} />
       <Field label="Includes" value={attendanceText(membership.attendance)} />
-      {applies ? <Caption>{applies}</Caption> : null}
+      {applies ? (
+        <Text variant="caption" tone="muted">
+          {applies}
+        </Text>
+      ) : null}
       {included ? (
         membership.usage.length > 0 ? (
           <View accessibilityRole="list" accessibilityLabel="Sessions used">
             {membership.usage.map((u) => (
-              <Body key={u.periodKey}>{usageText(u)}</Body>
+              <Text variant="body" key={u.periodKey}>
+                {usageText(u)}
+              </Text>
             ))}
           </View>
         ) : (
-          <Caption>No included sessions used yet.</Caption>
+          <Text variant="caption" tone="muted">
+            No included sessions used yet.
+          </Text>
         )
       ) : null}
       {membership.suspensions.length > 0 ? (
@@ -117,16 +134,26 @@ function MembershipCard({
                 tone={s.status === 'active' ? 'warning' : 'neutral'}
                 label={suspensionText(s, zone.zone)}
               />
-              {s.reason ? <Caption>{`Reason: ${s.reason}`}</Caption> : null}
+              {s.reason ? (
+                <Text variant="caption" tone="muted">{`Reason: ${s.reason}`}</Text>
+              ) : null}
             </View>
           ))}
         </View>
       ) : null}
-      <Caption>Suspending a membership is arranged by the front desk.</Caption>
+      <Text variant="caption" tone="muted">
+        Suspending a membership is arranged by the front desk.
+      </Text>
       {membership.renewedFromEnrollmentId ? (
-        <Caption>This membership renews an earlier one.</Caption>
+        <Text variant="caption" tone="muted">
+          This membership renews an earlier one.
+        </Text>
       ) : null}
-      {notice ? <Caption>{notice}</Caption> : null}
+      {notice ? (
+        <Text variant="caption" tone="muted">
+          {notice}
+        </Text>
+      ) : null}
       {membership.status === 'confirmed' && canRenew ? (
         renewing ? (
           <RenewMembership
@@ -134,14 +161,14 @@ function MembershipCard({
             onClose={() => setRenewing(false)}
           />
         ) : (
-          <ButtonRow>
+          <Actions>
             <Button
               label="Renew"
               variant="secondary"
               onPress={() => setRenewing(true)}
               accessibilityHint={`Renews ${membership.offeringName ?? 'this membership'} at checkout`}
             />
-          </ButtonRow>
+          </Actions>
         )
       ) : null}
       <BookWithMembership
@@ -149,16 +176,16 @@ function MembershipCard({
         canStart={canRenew && membershipBookable(membership, now)}
       />
       {cancellable ? (
-        <ButtonRow>
+        <Actions>
           <Button
             label="Cancel this membership"
             variant="secondary"
             onPress={() => router.push(moneyRoutes.cancel(membership.enrollmentId))}
             accessibilityHint="Shows what canceling would change before anything is sent"
           />
-        </ButtonRow>
+        </Actions>
       ) : null}
-    </View>
+    </Card>
   );
 }
 
@@ -180,29 +207,32 @@ function MembershipsList() {
       <QueryBoundary
         query={memberships}
         label="memberships"
-        isEmpty={(list) => list.length === 0}
-        empty={{
-          title: 'No memberships',
-          description:
-            'Memberships you or your family hold appear here, with what each one includes. Find one in Discover.',
-          actionLabel: 'Open Discover',
-          onAction: () => router.push('/discover'),
-        }}
+        // No `isEmpty`: the empty list is drawn below, with the payments illustration.
+        empty={{ title: '', description: '' }}
         unavailableOffline={['Renewing']}
       >
-        {(list) => (
-          <View accessibilityRole="list" style={styles.list}>
-            {list.map((m) => (
-              <MembershipCard
-                key={m.enrollmentId}
-                membership={m}
-                zone={zones.get(m.offeringId) ?? displayZone(null)}
-                forWhom={labelOf(m.participantPersonId)}
-                canRenew={canRenew}
-              />
-            ))}
-          </View>
-        )}
+        {(list) =>
+          list.length === 0 ? (
+            <MoneyEmpty
+              title="No memberships"
+              message="Memberships you or your family hold appear here, with what each one includes. Find one in Explore."
+              action={{ label: 'Open Explore', onPress: () => router.push('/discover') }}
+              testID="memberships-empty"
+            />
+          ) : (
+            <View accessibilityRole="list" style={styles.list}>
+              {list.map((m) => (
+                <MembershipCard
+                  key={m.enrollmentId}
+                  membership={m}
+                  zone={zones.get(m.offeringId) ?? displayZone(null)}
+                  forWhom={labelOf(m.participantPersonId)}
+                  canRenew={canRenew}
+                />
+              ))}
+            </View>
+          )
+        }
       </QueryBoundary>
       <LoadMore pages={memberships} label="memberships" />
     </>
@@ -211,18 +241,19 @@ function MembershipsList() {
 
 export function MyMembershipsScreen() {
   const styles = useStyles();
+  const { refreshing, onRefresh } = usePullToRefresh();
   return (
-    <Screen>
+    <Screen onRefresh={onRefresh} refreshing={refreshing}>
       <View testID="screen-my-memberships">
         <RequireSession what="your memberships">
           <View style={styles.header}>
-            <Text style={styles.title} accessibilityRole="header">
+            <Text variant="title2" accessibilityRole="header">
               Memberships
             </Text>
-            <Caption>
+            <Text variant="caption" tone="muted">
               A membership includes only what its terms say. Each one below lists the sessions it
               includes.
-            </Caption>
+            </Text>
           </View>
           <CapabilityGate
             capability="memberships"
@@ -238,18 +269,9 @@ export function MyMembershipsScreen() {
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
-  title: { ...type.title, color: colors.text },
-  list: { gap: spacing.sm, padding: spacing.lg },
-  card: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.background,
-    padding: spacing.md,
-    gap: spacing.xs,
-  },
-  cardTitle: { ...type.heading, color: colors.text },
-  suspension: { gap: 2 },
+const useStyles = makeStyles(() => ({
+  header: { paddingHorizontal: layout.gutter, paddingTop: spacing.lg, gap: spacing.xs },
+  list: { gap: spacing.sm, paddingVertical: spacing.sm },
+  card: { gap: spacing.sm },
+  suspension: { gap: spacing.xxs },
 }));

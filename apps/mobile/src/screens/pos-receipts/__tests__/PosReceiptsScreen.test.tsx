@@ -21,6 +21,8 @@ import {
 } from '../../../features/package-g/__tests__/fixtures';
 import { PosReceiptsScreen } from '../PosReceiptsScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { illustrations } from '../../../artwork/manifest';
+import { Artwork } from '../../../ui/Artwork';
 
 const RETURNED = receipt({
   saleId: G.saleB,
@@ -64,7 +66,7 @@ describe('Package G PosReceiptsScreen (SPK-PAY-002)', () => {
     expect(within(card).getByLabelText('Sales tax: $0.50')).toBeOnTheScreen();
     expect(within(card).getByLabelText('Total: $6.50')).toBeOnTheScreen();
     expect(within(card).getByLabelText('Paid with: Card: $6.50')).toBeOnTheScreen();
-    expect(screen.getByRole('header', { name: 'Point-of-sale receipts' })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'In-person receipts' })).toBeOnTheScreen();
   });
 
   it('SPK-PAY-016 (proposed): an open-amount line reads by its description with its reason category, beside a product line', async () => {
@@ -113,7 +115,7 @@ describe('Package G PosReceiptsScreen (SPK-PAY-002)', () => {
   it('DEC-016: turned off by default naming DEC-079, while earlier receipts stay readable', async () => {
     renderScreen(routes(switchesOn()));
     const off = await screen.findByTestId('state-turned-off');
-    expect(within(off).getByLabelText('Point-of-sale receipts turned off')).toBeOnTheScreen();
+    expect(within(off).getByLabelText('In-person receipts turned off')).toBeOnTheScreen();
     await openSupportDetails(within(off));
     expect(within(off).getByText(/DEC-079/)).toBeOnTheScreen();
     expect(
@@ -180,8 +182,17 @@ describe('Package G PosReceiptsScreen (SPK-PAY-002)', () => {
     screen.unmount();
 
     renderScreen(routes({ 'GET /me/pos-receipts': ok(page([])) }));
+    expect(await screen.findByRole('header', { name: 'No in-person receipts' })).toBeOnTheScreen();
+    // ADR-008: the payments illustration, in customer words (PA-11: "front desk").
     expect(
-      await screen.findByRole('header', { name: 'No point-of-sale receipts' }),
+      screen
+        .UNSAFE_getAllByType(Artwork)
+        .filter((a) => a.props.source === illustrations['empty-payments']),
+    ).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'Purchases at the front desk that were recorded under your name appear here with their receipt.',
+      ),
     ).toBeOnTheScreen();
   });
 });

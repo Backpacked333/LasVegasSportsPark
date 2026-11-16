@@ -186,13 +186,13 @@ describe('SCR-C-35 session package wording (ENR-11)', () => {
   it('names why the API refused a package booking, and nothing for other answers', () => {
     const conflict = (details: Record<string, unknown>) => ({ code: 'RESOURCE_CONFLICT', details });
     expect(packageRefusal(conflict({ code: 'PACKAGE_CREDITS_EXHAUSTED' }))).toBe(
-      'Not available: no sessions left on this package',
+      'Not available: no sessions left in this class pack',
     );
     expect(packageRefusal(conflict({ code: 'PACKAGE_NOT_REDEEMABLE', status: 'revoked' }))).toBe(
-      'Not available: this package was revoked',
+      'Not available: this class pack was revoked',
     );
     expect(packageRefusal(conflict({ code: 'PACKAGE_NOT_REDEEMABLE', status: 'active' }))).toBe(
-      'Not available: this package has expired',
+      'Not available: this class pack has expired',
     );
     expect(packageRefusal({ code: 'ELIGIBILITY_FAILED', details: {} })).toBeNull();
     expect(packageRefusal(conflict({ code: 'SOMETHING_ELSE' }))).toBeNull();

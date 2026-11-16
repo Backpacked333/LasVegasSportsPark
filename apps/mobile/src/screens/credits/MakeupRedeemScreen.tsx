@@ -35,7 +35,7 @@ import {
   type MakeupEntitlement,
   type SessionBooking,
 } from '../../features/money/status';
-import { Body, ButtonRow, Caption, ChoiceRow, Field, Section } from '../../features/money/ui';
+import { ChoiceCard } from '../../ui/ChoiceList';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -44,6 +44,10 @@ import { Screen } from '../../ui/Screen';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
+import { FieldValue as Field } from '../../ui/Field';
+import { Section } from '../../ui/Section';
+import { Actions, Choices } from '../../features/money/surfaces';
 
 /** Why the API refused a redemption, in the customer's words (SPK-AT-020). */
 export function redemptionRefusal(error: ApiError): string | null {
@@ -67,12 +71,12 @@ function Booked({ booking }: { booking: SessionBooking }) {
         label="Session"
         value={`${formatInstant(booking.scheduledStart)} to ${formatInstant(booking.scheduledEnd)}`}
       />
-      <ButtonRow>
+      <Actions>
         <Button
           label="Back to credits and makeups"
           onPress={() => router.replace(moneyRoutes.credits())}
         />
-      </ButtonRow>
+      </Actions>
     </Section>
   );
 }
@@ -159,9 +163,9 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
               label="Not available: already redeemed"
               testID="redeem-refused"
             />
-            <Caption>
+            <Text variant="caption" tone="muted">
               Someone else on your account booked with this makeup at the same time.
-            </Caption>
+            </Text>
           </Section>
         ) : (
           <StateView
@@ -182,13 +186,16 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                 description="None of the activities this makeup can replace is published right now. The front desk can help."
               />
             ) : (
-              <View accessibilityRole="radiogroup" accessibilityLabel="Eligible activity">
+              <Choices label="Eligible activity">
                 {[...offerings.values()].map((o) => (
-                  <ChoiceRow
+                  <ChoiceCard
                     key={o.id}
-                    mode="radio"
-                    label={o.name}
-                    detail={formatDateRange(o.startsOn, o.endsOn)}
+                    mode="single"
+                    option={{
+                      value: o.id,
+                      label: o.name,
+                      description: formatDateRange(o.startsOn, o.endsOn),
+                    }}
                     checked={offeringId === o.id}
                     onPress={() => {
                       setOfferingId(o.id);
@@ -197,7 +204,7 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                     }}
                   />
                 ))}
-              </View>
+              </Choices>
             )}
           </Section>
           {offeringId ? (
@@ -213,13 +220,16 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                 unavailableOffline={['booking a makeup session']}
               >
                 {() => (
-                  <View accessibilityRole="radiogroup" accessibilityLabel="Session">
+                  <Choices label="Session">
                     {upcoming.map((s) => (
-                      <ChoiceRow
+                      <ChoiceCard
                         key={s.id}
-                        mode="radio"
-                        label={s.title ?? `Session ${s.sequence}`}
-                        detail={formatInstant(s.scheduledStart)}
+                        mode="single"
+                        option={{
+                          value: s.id,
+                          label: s.title ?? `Session ${s.sequence}`,
+                          description: formatInstant(s.scheduledStart),
+                        }}
                         checked={sessionId === s.id}
                         onPress={() => {
                           setSessionId(s.id);
@@ -227,15 +237,21 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                         }}
                       />
                     ))}
-                  </View>
+                  </Choices>
                 )}
               </QueryBoundary>
             </Section>
           ) : null}
           <Section title="Book">
-            <Caption>Session times are shown in this device’s time zone.</Caption>
-            {offline ? <Caption>Needs a connection.</Caption> : null}
-            <ButtonRow>
+            <Text variant="caption" tone="muted">
+              Session times are shown in this device’s time zone.
+            </Text>
+            {offline ? (
+              <Text variant="caption" tone="muted">
+                Needs a connection.
+              </Text>
+            ) : null}
+            <Actions>
               <Button
                 label="Book this session"
                 onPress={book}
@@ -243,11 +259,11 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                 busy={redeem.isProcessing}
                 accessibilityHint="Uses one makeup to book the chosen session"
               />
-            </ButtonRow>
+            </Actions>
             {raced && !failure ? (
-              <Caption>
+              <Text variant="caption" tone="muted">
                 This makeup changed since you opened it. Check your choice and book again.
-              </Caption>
+              </Text>
             ) : null}
             {refusal ? (
               <StatusBadge tone="neutral" label={refusal} testID="redeem-refused" />
@@ -255,9 +271,13 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
               <View testID="redeem-ineligible">
                 <StatusBadge tone="warning" label="This session is not an eligible replacement" />
                 {reasons.map((m) => (
-                  <Body key={m}>{m}</Body>
+                  <Text variant="body" key={m}>
+                    {m}
+                  </Text>
                 ))}
-                <Caption>Error code: {failure?.code}</Caption>
+                <Text variant="caption" tone="muted">
+                  Error code: {failure?.code}
+                </Text>
               </View>
             ) : failure ? (
               <CommandFailure
