@@ -345,6 +345,7 @@ describe('SCR-C-34 ObligationScreen', () => {
         'The service answered, but its answer could not be read, so the payment may have gone through. Checking again is safe: it asks about the same payment and cannot charge twice.',
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText('Error code: RESPONSE_UNREADABLE')).toBeOnTheScreen();
     expect(screen.queryByText('Something went wrong')).toBeNull();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
@@ -514,6 +515,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     });
     await pay();
     expect(await screen.findByTestId('payment-in-progress')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: PAYMENT_OUTCOME_UNKNOWN/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Pay $40.00' })).toBeDisabled();
   });

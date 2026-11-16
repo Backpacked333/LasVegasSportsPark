@@ -70,22 +70,22 @@ export function RootNavigator() {
           <Stack.Screen name="invitations/[id]" options={{ title: 'Invitation' }} />
           <Stack.Screen name="family" options={{ title: 'Family' }} />
           <Stack.Screen name="forms" options={{ title: 'Forms and waivers' }} />
-          <Stack.Screen name="preferences" options={{ title: 'Preferences' }} />
+          <Stack.Screen name="preferences" options={{ title: 'Notifications and calendar' }} />
           <Stack.Screen name="link" options={{ title: 'Link' }} />
           <Stack.Screen name="registration/basket/[basketId]" options={{ title: 'Cart' }} />
           <Stack.Screen name="registration/quote/[quoteId]" options={{ title: 'Review' }} />
           <Stack.Screen name="registration/checkout/[quoteId]" options={{ title: 'Checkout' }} />
           <Stack.Screen name="payments/index" options={{ title: 'Payments' }} />
           <Stack.Screen name="enrollments/index" options={{ title: 'Registrations' }} />
-          <Stack.Screen name="fixtures/[id]" options={{ title: 'Fixture' }} />
+          <Stack.Screen name="fixtures/[id]" options={{ title: 'Game' }} />
           <Stack.Screen name="sessions/[sessionId]" options={{ title: 'Activity' }} />
           {/* Package G (conditional, behind their capability switches; reached from Account). */}
           <Stack.Screen name="bookings/index" options={{ title: 'Rentals and parties' }} />
           <Stack.Screen name="bookings/[id]" options={{ title: 'Booking' }} />
           <Stack.Screen name="bookings/new/[offeringId]" options={{ title: 'Book' }} />
           <Stack.Screen name="memberships/index" options={{ title: 'Memberships' }} />
-          <Stack.Screen name="session-packages/index" options={{ title: 'Session packages' }} />
-          <Stack.Screen name="pos-receipts/index" options={{ title: 'Point-of-sale receipts' }} />
+          <Stack.Screen name="session-packages/index" options={{ title: 'Class packs' }} />
+          <Stack.Screen name="pos-receipts/index" options={{ title: 'In-person receipts' }} />
           <Stack.Screen name="+not-found" options={{ title: 'Not available' }} />
         </Stack>
         {DemoOverlay ? <DemoOverlay /> : null}

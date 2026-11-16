@@ -59,17 +59,15 @@ describe('SCR-C-25 MyContributionsScreen', () => {
     const app = renderList();
     expect(
       await screen.findByRole('button', {
-        name: 'Fall 2026 team fee, Your contribution: $75.00, Requested',
+        name: 'Fall 2026 team fee, Your share: $75.00, Requested',
       }),
     ).toBeOnTheScreen();
     expect(
       await screen.findByRole('button', {
-        name: 'Fall 2026 team fee, Contribution for Sam: $50.00, Paid on Oct 23, 2026',
+        name: "Fall 2026 team fee, Sam's share: $50.00, Paid on Oct 23, 2026",
       }),
     ).toBeOnTheScreen();
-    expect(
-      screen.getByRole('header', { name: 'Team contributions asked of you' }),
-    ).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Your share' })).toBeOnTheScreen();
     // The scope is the API's own: the app sends no person id.
     expect(app.fake.requests.find((r) => r.route === '/me/contribution-requests')?.query).toEqual({
       limit: '20',
@@ -98,12 +96,12 @@ describe('SCR-C-25 MyContributionsScreen', () => {
     });
     expect(
       await screen.findByRole('button', {
-        name: 'Fall 2026 team fee, Your contribution: $75.00, Payment outcome being confirmed. Do not pay again.',
+        name: 'Fall 2026 team fee, Your share: $75.00, Payment outcome being confirmed. Do not pay again.',
       }),
     ).toBeOnTheScreen();
     expect(
       screen.getByRole('button', {
-        name: 'Fall 2026 team fee, Contribution for Sam: $50.00, Paid on Oct 23, 2026',
+        name: "Fall 2026 team fee, Sam's share: $50.00, Paid on Oct 23, 2026",
       }),
     ).toBeOnTheScreen();
   });
@@ -128,7 +126,7 @@ describe('SCR-C-25 MyContributionsScreen', () => {
     // The lines stay listed with their own status.
     expect(
       screen.getByRole('button', {
-        name: 'Fall 2026 team fee, Your contribution: $75.00, Requested',
+        name: 'Fall 2026 team fee, Your share: $75.00, Requested',
       }),
     ).toBeOnTheScreen();
     await act(async () => {
@@ -140,9 +138,7 @@ describe('SCR-C-25 MyContributionsScreen', () => {
 
   it('shows the empty state when nothing was asked', async () => {
     renderList({ 'GET /me/contribution-requests': pageOf([]) });
-    expect(
-      await screen.findByRole('header', { name: 'No contributions asked of you' }),
-    ).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'No shares asked of you' })).toBeOnTheScreen();
   });
 
   it('shows the API error code and reference with "Try again"', async () => {
@@ -160,7 +156,7 @@ describe('SCR-C-25 MyContributionsScreen', () => {
     expect(await screen.findByText('Reference: corr-25')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(
-      await screen.findByRole('button', { name: /^Fall 2026 team fee, Your contribution/ }),
+      await screen.findByRole('button', { name: /^Fall 2026 team fee, Your share/ }),
     ).toBeOnTheScreen();
   });
 

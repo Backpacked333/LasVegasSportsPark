@@ -8,16 +8,14 @@
  * collects the text customers can see or hear (`customer-text.ts` says exactly which), and looks
  * for the banned terms. Each finding is one entry, `relativePath :: term :: snippet`.
  *
- * The ratchet. `src/copy/customer-words.baseline.json` lists today's findings, sorted, with a
- * blank line between files so each journey removes its own files' lines. The test fails when:
- * - a finding is not in the list: use the customer word from `vocabulary.ts`, or move the code
- *   into `SupportDetails`;
- * - a listed entry no longer occurs: delete it from the list.
- * So the list only shrinks, until it is empty.
+ * The ratchet has reached zero. `src/copy/customer-words.baseline.json` is empty (`[]`): no
+ * customer text uses an internal word or code, and a test keeps the list empty. Any new finding
+ * fails the guard: use the customer word from `vocabulary.ts`, or move the code into
+ * `SupportDetails`. Never add a line to the list.
  *
- * Updating the list: `UPDATE_COPY_BASELINE=1 pnpm exec jest src/copy` (from `apps/mobile`)
- * rewrites it. With a list already present it only drops stale entries; a new finding still fails.
- * Without one it writes every finding (how the first list was made).
+ * The list was a ratchet while the journeys removed their findings: it listed the offenders,
+ * sorted, and could only shrink. `UPDATE_COPY_BASELINE=1 pnpm exec jest src/copy` (from
+ * `apps/mobile`) still drops stale entries and never adds a new finding.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -188,6 +186,10 @@ describe('PA-11 SPK-UX-011 copy guard: the ratchet', () => {
   const baseline: string[] = fs.existsSync(BASELINE)
     ? JSON.parse(fs.readFileSync(BASELINE, 'utf8'))
     : [];
+
+  it('PA-11 SPK-UX-011: the list is empty, so every new internal word or code fails', () => {
+    expect(baseline).toEqual([]);
+  });
 
   it('PA-11: the baseline is sorted, so each file’s entries stay together', () => {
     expect([...baseline].sort(compare)).toEqual(baseline);

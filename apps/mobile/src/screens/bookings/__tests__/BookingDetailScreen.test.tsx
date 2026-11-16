@@ -63,7 +63,7 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
     expect(screen.getByLabelText('Held for you: pay to confirm')).toBeOnTheScreen();
     expect(
       screen.getByText(
-        /Your payment, in your basket\. The booking is confirmed only when it is paid\./,
+        /Your payment, in your cart\. The booking is confirmed only when it is paid\./,
       ),
     ).toBeOnTheScreen();
     expect(

@@ -177,6 +177,7 @@ describe('SCR-C-24 AvailabilityScreen', () => {
     expect(
       screen.getByText(/^Answers closed at kickoff, Sat, Oct 31, 10:00\sAM PDT\.$/),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText('Error code: INVALID_TRANSITION')).toBeOnTheScreen();
   });
 

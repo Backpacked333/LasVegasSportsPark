@@ -59,6 +59,7 @@ import { CommandError } from '../../ui/CommandError';
 
 import { INVITATION_KEYS, invitationStateLabel } from '../invitations/InvitationScreen';
 import { contactFormatError } from '../onboarding/ContactPointStep';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 type RelationshipKind = 'guardian' | 'delegate';
 type ContactKind = 'email' | 'phone';
@@ -398,9 +399,7 @@ function IssuedInvitation({
             This invitation changed since you created it: it may have been accepted, or withdrawn on
             another device. It can no longer be withdrawn here.
           </Text>
-          <Text variant="body" tone="muted">
-            {`Error code: ${revoke.error.code}${revoke.error.correlationId ? `. Reference: ${revoke.error.correlationId}` : ''}`}
-          </Text>
+          <SupportDetails errorCode={revoke.error.code} reference={revoke.error.correlationId} />
         </>
       ) : (
         <>

@@ -312,7 +312,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to cart' }));
     });
-    expect(await screen.findByLabelText('Session packages turned off')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Class packs turned off')).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText(/CAPABILITY_DISABLED/)).toBeOnTheScreen();
   });

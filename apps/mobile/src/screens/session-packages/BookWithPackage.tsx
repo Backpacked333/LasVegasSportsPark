@@ -42,6 +42,7 @@ import { Text } from '../../ui/Text';
 import { FieldValue as Field } from '../../ui/Field';
 import { Section } from '../../ui/Section';
 import { Actions, Choices } from '../../features/money/surfaces';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 /** What the API sends back for a refused booking that names its reasons (ELIGIBILITY_FAILED). */
 function reasonsOf(error: ApiError): string[] {
@@ -215,9 +216,7 @@ function BookingForm({ pkg, onClose }: { pkg: PackageEntitlement; onClose: () =>
               {m}
             </Text>
           ))}
-          <Text variant="caption" tone="muted">
-            Error code: {failure.code}
-          </Text>
+          <SupportDetails errorCode={failure.code} reference={failure.correlationId} />
         </View>
       ) : failure ? (
         <CommandError

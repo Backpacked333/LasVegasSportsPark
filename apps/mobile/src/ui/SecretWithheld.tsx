@@ -46,6 +46,7 @@ import { OUTCOME_LOST_LABEL } from './OutcomeLost';
 import { StateView } from './StateView';
 import { StatusBadge } from './StatusBadge';
 import { makeStyles, spacing, type } from './theme';
+import { SupportDetails } from './SupportDetails';
 
 /** The revoke commands of the records whose create withholds a one-time link. */
 export type WithheldRevokePath =
@@ -118,7 +119,7 @@ export function SecretWithheld({
   };
   // The lists that show only open records no longer show one answered meanwhile.
   const openOnly = answeredShownAt !== undefined;
-  const reference = `Error code: ${error.code}${error.correlationId ? `. Reference: ${error.correlationId}` : ''}`;
+  const support = <SupportDetails errorCode={error.code} reference={error.correlationId} />;
   const findIt = openOnly
     ? `If it is still open, it is listed under "${listName}": revoke it there. Once it is accepted or declined it no longer appears there.`
     : `Find it under "${listName}" and revoke it there.`;
@@ -143,9 +144,6 @@ export function SecretWithheld({
         <StatusBadge tone="warning" label={OUTCOME_LOST_LABEL} />
         <Text style={styles.body}>{lostBody}</Text>
         <Text style={styles.body}>{findIt}</Text>
-        <Text style={styles.caption} selectable>
-          {reference}
-        </Text>
         <Button
           label="Reload"
           variant="secondary"
@@ -153,6 +151,7 @@ export function SecretWithheld({
           accessibilityHint={`Reads "${listName}" again`}
         />
         {startOver}
+        {support}
       </LiveRegion>
     );
   }
@@ -201,9 +200,6 @@ export function SecretWithheld({
       />
       <StatusBadge tone="warning" label={WITHHELD_LABEL} />
       <Text style={styles.body}>{withheldBody}</Text>
-      <Text style={styles.caption} selectable>
-        {reference}
-      </Text>
       {used ? (
         <Text style={styles.body} testID={`${testID}-used`}>
           {usedText}
@@ -236,7 +232,7 @@ export function SecretWithheld({
           <View style={styles.inner} testID={`${testID}-revoke-unknown`}>
             <StatusBadge tone="warning" label={REVOKE_UNKNOWN_LABEL} />
             <Text style={styles.body}>{revokeUnknownBody}</Text>
-            <Text style={styles.caption}>{`Error code: ${revokeError.code}`}</Text>
+            <SupportDetails errorCode={revokeError.code} reference={revokeError.correlationId} />
           </View>
         ) : revokeError.isNotFound || revokeError.isPermissionRestriction ? (
           <StateView variant="unavailable" />
@@ -244,6 +240,7 @@ export function SecretWithheld({
           <StateView variant="error" error={revokeError} onRetry={() => void reissue()} />
         )
       ) : null}
+      {support}
     </LiveRegion>
   );
 }
@@ -273,5 +270,4 @@ const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   inner: { gap: spacing.sm },
   body: { ...type.body, color: colors.text },
-  caption: { ...type.caption, color: colors.textMuted },
 }));

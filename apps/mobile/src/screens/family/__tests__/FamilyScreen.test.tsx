@@ -434,9 +434,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(
       within(withheld).getByLabelText('Created, but the link cannot be shown again'),
     ).toBeOnTheScreen();
-    expect(
-      within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD. Reference: corr-w'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(withheld));
+    expect(within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD')).toBeOnTheScreen();
+    expect(within(withheld).getByText('Reference: corr-w')).toBeOnTheScreen();
     expect(within(form).queryByLabelText('Something went wrong')).toBeNull();
     // Nothing new is created beside the invitation nobody has a link for.
     expect(within(form).getByRole('button', { name: 'Create invitation' })).toBeDisabled();
@@ -483,9 +483,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     fireEvent.press(checkAgain);
     const lost = await within(form).findByTestId('secret-withheld');
     expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-lost'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(lost));
+    expect(within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(within(lost).getByText('Reference: corr-lost')).toBeOnTheScreen();
     expect(
       within(lost).getByText('Find it under "Invitations you sent" and revoke it there.'),
     ).toBeOnTheScreen();
@@ -528,6 +528,9 @@ describe('SCR-C-31 FamilyScreen', () => {
     const result = await screen.findByTestId('invitation-issued');
     fireEvent.changeText(within(result).getByLabelText('Reason for withdrawing'), 'Mistake');
     fireEvent.press(within(result).getByRole('button', { name: 'Withdraw invitation' }));
+    // The answer arrives after the press: wait for it before opening its support fold.
+    await within(result).findByLabelText('No longer open');
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     expect(within(result).getByLabelText('No longer open')).toBeOnTheScreen();
     expect(within(result).queryByText(/Open until/)).toBeNull();

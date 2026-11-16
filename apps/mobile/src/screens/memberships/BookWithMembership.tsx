@@ -48,6 +48,7 @@ import { Text } from '../../ui/Text';
 import { FieldValue as Field } from '../../ui/Field';
 import { Section } from '../../ui/Section';
 import { Actions, Choices } from '../../features/money/surfaces';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 const INELIGIBLE_LABEL = 'This session cannot be booked with this membership';
 
@@ -229,10 +230,10 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
         // Each refusal is announced (SPK-UX-009); the code is for support, not read out.
         <LiveRegion testID="membership-booking-refused" announcement={refusal} occurrence={failure}>
           <StatusBadge tone="neutral" label={refusal} />
-          <Text
-            variant="caption"
-            tone="muted"
-          >{`Error code: ${failure.code} (${detailCode(failure.details) ?? ''})`}</Text>
+          <SupportDetails
+            errorCode={`${failure.code} (${detailCode(failure.details) ?? ''})`}
+            reference={failure.correlationId}
+          />
         </LiveRegion>
       ) : ineligible && failure ? (
         <LiveRegion
@@ -246,7 +247,7 @@ function BookingForm({ membership, onClose }: { membership: Membership; onClose:
               {m}
             </Text>
           ))}
-          <Text variant="caption" tone="muted">{`Error code: ${failure.code}`}</Text>
+          <SupportDetails errorCode={failure.code} reference={failure.correlationId} />
         </LiveRegion>
       ) : failure ? (
         <CommandError

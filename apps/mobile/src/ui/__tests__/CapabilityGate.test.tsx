@@ -100,7 +100,7 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
       </CapabilityGate>,
       { wrapper: app.wrapper },
     );
-    expect(await screen.findByLabelText('Point of sale turned off')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('In-person purchases turned off')).toBeOnTheScreen();
     expect(
       screen.getByText('Receipts of earlier purchases stay available here.'),
     ).toBeOnTheScreen();

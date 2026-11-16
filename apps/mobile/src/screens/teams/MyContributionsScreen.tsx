@@ -88,7 +88,7 @@ function ContributionRows({ items }: { items: readonly ContributionRequest[] }) 
       <View accessibilityRole="list">
         {items.map((request) => {
           const name = nameOf(request.requestedPersonId);
-          const whose = name === 'You' ? 'Your contribution' : `Contribution for ${name}`;
+          const whose = name === 'You' ? 'Your share' : `${name}'s share`;
           const attempt = request.status === 'requested' ? live.get(request.id) : undefined;
           return (
             <ListRow
@@ -107,20 +107,20 @@ function ContributionRows({ items }: { items: readonly ContributionRequest[] }) 
   );
 }
 
-/** The list itself, also shown by Payments (SCR-C-34 "Team contributions"). */
+/** The list itself, also shown by Payments (SCR-C-34 "Your share"). */
 export function MyContributionsList() {
   const requests = useApiPages({
     path: '/me/contribution-requests',
     request: { query: { limit: 20 } },
   });
   return (
-    <Section title="Team contributions asked of you" testID="my-contributions">
+    <Section title="Your share" testID="my-contributions">
       <QueryBoundary
         query={requests}
-        label="your team contributions"
+        label="your share"
         isEmpty={(items) => items.length === 0}
         empty={{
-          title: 'No contributions asked of you',
+          title: 'No shares asked of you',
           description:
             'When a team captain asks you, or someone you pay for, to pay part of a team fee, it appears here to pay.',
         }}
@@ -136,7 +136,7 @@ export function MyContributionsList() {
 export function MyContributionsScreen() {
   return (
     <Screen>
-      <RequireSession what="your team contributions">
+      <RequireSession what="your share">
         <MyContributionsList />
       </RequireSession>
     </Screen>
@@ -147,7 +147,7 @@ export function MyContributionsScreen() {
 export function MyContributionsRoute() {
   return (
     <>
-      <Stack.Screen options={{ title: 'Your team contributions' }} />
+      <Stack.Screen options={{ title: 'Your share' }} />
       <MyContributionsScreen />
     </>
   );

@@ -249,9 +249,9 @@ describe('SCR-C-23 RosterScreen', () => {
     expect(
       within(withheld).getByLabelText('Created, but the link cannot be shown again'),
     ).toBeOnTheScreen();
-    expect(
-      within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD. Reference: corr-w1'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(withheld));
+    expect(within(withheld).getByText('Error code: IDEMPOTENCY_SECRET_WITHHELD')).toBeOnTheScreen();
+    expect(within(withheld).getByText('Reference: corr-w1')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     // Nothing is sent again beside the created invitation, and the open invitations are re-read.
     expect(screen.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
@@ -450,9 +450,9 @@ describe('SCR-C-23 RosterScreen', () => {
     });
     const lost = await screen.findByTestId('recipient-1-withheld');
     expect(within(lost).getByLabelText('This may already have been done')).toBeOnTheScreen();
-    expect(
-      within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE. Reference: corr-l1'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(lost));
+    expect(within(lost).getByText('Error code: IDEMPOTENCY_OUTCOME_UNAVAILABLE')).toBeOnTheScreen();
+    expect(within(lost).getByText('Reference: corr-l1')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not done')).toBeNull();
     expect(screen.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
     await waitFor(() =>

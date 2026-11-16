@@ -44,6 +44,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { orderRevisions } from './FixtureResultsScreen';
 import { pendingMessage } from '../../copy/pending';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 type Dispute = Schema<'Dispute'>;
 type ResultRevision = Schema<'ResultRevision'>;
@@ -280,7 +281,10 @@ function DisputeForm({
               ? `The dispute window closed ${formatInstant(closedAt, timeZone)}. Your draft is kept.`
               : 'The dispute window has closed. Your draft is kept.'}
           </Text>
-          <Text variant="caption" tone="muted">{`Error code: ${submitDispute.error.code}`}</Text>
+          <SupportDetails
+            errorCode={submitDispute.error.code}
+            reference={submitDispute.error.correlationId}
+          />
         </View>
       ) : submitDispute.error ? (
         <CommandError

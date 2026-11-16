@@ -20,7 +20,12 @@
  * already accepted: reload); offline (offer shown with its expiry, accept disabled); processing
  * (accepting); success (held basket).
  */
-import { CAPABILITY_PRESENTATION, type ApiError, type Schema } from '@sportspark/api-client';
+import {
+  CAPABILITY_PRESENTATION,
+  capabilityCustomerLabel,
+  type ApiError,
+  type Schema,
+} from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -152,7 +157,7 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
           {switchedOff ? (
             <StateView
               variant="turned-off"
-              subject={switchedOff.label}
+              subject={capability ? capabilityCustomerLabel(capability) : switchedOff.label}
               decisions={switchedOff.decisions}
               owner={switchedOff.owner}
               stillAvailable="The spot stays saved for you until the offer expires; declining and leaving the waitlist stay available."

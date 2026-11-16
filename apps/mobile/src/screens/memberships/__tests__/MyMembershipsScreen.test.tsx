@@ -369,6 +369,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
         'Not available: every session this membership includes for that period is used',
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(refused));
     expect(
       within(refused).getByText('Error code: RESOURCE_CONFLICT (MEMBERSHIP_SESSIONS_USED)'),
     ).toBeOnTheScreen();

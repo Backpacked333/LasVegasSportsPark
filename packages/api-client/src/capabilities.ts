@@ -24,6 +24,11 @@ export const PERMISSIONS_QUERY_PREFIX = ['api', '/me/permissions'] as const;
 export interface CapabilityPresentation {
   /** What is turned off, as a heading: "Rentals". */
   label: string;
+  /**
+   * The customer app's word, where it differs from the staff one (PA-11 customer words, proposed):
+   * "Class packs" for session packages. `capabilityCustomerLabel` falls back to `label`.
+   */
+  customerLabel?: string;
   /** The decisions whose answer may turn it on (DEC-016 and its own record). */
   decisions: readonly string[];
   /** The decision register's owner of those decisions. */
@@ -36,6 +41,7 @@ export const CAPABILITY_PRESENTATION: Readonly<Record<CapabilityId, CapabilityPr
   memberships: { label: 'Memberships', decisions: ['DEC-016', 'DEC-072'], owner: PRODUCT_OWNER },
   session_packages: {
     label: 'Session packages',
+    customerLabel: 'Class packs',
     decisions: ['DEC-016', 'DEC-074'],
     owner: PRODUCT_OWNER,
   },
@@ -44,6 +50,7 @@ export const CAPABILITY_PRESENTATION: Readonly<Record<CapabilityId, CapabilityPr
   tournaments: { label: 'Tournaments', decisions: ['DEC-016', 'DEC-078'], owner: PRODUCT_OWNER },
   point_of_sale: {
     label: 'Point of sale',
+    customerLabel: 'In-person purchases',
     decisions: ['DEC-016', 'DEC-079'],
     owner: PRODUCT_OWNER,
   },
@@ -190,6 +197,12 @@ export function turnedOffFromError(error: unknown): TurnedOff | null {
     decisions: stringList(details.applicabilityReferences) ?? known?.decisions ?? ['DEC-016'],
     owner: known?.owner ?? PRODUCT_OWNER,
   };
+}
+
+/** What the customer app calls a capability: its customer word, else its label ("Class packs"). */
+export function capabilityCustomerLabel(capability: CapabilityId): string {
+  const presentation = CAPABILITY_PRESENTATION[capability];
+  return presentation.customerLabel ?? presentation.label;
 }
 
 /** The turned-off badge, e.g. "Rentals turned off" (as the assistant panel's "Assistant turned off"). */

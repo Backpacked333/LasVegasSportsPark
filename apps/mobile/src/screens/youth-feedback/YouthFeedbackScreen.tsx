@@ -23,7 +23,11 @@
  *   stale with the age of what is shown; not available (NOT_FOUND, ACCESS_DENIED); turned off.
  *   Given names only (§4.14); nothing is logged and no id of a child is put in a route.
  */
-import { CAPABILITY_PRESENTATION, type Schema } from '@sportspark/api-client';
+import {
+  CAPABILITY_PRESENTATION,
+  capabilityCustomerLabel,
+  type Schema,
+} from '@sportspark/api-client';
 import { Stack, useRouter, type Href } from 'expo-router';
 import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
@@ -241,7 +245,7 @@ function TurnedOffNotice() {
   return (
     <StateView
       variant="turned-off"
-      subject={presentation.label}
+      subject={capabilityCustomerLabel('youth_progression')}
       decisions={presentation.decisions}
       owner={presentation.owner}
       stillAvailable="Feedback and recommendations already shared with you stay here."

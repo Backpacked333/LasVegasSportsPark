@@ -58,7 +58,7 @@ describe('booking model (SPK-COND-003, ENR-13)', () => {
 
   it('names what is still outstanding as the API lists it', () => {
     expect(outstandingText(['payment', 'staffing'])).toEqual([
-      'Your payment, in your basket. The booking is confirmed only when it is paid.',
+      'Your payment, in your cart. The booking is confirmed only when it is paid.',
       'The facility assigns the staff this booking needs. It is confirmed only when they are assigned.',
     ]);
   });

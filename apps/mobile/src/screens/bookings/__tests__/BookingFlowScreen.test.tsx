@@ -133,12 +133,12 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(await screen.findByRole('header', { name: 'Court rental' })).toBeOnTheScreen();
     expect(
       await screen.findByLabelText(
-        'How it is confirmed: Booked at once: the time is held for you, then you pay in your basket to confirm it.',
+        'How it is confirmed: Booked at once: the time is held for you, then you pay in your cart to confirm it.',
       ),
     ).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        'Paying: Paid in full at checkout. Your basket shows the price, taxes and fees.',
+        'Paying: Paid in full at checkout. Your cart shows the price, taxes and fees.',
       ),
     ).toBeOnTheScreen();
     expect(screen.getByLabelText('Access conditions: Enter by the north gate.')).toBeOnTheScreen();

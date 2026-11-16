@@ -34,6 +34,7 @@ import {
 import { formatInstantIn } from '../../../features/money/time-zone';
 import { mePermissions } from '../../../testing/test-app';
 import { MySessionPackagesScreen } from '../MySessionPackagesScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({ deviceTimeZone: () => 'UTC' }));
 
@@ -200,6 +201,7 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     expect(
       within(refused).getByText('The package applies only to the offerings and programs it names.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(refused));
     expect(within(refused).getByText('Error code: ELIGIBILITY_FAILED')).toBeOnTheScreen();
   });
 
@@ -211,7 +213,7 @@ describe('Book a session with a package (SCR-C-35, ENR-11)', () => {
     await chooseSession();
     await book();
     // The refused command's own label comes from the API client's capability list (unchanged).
-    expect(await screen.findByLabelText('Session packages turned off')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Class packs turned off')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Not available')).toBeNull();
   });
 

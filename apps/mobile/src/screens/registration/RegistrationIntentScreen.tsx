@@ -50,10 +50,11 @@
  * processing (adding); success (the basket, SCR-C-11); turned off.
  */
 import {
-  CAPABILITY_PRESENTATION,
-  turnedOffLabel,
   type ApiError,
+  CAPABILITY_PRESENTATION,
+  capabilityCustomerLabel,
   type Schema,
+  turnedOffLabel,
 } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -346,10 +347,10 @@ function IntentChooser({ offering }: { offering: Offering }) {
     const { description } = INTENT_LABELS[option];
     if (turnedOff(option) && capability) {
       const presentation = CAPABILITY_PRESENTATION[capability];
-      return `${description} ${turnedOffLabel(presentation.label)}. ${pendingMessageFor(presentation.decisions)}`;
+      return `${description} ${turnedOffLabel(capabilityCustomerLabel(capability))}. ${pendingMessageFor(presentation.decisions)}`;
     }
     if (switchOf(option) === undefined && capability) {
-      return `${description} Checking ${CAPABILITY_PRESENTATION[capability].label.toLowerCase()}.`;
+      return `${description} Checking ${capabilityCustomerLabel(capability).toLowerCase()}.`;
     }
     return optionHandling === 'basket' || optionHandling === 'session'
       ? description

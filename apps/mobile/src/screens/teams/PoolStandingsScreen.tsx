@@ -18,7 +18,11 @@
  * <time>", refetch on focus); offline (cached with age); turned off (notice, the table kept);
  * processing, success, partial completion and recovery: not applicable (read only).
  */
-import { CAPABILITY_PRESENTATION, type Schema } from '@sportspark/api-client';
+import {
+  CAPABILITY_PRESENTATION,
+  capabilityCustomerLabel,
+  type Schema,
+} from '@sportspark/api-client';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
@@ -121,7 +125,7 @@ export function TournamentsOffNotice() {
   return (
     <StateView
       variant="turned-off"
-      subject={presentation.label}
+      subject={capabilityCustomerLabel('tournaments')}
       decisions={presentation.decisions}
       owner={presentation.owner}
       stillAvailable="Pool tables already published stay readable here."

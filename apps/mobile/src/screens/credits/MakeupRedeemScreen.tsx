@@ -48,6 +48,7 @@ import { Text } from '../../ui/Text';
 import { FieldValue as Field } from '../../ui/Field';
 import { Section } from '../../ui/Section';
 import { Actions, Choices } from '../../features/money/surfaces';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 /** Why the API refused a redemption, in the customer's words (SPK-AT-020). */
 export function redemptionRefusal(error: ApiError): string | null {
@@ -275,9 +276,7 @@ function RedeemForm({ makeup, reload }: { makeup: MakeupEntitlement; reload: () 
                     {m}
                   </Text>
                 ))}
-                <Text variant="caption" tone="muted">
-                  Error code: {failure?.code}
-                </Text>
+                <SupportDetails errorCode={failure?.code} reference={failure?.correlationId} />
               </View>
             ) : failure ? (
               <CommandError

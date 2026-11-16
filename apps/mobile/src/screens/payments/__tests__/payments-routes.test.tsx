@@ -72,9 +72,7 @@ describe('stage-4 money routes (SCR-C-25, SCR-C-34, SCR-C-35)', () => {
 
   it('/team/contributions opens the player list, not a team workspace', async () => {
     const { router, app } = renderAt('/team/contributions');
-    expect(
-      await screen.findByRole('header', { name: 'Team contributions asked of you' }),
-    ).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'Your share' })).toBeOnTheScreen();
     expect(router.getPathname()).toBe('/team/contributions');
     expect(app.fake.requests.filter((r) => r.route === '/team-entries/{id}')).toHaveLength(0);
   });

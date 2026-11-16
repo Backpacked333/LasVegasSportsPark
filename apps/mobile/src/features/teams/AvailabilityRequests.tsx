@@ -30,6 +30,7 @@ import { TextField } from '../../ui/Field';
 import { CommandError } from '../../ui/CommandError';
 import { OfflineNotice } from '../../ui/OfflineNotice';
 import { Text } from '../../ui/Text';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 type AvailabilityRequest = Schema<'AvailabilityRequest'>;
 
@@ -70,7 +71,7 @@ export function AvailabilityClosed({
     >
       <StatusBadge tone="neutral" label="Availability closed" />
       <Text variant="body">{closed}</Text>
-      <Text variant="caption" tone="muted">{`Error code: ${error.code}`}</Text>
+      <SupportDetails errorCode={error.code} reference={error.correlationId} />
     </LiveRegion>
   );
 }

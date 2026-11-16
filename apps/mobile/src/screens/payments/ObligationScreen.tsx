@@ -371,9 +371,6 @@ function PaySection({
           >
             <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
             <Text variant="body">{noAnswerBody}</Text>
-            <Text variant="caption" tone="muted">
-              Error code: {unanswered?.code}
-            </Text>
             <Actions>
               <Button
                 label="Check again"
@@ -382,6 +379,7 @@ function PaySection({
                 disabled={offline}
               />
             </Actions>
+            <SupportDetails errorCode={unanswered?.code} reference={unanswered?.correlationId} />
           </LiveRegion>
           {checkRefused && failure ? (
             <RefusedBeforeRunning
@@ -400,10 +398,7 @@ function PaySection({
         >
           <StatusBadge tone="warning" label={UNCONFIRMED_LABEL} />
           <Text variant="body">{failure?.message}</Text>
-          <Text variant="caption" tone="muted">
-            Error code: {failure?.code}
-            {failure?.correlationId ? `. Reference: ${failure.correlationId}` : ''}
-          </Text>
+          <SupportDetails errorCode={failure?.code} reference={failure?.correlationId} />
         </LiveRegion>
       ) : failure ? (
         <CommandError

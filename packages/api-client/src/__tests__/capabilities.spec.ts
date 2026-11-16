@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CAPABILITY_PRESENTATION,
+  capabilityCustomerLabel,
   isCapabilityDisabledError,
   isCapabilityId,
   turnedOffFor,
@@ -113,6 +114,15 @@ describe('CAPABILITY_DISABLED presentation (K-12, DEC-016)', () => {
       decisions: ['DEC-016', 'DEC-080'],
       owner: 'Product owner',
     });
+  });
+
+  it('PA-11: the customer app has its own words where staff words differ, else the label', () => {
+    expect(capabilityCustomerLabel('session_packages')).toBe('Class packs');
+    expect(capabilityCustomerLabel('point_of_sale')).toBe('In-person purchases');
+    expect(capabilityCustomerLabel('rentals')).toBe('Rentals');
+    // The staff app keeps its words.
+    expect(CAPABILITY_PRESENTATION.session_packages.label).toBe('Session packages');
+    expect(CAPABILITY_PRESENTATION.point_of_sale.label).toBe('Point of sale');
   });
 
   it('words the turned-off state the same way in both apps, naming the decisions (SPK-UX-010)', () => {

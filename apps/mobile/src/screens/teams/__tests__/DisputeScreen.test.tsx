@@ -160,6 +160,7 @@ describe('SCR-C-29 DisputeScreen', () => {
         `The dispute window closed ${formatInstant('2026-10-25T10:00:00.000Z')}. Your draft is kept.`,
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(closed));
     expect(within(closed).getByText('Error code: VALIDATION_FAILED')).toBeOnTheScreen();
     expect(screen.getByLabelText('Reason').props.value).toBe('Late goal.');
   });

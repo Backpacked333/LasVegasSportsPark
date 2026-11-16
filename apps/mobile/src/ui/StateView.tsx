@@ -34,6 +34,7 @@
  * pending-decision (fixed wording that answers nothing) are not announced on iOS.
  */
 import {
+  capabilityCustomerLabel,
   formatAge,
   recoveryActionFor,
   turnedOffFromError,
@@ -98,7 +99,7 @@ export type StateViewProps =
     }
   | {
       variant: 'turned-off';
-      /** What is turned off, e.g. "Rentals" (CAPABILITY_PRESENTATION labels). */
+      /** What is turned off, e.g. "Rentals" (`capabilityCustomerLabel`). */
       subject: string;
       /** The decisions that may turn it on (DEC-016 and the capability's own record). */
       decisions: readonly string[];
@@ -119,7 +120,10 @@ export function StateView(props: StateViewProps) {
     turnedOff && props.variant === 'error'
       ? {
           variant: 'turned-off',
-          subject: turnedOff.label,
+          // The customer's word for it (PA-11): "Class packs", not the staff "Session packages".
+          subject: turnedOff.capability
+            ? capabilityCustomerLabel(turnedOff.capability)
+            : turnedOff.label,
           decisions: turnedOff.decisions,
           owner: turnedOff.owner,
           error: props.error,

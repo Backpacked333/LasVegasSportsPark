@@ -709,7 +709,7 @@ describe('SCR-C-34 PaymentsScreen', () => {
     await show('Your share');
     expect(
       await screen.findByRole('button', {
-        name: 'Fall 2026 team fee, Your contribution: $75.00, Requested',
+        name: 'Fall 2026 team fee, Your share: $75.00, Requested',
       }),
     ).toBeOnTheScreen();
   });
