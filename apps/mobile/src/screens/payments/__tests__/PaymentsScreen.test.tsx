@@ -31,6 +31,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { PaymentsScreen } from '../PaymentsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -134,9 +135,9 @@ describe('SCR-C-34 PaymentsScreen', () => {
       }),
     });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-34/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-34')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });
 
@@ -256,9 +257,9 @@ describe('SCR-C-34 PaymentsScreen', () => {
       }),
     });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-att/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-att')).toBeOnTheScreen();
     expect(await screen.findByRole('header', { name: 'Balances due' })).toBeOnTheScreen();
   });
 
@@ -331,9 +332,9 @@ describe('SCR-C-34 PaymentsScreen', () => {
     });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
     await show('Payments');
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-pay/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-pay')).toBeOnTheScreen();
     fail = false;
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('header', { name: 'No payments yet' })).toBeOnTheScreen();
@@ -450,9 +451,9 @@ describe('SCR-C-34 PaymentsScreen', () => {
     render(<PaymentsScreen />, { wrapper: app.wrapper });
     await show('Receipts');
     const list = await screen.findByTestId('my-receipts');
-    expect(
-      await within(list).findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-rcpt/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(list));
+    expect(await within(list).findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await within(list).findByText('Reference: c-rcpt')).toBeOnTheScreen();
     fail = false;
     fireEvent.press(within(list).getByRole('button', { name: 'Try again' }));
     expect(await within(list).findByTestId(`receipt-${IDS.booking}`)).toBeOnTheScreen();
@@ -584,9 +585,9 @@ describe('SCR-C-34 PaymentsScreen', () => {
     render(<PaymentsScreen />, { wrapper: app.wrapper });
     await show('Orders');
     const list = await screen.findByTestId('my-orders');
-    expect(
-      await within(list).findByText(/Error code: INTERNAL_ERROR\. Reference: c-ord/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(list));
+    expect(await within(list).findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await within(list).findByText('Reference: c-ord')).toBeOnTheScreen();
     fail = false;
     fireEvent.press(within(list).getByRole('button', { name: 'Try again' }));
     expect(await within(list).findByTestId(`order-${IDS.order}`)).toBeOnTheScreen();

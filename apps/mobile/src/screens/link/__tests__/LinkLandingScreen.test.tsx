@@ -14,6 +14,7 @@ import * as nativeIntent from '../../../../app/+native-intent';
 import { RootNavigator } from '../../../navigation/RootNavigator';
 import { createTestApp } from '../../../testing/test-app';
 import { LinkLanding, operationStatus, routeForTarget } from '../LinkLandingScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const INVITATION = '0192f1a0-0000-7000-8000-00000000c001';
 const OPERATION = '0192f1a0-0000-7000-8000-00000000d001';
@@ -180,6 +181,7 @@ describe('SCR-C-39 LinkLanding', () => {
       />,
       { wrapper: app.wrapper },
     );
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

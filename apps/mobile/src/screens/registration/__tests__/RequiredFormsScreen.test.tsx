@@ -24,6 +24,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { RequiredFormsScreen } from '../RequiredFormsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -174,6 +175,7 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     expect(
       await screen.findByText('Only an approved policy version can be acknowledged.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
     expect(screen.getByRole('checkbox', { name: AGREE_ADA })).toBeChecked();
   });

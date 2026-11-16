@@ -13,6 +13,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { CheckoutScreen } from '../CheckoutScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/registration/dev', () => ({ DevPaymentMethodPicker: null }));
 
@@ -28,10 +29,11 @@ describe('SCR-C-14 CheckoutScreen (release build)', () => {
       },
     });
     render(<CheckoutScreen quoteId={IDS.quote} />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Waiting on a decision')).toBeOnTheScreen();
     expect(
-      screen.getByText(/Paying in the app is not available yet: it depends on DEC-019/),
+      await screen.findByLabelText("Paying in the app. This isn't available in the app yet."),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-019')).toBeOnTheScreen();
     expect(screen.queryByTestId('dev-payment-method')).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.getByRole('button', { name: 'Pay $226.00' })).toBeDisabled();
@@ -48,7 +50,9 @@ describe('SCR-C-14 CheckoutScreen (release build)', () => {
     });
     render(<CheckoutScreen quoteId={IDS.quote} />, { wrapper: app.wrapper });
     expect(await screen.findByRole('button', { name: 'Confirm registration' })).toBeEnabled();
-    expect(screen.queryByLabelText('Waiting on a decision')).toBeNull();
+    expect(
+      screen.queryByLabelText("Paying in the app. This isn't available in the app yet."),
+    ).toBeNull();
     await app.settle();
   });
 });

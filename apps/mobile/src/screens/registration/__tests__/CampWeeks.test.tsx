@@ -27,6 +27,7 @@ import {
 } from '../../../features/registration/testing/registration-test-app';
 import { placesStatus, previewLines } from '../../../features/registration/CampWeeks';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -240,6 +241,7 @@ describe('SCR-C-09 camp weeks and live total', () => {
         'The total could not be worked out. Your quote gives the price.',
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(bar));
     expect(within(bar).getByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(bar).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     await app.settle();

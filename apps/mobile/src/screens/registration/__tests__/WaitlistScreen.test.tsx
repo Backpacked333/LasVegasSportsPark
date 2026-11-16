@@ -29,6 +29,7 @@ import { createRegistrationTestApp } from '../../../features/registration/testin
 import { mePermissions } from '../../../testing/test-app';
 import { WaitlistScreen } from '../WaitlistScreen';
 import { WaitlistsScreen } from '../WaitlistsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -150,6 +151,7 @@ describe('SCR-C-16 WaitlistScreen', () => {
     expect(
       await screen.findByText('This offer has expired; its place was released.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: CAPACITY_UNAVAILABLE/)).toBeOnTheScreen();
   });
 
@@ -366,6 +368,7 @@ describe('SCR-C-16 WaitlistsScreen', () => {
       }),
     });
     const first = render(<WaitlistsScreen />, { wrapper: failing.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     first.unmount();

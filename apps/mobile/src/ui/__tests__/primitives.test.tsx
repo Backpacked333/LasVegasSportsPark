@@ -8,6 +8,7 @@ import { Button } from '../Button';
 import { ListRow } from '../ListRow';
 import { STATUS_GLYPHS, StatusBadge } from '../StatusBadge';
 import { StateView } from '../StateView';
+import { openSupportDetails } from '../../testing/ui-surfaces';
 
 const NOW = new Date('2026-10-24T12:00:00Z');
 
@@ -46,7 +47,7 @@ describe('StateView (SPK-UX-008)', () => {
     expect(onAction).toHaveBeenCalledTimes(1);
   });
 
-  it('error: shows the API error code, the correlation reference and the recovery action', () => {
+  it('error: shows the API error code, the correlation reference and the recovery action', async () => {
     const onAction = jest.fn();
     render(
       <StateView
@@ -56,7 +57,9 @@ describe('StateView (SPK-UX-008)', () => {
       />,
     );
     expect(screen.getByText('The record changed since it was loaded.')).toBeOnTheScreen();
-    expect(screen.getByText(/Error code: STALE_REVISION\. Reference: corr-123/)).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: STALE_REVISION')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-123')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
     expect(onAction).toHaveBeenCalledTimes(1);
   });
@@ -80,7 +83,10 @@ describe('StateView (SPK-UX-008)', () => {
         onRetry={onRetry}
       />,
     );
-    expect(screen.queryByRole('button')).toBeNull();
+    // The only control is the support fold: nothing offers to pay again.
+    expect(screen.getAllByRole('button')).toEqual([
+      screen.getByRole('button', { name: 'Details for support' }),
+    ]);
     expect(screen.getByText('Do not pay again. The outcome is being confirmed.')).toBeOnTheScreen();
   });
 
@@ -106,7 +112,7 @@ describe('StateView (SPK-UX-008)', () => {
     expect(text).not.toMatch(/permission|denied|exists|another (household|account)/i);
   });
 
-  it('pending-decision: names the decision and its owner instead of inventing a policy', () => {
+  it('pending-decision: names the decision and its owner instead of inventing a policy', async () => {
     render(
       <StateView
         variant="pending-decision"
@@ -115,11 +121,12 @@ describe('StateView (SPK-UX-008)', () => {
         owner="Technical lead/account owners"
       />,
     );
-    expect(screen.getByLabelText('Waiting on a decision')).toBeOnTheScreen();
     expect(
-      screen.getByText(/Account sign-in is not available yet: it depends on DEC-018/),
+      screen.getByLabelText("Account sign-in. This isn't available in the app yet."),
     ).toBeOnTheScreen();
-    expect(screen.getByText(/owner: Technical lead\/account owners/)).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-018')).toBeOnTheScreen();
+    expect(screen.getByText('Owner: Technical lead/account owners')).toBeOnTheScreen();
   });
 });
 

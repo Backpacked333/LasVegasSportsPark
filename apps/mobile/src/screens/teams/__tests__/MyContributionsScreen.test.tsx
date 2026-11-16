@@ -22,6 +22,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { MyContributionsScreen } from '../MyContributionsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -154,9 +155,9 @@ describe('SCR-C-25 MyContributionsScreen', () => {
           : fakeResponse(200, { items: [contributionRequest()], nextCursor: null });
       },
     });
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-25/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-25')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(
       await screen.findByRole('button', { name: /^Fall 2026 team fee, Your contribution/ }),

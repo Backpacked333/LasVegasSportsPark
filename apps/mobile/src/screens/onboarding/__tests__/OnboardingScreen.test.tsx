@@ -19,6 +19,7 @@ import {
   TOKEN,
 } from '../../account/__tests__/fixtures';
 import { OnboardingRoute, OnboardingScreen } from '../OnboardingScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const SELF_PERSON = person(SELF, 'Alex', 'Morgan');
 
@@ -191,10 +192,12 @@ describe('SCR-C-01 OnboardingScreen', () => {
     expect(screen.getByLabelText('+1 555 0100, Phone, primary, Verified')).toBeOnTheScreen();
     expect(screen.getByLabelText('Step 3 of 4, Email or phone, Verified')).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Verifying an email or phone in the app is not available yet: it depends on DEC-018/,
+      screen.getByLabelText(
+        "Verifying an email or phone in the app. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-018')).toBeOnTheScreen();
     expect(screen.getByText('Your account is set up.')).toBeOnTheScreen();
   });
 
@@ -473,10 +476,12 @@ describe('SCR-C-01 OnboardingScreen', () => {
     });
     render(<OnboardingScreen />, { wrapper: app.wrapper });
     expect(
-      await screen.findByText(
-        /asking for notification and camera permission is not available yet: it depends on DEC-061/,
+      await screen.findByLabelText(
+        "Explaining and asking for notification and camera permission. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-061')).toBeOnTheScreen();
     expect(screen.getByText(/You can continue without them/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Go to Home' })).toBeOnTheScreen();
   });
@@ -625,6 +630,8 @@ describe('SCR-C-01 managing contact points (SPK-IAM-001; make primary, remove)',
     fireEvent.press(
       await screen.findByRole('button', { name: 'Make alex.work@example.test the primary email' }),
     );
+    expect(await screen.findByRole('button', { name: 'Reload' })).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     const reads = () => app.fake.requests.filter((r) => r.route === '/people/{id}').length;
     const before = reads();

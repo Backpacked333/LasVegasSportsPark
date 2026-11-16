@@ -9,6 +9,7 @@ import { RootNavigator } from '../../../navigation/RootNavigator';
 import { createTestApp } from '../../../testing/test-app';
 import { AccountScreen } from '../AccountScreen';
 import { apiError, CHILD, me, namesRoute, ok, page, person } from './fixtures';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const CHECKOUT = '0192f1a0-0000-7000-8000-00000000f501';
 
@@ -92,10 +93,12 @@ describe('SCR-C-30 AccountScreen', () => {
       screen.getByRole('button', { name: 'Invitations, Open invitations you received' }),
     ).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Account deletion and data requests is not available yet: it depends on DEC-059/,
+      screen.getByLabelText(
+        "Account deletion and data requests. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-059')).toBeOnTheScreen();
   });
 
   it('SPK-IAM-005: the Family row counts a person whose every grant is paused, as Family lists them, never "No family members yet"', async () => {
@@ -195,6 +198,7 @@ describe('SCR-C-30 AccountScreen', () => {
       },
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Preferences' })).toBeOnTheScreen();
@@ -265,6 +269,7 @@ describe('SCR-C-30 AccountScreen', () => {
       },
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

@@ -18,6 +18,7 @@ import { createTestApp, mePermissions } from '../../testing/test-app';
 import { Button } from '../Button';
 import { CapabilityGate } from '../CapabilityGate';
 import { StateView } from '../StateView';
+import { openSupportDetails } from '../../testing/ui-surfaces';
 
 function Content() {
   return <Text>Your memberships</Text>;
@@ -52,11 +53,10 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
     expect(within(state).getByLabelText('Memberships turned off')).toBeOnTheScreen();
     // The glyph is decorative: hidden from screen readers, shown on screen.
     expect(within(state).getByText('●', { includeHiddenElements: true })).toBeOnTheScreen();
-    expect(
-      within(state).getByText(
-        'This is turned off for this organization. Whether it is used is decided by the product owner (DEC-016, DEC-072); a system administrator turns it on by naming one of these decisions. Everything else works without it.',
-      ),
-    ).toBeOnTheScreen();
+    expect(within(state).getByText("This isn't available right now.")).toBeOnTheScreen();
+    await openSupportDetails(within(state));
+    expect(within(state).getByText('Decisions: DEC-016, DEC-072')).toBeOnTheScreen();
+    expect(within(state).getByText('Owner: Product owner')).toBeOnTheScreen();
     expect(screen.queryByText('Your memberships')).toBeNull();
   });
 
@@ -97,9 +97,9 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
       </CapabilityGate>,
       { wrapper: app.wrapper },
     );
-    expect(
-      await screen.findByText('Error code: INTEGRATION_UNAVAILABLE. Reference: c-n1'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-n1')).toBeOnTheScreen();
     // Reads are never gated (§1.6): the children follow their own states under the unknown switch.
     expect(screen.getByText('Your memberships')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
@@ -119,6 +119,7 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
       </CapabilityGate>,
       { wrapper: app.wrapper },
     );
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.queryByText('Your memberships')).toBeNull();
   });
@@ -154,9 +155,9 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
       </CapabilityGate>,
       { wrapper: app.wrapper },
     );
-    expect(
-      await screen.findByText('Error code: INTERNAL_ERROR. Reference: corr-m1'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-m1')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('Your memberships')).toBeOnTheScreen();
   });
@@ -191,7 +192,7 @@ describe('CapabilityGate (K-12, DEC-016)', () => {
 });
 
 describe('a command refused with CAPABILITY_DISABLED (K-12)', () => {
-  it('StateView "error" renders the turned-off state with the code, not "Something went wrong"', () => {
+  it('StateView "error" renders the turned-off state with the code, not "Something went wrong"', async () => {
     const error = new ApiError({
       kind: 'api',
       status: 403,
@@ -208,9 +209,9 @@ describe('a command refused with CAPABILITY_DISABLED (K-12)', () => {
     render(<StateView variant="error" error={error} />);
     expect(screen.getByTestId('state-turned-off')).toBeOnTheScreen();
     expect(screen.getByLabelText('Rentals turned off')).toBeOnTheScreen();
-    expect(
-      screen.getByText('Error code: ACCESS_DENIED (CAPABILITY_DISABLED). Reference: corr-r'),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: ACCESS_DENIED (CAPABILITY_DISABLED)')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-r')).toBeOnTheScreen();
     expect(screen.queryByLabelText('Something went wrong')).toBeNull();
   });
 

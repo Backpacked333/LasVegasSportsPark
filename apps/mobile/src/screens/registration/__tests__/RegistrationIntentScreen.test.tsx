@@ -34,6 +34,7 @@ import {
   createRegistrationTestApp,
 } from '../../../features/registration/testing/registration-test-app';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -118,6 +119,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.queryByRole('checkbox')).toBeNull();
@@ -274,6 +276,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     });
     expect(await screen.findByLabelText('Session packages turned off')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/CAPABILITY_DISABLED/)).toBeOnTheScreen();
   });
 
@@ -398,6 +401,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add 2 people to your basket' }));
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
@@ -423,6 +427,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('radio', { name: /^Youth enrollment/ }));
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     await basketButtonReady();
     await act(async () => {
@@ -454,6 +459,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     expect(
       await screen.findByText('An application for this participant and offering already exists.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: DUPLICATE_ENTITLEMENT/)).toBeOnTheScreen();
     expect(screen.getByText('Review existing registration')).toBeOnTheScreen();
     expect(mockRouter.push).not.toHaveBeenCalled();
@@ -596,6 +602,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     });
     expect(membership).toBeDisabled();
     expect(membership).not.toBeChecked();
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Add to your basket' })).toBeNull();
 
@@ -697,6 +704,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
       }),
     });
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.queryByRole('radio')).toBeNull();

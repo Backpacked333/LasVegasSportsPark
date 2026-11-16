@@ -11,6 +11,7 @@ import { createTestApp } from '../../testing/test-app';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { useApiPages } from '../useApiPages';
+import { openSupportDetails } from '../../testing/ui-surfaces';
 
 function booking(n: number) {
   return { id: `0192f1a0-0000-7000-8000-${String(n).padStart(12, '0')}` };
@@ -71,9 +72,9 @@ describe('useApiPages and LoadMore (§4.5, SPK-UX-008)', () => {
     render(<MyBookings />, { wrapper: app.wrapper });
     await screen.findByText('Booking 02');
     fireEvent.press(screen.getByRole('button', { name: 'Load more bookings' }));
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-page/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-page')).toBeOnTheScreen();
     expect(screen.getByText('Booking 01')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('Booking 03')).toBeOnTheScreen();

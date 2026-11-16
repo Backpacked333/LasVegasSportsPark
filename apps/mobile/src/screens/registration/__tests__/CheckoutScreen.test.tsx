@@ -20,6 +20,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { CheckoutScreen } from '../CheckoutScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -151,6 +152,7 @@ describe('SCR-C-14 CheckoutScreen', () => {
       }),
     });
     await choosePaymentAndPay();
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: QUOTE_EXPIRED/)).toBeOnTheScreen();
     expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull();
   });
@@ -503,6 +505,7 @@ describe('SCR-C-14 CheckoutScreen', () => {
     await act(async () => {
       fireEvent.press(hold);
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: CAPACITY_UNAVAILABLE/)).toBeOnTheScreen();
     expect(
       screen.getByText('Nothing was charged. You can join the waitlist instead.'),

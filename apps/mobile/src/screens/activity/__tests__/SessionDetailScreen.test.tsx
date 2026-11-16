@@ -29,6 +29,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { SessionDetailScreen } from '../SessionDetailScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -119,10 +120,12 @@ describe('SCR-C-20 SessionDetailScreen', () => {
     expect(within(card).getByLabelText('Confirmed')).toBeOnTheScreen();
     expect(screen.getByText('Ball skills for younger players.')).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Arrival guidance for this activity is not available yet: it depends on POL-046/,
+      screen.getByLabelText(
+        "Arrival guidance for this activity. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: POL-046')).toBeOnTheScreen();
     // Only the given name of the child is shown (§4.14).
     expect(screen.queryByText(/Morgan|2016/)).toBeNull();
   });
@@ -207,6 +210,7 @@ describe('SCR-C-20 SessionDetailScreen', () => {
       },
     );
     expect(await screen.findByText('Registrations are unavailable.')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

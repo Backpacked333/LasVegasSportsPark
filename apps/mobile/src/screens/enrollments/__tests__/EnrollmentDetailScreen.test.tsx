@@ -21,6 +21,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { EnrollmentDetailScreen } from '../EnrollmentDetailScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -79,6 +80,7 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
           apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
         ),
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.queryByText(/not available to this account/)).toBeNull();
   });
@@ -167,6 +169,7 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
       },
     });
     const unknown = await screen.findByTestId('enrollment-recovery-unknown');
+    await openSupportDetails(within(unknown));
     expect(
       await within(unknown).findByText(/Error code: INTEGRATION_UNAVAILABLE/),
     ).toBeOnTheScreen();
@@ -199,6 +202,7 @@ describe('SCR-C-32 EnrollmentDetailScreen', () => {
       },
     );
     const unknown = await screen.findByTestId('enrollment-recovery-unknown');
+    await openSupportDetails(within(unknown));
     expect(await within(unknown).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(unknown).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.queryByText(/payment for this registration is not finished/)).toBeNull();

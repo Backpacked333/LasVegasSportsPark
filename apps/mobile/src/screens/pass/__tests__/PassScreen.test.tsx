@@ -26,6 +26,7 @@ import {
   REPLACE_REASON,
   WITHDRAW_REASON,
 } from '../PassScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -138,10 +139,10 @@ describe('SCR-C-05 PassScreen', () => {
     expect(screen.queryByText(/Alex|Morgan/)).toBeNull();
     // The scannable symbol waits on the scanner decision.
     expect(
-      screen.getByText(
-        /A scannable code for this pass is not available yet: it depends on DEC-023/,
-      ),
+      screen.getByLabelText("A scannable code for this pass. This isn't available in the app yet."),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-023')).toBeOnTheScreen();
   });
 
   it('§4.15: offline, shows the stored pass with its age and says the desk may refuse it if revoked', async () => {
@@ -642,9 +643,9 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Withdraw this pass' }));
     fireEvent.press(screen.getByRole('button', { name: 'Withdraw' }));
-    expect(
-      await screen.findByText(/Error code: STALE_REVISION\. Reference: corr-w/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: STALE_REVISION')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-w')).toBeOnTheScreen();
     const reads = app.fake.requests.filter((r) => r.route === '/me/passes').length;
     fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
     await waitFor(() =>
@@ -680,9 +681,9 @@ describe('SCR-C-05 pass state from GET /v1/me/passes (ENT-01)', () => {
       },
       { stored: STORED },
     );
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-p/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-p')).toBeOnTheScreen();
     expect(
       screen.getByText('Could not check whether this pass is still active.'),
     ).toBeOnTheScreen();

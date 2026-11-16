@@ -7,6 +7,7 @@ import { render, screen } from '@testing-library/react-native';
 import { IDS, contributionRequest, paymentAttempt } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { ContributionScreen } from '../ContributionScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 // Release bundles drop the development module (`__DEV__` is false); stand in for that here.
 jest.mock('../../../features/teams/dev', () => ({ DEV_CONTRIBUTION_PAYMENT_METHODS: null }));
@@ -26,8 +27,10 @@ describe('SCR-C-25 ContributionScreen (release build)', () => {
     expect(await screen.findByTestId('contribution-live-attempt')).toBeOnTheScreen();
     expect(screen.getByLabelText('Payment processing')).toBeOnTheScreen();
     expect(
-      screen.getByText(/Paying in the app is not available yet: it depends on DEC-019/),
+      screen.getByLabelText("Paying in the app. This isn't available in the app yet."),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-019')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: /^Pay / })).toBeNull();
     await app.settle();
   });

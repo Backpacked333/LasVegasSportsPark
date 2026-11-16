@@ -25,6 +25,7 @@ import {
 import { formatInstantIn } from '../../../features/money/time-zone';
 import { mePermissions } from '../../../testing/test-app';
 import { MySessionPackagesScreen, PACKAGES_STILL_AVAILABLE } from '../MySessionPackagesScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 // The device zone is fixed so the fallback wording is deterministic on any machine.
 jest.mock('../../../features/today/device-time-zone', () => ({ deviceTimeZone: () => 'UTC' }));
@@ -129,7 +130,8 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     renderPackages({ 'GET /me/permissions': mePermissions() });
     const state = await screen.findByTestId('state-turned-off');
     expect(within(state).getByLabelText('Session packages turned off')).toBeOnTheScreen();
-    expect(within(state).getByText(/\(DEC-016, DEC-074\)/)).toBeOnTheScreen();
+    await openSupportDetails(within(state));
+    expect(within(state).getByText('Decisions: DEC-016, DEC-074')).toBeOnTheScreen();
     expect(within(state).getByText(PACKAGES_STILL_AVAILABLE)).toBeOnTheScreen();
     expect(await screen.findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
   });
@@ -155,9 +157,9 @@ describe('Session packages (SCR-C-35, Package G)', () => {
           : fakeResponse(200, { items: [packageEntitlement()], nextCursor: null });
       },
     });
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-pkg/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-pkg')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
   });
@@ -183,9 +185,9 @@ describe('Session packages (SCR-C-35, Package G)', () => {
             );
       },
     });
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-perm/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-perm')).toBeOnTheScreen();
     // The API serves the packages whatever the switch says: they follow their own read.
     const card = await screen.findByTestId(`package-${LIST_IDS.package}`);
     expect(within(card).getByLabelText('7 sessions left')).toBeOnTheScreen();

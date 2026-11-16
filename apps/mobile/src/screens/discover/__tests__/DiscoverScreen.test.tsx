@@ -24,6 +24,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { mePermissions } from '../../../testing/test-app';
 import { DiscoverScreen, filterProblems } from '../DiscoverScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -135,9 +136,9 @@ describe('SCR-C-07 DiscoverScreen', () => {
     });
     render(<DiscoverScreen />, { wrapper: app.wrapper });
     expect(await screen.findByText('The catalog is unavailable.')).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-7/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-7')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });
 
@@ -294,6 +295,7 @@ describe('SCR-C-07 DiscoverScreen', () => {
     });
     render(<DiscoverScreen />, { wrapper: app.wrapper });
     const card = await screen.findByTestId('discover-resume');
+    await openSupportDetails(within(card));
     expect(await within(card).findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(within(card).queryByText('Nothing in progress right now.')).toBeNull();
     fail = false;
@@ -352,6 +354,7 @@ describe('SCR-C-07 DiscoverScreen', () => {
     render(<DiscoverScreen />, { wrapper: app.wrapper });
     expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
     const card = screen.getByTestId('discover-resume');
+    await openSupportDetails(within(card));
     expect(await within(card).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(card).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

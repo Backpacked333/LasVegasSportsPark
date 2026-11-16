@@ -13,6 +13,7 @@ import {
 } from '../../../features/money/testing/money-test-app';
 import { basket, booking, G, ok } from '../../../features/package-g/__tests__/fixtures';
 import { BookingDetailScreen, basketPriceLines } from '../BookingDetailScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -87,6 +88,7 @@ describe('booking price (GET /v1/basket-prices/{id})', () => {
       'GET /basket-prices/{id}': () => fakeResponse(500, apiErrorBody('INTERNAL_ERROR')),
     });
     const sections = await screen.findAllByTestId('booking-price');
+    await openSupportDetails(within(sections.at(-1)!));
     expect(
       await within(sections.at(-1)!).findByText(/Error code: INTERNAL_ERROR/),
     ).toBeOnTheScreen();

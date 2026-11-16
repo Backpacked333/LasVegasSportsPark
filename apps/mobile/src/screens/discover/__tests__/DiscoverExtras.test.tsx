@@ -9,6 +9,7 @@ import { createRegistrationTestApp } from '../../../features/registration/testin
 import { familyRoutes, IDS, offering, page } from '../../../features/registration/testing/fixtures';
 import { promotionText } from '../../../features/registration/promotions';
 import { DiscoverScreen, searchProblem } from '../DiscoverScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -174,6 +175,7 @@ describe('SCR-C-07 Discover: search, promotions and suggestions', () => {
     ).toBeOnTheScreen();
 
     fireEvent.press(screen.getByRole('radio', { name: 'Ben' }));
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(
       within(screen.getByTestId('picked-for')).getByRole('button', { name: 'Try again' }),

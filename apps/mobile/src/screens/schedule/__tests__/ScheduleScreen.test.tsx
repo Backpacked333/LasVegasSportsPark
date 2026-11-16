@@ -30,6 +30,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { ScheduleScreen } from '../ScheduleScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -186,6 +187,7 @@ describe('SCR-C-18 ScheduleScreen', () => {
       }),
     });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
 
@@ -345,6 +347,7 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
     });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const failure = await screen.findByTestId('schedule-fixtures-error');
+    await openSupportDetails(within(failure));
     expect(within(failure).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(within(failure).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.getByTestId('day-2026-10-24')).toBeOnTheScreen();

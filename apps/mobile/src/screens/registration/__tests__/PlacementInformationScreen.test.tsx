@@ -16,6 +16,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { PlacementInformationScreen } from '../PlacementInformationScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -76,8 +77,11 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
     render(<PlacementInformationScreen basketId={IDS.basket} lineId={IDS.lineA} />, {
       wrapper: app.wrapper,
     });
-    expect(await screen.findByLabelText('Waiting on a decision')).toBeOnTheScreen();
-    expect(screen.getByText(/depends on DEC-051, DEC-031/)).toBeOnTheScreen();
+    expect(
+      await screen.findByLabelText("Placement information. This isn't available in the app yet."),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-051, DEC-031')).toBeOnTheScreen();
     expect(app.fake.requests).toHaveLength(0);
   });
 
@@ -143,6 +147,7 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
       }),
     });
     const choice = await screen.findByTestId('preferred-competition');
+    await openSupportDetails(within(choice));
     expect(
       await within(choice).findByText(/Error code: INTEGRATION_UNAVAILABLE/),
     ).toBeOnTheScreen();
@@ -220,6 +225,7 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
       fireEvent.press(save);
     });
     expect(await screen.findByText('✕ Use at most 100 characters.')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
     expect(screen.getByLabelText('Playing level')).toHaveProp('value', 'x'.repeat(120));
   });
@@ -266,6 +272,7 @@ describe('SCR-C-10 PlacementInformationScreen', () => {
           fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
       }),
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);

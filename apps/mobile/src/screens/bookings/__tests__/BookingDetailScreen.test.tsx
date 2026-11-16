@@ -18,6 +18,7 @@ import {
 } from '../../../features/money/testing/money-test-app';
 import { basket, booking, G, ok } from '../../../features/package-g/__tests__/fixtures';
 import { BookingDetailScreen } from '../BookingDetailScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -276,9 +277,9 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
       },
     });
     await openCancel();
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-b/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-b')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
     expect(cancels(app)).toHaveLength(0);
   });
@@ -359,9 +360,9 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
       await screen.findByRole('checkbox', { name: 'I understand: Refund of $60.00' }),
     );
     await confirmCancel();
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-p/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-p')).toBeOnTheScreen();
     expect(cancels(app)).toHaveLength(0);
     // Only the read failed: nothing says the cancellation may already have been made.
     expect(screen.queryByLabelText('No answer yet')).toBeNull();

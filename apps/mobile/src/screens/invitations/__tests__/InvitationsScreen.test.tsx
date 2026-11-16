@@ -23,6 +23,7 @@ import {
   person,
 } from '../../account/__tests__/fixtures';
 import { InvitationsScreen } from '../InvitationsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const FAMILY_ID = '0192f1a0-0000-7000-8000-00000000c001';
 const FAMILY_TWO = '0192f1a0-0000-7000-8000-00000000c002';
@@ -135,6 +136,7 @@ describe('SCR-C-17 InvitationsScreen', () => {
     // Each list answers on its own: wait for each one, never assert one after the other's flush.
     expect(await screen.findByTestId(`invitation-family-${FAMILY_ID}`)).toBeOnTheScreen();
     const failure = await screen.findByTestId('invitations-team');
+    await openSupportDetails(within(failure));
     expect(await within(failure).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(failure).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(

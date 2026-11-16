@@ -18,6 +18,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { PaymentAttemptScreen } from '../PaymentAttemptScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -92,7 +93,13 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
       body: paymentDetail({ status: 'action_required', resolvedAt: null }),
     });
     expect(await screen.findByLabelText('Payment needs your action')).toBeOnTheScreen();
-    expect(screen.getByText(/depends on DEC-019/)).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText(
+        "Completing the payment provider’s step in the app. This isn't available in the app yet.",
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-019')).toBeOnTheScreen();
   });
 
   it('SPK-PAY-008: refunds show their own states; one being confirmed is never "Refunded"', async () => {
@@ -169,7 +176,11 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
       'Payment processing',
     );
     expect(screen.queryByLabelText('Payment needs your action')).toBeNull();
-    expect(screen.queryByText(/depends on DEC-019/)).toBeNull();
+    expect(
+      screen.queryByLabelText(
+        "Completing the payment provider’s step in the app. This isn't available in the app yet.",
+      ),
+    ).toBeNull();
     expect(
       screen.getByText(/still working on this payment\. Do not pay again\./),
     ).toBeOnTheScreen();
@@ -218,9 +229,9 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
         ? fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { correlationId: 'corr-pay' }))
         : fakeResponse(200, paymentDetail());
     });
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-pay/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-pay')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.getByLabelText('Payment received')).toBeOnTheScreen());
   });

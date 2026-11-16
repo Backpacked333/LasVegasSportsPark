@@ -34,6 +34,7 @@ import {
   switchesOn,
 } from '../../../features/package-g/__tests__/fixtures';
 import { MyMembershipsScreen } from '../MyMembershipsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -260,6 +261,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
       fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to a basket' }));
     });
     expect(await screen.findByLabelText('Memberships turned off')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: ACCESS_DENIED \(CAPABILITY_DISABLED\)/)).toBeOnTheScreen();
   });
 
@@ -267,6 +269,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
     renderScreen(routes(switchesOn()));
     const off = await screen.findByTestId('state-turned-off');
     expect(within(off).getByLabelText('Memberships turned off')).toBeOnTheScreen();
+    await openSupportDetails(within(off));
     expect(within(off).getByText(/DEC-072/)).toBeOnTheScreen();
     expect(
       within(off).getByText('Memberships you already hold stay available here.'),
@@ -406,6 +409,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
     await chooseIncludedSession();
     await bookWithMembership();
     expect(await screen.findByLabelText('Memberships turned off')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: ACCESS_DENIED \(CAPABILITY_DISABLED\)/)).toBeOnTheScreen();
   });
 
@@ -421,9 +425,9 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
         },
       }),
     );
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: c-m/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-m')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId(`membership-${G.membership}`)).toBeOnTheScreen();
     await settleApps();

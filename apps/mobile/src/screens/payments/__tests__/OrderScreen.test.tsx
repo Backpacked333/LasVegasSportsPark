@@ -24,6 +24,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { OrderScreen } from '../OrderScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -99,9 +100,9 @@ describe('SCR-C-34 OrderScreen', () => {
       'GET /obligations/{id}': () =>
         fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { correlationId: 'corr-ob' })),
     });
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-ob/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-ob')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Order total: $120.00')).toBeOnTheScreen();
   });
@@ -169,9 +170,9 @@ describe('SCR-C-34 OrderScreen', () => {
         fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { correlationId: 'c-ord' })),
     });
     const notice = await screen.findByTestId('payments-unchecked');
-    expect(
-      within(notice).getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-ord/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(notice));
+    expect(within(notice).getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(within(notice).getByText('Reference: c-ord')).toBeOnTheScreen();
     expect(within(notice).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Order total: $120.00')).toBeOnTheScreen();
   });

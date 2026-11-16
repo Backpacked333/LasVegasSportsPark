@@ -13,6 +13,7 @@ import {
 } from '../../../features/money/testing/money-test-app';
 import { booking, G, ok, page, switchesOn } from '../../../features/package-g/__tests__/fixtures';
 import { MyBookingsScreen } from '../MyBookingsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -95,7 +96,9 @@ describe('Package G MyBookingsScreen (SPK-COND-003)', () => {
     render(<MyBookingsScreen />, { wrapper: app.wrapper });
     const off = await screen.findByTestId('state-turned-off');
     expect(within(off).getByLabelText('Rentals and parties turned off')).toBeOnTheScreen();
+    await openSupportDetails(within(off));
     expect(within(off).getByText(/DEC-076/)).toBeOnTheScreen();
+    await openSupportDetails(within(off));
     expect(within(off).getByText(/DEC-077/)).toBeOnTheScreen();
     expect(
       within(off).getByText('Bookings you already made stay available here.'),
@@ -119,9 +122,9 @@ describe('Package G MyBookingsScreen (SPK-COND-003)', () => {
       },
     });
     render(<MyBookingsScreen />, { wrapper: app.wrapper });
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-b1/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-b1')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: HELD_ROW })).toBeOnTheScreen();
   });

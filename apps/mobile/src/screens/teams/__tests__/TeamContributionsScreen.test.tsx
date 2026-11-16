@@ -15,6 +15,7 @@ import {
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { TeamContributionsScreen } from '../TeamContributionsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const page = (items: unknown[]) => ({ status: 200, body: { items, nextCursor: null } });
 
@@ -257,8 +258,8 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
           fakeResponse(500, apiErrorBody('INTERNAL_ERROR', { correlationId: 'corr-25' })),
       }),
     });
-    expect(
-      await screen.findByText(/Error code: INTERNAL_ERROR\. Reference: corr-25/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-25')).toBeOnTheScreen();
   });
 });

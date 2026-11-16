@@ -18,6 +18,7 @@ import {
   person,
   SELF,
 } from './fixtures';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const SAM = person(CHILD, 'Sam', 'Morgan', 'child');
 const JORDAN = person(OTHER_ADULT, 'Jordan', 'Lee');
@@ -225,6 +226,7 @@ describe('SCR-C-30 FormsScreen', () => {
     fireEvent.press(await within(row).findByRole('button', { name: 'Withdraw this form' }));
     fireEvent.changeText(within(row).getByLabelText('Reason for withdrawing'), 'Mistake');
     fireEvent.press(within(row).getByRole('button', { name: 'Withdraw form' }));
+    await openSupportDetails(within(row));
     expect(await within(row).findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     expect(within(row).getByText(/This form changed since it was shown/)).toBeOnTheScreen();
     const before = app.fake.requests.filter((r) => r.route === '/acknowledgments').length;
@@ -244,6 +246,7 @@ describe('SCR-C-30 FormsScreen', () => {
     });
     render(<FormsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByTestId(`form-${ACK_SELF}`)).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

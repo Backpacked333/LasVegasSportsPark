@@ -26,6 +26,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { CreditsScreen } from '../CreditsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -138,9 +139,9 @@ describe('SCR-C-35 CreditsScreen', () => {
           }),
         ),
     });
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-35/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-35')).toBeOnTheScreen();
     expect(await screen.findByTestId(`credit-${IDS.credit}`)).toBeOnTheScreen();
   });
 
@@ -200,7 +201,8 @@ describe('SCR-C-35 CreditsScreen', () => {
     renderCredits({ 'GET /me/package-entitlements': pageOf([packageEntitlement()]) });
     const section = await screen.findByTestId('packages-section');
     expect(await within(section).findByLabelText('Session packages turned off')).toBeOnTheScreen();
-    expect(within(section).getByText(/\(DEC-016, DEC-074\)/)).toBeOnTheScreen();
+    await openSupportDetails(within(section));
+    expect(within(section).getByText('Decisions: DEC-016, DEC-074')).toBeOnTheScreen();
     expect(await within(section).findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
     // Credits and makeups are not affected by the switch.
     expect(screen.getByTestId(`credit-${IDS.credit}`)).toBeOnTheScreen();

@@ -20,6 +20,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import { formatDateOnly, scaleText, YouthFeedbackScreen } from '../YouthFeedbackScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -117,9 +118,9 @@ describe('SCR-C-37 YouthFeedbackScreen', () => {
       'GET /me/youth-feedback': fail(503, 'INTEGRATION_UNAVAILABLE', 'Records are unavailable.'),
     });
     expect(await screen.findByText('Records are unavailable.')).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-1/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-1')).toBeOnTheScreen();
     const before = app.fake.requests.filter((r) => r.route === '/me/youth-feedback').length;
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() =>

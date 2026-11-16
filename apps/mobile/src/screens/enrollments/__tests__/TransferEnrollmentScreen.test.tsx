@@ -23,6 +23,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { TransferEnrollmentScreen, transferBlockers } from '../TransferEnrollmentScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -292,6 +293,7 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Preview transfer' }));
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.queryByTestId('transfer-preview')).toBeNull();
@@ -320,6 +322,7 @@ describe('SCR-C-33 TransferEnrollmentScreen', () => {
       fireEvent.press(screen.getByRole('button', { name: 'Transfer' }));
     });
     const failed = await screen.findByTestId('transfer-recheck-failed');
+    await openSupportDetails(within(failed));
     expect(within(failed).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     // Only a GET failed: nothing claims the transfer may already have been made.
     expect(screen.queryByText(/may already have been made/)).toBeNull();

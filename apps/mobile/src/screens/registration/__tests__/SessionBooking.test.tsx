@@ -28,6 +28,7 @@ import {
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { mePermissions } from '../../../testing/test-app';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -382,6 +383,7 @@ describe('SCR-C-09 trial and pickup intents', () => {
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: CAPACITY_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByText('This session is full.')).toBeOnTheScreen();
     const keys = sent(app, '/session-bookings').map((r) => r.headers['idempotency-key']);
@@ -400,6 +402,7 @@ describe('SCR-C-09 trial and pickup intents', () => {
     renderChooser(app);
     const viewOnly = await screen.findByRole('radio', { name: /^Cy\. Not available/ });
     expect(viewOnly).toBeDisabled();
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Book the session' })).toBeDisabled();
   });

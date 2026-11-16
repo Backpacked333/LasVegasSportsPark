@@ -225,7 +225,7 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
       expect.stringMatching(/^Not available\. This is not available\./),
       // The age of the data changes while it is shown, so it is not part of the announcement.
       'You are offline. Needs a connection: Payment.',
-      expect.stringMatching(/^Rentals turned off\. This is turned off for this organization\./),
+      "Rentals turned off. This isn't available right now.",
     ]);
   });
 

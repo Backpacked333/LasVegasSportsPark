@@ -21,6 +21,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import { FamilyCalendarScreen } from '../FamilyCalendarScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -141,10 +142,12 @@ describe('SCR-C-19 FamilyCalendarScreen', () => {
     render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
     expect(await screen.findByTestId('family-only-self')).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Choosing who collects a child from a supervised session is not available yet: it depends on DEC-075, DEC-005/,
+      screen.getByLabelText(
+        "Choosing who collects a child from a supervised session. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-075, DEC-005')).toBeOnTheScreen();
     expect(screen.getByText(/does not by itself allow collecting them/)).toBeOnTheScreen();
   });
 
@@ -155,6 +158,7 @@ describe('SCR-C-19 FamilyCalendarScreen', () => {
       }),
     });
     render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
 
     screen.unmount();
@@ -197,6 +201,7 @@ describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility 
     expect(
       within(section).getByText('Pickup sessions already booked stay on this calendar.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(section));
     expect(within(section).getByText(/DEC-016, DEC-082/)).toBeOnTheScreen();
     expect(within(section).queryByRole('button', { name: 'Find pickup sessions' })).toBeNull();
     // The booked one is still there.
@@ -297,6 +302,7 @@ describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility 
     });
     render(<FamilyCalendarScreen />, { wrapper: app.wrapper });
     const failure = await screen.findByTestId('family-fixtures-error');
+    await openSupportDetails(within(failure));
     expect(within(failure).getByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByTestId('family-day-2026-10-24')).toBeOnTheScreen();
   });

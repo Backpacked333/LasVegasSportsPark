@@ -39,6 +39,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { HomeScreen } from '../HomeScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -276,9 +277,9 @@ describe('SCR-C-03 Home', () => {
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
     expect(await screen.findByText('Scheduling is unavailable.')).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-1/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-1')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(await screen.findByText('Installment due')).toBeOnTheScreen();
   });
@@ -493,9 +494,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
     const section = await screen.findByTestId('home-fixtures-error');
-    expect(
-      within(section).getByText(/Error code: INTERNAL_ERROR\. Reference: corr-1/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(section));
+    expect(within(section).getByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(within(section).getByText('Reference: corr-1')).toBeOnTheScreen();
     expect(within(section).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     // The session card still shows.
     expect(screen.getByTestId('next-activity-card')).toBeOnTheScreen();
@@ -653,9 +654,9 @@ describe('SCR-C-03 / SCR-C-04 Home: fixtures, facility clock, reasons and partic
     });
     render(<HomeScreen />, { wrapper: app.wrapper });
     const failed = await screen.findByTestId('home-recovery-error');
-    expect(
-      within(failed).getByText(/Error code: INTERNAL_ERROR\. Reference: corr-co/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(within(failed));
+    expect(within(failed).getByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(within(failed).getByText('Reference: corr-co')).toBeOnTheScreen();
     // Nothing is called empty while it is not known whether a payment is being completed.
     expect(screen.queryByRole('header', { name: 'Nothing scheduled yet' })).toBeNull();
     fireEvent.press(within(failed).getByRole('button', { name: 'Try again' }));
