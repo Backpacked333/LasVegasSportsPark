@@ -53,7 +53,7 @@ function renderAt(initialUrl: string) {
 
 describe('SCR-C-32 to SCR-C-38 routes', () => {
   it.each([
-    ['/enrollments', 'No enrollments yet'],
+    ['/enrollments', 'No registrations yet'],
     ['/payments', 'No payments'],
     ['/credits', 'No credits'],
   ])('%s opens its screen', async (url, header) => {

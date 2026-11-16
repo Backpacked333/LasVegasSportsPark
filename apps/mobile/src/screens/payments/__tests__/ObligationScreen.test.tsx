@@ -18,7 +18,7 @@ import {
   paymentAttempt,
   receipt,
 } from '../../../features/money/testing/fixtures';
-import { formatInstant } from '../../../features/money/format';
+import { formatDay, formatInstant } from '../../../features/money/format';
 import {
   LIST_IDS,
   liveAttempt,
@@ -97,6 +97,27 @@ describe('SCR-C-34 ObligationScreen', () => {
     expect(screen.getByLabelText('Applied to this balance: $0.00')).toBeOnTheScreen();
     expect(screen.getByLabelText('Left to pay: $40.00')).toBeOnTheScreen();
     expect(await screen.findByLabelText('Order total: $120.00')).toBeOnTheScreen();
+  });
+
+  it('ADR-008 SPK-PAY-005: opens with "Left to pay" and "Paid" as stat tiles in tabular figures', async () => {
+    renderObligation();
+    const due = obligation();
+    expect(
+      await screen.findByLabelText(`Left to pay, $40.00, Due ${formatDay(due.dueAt)}`),
+    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Paid, $0.00, of $40.00')).toBeOnTheScreen();
+    // The facts below the tiles keep every figure the API states.
+    expect(screen.getByLabelText('Left to pay: $40.00')).toBeOnTheScreen();
+  });
+
+  it('ADR-008: a past-due amount says so in the tile, in words as well as its tone', async () => {
+    const overdue = obligation({ dueAt: '2026-10-01T12:00:00.000Z' });
+    renderObligation({ 'GET /obligations/{id}': { status: 200, body: overdue } });
+    expect(
+      await screen.findByLabelText(
+        `Left to pay, $40.00, Payment due since ${formatDay(overdue.dueAt)}`,
+      ),
+    ).toBeOnTheScreen();
   });
 
   it('shows the order lines per participant and the order state', async () => {
@@ -620,7 +641,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     );
     expect(
       screen.queryByLabelText(
-        "Completing the payment provider’s step in the app. This isn't available in the app yet.",
+        'Completing the payment provider’s step in the app. Pay at the front desk for now.',
       ),
     ).toBeNull();
   });

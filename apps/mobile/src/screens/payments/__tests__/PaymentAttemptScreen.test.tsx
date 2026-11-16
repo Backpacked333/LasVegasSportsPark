@@ -43,7 +43,7 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
     expect(screen.getByLabelText('Amount: $40.00')).toBeOnTheScreen();
     expect(await screen.findByLabelText('Payer: You')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
-    fireEvent.press(screen.getByRole('button', { name: 'Open the balance' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Open the amount due' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/payments/${IDS.obligation}`);
     fireEvent.press(screen.getByRole('button', { name: 'Open the order' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/payments/order/${IDS.order}`);
@@ -95,7 +95,7 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
     expect(await screen.findByLabelText('Payment needs your action')).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "Completing the payment provider’s step in the app. This isn't available in the app yet.",
+        'Completing the payment provider’s step in the app. Pay at the front desk for now.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
@@ -153,9 +153,9 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
         contributionRequestId: LIST_IDS.contribution,
       }),
     });
-    fireEvent.press(await screen.findByRole('button', { name: 'Open the contribution' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Open your share' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/team/contribution/${LIST_IDS.contribution}`);
-    expect(screen.queryByRole('button', { name: 'Open the balance' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open the amount due' })).toBeNull();
   });
 
   it('links a checkout payment to its registration and its order', async () => {
@@ -178,7 +178,7 @@ describe('SCR-C-34 PaymentAttemptScreen', () => {
     expect(screen.queryByLabelText('Payment needs your action')).toBeNull();
     expect(
       screen.queryByLabelText(
-        "Completing the payment provider’s step in the app. This isn't available in the app yet.",
+        'Completing the payment provider’s step in the app. Pay at the front desk for now.',
       ),
     ).toBeNull();
     expect(

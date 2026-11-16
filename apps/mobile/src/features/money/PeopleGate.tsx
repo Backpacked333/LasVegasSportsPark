@@ -11,7 +11,9 @@ import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { useAccountPeople, type AccountPerson } from './people';
-import { Caption, PersonPicker, Section } from './ui';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { PersonPicker } from './ui';
 
 export function PeopleGate({
   pickerLabel,
@@ -53,7 +55,7 @@ export function PeopleGate({
       <StateView
         variant="empty"
         title="Nobody to show yet"
-        description="Your account is not linked to a participant yet, and nobody has shared a family member with you. Finish setting up your account from Account."
+        description="Your account is not linked to a participant yet, and nobody has shared a family member with you. Finish setting up your account from You."
       />
     );
   }
@@ -69,7 +71,9 @@ export function PeopleGate({
       />
       {namesLoading ? (
         <Section title="Family members">
-          <Caption>Loading the other people on your account…</Caption>
+          <Text variant="caption" tone="muted">
+            Loading the other people on your account…
+          </Text>
         </Section>
       ) : null}
       {namesError ? (

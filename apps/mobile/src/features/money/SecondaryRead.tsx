@@ -9,7 +9,7 @@ import type { ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { Section } from './ui';
+import { Section } from '../../ui/Section';
 
 export interface SecondaryQuery<T> {
   data: T | undefined;

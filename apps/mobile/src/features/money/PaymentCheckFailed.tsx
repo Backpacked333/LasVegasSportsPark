@@ -7,7 +7,7 @@
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import { View } from 'react-native';
 import { QueryErrorView } from '../../ui/QueryBoundary';
-import { Caption } from './ui';
+import { Text } from '../../ui/Text';
 
 export function PaymentCheckFailed({
   query,
@@ -21,9 +21,9 @@ export function PaymentCheckFailed({
   if (!error || presentationForError(error) !== 'error') return null;
   return (
     <View testID="payments-unchecked">
-      <Caption>
+      <Text variant="caption" tone="muted">
         {`We could not check whether a payment for ${what} is on its way, so one being confirmed may not be shown. Do not pay again before checking.`}
-      </Caption>
+      </Text>
       <QueryErrorView error={error} onRetry={() => void query.refetch()} />
     </View>
   );

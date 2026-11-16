@@ -16,7 +16,7 @@ import {
   createMoneyTestApp as createTestApp,
   settleApps,
 } from '../../../features/money/testing/money-test-app';
-import { amountsText } from '../MoneySummary';
+import { amountDueSublabel, amountsText } from '../MoneySummary';
 import { PaymentsScreen } from '../PaymentsScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
@@ -65,9 +65,11 @@ describe('SCR-C-34 money summary', () => {
     render(<PaymentsScreen />, { wrapper: app.wrapper });
     const card = await screen.findByTestId('money-summary');
     expect(within(card).getByRole('header', { name: 'Your money' })).toBeOnTheScreen();
-    expect(await within(card).findByLabelText('Owed on open balances: $45.00')).toBeOnTheScreen();
-    expect(within(card).getByLabelText('Open balances: 2 open, 1 past due')).toBeOnTheScreen();
-    expect(within(card).getByLabelText('Credits you can use: $10.00')).toBeOnTheScreen();
+    // PA-11, ADR-008: the amount due and the credits open the page as stat tiles (one element each).
+    expect(
+      await within(card).findByLabelText('Amount due, $45.00, 2 to pay, 1 past due'),
+    ).toBeOnTheScreen();
+    expect(within(card).getByLabelText('Credits, $10.00, Ready to use')).toBeOnTheScreen();
     expect(
       within(card).getByLabelText('Credits waiting for approval (not usable yet): $25.00'),
     ).toBeOnTheScreen();
@@ -89,7 +91,9 @@ describe('SCR-C-34 money summary', () => {
       ),
     });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Owed on open balances: $45.00')).toBeOnTheScreen();
+    expect(
+      await screen.findByLabelText('Amount due, $45.00, 2 to pay, 1 past due'),
+    ).toBeOnTheScreen();
 
     fireEvent.press(await screen.findByRole('radio', { name: 'Sam' }));
     const card = await screen.findByTestId('money-summary');
@@ -108,5 +112,11 @@ describe('SCR-C-34 money summary', () => {
     expect(await within(card).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(card).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(amountsText([], 'Nothing owed')).toBe('Nothing owed');
+  });
+
+  it('ADR-008: the amount-due tile says in words how many are open and past due, never by tone alone', () => {
+    expect(amountDueSublabel(0, 0)).toBe('Nothing to pay');
+    expect(amountDueSublabel(2, 0)).toBe('2 to pay, none past due');
+    expect(amountDueSublabel(3, 1)).toBe('3 to pay, 1 past due');
   });
 });

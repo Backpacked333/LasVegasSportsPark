@@ -42,7 +42,7 @@ export function obligationAmounts(obligation: Obligation): string {
 export const PAYMENT_PURPOSE_LABELS: Record<PaymentAttempt['purpose'], string> = {
   checkout: 'Registration payment',
   obligation: 'Balance payment',
-  contribution: 'Team contribution',
+  contribution: 'Team share payment',
   installment: 'Installment payment',
   pos_sale: 'Front desk purchase',
 };

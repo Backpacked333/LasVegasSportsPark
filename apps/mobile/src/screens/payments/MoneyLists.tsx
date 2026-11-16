@@ -4,7 +4,7 @@
  * from the account's own authority (never from a parameter the app sends), newest first, in
  * cursor pages with "Load more":
  *
- * - `GET /v1/me/payments`: every payment attempt by state. `unknown` reads "Payment outcome being
+ * - `GET /v1/me/payments`: every payment by state. `unknown` reads "Payment outcome being
  *   confirmed. Do not pay again." and `processing` "Payment processing", never success or failure.
  * - `GET /v1/me/receipts`: money received, with what was applied and any overpayment kept visible.
  * - `GET /v1/me/orders`: orders with their lines, credits applied, payment and fulfillment state.
@@ -16,11 +16,15 @@
  *   interrupted payment or a registration the facility is completing is found again from the
  *   server, not from the device, and none is cut off.
  *
- * States (each list on its own): loading; empty (with what would appear); ready; error with code
+ * States (each list on its own): loading; empty (the payments illustration, with what would
+ * appear); ready; error with code
  * and "Try again"; permission restriction ("not available", nothing of another payer); stale or
  * offline (cached with its age; "Load more" needs a connection).
  *
- * Payment attempts, receipts and orders carry no facility, so times are in the device's zone with
+ * Visual system v2 (ADR-008) and customer words (PA-11): each list is a `Section` card of
+ * `ListRow`s; an empty list is `MoneyEmpty`.
+ *
+ * Payments, receipts and orders carry no facility, so times are in the device's zone with
  * the zone named (reported; stage 3 left "facility zone on money records" open).
  */
 import { presentationForError } from '@sportspark/api-client';
@@ -42,11 +46,13 @@ import {
 import { useNameOf } from '../../features/money/people';
 import { moneyRoutes } from '../../features/money/routes';
 import { paymentStatus } from '../../features/money/status';
-import { Caption, Section } from '../../features/money/ui';
+import { MoneyEmpty } from '../../features/money/surfaces';
 import { registrationRoutes } from '../../features/registration/routes';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 
 const PAGE = 20;
 
@@ -64,29 +70,31 @@ export function MyPaymentsList() {
       <QueryBoundary
         query={payments}
         label="your payments"
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: 'No payments yet',
-          description:
-            'Payments you make, or make for the people you pay for, appear here with their state.',
-        }}
+        empty={{ title: '', description: '' }}
         unavailableOffline={['loading more payments']}
       >
-        {(items) => (
-          <View accessibilityRole="list">
-            {items.map((attempt) => (
-              <ListRow
-                key={attempt.id}
-                title={paymentTitle(attempt)}
-                detail={payerLine(nameOf(attempt.payerPersonId), attempt.createdAt)}
-                status={paymentStatus(attempt.status)}
-                onPress={() => router.push(moneyRoutes.payment(attempt.id))}
-                accessibilityHint="Opens the payment with its state and any refunds"
-                testID={`payment-${attempt.id}`}
-              />
-            ))}
-          </View>
-        )}
+        {(items) =>
+          items.length === 0 ? (
+            <MoneyEmpty
+              title="No payments yet"
+              message="Payments you make, or make for the people you pay for, appear here with their state."
+            />
+          ) : (
+            <View accessibilityRole="list">
+              {items.map((attempt) => (
+                <ListRow
+                  key={attempt.id}
+                  title={paymentTitle(attempt)}
+                  detail={payerLine(nameOf(attempt.payerPersonId), attempt.createdAt)}
+                  status={paymentStatus(attempt.status)}
+                  onPress={() => router.push(moneyRoutes.payment(attempt.id))}
+                  accessibilityHint="Opens the payment with its state and any refunds"
+                  testID={`payment-${attempt.id}`}
+                />
+              ))}
+            </View>
+          )
+        }
       </QueryBoundary>
       <LoadMore pages={payments} label="payments" />
     </Section>
@@ -101,35 +109,37 @@ export function MyReceiptsList() {
       <QueryBoundary
         query={receipts}
         label="your receipts"
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: 'No receipts yet',
-          description:
-            'Each payment the facility receives from you, online or at the front desk, appears here.',
-        }}
+        empty={{ title: '', description: '' }}
         unavailableOffline={['loading more receipts']}
       >
-        {(items) => (
-          <View accessibilityRole="list">
-            {items.map((receipt) => {
-              const paymentId = receipt.paymentAttemptId;
-              return (
-                <ListRow
-                  key={receipt.id}
-                  title={`Received ${formatMoney(receipt.amountMinor, receipt.currency)}`}
-                  detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt)}. ${receiptAmounts(receipt)}`}
-                  onPress={
-                    paymentId ? () => router.push(moneyRoutes.payment(paymentId)) : undefined
-                  }
-                  accessibilityHint={
-                    paymentId ? 'Opens the payment this receipt is for' : undefined
-                  }
-                  testID={`receipt-${receipt.id}`}
-                />
-              );
-            })}
-          </View>
-        )}
+        {(items) =>
+          items.length === 0 ? (
+            <MoneyEmpty
+              title="No receipts yet"
+              message="Each payment the facility receives from you, online or at the front desk, appears here."
+            />
+          ) : (
+            <View accessibilityRole="list">
+              {items.map((receipt) => {
+                const paymentId = receipt.paymentAttemptId;
+                return (
+                  <ListRow
+                    key={receipt.id}
+                    title={`Received ${formatMoney(receipt.amountMinor, receipt.currency)}`}
+                    detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt)}. ${receiptAmounts(receipt)}`}
+                    onPress={
+                      paymentId ? () => router.push(moneyRoutes.payment(paymentId)) : undefined
+                    }
+                    accessibilityHint={
+                      paymentId ? 'Opens the payment this receipt is for' : undefined
+                    }
+                    testID={`receipt-${receipt.id}`}
+                  />
+                );
+              })}
+            </View>
+          )
+        }
       </QueryBoundary>
       <LoadMore pages={receipts} label="receipts" />
     </Section>
@@ -148,28 +158,31 @@ export function MyOrdersList() {
       <QueryBoundary
         query={orders}
         label="your orders"
-        isEmpty={(items) => items.length === 0}
-        empty={{
-          title: 'No orders yet',
-          description: 'Registrations you pay for appear here as orders, with what each line cost.',
-        }}
+        empty={{ title: '', description: '' }}
         unavailableOffline={['loading more orders']}
       >
-        {(items) => (
-          <View accessibilityRole="list">
-            {items.map((order) => (
-              <ListRow
-                key={order.id}
-                title={orderTitle(order)}
-                detail={`${orderAmounts(order)}. Ordered ${formatInstant(order.createdAt)}`}
-                status={orderStatus(order, live.get(order.id))}
-                onPress={() => router.push(moneyRoutes.order(order.id))}
-                accessibilityHint="Opens the order with its balances and installments"
-                testID={`order-${order.id}`}
-              />
-            ))}
-          </View>
-        )}
+        {(items) =>
+          items.length === 0 ? (
+            <MoneyEmpty
+              title="No orders yet"
+              message="Registrations you pay for appear here as orders, with what each line cost."
+            />
+          ) : (
+            <View accessibilityRole="list">
+              {items.map((order) => (
+                <ListRow
+                  key={order.id}
+                  title={orderTitle(order)}
+                  detail={`${orderAmounts(order)}. Ordered ${formatInstant(order.createdAt)}`}
+                  status={orderStatus(order, live.get(order.id))}
+                  onPress={() => router.push(moneyRoutes.order(order.id))}
+                  accessibilityHint="Opens the order with its balances and installments"
+                  testID={`order-${order.id}`}
+                />
+              ))}
+            </View>
+          )
+        }
       </QueryBoundary>
       <LoadMore pages={orders} label="orders" />
     </Section>
@@ -233,10 +246,10 @@ export function NeedsAttention() {
       <LoadMore pages={unknown} label="payments being confirmed" />
       <LoadMore pages={recovery} label="registrations being completed" />
       {unknownItems.length > 0 ? (
-        <Caption>
+        <Text variant="footnote" tone="muted">
           Do not pay again for a payment being confirmed: the facility confirms the outcome with the
           payment provider, and it is never charged twice.
-        </Caption>
+        </Text>
       ) : null}
       {failed?.error ? (
         <QueryErrorView error={failed.error} onRetry={() => void failed.refetch()} />

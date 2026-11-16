@@ -54,7 +54,7 @@ describe('SCR-C-34 payment list wording', () => {
 
   it('names what a payment paid for with its amount', () => {
     expect(paymentTitle({ purpose: 'contribution', amountMinor: 7500, currency: 'USD' })).toBe(
-      'Team contribution: $75.00',
+      'Team share payment: $75.00',
     );
     expect(paymentTitle({ purpose: 'checkout', amountMinor: 12000, currency: 'USD' })).toBe(
       'Registration payment: $120.00',
