@@ -13,4 +13,5 @@
 
 ## Features
 
+- `customer-redesign`: `customer-redesign.md` (ADR-008, PA-11; customer app visual system v2).
 - `glass-demo-amendments`: see `glass-demo-amendments.md`, ADR-001 to ADR-007.

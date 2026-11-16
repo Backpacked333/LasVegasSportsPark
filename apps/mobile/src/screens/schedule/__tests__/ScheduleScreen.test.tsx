@@ -40,7 +40,13 @@ import {
   useCalendarWindow,
   useMyFixtures,
 } from '../../../features/today/queries';
-import { createTestApp, mePermissions, settleQueries, TEST_NOW } from '../../../testing/test-app';
+import {
+  createTestApp,
+  mePermissions,
+  settleQueries,
+  TEST_NOW,
+  waitForAbsent,
+} from '../../../testing/test-app';
 import { openSheet } from '../../../testing/ui';
 import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
 import { ScheduleScreen } from '../ScheduleScreen';
@@ -453,7 +459,7 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
     // SPK-UX-009: closing the sheet puts focus back on the availability chip that opened it.
     const focus = jest.spyOn(AccessibilityInfo, 'sendAccessibilityEvent');
     fireEvent.press(within(sheet).getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByTestId('sheet')).toBeNull());
+    await waitForAbsent(() => screen.queryByTestId('sheet'), 'The answer sheet');
     const chip = `schedule-answer-${fixtureDetail().id}`;
     expect(screen.getByTestId(chip)).toBeOnTheScreen();
     await waitFor(() =>

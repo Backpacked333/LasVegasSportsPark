@@ -1,5 +1,30 @@
 # Handoff
 
+## Customer app redesign (`customer-redesign`, branch `claude/jolly-johnson-gd61vv`)
+
+### For the product owner
+
+- **See it**: `pnpm demo --fresh --web`, then `pnpm --filter @sportspark/mobile screenshots --label
+<name>` for every screen in both themes at two phone sizes (a browser render, not a phone).
+- **Decide**: PA-11 / DEC-107 (tab labels Explore, Calendar, You; the vocabulary; codes in "Details
+  for support"); the visual system is ADR-008 (**Proposed**). Open values are listed in
+  `docs/package-a/customer-visual-system.md`, section 4.
+- **Check on phones** before release: VoiceOver and TalkBack, the largest text sizes, glass,
+  haptics, sheets and the native pickers. None of it was run on a device.
+
+### For whoever continues
+
+- The system and its rules: `apps/mobile/README.md` ("Visual system", "Conventions for screen
+  builders") and `docs/package-a/customer-visual-system.md`.
+- What the finish pass changed and why: `decisions/sde/customer-redesign.md`; the test approach:
+  `decisions/qa/customer-redesign.md`.
+- Known follow-ups (**Proposed**): move the paged lists inside card sections to `Screen` list mode;
+  ask the API to state the facility zone on money and pass records.
+
+---
+
+## Feature `glass-demo-amendments`
+
 Feature `glass-demo-amendments` is complete on branch `claude/jolly-johnson-gd61vv` (draft pull
 request 21).
 

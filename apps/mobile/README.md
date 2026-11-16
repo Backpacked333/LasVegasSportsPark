@@ -185,7 +185,7 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
     It is used in two places. The tab bar floats over the page as one glass surface and content
     scrolls beneath it; `Screen` ends its content above the bar (`BottomBarInsetContext`), so the
     last control is never covered. The hero band (`Hero`) is coloured glass in its night or pitch
-    tint under `liquid`, and the solid band otherwise. Headers stay solid. The app has no sheets.
+    tint under `liquid`, and the solid band otherwise. Headers and sheets stay solid.
   - **Verified** (unit tests, no device): which device facts give which mode; `solid` without a
     provider, so every screen test runs on the opaque path; the same five labelled tabs in each
     mode; the content inset under a floating bar; the hero's labels on glass.
@@ -197,23 +197,29 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
     experimental method that needs each screen wrapped in a blur target; it is left off until it
     can be tried on devices. The glass provider no longer asks the device off iOS (the answer is
     solid there anyway; the web has no reduce-transparency setting to ask about).
-- **Motion and haptics** (ADR-008, **Proposed** visual system v2; groundwork only, no screen uses
-  them yet). `useMotion()` (`src/ui/motion.tsx`) gives `reduced` and `duration(token)` (0, 120, 220
-  and 320 ms, all 0 while reduced), following the device's reduce-motion setting through
-  `MotionProvider` in the root layout; **without a provider motion counts as reduced**, like glass,
-  so screen tests never wait on an animation. The `haptics` service (`src/providers/haptics.ts`,
-  in `AppServices`) plays selection, light and medium impact, success and warning through
+- **Motion and haptics** (ADR-008, **Proposed** visual system v2). `useMotion()`
+  (`src/ui/motion.tsx`) gives `reduced` and `duration(token)` (0, 120, 220 and 320 ms, all 0 while
+  reduced), following the device's reduce-motion setting through `MotionProvider` in the root
+  layout; **without a provider motion counts as reduced**, like glass, so screen tests never wait on
+  an animation. Every animation goes through it: the press scale (`PressableScale`), sheets
+  (`Sheet`: bottom-sheet springs, or the `Modal` fade), the `Disclosure` layout change, the
+  `DateStrip` week slide, `Skeleton` shimmer, `Toast` fade, the `Artwork` fade-in, `Screen`'s scroll
+  to a section, and the stack's screen transitions (`RootNavigator`: none while reduced). Nothing
+  outside `src/ui` uses `Animated`, reanimated's `withTiming`/`withSpring` or `LayoutAnimation`
+  (checked by search, 2026-11-16). The `haptics` service (`src/providers/haptics.ts`, in
+  `AppServices`) plays selection, light and medium impact, success and warning through
   expo-haptics on iOS and Android, nothing on the web, and records events in tests
-  (`createTestApp().haptics.events`). The root layout also wraps the app in
-  `GestureHandlerRootView` and `BottomSheetModalProvider`, and `createTestApp` mirrors both.
-  - **Verified** in jest: `src/ui/__tests__/motion.test.tsx`, `src/providers/__tests__/haptics.test.tsx`,
-    and `src/testing/__tests__/ui-libraries.test.tsx` (each new library renders under the jest
-    setup).
-  - **Not verified**: any of it on a device (motion, gestures, sheets, haptic feel).
+  (`createTestApp().haptics.events`); every event that plays one also changes the screen or is
+  announced, so a haptic is never the only feedback.
+  - **Verified** in jest: `src/ui/__tests__/motion.test.tsx`, each animated component's own test
+    (still with reduced motion, moving with motion on), `src/providers/__tests__/haptics.test.tsx`,
+    `src/testing/__tests__/ui-libraries.test.tsx`, and the stack's `animation` option.
+  - **Not verified**: any of it on a device (motion curves, gestures, sheet drag, haptic feel).
 
 ### Tokens v2 (ADR-008, **Proposed** visual system v2)
 
-`src/ui/theme.ts` carries the tokens the v2 component library builds on; no screen uses them yet.
+`src/ui/theme.ts` carries the tokens the v2 component library (`src/ui`) builds on; screens use
+them through those components.
 
 - **Colours, in both themes:** `elevated`, `sheet`/`onSheet`, `backdrop`, `scrimStart`/`scrimEnd`
   with `onMedia`/`onMediaMuted` (text over artwork), `skeleton`/`skeletonHighlight`,
@@ -235,6 +241,59 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
   and on pure black, count badges stand 3:1 from the surfaces around them, the elevation styles of
   each theme, and the token values. **Not verified**: how shadows, hairlines, tabular figures in
   Archivo and the motion curves look or feel on a device; contrast is by calculation.
+
+### Visual system v2 in the screens (ADR-008, **Proposed**; customer words PA-11, **Proposed**)
+
+Every customer screen is built from `src/ui` (no feature folder keeps its own sections, fields or
+choices). What a screen builder can rely on, and what each part promises:
+
+- **Imagery.** `Artwork` draws bundled webp art (`src/artwork/manifest.ts`, byte budgets in
+  `src/artwork/__tests__`), always hidden from screen readers, kept in memory once decoded,
+  decoded at its drawn size and keyed for list recycling. `MediaCard` (hero, tile, compact) puts
+  words over a picture only on `MediaScrim`: a gradient from `scrimStart` into `scrimEnd`
+  (expo-linear-gradient), then the words on `scrimEnd`; Home's greeting band uses the same scrim.
+  From font scale 1.3 the words move below the picture. In Legends mode Home's band is the night
+  one at every hour.
+- **Empty states.** `EmptyState` (or `QueryBoundary empty={{ ..., source }}`) with an illustration
+  that fits what is missing (`empty-home`, `empty-calendar`, `empty-teams`, `empty-cart`,
+  `empty-inbox`, `empty-search`, `empty-family`, `empty-payments` for payments only; `success` is
+  for outcomes, never for "nothing yet"). A page with several empty lists shows one empty state.
+- **Offline.** `Screen` draws the connectivity banner ("You are offline", the age of what is shown,
+  what needs a connection). Inside a `Screen`, a section's offline state is one quiet line with its
+  own age and needs ("Showing information from 5 minutes ago. Needs a connection: …"), never a second
+  card (`StateView`, `src/ui/offline-banner.ts`).
+- **Codes and support.** Decision, policy and requirement identifiers, error codes and references
+  appear only inside `SupportDetails` ("Details for support"). Text the API writes for staff is
+  shown in customer words and kept verbatim in the fold: eligibility reasons by their code
+  (`src/features/registration/eligibility-words.ts`), the price's standard terms
+  (`policy-words.ts`).
+- **Times.** A time is shown on the facility's clock with its zone named (SPK-SCHED-008): the
+  record's own zone, else the zone the app already holds from any answer that stated one
+  (`useKnownFacilityZone`, `src/features/today/known-zone.ts`, read from the query cache with no
+  request), else the device's zone with its abbreviation. Nothing is fixed to UTC.
+- **Controls.** `Sheet` (bottom sheet on devices, `Modal` in tests and on the web; focus moves to
+  its title and back to the control that opened it: pass `returnFocusTo`), `Select`, `DateField`,
+  `ChoiceList`/`ChoiceCard`, `Chip`/`ChipRow` (selected state exposed), `SegmentedControl` (radio or
+  tab state), `ProgressSteps` (read "Step 2 of 5, Options"), `SwitchRow` (light thumb in both
+  themes), `ListRow` (one element; no divider above the first row in a card; `spokenDetail` when
+  part of the line is drawn elsewhere), `StatTile` (`plain` inside another card), `Avatar` (initials
+  ignore brackets and punctuation) and `AvatarStack`, `StickyActionBar`, `Toast`, `Skeleton`,
+  `CommandError`, `SupportDetails`, `CapabilityGate`.
+- **Lists.** Explore, Calendar, Teams and the inbox render through `Screen`'s `list` or `sections`
+  mode (FlatList/SectionList). The other paged lists (payments, receipts, registrations, waitlists,
+  bookings, class packs, memberships, invitations) render each page of 20 inside the scrolling page
+  with "Load more"; moving them to `Screen` list mode is **Proposed** follow-up work (they sit in
+  card sections and behind `CapabilityGate`, so it is a layout change, not a swap).
+- **Verified** in jest (2026-11-16, 2,150 tests): the above behaviours, each with its own test;
+  200% text on Home, Explore, Pay and the Pass (`mockFontScale(2)`, `truncatedTexts`: the critical
+  words are on screen and nothing has a line limit); no internal code outside the support fold on
+  the Review step (`codesOutsideSupport`). **Looked at in a browser** (`pnpm demo --fresh --web` and
+  the screenshot harness, classic and Legends, 390×844 and 375×667): every fix above. A browser
+  render is not native acceptance (§6.2).
+- **Not verified** (needs devices and a native build, §6.2): VoiceOver and TalkBack reading order
+  and focus moves, Dynamic Type and Android font scale on real layouts, glass and blur, haptics,
+  sheet gestures and the native date and time pickers, `expo-image` decoding and memory on long
+  lists, and the Menlo / platform monospace face of the pass reference on each platform.
 
 ### What is verified
 
@@ -433,9 +492,27 @@ error` or `ChoiceList error` in `src/ui/ChoiceList.tsx`) or to each card (`Choic
 - **Paged lists and names.** `useApiPages({ path: '/me/bookings', request: { query: { limit } } })`
   with `QueryBoundary` and `<LoadMore pages={...} label="bookings" />`; names of people the screen
   has only ids for through `usePersonNames(ids)` (given name only for children).
+- **Customer words (PA-11, SPK-UX-011, Proposed).** Use the words of `src/copy/vocabulary.ts`
+  (cart, review, amount due, registration, activity, game, class pack, your share, family …). The
+  copy guard (`src/copy/__tests__/customer-words.test.ts`) parses every screen and fails on an
+  internal word or a code (`SCR-`, `SPK-`, `DEC-`, `POL-`, `PA-`, `§`) in customer text; its list
+  is empty and stays empty. It reads source only, so text the API builds at run time is checked on
+  the rendered screen with `codesOutsideSupport(screen)` (`src/testing/ui-surfaces.ts`). Put codes,
+  owners, error codes and references in `SupportDetails`.
+- **Pending decisions.** What a customer can do while a decision is open comes from
+  `src/copy/pending.ts` (`pendingMessage('DEC-019')`: "Pay at the front desk for now."), shown with
+  `StateView variant="pending-decision"` or an `InfoCard`, with the decision in `SupportDetails`.
+  Never write "pending" wording of your own.
+- **Failures.** Every command failure goes through `CommandError` (`src/ui/CommandError.tsx`, with
+  the `wording` of the screen); do not compose failure views by hand.
+- **Look.** One heading per idea: the screen's title is not repeated as the first heading (leave
+  `Section`'s `title` out instead). Empty lists use `EmptyState` with a fitting illustration. Words
+  over a picture only on `MediaScrim`. Times through the zone helpers above (never `Date.now()`, never
+  a fixed zone). Animation only through `useMotion()`. A sheet gets `returnFocusTo`.
 - **Privacy.** No child data in logs, analytics or URLs (§4.14); route parameters are opaque ids.
 - **Pending values.** A policy value or decision that is pending (decision register) comes from
-  configuration or is shown with `StateView variant="pending-decision"`; never hard-code one.
+  configuration or is shown with `StateView variant="pending-decision"` (its words from
+  `src/copy/pending.ts`); never hard-code one.
 - **Links.** Links from outside the app open only Home and `/link` (`app/+native-intent.tsx`); a new
   destination is added to the closed list in `src/links/link-targets.ts`, never as a new external route.
   Tokens from links stay in memory (`src/links/link-secrets.ts`), never in a route or storage, and
@@ -457,7 +534,11 @@ error` or `ChoiceList error` in `src/ui/ChoiceList.tsx`) or to each card (`Choic
   each failing poll of the latter prints the whole element, which takes seconds on a full screen.
   A held-back answer is a promise made before rendering, so releasing it never depends on when the
   screen sends the request. Announcements are asserted on
-  `AccessibilityInfo.announceForAccessibilityWithOptions` (the preset renders as iOS).
+  `AccessibilityInfo.announceForAccessibilityWithOptions` (the preset renders as iOS). The test
+  renderer's default font scale is 2 (200%); `mockFontScale(1)` for the default size. Sheets,
+  selects, date fields and folds are driven through `src/testing/ui.ts` and
+  `src/testing/ui-surfaces.ts` (`chooseInSheet`, `pickDate`, `openSupportDetails`,
+  `illustrationsOnScreen`, `truncatedTexts`), so a test says what the person does.
 
 ## Dependencies
 
