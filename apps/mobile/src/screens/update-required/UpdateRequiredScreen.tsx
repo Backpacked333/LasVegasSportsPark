@@ -10,12 +10,16 @@
  * reading while covered, and each read answers 426 again: the words never change, so a later answer
  * is not announced again, and the providers keep the first answer (its reference with it), so the
  * Android live region's content does not change either (R4-CLIENTS-A11Y-COPY-04).
+ *
+ * Wording (PA-11, ADR-008): plain words and what to do next. The request's reference stays in view
+ * (quietly, selectable to copy), because the live region's words must not change while it shows.
  */
 import type { UpdateRequiredError } from '@sportspark/api-client';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { makeStyles, spacing, type } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { makeStyles, spacing } from '../../ui/theme';
 
 /** What a screen reader hears when the update screen appears, with the next action. */
 export const UPDATE_REQUIRED_ANNOUNCEMENT = sentences(
@@ -40,16 +44,16 @@ export function UpdateRequiredScreen({
       testID="update-required"
     >
       <StatusBadge tone="danger" label="Update required" />
-      <Text style={styles.title} accessibilityRole="header">
+      <Text variant="title1" heading>
         This version of the app is no longer supported
       </Text>
-      <Text style={styles.body}>
+      <Text variant="body">
         You have version {appVersion}
         {error.minimumVersion ? `; version ${error.minimumVersion} or later is required` : ''}.
         Update the app from your device's app store to continue.
       </Text>
       {error.correlationId ? (
-        <Text style={styles.caption} selectable>
+        <Text variant="footnote" tone="muted" selectable>
           Reference: {error.correlationId}
         </Text>
       ) : null}
@@ -65,7 +69,4 @@ const useStyles = makeStyles(({ colors }) => ({
     gap: spacing.md,
     justifyContent: 'center',
   },
-  title: { ...type.title, color: colors.text },
-  body: { ...type.body, color: colors.text },
-  caption: { ...type.caption, color: colors.textMuted },
 }));

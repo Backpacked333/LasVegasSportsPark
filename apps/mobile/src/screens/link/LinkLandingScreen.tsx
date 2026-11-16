@@ -18,20 +18,28 @@
  * processing: not applicable; success: not applicable; partial completion: not permitted; recovery
  * required: not applicable, "Update required" covers the app when the API says the build is no
  * longer supported (UpdateGate, SPK-AT-027).
+ *
+ * Wording (PA-11, ADR-008): plain words; a failed request's code and reference are in the
+ * "Details for support" fold, and an operation that cannot be read offline shows the `offline`
+ * illustration over its state.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
+import { illustrations } from '../../artwork/manifest';
 import { holdLinkSecret } from '../../links/link-secrets';
 import { resolveLinkParams, type LinkResolution, type LinkTarget } from '../../links/link-targets';
+import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
+import { Artwork } from '../../ui/Artwork';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { SupportDetails } from '../../ui/SupportDetails';
 import type { StatusBadgeProps } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { formatDateTime } from '../account/components/account-data';
@@ -162,17 +170,31 @@ function OperationLanding({
     refetchInterval: polling ? 5_000 : false,
   });
   const status = operation.data?.status;
+  const { reachable } = useConnectivity();
   useEffect(() => {
     setPolling(status === 'pending' || status === 'running');
   }, [status]);
   return (
-    <QueryBoundary
-      query={operation}
-      label="the request"
-      empty={{ title: 'Nothing to show', description: '' }}
-    >
-      {(op) => <OperationState operation={op} navigate={navigate} />}
-    </QueryBoundary>
+    <View>
+      {reachable === false && operation.data === undefined ? (
+        // Nothing to show yet without a connection: the offline illustration over the state.
+        <View style={styles.art}>
+          <Artwork
+            source={illustrations.offline}
+            aspectRatio={4 / 3}
+            contentFit="contain"
+            testID="link-offline-art"
+          />
+        </View>
+      ) : null}
+      <QueryBoundary
+        query={operation}
+        label="the request"
+        empty={{ title: 'Nothing to show', description: '' }}
+      >
+        {(op) => <OperationState operation={op} navigate={navigate} />}
+      </QueryBoundary>
+    </View>
   );
 }
 
@@ -196,9 +218,9 @@ function OperationState({
       {operation.status === 'failed' && operation.error ? (
         <>
           <Paragraph>{operation.error.message}</Paragraph>
-          <Paragraph muted>
-            {`Error code: ${operation.error.code}${operation.correlationId ? `. Reference: ${operation.correlationId}` : ''}`}
-          </Paragraph>
+          <View style={styles.actions}>
+            <SupportDetails errorCode={operation.error.code} reference={operation.correlationId} />
+          </View>
           {/* An operation's error carries no next action, so the recovery is to contact support
               with the reference (SPK-UX-008). */}
           <View style={styles.actions}>
@@ -224,4 +246,5 @@ function OperationState({
 const styles = StyleSheet.create({
   body: { gap: spacing.md, paddingTop: spacing.md },
   actions: { paddingHorizontal: spacing.lg },
+  art: { alignSelf: 'center', width: '60%', maxWidth: 240, paddingTop: spacing.lg },
 });

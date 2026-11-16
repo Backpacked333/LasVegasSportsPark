@@ -19,6 +19,7 @@
  */
 import { useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
+import { pendingMessage } from '../../copy/pending';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
@@ -59,10 +60,11 @@ function RecoverSignedOut() {
         subject="Recovering your account from the app"
         decisions={['DEC-018']}
         owner="Technical lead/account owners"
+        message={pendingMessage('DEC-018')}
       />
       <Paragraph>
-        Until then, facility support staff can link your existing account to a new sign-in. Your
-        access stays exactly as it was; nothing new is added.
+        The front desk can link your existing account to a new sign-in. Your access stays exactly as
+        it was; nothing new is added.
       </Paragraph>
       <View style={styles.actions}>
         <Button label="Sign in" onPress={() => router.push('/sign-in')} />
@@ -112,7 +114,7 @@ function RestoredAccess() {
           )}
           <Paragraph muted>
             If something you expect is missing, ask the front desk. Access is never restored from
-            household membership alone.
+            being in a family alone.
           </Paragraph>
         </View>
       )}

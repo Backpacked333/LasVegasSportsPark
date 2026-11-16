@@ -48,8 +48,6 @@
   "src/screens/memberships/RenewMembership.tsx :: basket :: …e renewal to a new basket; nothing is charged until checko…",
   "src/screens/memberships/RenewMembership.tsx :: basket :: …ou choose to a new basket. Nothing is charged until you ch…",
 
-  "src/screens/onboarding/AccountRecoveryScreen.tsx :: household :: …. Access is never restored from household membership alone.",
-
   "src/screens/payments/OrderSections.tsx :: enrollment :: …do not change your enrollment: it stays confirmed while th…",
 
   "src/screens/payments/PaymentsScreen.tsx :: obligation :: Payments and obligations",

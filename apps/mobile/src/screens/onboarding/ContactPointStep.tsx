@@ -16,6 +16,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
+import { pendingMessage } from '../../copy/pending';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -86,6 +87,7 @@ export function ContactPointStep({ personId }: { personId: string }) {
         subject="Verifying an email or phone in the app"
         decisions={['DEC-018']}
         owner="Technical lead/account owners"
+        message={pendingMessage('DEC-018')}
       />
     </View>
   );
