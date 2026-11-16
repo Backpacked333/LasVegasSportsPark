@@ -5,28 +5,6 @@
   "src/navigation/RootNavigator.tsx :: fixture :: Fixture",
   "src/navigation/RootNavigator.tsx :: session package :: Session packages",
 
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Go to basket",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Open the basket",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Open the basket",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Opens the basket where this booking is paid",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Payment in progress: open the basket for its outcome",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: The basket's checkout completed. This booking shows it is p…",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: Your basket shows the price where your account may see it.",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: …d taxes and fees, and any deposit are shown in your basket.",
-  "src/screens/bookings/BookingDetailScreen.tsx :: basket :: …d's expiry cannot be shown right now; your basket shows it.",
-  "src/screens/bookings/BookingDetailScreen.tsx :: quote :: … and credits. Your quote at checkout gives the binding pri…",
-  "src/screens/bookings/BookingDetailScreen.tsx :: quote :: …t for part of this booking yet. Your quote shows the price.",
-
-  "src/screens/bookings/BookingFlowScreen.tsx :: POL- :: …booking terms yet (POL-040), so it cannot be booked. The f…",
-  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: Go to basket",
-  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: Holds the time and opens the payment step in your basket",
-  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: Opens the basket where this booking is paid",
-  "src/screens/bookings/BookingFlowScreen.tsx :: basket :: …u then pay in your basket, which shows the price, taxes an…",
-
-  "src/screens/bookings/CancelBooking.tsx :: basket :: Open the basket",
-  "src/screens/bookings/CancelBooking.tsx :: basket :: Open the basket",
-  "src/screens/bookings/CancelBooking.tsx :: basket :: … released and your basket is emptied. Nothing has been cha…",
-
   "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
   "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
 

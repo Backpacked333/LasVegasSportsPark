@@ -75,7 +75,7 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
         "Held until: Oct 24, 2026, 5:20 AM PDT. The facility's system releases the time then.",
       ),
     ).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Go to basket' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Go to cart' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${G.basket}`);
   });
 
@@ -148,12 +148,12 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
     expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
     // The hold itself says the payment is in progress and never asks to pay again.
     expect(
-      screen.getByLabelText('Payment in progress: open the basket for its outcome'),
+      screen.getByLabelText('Payment in progress: open your cart for its outcome'),
     ).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to cart' })).toBeNull();
     fireEvent.press(
       within(screen.getByTestId('cancel-payment-in-progress')).getByRole('button', {
-        name: 'Open the basket',
+        name: 'Open your cart',
       }),
     );
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${G.basket}`);
@@ -172,7 +172,7 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
       await openCancel();
       expect(
         await screen.findByText(
-          'The time held for you is released and your basket is emptied. Nothing has been charged for this booking.',
+          'The time saved for you is released and your cart is emptied. Nothing has been charged for this booking.',
         ),
       ).toBeOnTheScreen();
       await waitFor(() =>
@@ -199,7 +199,7 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
       await screen.findByLabelText('Payment received: this booking is being updated'),
     ).toBeOnTheScreen();
     expect(screen.queryByText('Pay to confirm')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to cart' })).toBeNull();
     // The booking reads `held` until the API records the payment: it is read again once.
     await waitFor(() =>
       expect(app.fake.requests.filter((r) => r.route === '/bookings/{id}')).toHaveLength(2),
@@ -223,7 +223,7 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
     expect(
       await screen.findByLabelText('The time held for this booking was released'),
     ).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to cart' })).toBeNull();
     await openCancel();
     expect(await screen.findByTestId('cancel-hold-ended')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Cancel booking' })).toBeDisabled();
@@ -246,7 +246,7 @@ describe('Package G BookingDetailScreen (SPK-COND-003)', () => {
         return fakeResponse(200, basket({ status: 'checking_out' }));
       },
     });
-    expect(await screen.findByRole('button', { name: 'Go to basket' })).toBeOnTheScreen();
+    expect(await screen.findByRole('button', { name: 'Go to cart' })).toBeOnTheScreen();
     await openCancel();
     // The cached basket says `held`, but the panel's own read has not answered yet.
     expect(await screen.findByText('Checking that no payment has started…')).toBeOnTheScreen();

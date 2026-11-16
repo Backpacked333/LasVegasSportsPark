@@ -29,7 +29,6 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect } from 'react';
 import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
-import { Body, ButtonRow, Caption, Field, Section } from '../../features/money/ui';
 import {
   bookingStatus,
   confirmationText,
@@ -55,6 +54,9 @@ import { makeStyles, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
 import { BookingRosterSection } from './BookingRosterSection';
 import { CancelBooking } from './CancelBooking';
+import { Section } from '../../ui/Section';
+import { FieldValue as Field } from '../../ui/Field';
+import { Text as UiText } from '../../ui/Text';
 
 /**
  * The hold and where its payment stands (`holdPaymentOf`): the basket to pay in while unpaid, the
@@ -96,12 +98,12 @@ function HoldSection({ booking, reload }: { booking: Booking; reload: () => void
           }
           testID="booking-hold-outcome"
         />
-        <Body>
+        <UiText variant="body">
           {paid
-            ? "The basket's checkout completed. This booking shows it is paid once the facility's system records the payment. Do not pay again."
+            ? "Your cart's checkout completed. This booking shows it is paid once the facility's system records the payment. Do not pay again."
             : 'The hold ended and this booking updates shortly.'}
-        </Body>
-        <ButtonRow>
+        </UiText>
+        <View style={buttonRow}>
           <Button
             label="Check again"
             onPress={checkAgain}
@@ -109,13 +111,13 @@ function HoldSection({ booking, reload }: { booking: Booking; reload: () => void
           />
           {paid ? (
             <Button
-              label="Open the basket"
+              label="Open your cart"
               variant="secondary"
               onPress={openBasket}
               accessibilityHint="Shows what the checkout paid for"
             />
           ) : null}
-        </ButtonRow>
+        </View>
       </Section>
     );
   }
@@ -130,24 +132,28 @@ function HoldSection({ booking, reload }: { booking: Booking; reload: () => void
           value={`${formatInstantIn(expires, zone.zone)}. The facility's system releases the time then.`}
         />
       ) : basket.error ? (
-        <Caption>The hold's expiry cannot be shown right now; your basket shows it.</Caption>
+        <UiText variant="caption" tone="muted">
+          When the time saved for you ends cannot be shown right now; your cart shows it.
+        </UiText>
       ) : null}
       {paying ? (
-        <StatusBadge tone="warning" label="Payment in progress: open the basket for its outcome" />
+        <StatusBadge tone="warning" label="Payment in progress: open your cart for its outcome" />
       ) : (
-        <Body>The price, approved taxes and fees, and any deposit are shown in your basket.</Body>
+        <UiText variant="body">
+          The price, approved taxes and fees, and any deposit are shown in your cart.
+        </UiText>
       )}
-      <ButtonRow>
+      <View style={buttonRow}>
         <Button
-          label={paying ? 'Open the basket' : 'Go to basket'}
+          label={paying ? 'Open your cart' : 'Go to cart'}
           onPress={openBasket}
           accessibilityHint={
             paying
               ? 'Shows the outcome of the payment'
-              : 'Opens the basket where this booking is paid'
+              : 'Opens the cart where this booking is paid'
           }
         />
-      </ButtonRow>
+      </View>
     </Section>
   );
 }
@@ -186,24 +192,26 @@ function BookingPrice({ basketId }: { basketId: string }) {
             onRetry={() => void price.refetch()}
             unavailable={{
               title: 'Price not available',
-              description: 'Your basket shows the price where your account may see it.',
+              description: 'Your cart shows the price where your account may see it.',
             }}
           />
         ) : (
           <StateView variant="loading" label="the price" />
         )
       ) : data.basis === 'unpriced' ? (
-        <Body>No price is set for part of this booking yet. Your quote shows the price.</Body>
+        <UiText variant="body">
+          No price is set for part of this booking yet. Your price summary shows the price.
+        </UiText>
       ) : (
         <>
           {basketPriceLines(data).map((l) => (
             <Field key={l.label} label={l.label} value={l.value} />
           ))}
-          <Caption>
+          <UiText variant="caption" tone="muted">
             {data.basis === 'order'
               ? 'From your order.'
-              : 'An estimate from the prices in effect now, before discounts and credits. Your quote at checkout gives the binding price.'}
-          </Caption>
+              : 'An estimate from the prices in effect now, before discounts and credits. Your price summary at checkout gives the binding price.'}
+          </UiText>
         </>
       )}
     </Section>
@@ -230,7 +238,7 @@ function BookingView({ booking, reload }: { booking: Booking; reload: () => void
         <Section title="Still to happen" testID="booking-outstanding">
           <View accessibilityRole="list">
             {outstanding.map((text) => (
-              <Body key={text}>{`• ${text}`}</Body>
+              <UiText variant="body" key={text}>{`• ${text}`}</UiText>
             ))}
           </View>
         </Section>
@@ -256,7 +264,11 @@ function BookingView({ booking, reload }: { booking: Booking; reload: () => void
             />
           ))}
         </View>
-        {notice ? <Caption>{notice}</Caption> : null}
+        {notice ? (
+          <UiText variant="caption" tone="muted">
+            {notice}
+          </UiText>
+        ) : null}
         {booking.guestCount !== null ? (
           <Field label="Guests" value={String(booking.guestCount)} />
         ) : null}
@@ -283,12 +295,12 @@ function BookingView({ booking, reload }: { booking: Booking; reload: () => void
 
       {booking.status === 'declined' && booking.decisionReason ? (
         <Section title="Why it was not approved">
-          <Body>{booking.decisionReason}</Body>
+          <UiText variant="body">{booking.decisionReason}</UiText>
         </Section>
       ) : null}
       {(booking.status === 'canceled' || booking.status === 'expired') && ended ? (
         <Section title={booking.status === 'canceled' ? 'Why it was canceled' : 'Why it expired'}>
-          <Body>{ended}</Body>
+          <UiText variant="body">{ended}</UiText>
         </Section>
       ) : null}
 
@@ -348,3 +360,5 @@ const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.sm },
   title: { ...type.title, color: colors.text },
 }));
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;

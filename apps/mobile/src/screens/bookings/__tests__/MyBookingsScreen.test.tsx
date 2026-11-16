@@ -13,7 +13,8 @@ import {
 } from '../../../features/money/testing/money-test-app';
 import { booking, G, ok, page, switchesOn } from '../../../features/package-g/__tests__/fixtures';
 import { MyBookingsScreen } from '../MyBookingsScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { activityArtwork } from '../../../artwork/manifest';
+import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -71,6 +72,29 @@ describe('Package G MyBookingsScreen (SPK-COND-003)', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(`/bookings/${G.booking}`);
     expect(listRequests(app)[0]?.query).toEqual({ limit: '20' });
     expect(screen.getByRole('button', { name: 'Find a rental or party' })).toBeOnTheScreen();
+  });
+
+  it('PA-11 ADR-008: each booking is a card with its picture (a rental, a party); pull to refresh reads the list again', async () => {
+    const app = createTestApp({
+      routes: {
+        ...switchesOn('rentals'),
+        'GET /me/bookings': ok(page([booking(), PARTY])),
+      },
+    });
+    render(<MyBookingsScreen />, { wrapper: app.wrapper });
+    await screen.findByRole('button', { name: HELD_ROW });
+    const rental = screen.getByTestId(`booking-${G.booking}`);
+    const party = screen.getByTestId(`booking-${G.bookingB}`);
+    expect(
+      within(rental).UNSAFE_getAllByProps({ source: activityArtwork['rental-field'].square })
+        .length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(party).UNSAFE_getAllByProps({ source: activityArtwork.party.square }).length,
+    ).toBeGreaterThan(0);
+    const before = listRequests(app).length;
+    await pullToRefresh(screen);
+    await waitFor(() => expect(listRequests(app).length).toBeGreaterThan(before));
   });
 
   it('§4.5: "Load more bookings" asks for the next page with the API cursor and keeps the first', async () => {
@@ -147,7 +171,7 @@ describe('Package G MyBookingsScreen (SPK-COND-003)', () => {
     expect(
       await screen.findByRole('header', { name: 'No rentals or parties yet' }),
     ).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Open Discover' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/discover');
   });
 

@@ -56,7 +56,7 @@ describe('booking price (GET /v1/basket-prices/{id})', () => {
     expect(within(section).queryByLabelText(/^Fees/)).toBeNull();
     expect(within(section).getByLabelText('Estimated total: $102.60')).toBeOnTheScreen();
     expect(
-      within(section).getByText(/Your quote at checkout gives the binding price/),
+      within(section).getByText(/Your price summary at checkout gives the binding price/),
     ).toBeOnTheScreen();
     expect(app.fake.requests.find((r) => r.route === '/basket-prices/{id}')?.params.id).toBe(
       G.basket,
@@ -102,7 +102,7 @@ describe('booking price (GET /v1/basket-prices/{id})', () => {
     });
     expect(
       await screen.findByText(
-        'No price is set for part of this booking yet. Your quote shows the price.',
+        'No price is set for part of this booking yet. Your price summary shows the price.',
       ),
     ).toBeOnTheScreen();
   });

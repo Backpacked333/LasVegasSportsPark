@@ -170,7 +170,7 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
       resourceIds: [G.court2],
     });
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
-    fireEvent.press(screen.getByRole('button', { name: 'Go to basket' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Go to cart' }));
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/basket/${G.basket}`);
   });
 
@@ -270,6 +270,10 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     const pending = screen.getByTestId('state-pending-decision');
     await openSupportDetails(within(pending));
     expect(within(pending).getByText(/DEC-029, DEC-030/)).toBeOnTheScreen();
+    // PA-11: the plain message for what to do now (DEC-029)
+    expect(
+      within(pending).getByText('Send your request and wait for the facility to approve it.'),
+    ).toBeOnTheScreen();
     // A party's length is the package's: the read names no duration.
     expect(availabilityReads(app)[0]?.query).toEqual({
       from: '2026-10-24T07:00:00.000Z',
@@ -283,7 +287,7 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(
       screen.getByText(/Nothing is reserved or charged until staff approve your request\./),
     ).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Go to basket' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to cart' })).toBeNull();
     expect(posts(app)[0]?.body).toEqual({
       offeringId: G.party,
       start: '2026-10-24T20:00:00.000Z',
@@ -549,8 +553,15 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     const app = renderFlow(
       rentalRoutes({ 'GET /offerings/{id}': ok(offering({ bookingTermsPolicyVersionId: null })) }),
     );
-    expect(await screen.findByLabelText('Not bookable yet')).toBeOnTheScreen();
-    expect(screen.getByText(/no approved booking terms yet \(POL-040\)/)).toBeOnTheScreen();
+    // PA-11: what to do now in plain words; the policy only in the fold
+    expect(
+      await screen.findByLabelText(
+        'Booking this activity in the app. Ask the front desk to book this for you.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByText(/POL-040/)).toBeNull();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: POL-040')).toBeOnTheScreen();
     expect(app.fake.requests.filter((r) => r.route === '/policy-versions/{id}')).toHaveLength(0);
   });
 

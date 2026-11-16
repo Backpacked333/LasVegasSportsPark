@@ -18,7 +18,7 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
 import { useApiRecords, type RecordState } from '../../features/money/records';
-import { Body, ButtonRow, Caption, ChoiceRow, Section } from '../../features/money/ui';
+import { ChoiceRow } from '../../features/money/ui';
 import { formatInstantIn } from '../../features/package-g/time';
 import type { PolicyVersion } from '../../features/package-g/booking-model';
 import { formWording, useFormsStatus } from '../../features/registration/forms';
@@ -27,6 +27,9 @@ import { Button } from '../../ui/Button';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
 
 function FormRow({
   policyVersionId,
@@ -70,9 +73,11 @@ function FormRow({
   };
   return (
     <View testID={`booking-form-${policyVersionId}`}>
-      <Body>{title}</Body>
+      <Text variant="body">{title}</Text>
       {formWording(version.data.content).map((text) => (
-        <Caption key={text}>{text}</Caption>
+        <Text variant="caption" tone="muted" key={text}>
+          {text}
+        </Text>
       ))}
       {signedAt ? (
         <StatusBadge tone="success" label={`Signed ${formatInstantIn(signedAt, zone)}`} />
@@ -96,14 +101,14 @@ function FormRow({
               }}
             />
           ) : null}
-          <ButtonRow>
+          <View style={buttonRow}>
             <Button
               label={`Sign ${title}`}
               onPress={() => void submit()}
               disabled={!agreed || offline}
               busy={sign.isProcessing}
             />
-          </ButtonRow>
+          </View>
         </>
       )}
     </View>
@@ -164,8 +169,12 @@ export function BookingForms({
   }
   return (
     <Section title="Required forms" testID="booking-forms">
-      <Caption>These forms must be signed before you book.</Caption>
+      <Text variant="caption" tone="muted">
+        These forms must be signed before you book.
+      </Text>
       {body}
     </Section>
   );
 }
+
+const buttonRow = { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm } as const;
