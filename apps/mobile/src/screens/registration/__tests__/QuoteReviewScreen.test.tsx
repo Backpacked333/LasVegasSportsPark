@@ -4,7 +4,7 @@
  * the server expiry, requotes for codes and credits (no amounts sent), and the SPK-UX-008 states.
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import {
   IDS,
   familyRoutes,
@@ -14,7 +14,7 @@ import {
   quoteLine,
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
-import { QuoteReviewScreen } from '../QuoteReviewScreen';
+import { QuoteReviewScreen, byPerson } from '../QuoteReviewScreen';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -68,8 +68,14 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
 
   it('SPK-PAY-002: explains each participant line, the totals, due now, expiry and policies', async () => {
     renderQuote({ routes: routes() });
-    expect(await screen.findByText('Ada: Autumn Youth Program')).toBeOnTheScreen();
-    expect(screen.getByText('Ben: Autumn Youth Program')).toBeOnTheScreen();
+    // ADR-008: the lines are grouped by person, under the person's name.
+    expect(await screen.findByRole('header', { name: 'For Ada' })).toBeOnTheScreen();
+    const ada = within(screen.getByTestId(`quote-person-${IDS.childA}`));
+    expect(ada.getByRole('header', { name: 'For Ada' })).toBeOnTheScreen();
+    expect(ada.getByText('Autumn Youth Program')).toBeOnTheScreen();
+    const ben = within(screen.getByTestId(`quote-person-${IDS.childB}`));
+    expect(ben.getByRole('header', { name: 'For Ben' })).toBeOnTheScreen();
+    expect(ben.getByText('Autumn Youth Program')).toBeOnTheScreen();
     expect(screen.getAllByLabelText('Sibling discount: -$12.00')).toHaveLength(2);
     expect(screen.getAllByText('10% off the second and later children.')).toHaveLength(2);
     expect(screen.getAllByLabelText('Facility fee: $5.00')).toHaveLength(2);
@@ -81,7 +87,9 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
     expect(screen.getByLabelText('Due now: $226.00')).toBeOnTheScreen();
     expect(screen.getByLabelText(/^Price valid until /)).toBeOnTheScreen();
     expect(
-      screen.getByText('A price does not hold a place. Places are held when you check out.'),
+      screen.getByText(
+        'This price does not save your spots. Your spots are saved when you check out.',
+      ),
     ).toBeOnTheScreen();
     expect(await screen.findByText('Cancellation: Program cancellation')).toBeOnTheScreen();
     expect(screen.getByText('• refund/compensation: refund (POL-009, DEC-009)')).toBeOnTheScreen();
@@ -146,7 +154,7 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
     renderQuote({
       routes: routes({ 'GET /registration-quotes/{id}': { status: 200, body } }),
     });
-    expect(await screen.findByText('Ada: Autumn Youth Program')).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'For Ada' })).toBeOnTheScreen();
     expect(screen.getByText('$24.00 per class × 7 classes = $168.00')).toBeOnTheScreen();
     expect(
       screen.getByText(
@@ -160,9 +168,45 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
 
   it('SPK-PAY-002: a plain term price has no extra explanation', async () => {
     renderQuote({ routes: routes() });
-    expect(await screen.findByText('Ada: Autumn Youth Program')).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'For Ada' })).toBeOnTheScreen();
     expect(screen.queryByText(/per class/)).not.toBeOnTheScreen();
     expect(screen.queryByText(/price applied/)).not.toBeOnTheScreen();
+  });
+
+  it("PA-11 ADR-008: Review is step 4, with each person's lines grouped under their name", async () => {
+    const adaPlace = quoteLine();
+    const benPlace = quoteLine({
+      id: '0192f1a0-0000-7000-8000-0000000000a2',
+      sequence: 2,
+      participantPersonId: IDS.childB,
+    });
+    const adaKit = quoteLine({
+      id: '0192f1a0-0000-7000-8000-0000000000a3',
+      sequence: 3,
+      description: 'Camp kit',
+    });
+    // The quote's order is kept within each person, and the people in order of first line.
+    expect(byPerson([adaPlace, benPlace, adaKit])).toEqual([
+      [IDS.childA, [adaPlace, adaKit]],
+      [IDS.childB, [benPlace]],
+    ]);
+    renderQuote({
+      routes: routes({
+        'GET /registration-quotes/{id}': {
+          status: 200,
+          body: quote({ lines: [adaPlace, benPlace, adaKit] }),
+        },
+      }),
+    });
+    expect(await screen.findByRole('header', { name: 'For Ada' })).toBeOnTheScreen();
+    expect(screen.getByLabelText('Step 4 of 5, Review')).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Price summary' })).toBeOnTheScreen();
+    const ada = within(screen.getByTestId(`quote-person-${IDS.childA}`));
+    expect(ada.getByTestId(`quote-line-${adaPlace.id}`)).toBeOnTheScreen();
+    expect(ada.getByTestId(`quote-line-${adaKit.id}`)).toBeOnTheScreen();
+    expect(ada.queryByTestId(`quote-line-${benPlace.id}`)).toBeNull();
+    const ben = within(screen.getByTestId(`quote-person-${IDS.childB}`));
+    expect(ben.getByTestId(`quote-line-${benPlace.id}`)).toBeOnTheScreen();
   });
 
   it('continues to checkout (SCR-C-14)', async () => {

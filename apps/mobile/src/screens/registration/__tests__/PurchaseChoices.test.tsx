@@ -514,13 +514,16 @@ describe('Tier, add-on and uniform lines on the basket, quote and receipt (SPK-P
       },
     });
     render(<QuoteReviewScreen quoteId={IDS.quote} />, { wrapper: app.wrapper });
-    expect(await screen.findByText('Ada: Autumn Youth Program: Two days')).toBeOnTheScreen();
+    // ADR-008: Ada's place, add-on and uniform are grouped under her name.
+    expect(await screen.findByRole('header', { name: 'For Ada' })).toBeOnTheScreen();
+    const ada = within(screen.getByTestId(`quote-person-${IDS.childA}`));
+    expect(ada.getByText('Autumn Youth Program: Two days')).toBeOnTheScreen();
     expect(screen.getByText('Two days: 2 days chosen')).toBeOnTheScreen();
-    expect(screen.getByText('Ada: Add-on: Lunch')).toBeOnTheScreen();
+    expect(ada.getByText('Add-on: Lunch')).toBeOnTheScreen();
     expect(screen.getByLabelText('2 × $9.00: $18.00')).toBeOnTheScreen();
     expect(screen.getByText('Chosen for 2 days')).toBeOnTheScreen();
     expect(screen.getByLabelText('Total for this add-on: $18.00')).toBeOnTheScreen();
-    expect(screen.getByText('Ada: Uniform: Club kit (YM)')).toBeOnTheScreen();
+    expect(ada.getByText('Uniform: Club kit (YM)')).toBeOnTheScreen();
     expect(screen.getByText('Size YM')).toBeOnTheScreen();
     expect(
       screen.getByText('Not charged: this uniform is already held (listed at $25.00).'),

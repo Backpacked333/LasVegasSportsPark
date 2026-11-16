@@ -70,8 +70,8 @@ describe('registration routes (SCR-C-07 to SCR-C-16)', () => {
 
   it.each([
     [`/registration/start/${IDS.offering}`, "Who's going?"],
-    [`/registration/basket/${IDS.basket}`, 'Your basket'],
-    [`/registration/quote/${IDS.quote}`, 'Your price'],
+    [`/registration/basket/${IDS.basket}`, 'Your cart'],
+    [`/registration/quote/${IDS.quote}`, 'Price summary'],
     [`/registration/forms?basketId=${IDS.basket}`, 'Required forms'],
     [`/registration/checkout/${IDS.quote}`, 'Checkout'],
     [`/registration/outcome/${IDS.checkout}`, 'Registration and payment'],

@@ -10,7 +10,7 @@ import {
   type FakeHandler,
   type FakeRequest,
 } from '@sportspark/api-client/testing';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import {
   IDS,
   acknowledgment,
@@ -24,6 +24,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { RequiredFormsScreen } from '../RequiredFormsScreen';
+import { openSheet } from '../../../testing/ui';
 import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
@@ -34,6 +35,14 @@ jest.mock('expo-router', () => ({
 
 const AGREE_ADA = 'I have read "Medical consent" and agree for Ada';
 const SIGN_ADA = 'Sign "Medical consent" for Ada';
+/** PA-11 ADR-008: each form opens in a "Read and sign" sheet with its wording. */
+const READ_ADA = 'Read and sign "Medical consent" for Ada';
+
+/** Opens a form's "Read and sign" sheet and returns it. */
+async function openForm(name = READ_ADA) {
+  fireEvent.press(await screen.findByRole('button', { name }));
+  return within(await waitFor(() => openSheet(screen)));
+}
 
 /** Acknowledgments the fake API holds, per participant. */
 function acknowledgmentsStore() {
@@ -70,8 +79,13 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     expect(await screen.findByRole('header', { name: 'Forms for Ada' })).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Forms for Ben' })).toBeOnTheScreen();
     expect(screen.getAllByText('Medical consent (version 2)')).toHaveLength(2);
-    expect(screen.getAllByText('Medical consent wording.')).toHaveLength(2);
     expect(await screen.findByLabelText('0 of 2 forms signed')).toBeOnTheScreen();
+    // The wording is read in the form's sheet, with its version.
+    expect(screen.queryByText('Medical consent wording.')).toBeNull();
+    const sheet = await openForm();
+    expect(sheet.getByRole('header', { name: 'Medical consent' })).toBeOnTheScreen();
+    expect(sheet.getByText('Version 2')).toBeOnTheScreen();
+    expect(sheet.getByText('Medical consent wording.')).toBeOnTheScreen();
     expect(
       screen.getByText(
         'You sign as yourself. A guardian signs for a child; staff never sign for you.',
@@ -91,6 +105,7 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
       }),
     });
     render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
+    await openForm();
     const sign = await screen.findByRole('button', { name: SIGN_ADA });
     expect(sign).toBeDisabled();
     fireEvent.press(screen.getByRole('checkbox', { name: AGREE_ADA }));
@@ -112,8 +127,11 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     expect(sent?.headers['idempotency-key']).toMatch(/^key-/);
     expect(await screen.findByLabelText(/^Signed on /)).toBeOnTheScreen();
     expect(await screen.findByLabelText('1 of 2 forms signed')).toBeOnTheScreen();
+    // Signing closes the sheet; Ben's form still waits to be read and signed.
+    expect(screen.queryByTestId('sheet')).toBeNull();
+    expect(screen.queryByRole('button', { name: READ_ADA })).toBeNull();
     expect(
-      screen.getByRole('button', { name: 'Sign "Medical consent" for Ben' }),
+      screen.getByRole('button', { name: 'Read and sign "Medical consent" for Ben' }),
     ).toBeOnTheScreen();
   });
 
@@ -131,6 +149,7 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     expect(
       await screen.findByLabelText('Needs a guardian who can complete forms'),
     ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: READ_ADA })).toBeNull();
     expect(screen.queryByRole('button', { name: SIGN_ADA })).toBeNull();
   });
 
@@ -147,6 +166,7 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
       }),
     });
     render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
+    await openForm();
     fireEvent.press(await screen.findByRole('checkbox', { name: AGREE_ADA }));
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: SIGN_ADA }));
@@ -168,6 +188,7 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
       }),
     });
     render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
+    await openForm();
     fireEvent.press(await screen.findByRole('checkbox', { name: AGREE_ADA }));
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: SIGN_ADA }));
@@ -180,6 +201,26 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     expect(screen.getByRole('checkbox', { name: AGREE_ADA })).toBeChecked();
   });
 
+  it('PA-11 ADR-008: Forms is step 3, and each form is read and signed in its own "Read and sign" sheet', async () => {
+    const app = createRegistrationTestApp({ routes: routes() });
+    render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
+    expect(await screen.findByLabelText('Step 3 of 5, Forms')).toBeOnTheScreen();
+    // Closed: no wording, no agreement and no Sign button on the page.
+    expect(screen.queryByRole('checkbox', { name: AGREE_ADA })).toBeNull();
+    expect(screen.queryByRole('button', { name: SIGN_ADA })).toBeNull();
+    const sheet = await openForm();
+    expect(sheet.getByText('Medical consent wording.')).toBeOnTheScreen();
+    fireEvent.press(sheet.getByRole('checkbox', { name: AGREE_ADA }));
+    // Closing without signing sends nothing and keeps the answer for next time.
+    fireEvent.press(sheet.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByTestId('sheet')).toBeNull();
+    const reopened = await openForm();
+    expect(reopened.getByRole('checkbox', { name: AGREE_ADA })).toBeChecked();
+    expect(reopened.getByRole('button', { name: SIGN_ADA })).toBeEnabled();
+    expect(app.fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    await app.settle();
+  });
+
   it('reads the forms of a waitlist offer from its offering', async () => {
     const app = createRegistrationTestApp({
       routes: routes({
@@ -190,6 +231,8 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     render(<RequiredFormsScreen waitlistEntryId={IDS.entry} />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'Forms for Ada' })).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Back to the waitlist offer' }));
+    // From a waitlist offer this is not a step of registering.
+    expect(screen.queryByTestId('registration-steps')).toBeNull();
     expect(mockRouter.push).toHaveBeenCalledWith(`/registration/waitlist/${IDS.entry}`);
   });
 
@@ -220,6 +263,7 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
   it('offline: the answer is kept and signing is disabled', async () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
+    await openForm();
     fireEvent.press(await screen.findByRole('checkbox', { name: AGREE_ADA }));
     act(() => app.sources.setReachable(false));
     expect(screen.getByRole('button', { name: SIGN_ADA })).toBeDisabled();

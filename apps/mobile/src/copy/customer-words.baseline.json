@@ -113,29 +113,12 @@
 
   "src/screens/payments/PaymentsScreen.tsx :: obligation :: Payments and obligations",
 
-  "src/screens/registration/BasketScreen.tsx :: basket :: A line in this basket needs approval by staff before you ca…",
-  "src/screens/registration/BasketScreen.tsx :: basket :: All places in this basket are confirmed together, or none a…",
-  "src/screens/registration/BasketScreen.tsx :: basket :: Basket",
-  "src/screens/registration/BasketScreen.tsx :: basket :: Nothing in your basket",
-  "src/screens/registration/BasketScreen.tsx :: basket :: Nothing in your basket",
-  "src/screens/registration/BasketScreen.tsx :: basket :: Remove … from the basket",
-  "src/screens/registration/BasketScreen.tsx :: basket :: The payment for this basket could not be looked up.",
-  "src/screens/registration/BasketScreen.tsx :: basket :: Your basket",
-  "src/screens/registration/BasketScreen.tsx :: basket :: your basket",
-  "src/screens/registration/BasketScreen.tsx :: basket :: your basket",
-  "src/screens/registration/BasketScreen.tsx :: basket :: …ce and checking out need a connection. Your basket is kept.",
-  "src/screens/registration/BasketScreen.tsx :: quote :: Your quote adds approved taxes and fees, discounts and cred…",
-
   "src/screens/registration/CheckoutScreen.tsx :: basket :: Back to your basket",
   "src/screens/registration/CheckoutScreen.tsx :: basket :: …d. Go back to your basket to start again or join a waitlis…",
   "src/screens/registration/CheckoutScreen.tsx :: quote :: Your quote has nothing due now.",
 
   "src/screens/registration/OfferingDetailScreen.tsx :: quote :: Your quote shows the final price for each participant, with…",
   "src/screens/registration/OfferingDetailScreen.tsx :: quote :: … a cancellation policy. Its wording is shown on your quote.",
-
-  "src/screens/registration/QuoteReviewScreen.tsx :: basket :: Back to your basket",
-
-  "src/screens/registration/RequiredFormsScreen.tsx :: basket :: Back to your basket",
 
   "src/screens/registration/WaitlistScreen.tsx :: basket :: Holds the place in a basket so you can pay",
 
