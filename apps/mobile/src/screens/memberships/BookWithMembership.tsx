@@ -24,7 +24,6 @@
  */
 import type { ApiError } from '@sportspark/api-client';
 import { useState } from 'react';
-import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandFailure } from '../../features/money/CommandFailure';
