@@ -1,11 +1,13 @@
 /**
- * SCR-C-30 Account (SPK-UX-002 "Account: Family, enrollments, payments, credits, forms,
- * preferences, support"; recovery required, §4.11), and the navigation into SCR-C-31, SCR-C-36,
- * SCR-C-17, SCR-C-01 and SCR-C-02.
+ * SCR-C-30 You (SPK-UX-002 as amended by PA-11, **Proposed**: "You: family, registrations,
+ * payments, credits, forms, preferences, support, grouped by topic"; recovery required, §4.11),
+ * and the navigation into SCR-C-31, SCR-C-36, SCR-C-17, SCR-C-01 and SCR-C-02.
  */
+import type { FakeHandler } from '@sportspark/api-client/testing';
 import { act, render, screen, waitFor, within } from '@testing-library/react-native';
 import { fireEvent, renderRouter, screen as routerScreen } from 'expo-router/testing-library';
 import { RootNavigator } from '../../../navigation/RootNavigator';
+import { basket, IDS, line } from '../../../features/registration/testing/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { AccountScreen } from '../AccountScreen';
 import { apiError, CHILD, me, namesRoute, ok, page, person } from './fixtures';
@@ -37,18 +39,31 @@ function recoveryCheckout() {
   };
 }
 
-const SECTION_TITLES = [
-  'Family and permissions',
-  'Enrollments and participation',
-  'Payments and obligations',
-  'Credits and makeup sessions',
-  'Forms and acknowledgments',
-  'Preferences',
-  'Support',
+/** The hub's groups and their rows, in order (Package G rows only with their switch on). */
+const GROUPS: readonly (readonly [string, readonly string[]])[] = [
+  ['Family', ['Family and permissions', 'Invitations']],
+  ['Bookings and plans', ['Registrations', 'Waitlists']],
+  ['Money', ['Payments', 'Credits and makeups']],
+  ['Forms', ['Forms and waivers']],
+  [
+    'Settings',
+    ['Notifications and calendar', 'Legends mode', 'Account setup', 'Access after recovery'],
+  ],
+  ['Help', ['Support']],
 ];
 
+const SECTION_TITLES = GROUPS.flatMap(([, rows]) => rows).filter((t) => t !== 'Legends mode');
+
+/** The names of the rows (buttons and switches) inside a group's list, in order. */
+function rowNames(group: string): string[] {
+  const list = screen.getByLabelText(group);
+  return within(list)
+    .queryAllByRole(/^(button|switch)$/)
+    .map((el) => String(el.props.accessibilityLabel).split(', ')[0] ?? '');
+}
+
 describe('SCR-C-30 AccountScreen', () => {
-  it('SPK-UX-002: lists the hub sections in order, and every one opens its screen', async () => {
+  it('PA-11 SPK-UX-002: groups the hub rows by topic, in order, and every one opens its screen', async () => {
     const app = createTestApp({
       routes: {
         'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
@@ -58,29 +73,22 @@ describe('SCR-C-30 AccountScreen', () => {
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
     expect(await screen.findByLabelText('Alex Morgan, Signed in, Linked')).toBeOnTheScreen();
-    const ids = [
-      'SCR-C-31',
-      'SCR-C-32',
-      'SCR-C-34',
-      'SCR-C-35',
-      'SCR-C-13',
-      'SCR-C-36',
-      'SCR-C-38',
-    ];
-    ids.forEach((id, index) => {
-      const row = screen.getByTestId(`account-section-${id}`);
-      expect(row.props.accessibilityLabel).toMatch(new RegExp(`^${SECTION_TITLES[index]}`));
-    });
+    // The groups are headers, in order, and each lists its rows in order.
+    expect(screen.getAllByRole('header').map((h) => String(h.props.children))).toEqual(
+      GROUPS.map(([group]) => group),
+    );
+    for (const [group, rows] of GROUPS) expect(rowNames(group)).toEqual(rows);
     const family = screen.getByRole('button', {
       name: 'Family and permissions, You may act for 1 person',
     });
     expect(family).toHaveProp('accessibilityHint', 'Opens Family and permissions');
-    expect(screen.getByRole('button', { name: 'Preferences' })).toBeOnTheScreen();
     for (const title of [
-      'Enrollments and participation',
-      'Payments and obligations',
-      'Credits and makeup sessions',
-      'Forms and acknowledgments',
+      'Registrations',
+      'Waitlists',
+      'Payments',
+      'Credits and makeups',
+      'Forms and waivers',
+      'Notifications and calendar',
       'Support',
     ]) {
       expect(screen.getByRole('button', { name: title })).toHaveProp(
@@ -92,13 +100,10 @@ describe('SCR-C-30 AccountScreen', () => {
     expect(
       screen.getByRole('button', { name: 'Invitations, Open invitations you received' }),
     ).toBeOnTheScreen();
-    expect(
-      screen.getByLabelText(
-        "Account deletion and data requests. This isn't available in the app yet.",
-      ),
-    ).toBeOnTheScreen();
-    await openSupportDetails(screen);
-    expect(screen.getByText('Decision: DEC-059')).toBeOnTheScreen();
+    // Account deletion and data requests (DEC-059) are not offered, and not shown.
+    expect(screen.queryByLabelText(/Account deletion/)).toBeNull();
+    expect(screen.queryByText(/DEC-059/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeOnTheScreen();
   });
 
   it('SPK-IAM-005: the Family row counts a person whose every grant is paused, as Family lists them, never "No family members yet"', async () => {
@@ -201,7 +206,7 @@ describe('SCR-C-30 AccountScreen', () => {
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Preferences' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Notifications and calendar' })).toBeOnTheScreen();
   });
 
   it('empty (new account): asks to finish setting up and holds back sections that need a linked record', async () => {
@@ -231,7 +236,7 @@ describe('SCR-C-30 AccountScreen', () => {
     expect(screen.getByLabelText('Alex Morgan, Signed in, Linked')).toBeOnTheScreen();
   });
 
-  it('Legends mode (SPK-UX-009): the switch opens the page, signed in, and turns the hub dark at once', async () => {
+  it('Legends mode (SPK-UX-009): the switch sits under Settings, signed in, and turns the hub dark at once', async () => {
     const app = createTestApp({
       routes: {
         'GET /me': ok(me({})),
@@ -240,9 +245,14 @@ describe('SCR-C-30 AccountScreen', () => {
       },
     });
     render(<AccountScreen />, { wrapper: app.wrapper });
-    const toggle = screen.getByRole('switch', { name: 'Legends mode' });
-    expect(toggle).not.toBeChecked();
     await screen.findByLabelText('Alex Morgan, Signed in, Linked');
+    // Once, in Settings, described as the app's appearance.
+    expect(screen.getAllByRole('switch', { name: 'Legends mode' })).toHaveLength(1);
+    const toggle = within(screen.getByLabelText('Settings')).getByRole('switch', {
+      name: 'Legends mode',
+    });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveProp('accessibilityHint', 'Appearance: a dark look with gold accents');
     fireEvent.press(toggle);
     expect(screen.getByRole('switch', { name: 'Legends mode' })).toBeChecked();
     expect(app.themeStore.read()).toBe('legends');
@@ -256,6 +266,7 @@ describe('SCR-C-30 AccountScreen', () => {
     const app = createTestApp({ session: null });
     render(<AccountScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+    expect(screen.getByRole('header', { name: 'Appearance' })).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('switch', { name: 'Legends mode' }));
     expect(screen.getByRole('switch', { name: 'Legends mode' })).toBeChecked();
     expect(app.fake.requests).toHaveLength(0);
@@ -272,13 +283,16 @@ describe('SCR-C-30 AccountScreen', () => {
     await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
+    // The display preference stays on offer while the account cannot be read.
+    expect(screen.getByRole('switch', { name: 'Legends mode' })).toBeOnTheScreen();
   });
 });
 
 describe('SCR-C-30 navigation into the account screens', () => {
-  function renderApp(initialUrl = '/account') {
+  function renderApp(initialUrl = '/account', extra: Record<string, FakeHandler> = {}) {
     const app = createTestApp({
       routes: {
+        ...extra,
         'GET /me': ok(me({ authorities: [{ subjectPersonId: CHILD, permissions: ['view'] }] })),
         'GET /person-names': namesRoute([person(CHILD, 'Sam', 'Morgan', 'child')]),
         'GET /me/communication-preferences': ok({ personId: CHILD, preferences: [] }),
@@ -316,13 +330,37 @@ describe('SCR-C-30 navigation into the account screens', () => {
     expect(await routerScreen.findByTestId('person-access-0')).toBeOnTheScreen();
   });
 
-  it('opens Preferences from Account', async () => {
+  it('opens Notifications and calendar (SCR-C-36 Preferences) from You', async () => {
     const { router } = renderApp();
-    fireEvent.press(await routerScreen.findByRole('button', { name: 'Preferences' }));
+    fireEvent.press(
+      await routerScreen.findByRole('button', { name: 'Notifications and calendar' }),
+    );
     expect(router.getPathname()).toBe('/preferences');
     expect(
       await routerScreen.findByRole('header', { name: 'Essential notices' }),
     ).toBeOnTheScreen();
+  });
+
+  it('PA-11 SPK-UX-002: shows Cart under "Bookings and plans" only while a registration is in progress, and opens it', async () => {
+    const done = renderApp('/account', {
+      'GET /me/baskets': page([basket({ status: 'fulfilled', lines: [line()] })]),
+    });
+    await routerScreen.findByLabelText('Alex Morgan, Signed in, Linked');
+    await waitFor(() =>
+      expect(done.app.fake.requests.some((r) => r.route === '/me/baskets')).toBe(true),
+    );
+    expect(routerScreen.queryByTestId('account-cart')).toBeNull();
+    done.router.unmount();
+
+    const { router } = renderApp('/account', {
+      'GET /me/baskets': page([basket({ lines: [line()] })]),
+    });
+    const cart = await routerScreen.findByRole('button', {
+      name: 'Cart, The registration you started',
+    });
+    expect(rowNames('Bookings and plans')).toEqual(['Registrations', 'Waitlists', 'Cart']);
+    fireEvent.press(cart);
+    expect(router.getPathname()).toBe(`/registration/basket/${IDS.basket}`);
   });
 
   it('opens Invitations from Account (SCR-C-17)', async () => {
@@ -338,11 +376,9 @@ describe('SCR-C-30 navigation into the account screens', () => {
     ).toBeOnTheScreen();
   });
 
-  it('opens Forms and acknowledgments from Account (SCR-C-13 signed forms)', async () => {
+  it('opens Forms and waivers from You (SCR-C-13 signed forms)', async () => {
     const { router } = renderApp();
-    fireEvent.press(
-      await routerScreen.findByRole('button', { name: /^Forms and acknowledgments/ }),
-    );
+    fireEvent.press(await routerScreen.findByRole('button', { name: 'Forms and waivers' }));
     expect(router.getPathname()).toBe('/forms');
     expect((await routerScreen.findAllByRole('header', { name: 'No forms signed' })).length).toBe(
       2,
@@ -350,13 +386,17 @@ describe('SCR-C-30 navigation into the account screens', () => {
   });
 
   it.each([
-    [/^Account setup/, '/onboarding'],
-    [/^Access after recovery/, '/recovery'],
-    [/^Enrollments and participation/, '/enrollments'],
-    [/^Payments and obligations/, '/payments'],
-    [/^Credits and makeup sessions/, '/credits'],
-    [/^Support/, '/support'],
-  ])('opens %s from Account (%s)', async (name, path) => {
+    ['Account setup, Your participant record and verified email or phone', '/onboarding'],
+    [
+      'Access after recovery, What this account may access, and what recovery restores',
+      '/recovery',
+    ],
+    ['Registrations', '/enrollments'],
+    ['Waitlists', '/registration/waitlists'],
+    ['Payments', '/payments'],
+    ['Credits and makeups', '/credits'],
+    ['Support', '/support'],
+  ])('opens "%s" from You (%s)', async (name, path) => {
     const { router } = renderApp();
     fireEvent.press(await routerScreen.findByRole('button', { name }));
     expect(router.getPathname()).toBe(path);
