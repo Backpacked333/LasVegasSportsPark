@@ -27,12 +27,14 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
 import { makeStyles, radius, spacing } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
-import { ChoiceGroup, Paragraph, TextField } from '../account/components/forms';
 
 type CareNote = Schema<'CareNote'>;
 type CareNoteKind = CareNote['kind'];
@@ -82,7 +84,7 @@ export function CareNotes({
   });
   return (
     <View style={styles.box} testID={`care-notes-${personId}`}>
-      <Paragraph inset={false}>{NOT_MEDICAL}</Paragraph>
+      <Text variant="body">{NOT_MEDICAL}</Text>
       <QueryBoundary
         query={notes}
         label="care notes"
@@ -92,11 +94,11 @@ export function CareNotes({
       >
         {(data) => (
           <View>
-            <Paragraph inset={false} muted>
+            <Text variant="body" tone="muted">
               {`Seen by ${personName === 'you' ? 'you, adults you allow to view your record' : `you, other adults allowed to view ${personName}`}, and ${rolesText(data.visibleToRoles)}. Every time the notes are read, it is recorded.`}
-            </Paragraph>
+            </Text>
             {data.notes.length === 0 ? (
-              <Paragraph inset={false}>No care notes.</Paragraph>
+              <Text variant="body">No care notes.</Text>
             ) : (
               <View accessibilityRole="list">
                 {data.notes.map((note) => (
@@ -206,9 +208,9 @@ function RetireCareNote({
         />
       </View>
       {offline ? (
-        <Paragraph inset={false} muted>
+        <Text variant="body" tone="muted">
           Retiring a note needs a connection.
-        </Paragraph>
+        </Text>
       ) : null}
       {retire.error ? (
         <CommandError
@@ -287,7 +289,8 @@ function AddCareNote({ personId }: { personId: string }) {
   }
   return (
     <View style={styles.form} testID={`add-care-note-${personId}`}>
-      <ChoiceGroup<CareNoteKind>
+      <ChoiceList<CareNoteKind>
+        mode="single"
         label="Kind of note"
         options={KIND_OPTIONS}
         value={kind}
@@ -297,7 +300,7 @@ function AddCareNote({ personId }: { personId: string }) {
         }}
         disabled={record.isProcessing}
       />
-      {attempted && kindError ? <Paragraph inset={false}>{`✕ ${kindError}`}</Paragraph> : null}
+      {attempted && kindError ? <Text variant="body">{`✕ ${kindError}`}</Text> : null}
       <TextField
         label="What staff need to know"
         hint="For example: Peanut allergy, EpiPen in the front pocket of the bag. Not a diagnosis or medical advice."
@@ -330,9 +333,9 @@ function AddCareNote({ personId }: { personId: string }) {
         />
       </View>
       {offline ? (
-        <Paragraph inset={false} muted>
+        <Text variant="body" tone="muted">
           Adding a care note needs a connection.
-        </Paragraph>
+        </Text>
       ) : null}
       {record.error ? (
         <CommandError

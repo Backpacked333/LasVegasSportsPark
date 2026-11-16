@@ -17,12 +17,14 @@ import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import { ME_QUERY_KEY, permissionLabel } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
-import { ChoiceGroup, Paragraph, TextField } from '../account/components/forms';
 import { grantStatusLabel, type GrantView } from './grants';
 
 export const ACCESS_GRANTS_KEY = ['api', '/me/access-grants'] as const;
@@ -80,7 +82,7 @@ export function GiveUpPermission({
         announcement={sentences('Permission given up', done)}
       >
         <StatusBadge tone="neutral" label="Permission given up" />
-        <Paragraph inset={false}>{done}</Paragraph>
+        <Text variant="body">{done}</Text>
         <Button label="Done" variant="secondary" onPress={onClose} />
       </LiveRegion>
     );
@@ -88,10 +90,11 @@ export function GiveUpPermission({
 
   return (
     <View style={styles.box} testID="give-up-form">
-      <Paragraph inset={false}>
+      <Text variant="body">
         {`Give up one of your permissions for ${personName}. It ends at once; getting it back needs a new invitation or the front desk.`}
-      </Paragraph>
-      <ChoiceGroup<string>
+      </Text>
+      <ChoiceList<string>
+        mode="single"
         label="Permission to give up"
         value={grantId}
         onChange={(next) => {
@@ -104,7 +107,7 @@ export function GiveUpPermission({
           value: g.grantId,
           label: permissionLabel(g.permission),
           // In effect now needs no note; a later or paused grant says which it is.
-          detail:
+          description:
             g.status === 'effective' && !g.underReview ? undefined : grantStatusLabel(g).label,
         }))}
       />
@@ -137,9 +140,9 @@ export function GiveUpPermission({
         />
       </View>
       {offline ? (
-        <Paragraph muted inset={false}>
+        <Text variant="body" tone="muted">
           Giving up a permission needs a connection.
-        </Paragraph>
+        </Text>
       ) : null}
       {revoke.error ? (
         <CommandError

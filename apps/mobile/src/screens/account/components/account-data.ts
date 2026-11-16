@@ -48,7 +48,7 @@ export const GRANT_PERMISSIONS: readonly {
   {
     permission: 'complete_forms',
     label: 'Complete forms',
-    detail: 'Sign forms and acknowledgments',
+    detail: 'Sign forms and waivers',
   },
   { permission: 'collect', label: 'Collect', detail: 'Collect from supervised sessions (pickup)' },
 ];

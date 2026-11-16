@@ -17,13 +17,15 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiPages } from '../../api/useApiPages';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { TextField } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
 import { listPermissions } from '../account/components/account-data';
 import { CommandError } from '../account/components/CommandError';
-import { Paragraph, SectionHeader, TextField } from '../account/components/forms';
 import {
   INVITATION_KEYS,
   invitationStatus,
@@ -55,11 +57,11 @@ export function SentInvitationsSection() {
     request: { query: { direction: 'sent', limit: 20 } },
   });
   return (
-    <View>
-      <SectionHeader
-        title="Invitations you sent"
-        detail="An open invitation can be withdrawn until it is answered."
-      />
+    <Section
+      title="Invitations you sent"
+      subtitle="An open invitation can be withdrawn until it is answered."
+      variant="plain"
+    >
       <QueryBoundary
         query={sent}
         label="invitations you sent"
@@ -79,7 +81,7 @@ export function SentInvitationsSection() {
         )}
       </QueryBoundary>
       <LoadMore pages={sent} label="invitations" />
-    </View>
+    </Section>
   );
 }
 
@@ -173,10 +175,10 @@ function SentInvitationRow({ invitation }: { invitation: InvitationView }) {
       {revoke.error ? (
         <>
           {revoke.error.isStale ? (
-            <Paragraph muted>
+            <Text variant="body" tone="muted">
               This invitation changed since it was shown: it may have been answered, or withdrawn on
               another device.
-            </Paragraph>
+            </Text>
           ) : null}
           <CommandError
             error={revoke.error}
@@ -196,6 +198,6 @@ function SentInvitationRow({ invitation }: { invitation: InvitationView }) {
 }
 
 const styles = StyleSheet.create({
-  inset: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
+  inset: { paddingVertical: spacing.sm, gap: spacing.sm },
   form: { gap: spacing.sm, paddingTop: spacing.sm },
 });

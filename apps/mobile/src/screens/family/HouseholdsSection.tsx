@@ -1,5 +1,6 @@
 /**
- * SCR-C-31 households (SPK-IAM-001 "Households group people for billing, communication and
+ * SCR-C-31 family groups, the API's households (PA-11: customers see "family group", never
+ * "household"; SPK-IAM-001 "Households group people for billing, communication and
  * convenience, but household membership alone must not grant authority", §4.5, §4.14):
  * `GET /v1/me/households` lists the households this person belongs to, with the members they may
  * view (themselves and people they hold `view` over) named and the others only counted. The screen
@@ -23,17 +24,21 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { TextField } from '../../ui/Field';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { makeStyles, radius, spacing, type } from '../../ui/theme';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import { spacing } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
-import { ChoiceGroup, Paragraph, SectionHeader, TextField } from '../account/components/forms';
 
 type MyHousehold = Schema<'MyHousehold'>;
 type Member = MyHousehold['members'][number];
@@ -57,7 +62,7 @@ export function otherMembersText(count: number): string | null {
   return `${count} other ${count === 1 ? 'member is' : 'members are'} not shown, because you do not have permission to view them.`;
 }
 
-const GRANTS_NOTHING = 'Being in a household gives nobody any permission.';
+const GRANTS_NOTHING = 'Being in a family group gives nobody any permission.';
 
 export function HouseholdsSection({ candidates }: { candidates: readonly HouseholdCandidate[] }) {
   const households = useApiQuery({ path: '/me/households' });
@@ -68,25 +73,25 @@ export function HouseholdsSection({ candidates }: { candidates: readonly Househo
   const mayAdd = Boolean(permissions.actionPermission('identity.add_household_member'));
   const emptyDescription =
     createPermission === undefined
-      ? 'Households you belong to appear here.'
+      ? 'Family groups you belong to appear here.'
       : mayCreate
         ? 'You can create one below.'
-        : 'The front desk can group your family into a household.';
+        : 'The front desk can put your family into a group.';
   return (
-    <View>
-      <SectionHeader
-        title="Households"
-        detail={`A household groups people for billing and messages. ${GRANTS_NOTHING}`}
-      />
+    <Section
+      title="Family groups"
+      subtitle={`A family group puts people together for billing and messages. ${GRANTS_NOTHING}`}
+      variant="plain"
+    >
       <QueryBoundary
         query={households}
-        label="your households"
+        label="your family groups"
         isEmpty={(data) => data.items.length === 0}
-        empty={{ title: 'No household yet', description: emptyDescription }}
-        unavailableOffline={['creating a household', 'adding someone to a household']}
+        empty={{ title: 'No family group yet', description: emptyDescription }}
+        unavailableOffline={['creating a family group', 'adding someone to a family group']}
       >
         {(data) => (
-          <View>
+          <View style={styles.cards}>
             {data.items.map((household) => (
               <HouseholdCard
                 key={household.id}
@@ -98,7 +103,7 @@ export function HouseholdsSection({ candidates }: { candidates: readonly Househo
         )}
       </QueryBoundary>
       {mayCreate ? <CreateHousehold /> : null}
-    </View>
+    </Section>
   );
 }
 
@@ -110,23 +115,31 @@ function HouseholdCard({
   /** People who may be added (empty when adding is not offered). */
   candidates: readonly HouseholdCandidate[];
 }) {
-  const styles = useStyles();
   const [adding, setAdding] = useState(false);
   const others = otherMembersText(household.otherMemberCount);
   const addable = candidates.filter(
     (c) => !household.members.some((m) => m.personId === c.personId),
   );
   return (
-    <View style={styles.card} testID={`household-${household.id}`}>
-      <Text style={styles.title} accessibilityRole="header">
+    <Card testID={`household-${household.id}`}>
+      <Text variant="title3" heading>
         {household.name}
       </Text>
       <View accessibilityRole="list" accessibilityLabel={`Members of ${household.name}`}>
         {household.members.map((member) => (
-          <ListRow key={member.personId} title={member.displayName} detail={memberDetail(member)} />
+          <ListRow
+            key={member.personId}
+            title={member.displayName}
+            detail={memberDetail(member)}
+            avatar={{ name: member.displayName, id: member.personId }}
+          />
         ))}
       </View>
-      {others ? <Paragraph muted>{others}</Paragraph> : null}
+      {others ? (
+        <Text variant="body" tone="muted">
+          {others}
+        </Text>
+      ) : null}
       {addable.length > 0 && !adding ? (
         <View style={styles.inset}>
           <Button
@@ -139,7 +152,7 @@ function HouseholdCard({
       {adding ? (
         <AddMember household={household} candidates={addable} onClose={() => setAdding(false)} />
       ) : null}
-    </View>
+    </Card>
   );
 }
 
@@ -154,7 +167,6 @@ function AddMember({
   candidates: readonly HouseholdCandidate[];
   onClose: () => void;
 }) {
-  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const [personId, setPersonId] = useState<string | null>(candidates[0]?.personId ?? null);
@@ -186,8 +198,9 @@ function AddMember({
 
   return (
     <View style={styles.form} testID={`household-add-${household.id}`}>
-      <Paragraph>{`Adding someone to ${household.name} does not change anyone's permissions.`}</Paragraph>
-      <ChoiceGroup<string>
+      <Text variant="body">{`Adding someone to ${household.name} does not change anyone's permissions.`}</Text>
+      <ChoiceList<string>
+        mode="single"
         label="Person to add"
         value={personId}
         onChange={(next) => {
@@ -199,7 +212,7 @@ function AddMember({
       />
       <TextField
         label="How they are related (optional)"
-        hint="Shown next to their name in this household."
+        hint="Shown next to their name in this family group."
         value={label}
         onChangeText={(next) => {
           setLabel(next);
@@ -236,7 +249,7 @@ function AddMember({
           }}
           notFound={{
             title: 'Not available',
-            description: 'This person or household is not available to you.',
+            description: 'This person or family group is not available to you.',
           }}
           denied={{ title: 'You cannot add this person', description: add.error.message }}
         />
@@ -246,7 +259,6 @@ function AddMember({
 }
 
 function CreateHousehold() {
-  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const [open, setOpen] = useState(false);
@@ -254,7 +266,7 @@ function CreateHousehold() {
   const [attempted, setAttempted] = useState(false);
   const create = useApiCommand('post', '/households', { invalidate: [HOUSEHOLDS_KEY] });
   const sent = useRef<{ name: string } | null>(null);
-  const nameError = name.trim().length === 0 ? 'Give the household a name.' : null;
+  const nameError = name.trim().length === 0 ? 'Give the family group a name.' : null;
 
   const send = async (request: { name: string }) => {
     sent.current = request;
@@ -278,7 +290,7 @@ function CreateHousehold() {
     return (
       <View style={styles.inset}>
         <Button
-          label="Create a household"
+          label="Create a family group"
           variant="secondary"
           onPress={() => setOpen(true)}
           disabled={offline}
@@ -289,9 +301,9 @@ function CreateHousehold() {
   }
   return (
     <View style={styles.form} testID="household-create">
-      <Paragraph>{`You become the household's first member. ${GRANTS_NOTHING}`}</Paragraph>
+      <Text variant="body">{`You become the group's first member. ${GRANTS_NOTHING}`}</Text>
       <TextField
-        label="Household name"
+        label="Family group name"
         value={name}
         onChangeText={(next) => {
           setName(next);
@@ -304,7 +316,7 @@ function CreateHousehold() {
       />
       <View style={styles.inset}>
         <Button
-          label="Create household"
+          label="Create family group"
           onPress={submit}
           busy={create.isProcessing}
           disabled={offline}
@@ -328,25 +340,18 @@ function CreateHousehold() {
           onRetry={() => {
             if (sent.current) void send(sent.current);
           }}
-          denied={{ title: 'You cannot create a household', description: create.error.message }}
+          denied={{
+            title: 'You cannot create a family group',
+            description: create.error.message,
+          }}
         />
       ) : null}
     </View>
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  card: {
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.md,
-    paddingVertical: spacing.md,
-    gap: spacing.xs,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.background,
-  },
-  title: { ...type.heading, color: colors.text, paddingHorizontal: spacing.lg },
-  inset: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
+const styles = {
+  cards: { gap: spacing.md },
+  inset: { paddingVertical: spacing.sm, gap: spacing.sm },
   form: { gap: spacing.sm, paddingTop: spacing.sm },
-}));
+} as const;

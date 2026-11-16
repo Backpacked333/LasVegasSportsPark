@@ -24,6 +24,13 @@
  * (DEC-075, DEC-005); the other adults' permissions over the people one manages are not readable
  * (DEC-004) and ending another adult's access is DEC-089.
  *
+ * Layout (PA-11, ADR-008 visual system v2): person cards first (avatar, name, the permissions
+ * one by one, then "Invite an adult", care notes and giving up a permission); "Invite an adult"
+ * opens its form in a `Sheet`. Then your care notes, family groups (the API's households),
+ * invitations you sent, who can act for you and claiming a record. What waits on a decision is
+ * last, each in plain words (`src/copy/pending.ts`) with its codes in "Details for support". The
+ * empty state has the family illustration. Pull to refresh reads everything again.
+ *
  * States: loading; empty (no family members); ready; validation failure (form fields, API
  * VALIDATION_FAILED); permission restriction (a permission the parent does not hold cannot be
  * passed on; PARTICIPANT_AUTHORITY_REQUIRED shown with its reason; a grant paused by a review shows
@@ -34,20 +41,27 @@
  * with its code and "Try again"; recovery required: not applicable, a failed command shows "Try
  * again" under the same key.
  */
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { usePersonNames, type PersonNameEntry } from '../../api/person-names';
 import { useApiPages } from '../../api/useApiPages';
+import { illustrations } from '../../artwork/manifest';
+import { pendingMessage, pendingMessageFor } from '../../copy/pending';
 import { useLinkSecret } from '../../links/useLinkSecret';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { EmptyState } from '../../ui/EmptyState';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { Section } from '../../ui/Section';
+import { Sheet } from '../../ui/Sheet';
 import { StateView } from '../../ui/StateView';
-import { spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, spacing } from '../../ui/theme';
 import {
   personDisplayName,
   useMe,
@@ -55,7 +69,6 @@ import {
   type MeData,
 } from '../account/components/account-data';
 import { ClaimForm } from '../account/components/ClaimForm';
-import { Paragraph, SectionHeader } from '../account/components/forms';
 import { PersonAccessCard } from '../account/components/PersonAccess';
 import { AccessOverMeSection } from './AccessOverMeSection';
 import { CareNotes } from './CareNotes';
@@ -72,12 +85,18 @@ import { InviteAdultForm } from './InviteAdultForm';
 import { SentInvitationsSection } from './SentInvitationsSection';
 
 export function FamilyScreen() {
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh: every read on the screen again.
+  const refresh = () => {
+    setRefreshing(true);
+    void queryClient.refetchQueries({ type: 'active' }).finally(() => setRefreshing(false));
+  };
   return (
-    <Screen>
-      <SectionHeader
-        title="Family and permissions"
-        detail="Each permission is separate: allowing one never allows another."
-      />
+    <Screen onRefresh={refresh} refreshing={refreshing}>
+      <Text variant="body" tone="muted" style={styles.intro}>
+        Each permission is separate: allowing one never allows another.
+      </Text>
       <RequireSession what="your family">
         <FamilyContent />
       </RequireSession>
@@ -163,72 +182,77 @@ function FamilyBody({ me }: { me: MeData }) {
   const names = usePersonNames(people.map((p) => p.subjectPersonId));
   return (
     <View>
-      <SectionHeader title="People you manage" />
-      {people.length === 0 ? (
-        <StateView
-          variant="empty"
-          title="No family members yet"
-          description="Children and other people you manage appear here once a guardian relationship is recorded for your account. If the front desk gave you a claim code, enter it below."
-        />
-      ) : (
-        <View accessibilityRole="list">
-          {people.map((authority, index) => {
-            const entry = names.get(authority.subjectPersonId);
-            return (
-              <ManagedPerson
-                key={authority.subjectPersonId}
-                authority={authority}
-                index={index}
-                name={nameOf(entry)}
-                subject={entry?.state === 'ready' ? nameOf(entry) : 'this person'}
-                grants={held.data?.filter((g) => g.subjectPersonId === authority.subjectPersonId)}
-                mayGiveUp={mayGiveUp}
-              />
-            );
-          })}
-        </View>
-      )}
-      {held.error && held.data === undefined ? (
-        <View testID="grants-error">
-          <Paragraph muted>
-            The dates and review state of your permissions could not be loaded. What you may do now
-            is shown above.
-          </Paragraph>
-          <QueryErrorView error={held.error} onRetry={() => void held.refetch()} />
-        </View>
-      ) : null}
-      <LoadMore pages={held} label="permissions" />
+      <Section title="People you manage" variant="plain">
+        {people.length === 0 ? (
+          <EmptyState
+            source={illustrations['empty-family']}
+            title="No family members yet"
+            message="Children and other people you manage appear here once a guardian relationship is recorded for your account. If the front desk gave you a claim code, enter it below."
+            testID="family-empty"
+          />
+        ) : (
+          <View accessibilityRole="list" style={styles.people}>
+            {people.map((authority, index) => {
+              const entry = names.get(authority.subjectPersonId);
+              return (
+                <ManagedPerson
+                  key={authority.subjectPersonId}
+                  authority={authority}
+                  index={index}
+                  name={nameOf(entry)}
+                  subject={entry?.state === 'ready' ? nameOf(entry) : 'this person'}
+                  grants={held.data?.filter((g) => g.subjectPersonId === authority.subjectPersonId)}
+                  mayGiveUp={mayGiveUp}
+                />
+              );
+            })}
+          </View>
+        )}
+        {held.error && held.data === undefined ? (
+          <View testID="grants-error">
+            <Text variant="body" tone="muted">
+              The dates and review state of your permissions could not be loaded. What you may do
+              now is shown above.
+            </Text>
+            <QueryErrorView error={held.error} onRetry={() => void held.refetch()} />
+          </View>
+        ) : null}
+        <LoadMore pages={held} label="permissions" />
+      </Section>
       <OwnCareNotes personId={me.person?.id ?? null} />
       <HouseholdsSection candidates={householdCandidates(me, names)} />
       <SentInvitationsSection />
       <AccessOverMeSection />
-      <SectionHeader title="Claim a record from the front desk" />
-      <ClaimForm
-        key={claimToken ?? 'typed'}
-        initialToken={claimToken}
-        intro="If the front desk registered your child, enter the claim code they gave you. You become guardian with exactly the permissions on the claim, and no second record is made."
-      />
-      <SectionHeader title="Adding a child" />
-      <StateView
-        variant="pending-decision"
-        subject="Adding a child from the app"
-        decisions={['DEC-004']}
-        owner="Operator/privacy owner"
-      />
-      <SectionHeader title="Pickup" />
-      <StateView
-        variant="pending-decision"
-        subject="Supervised pickup arrangements"
-        decisions={['DEC-075', 'DEC-005']}
-        owner="Product owner; Operations"
-      />
-      <SectionHeader title="Other adults" />
-      <StateView
-        variant="pending-decision"
-        subject="Seeing the permissions other adults hold over the people you manage"
-        decisions={['DEC-004']}
-        owner="Operator/privacy owner"
-      />
+      <Section title="Claim a record from the front desk" variant="plain">
+        <ClaimForm
+          key={claimToken ?? 'typed'}
+          initialToken={claimToken}
+          intro="If the front desk registered your child, enter the claim code they gave you. You become guardian with exactly the permissions on the claim, and no second record is made."
+        />
+      </Section>
+      <Section title="Ask the front desk" variant="plain">
+        <StateView
+          variant="pending-decision"
+          subject="Adding a child from the app"
+          decisions={['DEC-004']}
+          owner="Operator/privacy owner"
+          message={pendingMessage('DEC-004')}
+        />
+        <StateView
+          variant="pending-decision"
+          subject="Supervised pickup arrangements"
+          decisions={['DEC-075', 'DEC-005']}
+          owner="Product owner; Operations"
+          message={pendingMessageFor(['DEC-075', 'DEC-005'])}
+        />
+        <StateView
+          variant="pending-decision"
+          subject="Seeing the permissions other adults hold over the people you manage"
+          decisions={['DEC-004']}
+          owner="Operator/privacy owner"
+          message={pendingMessage('DEC-004')}
+        />
+      </Section>
     </View>
   );
 }
@@ -238,20 +262,20 @@ function OwnCareNotes({ personId }: { personId: string | null }) {
   const [open, setOpen] = useState(false);
   if (!personId) return null;
   return (
-    <View>
-      <SectionHeader title="Your care notes" />
-      <View style={styles.own}>
-        <Button
-          label={open ? 'Hide your care notes' : 'Show your care notes'}
-          variant="secondary"
-          onPress={() => setOpen((o) => !o)}
-          accessibilityHint="Allergies and care instructions staff need; reading them is recorded"
-        />
-        {open ? <CareNotes personId={personId} personName="you" canManage /> : null}
-      </View>
-    </View>
+    <Section title="Your care notes" variant="plain">
+      <Button
+        label={open ? 'Hide your care notes' : 'Show your care notes'}
+        variant="secondary"
+        onPress={() => setOpen((o) => !o)}
+        accessibilityHint="Allergies and care instructions staff need; reading them is recorded"
+      />
+      {open ? <CareNotes personId={personId} personName="you" canManage /> : null}
+    </Section>
   );
 }
+
+/** The sheet's title; the button names the person ("Invite an adult for Sam Morgan"). */
+export const INVITE_ADULT_TITLE = 'Invite an adult';
 
 function ManagedPerson({
   authority,
@@ -265,26 +289,29 @@ function ManagedPerson({
   index: number;
   /** The heading: the name, or why it is not shown. */
   name: string;
-  /** The name in sentences ("Invite another adult for Sam Morgan"), or "this person". */
+  /** The name in sentences ("Invite an adult for Sam Morgan"), or "this person". */
   subject: string;
   grants: GrantView[] | undefined;
   mayGiveUp: boolean;
 }) {
   const [open, setOpen] = useState<'invite' | 'give-up' | 'care' | null>(null);
+  const inviteButton = useRef<View>(null);
   const mayViewCare = authority.permissions.includes('view');
   // Every grant not withdrawn or ended can be given up (the API refuses only a revoked one).
   const givable = (grants ?? []).filter(isCurrentGrant);
   return (
     <View>
       <PersonAccessCard authority={authority} index={index} name={name} grants={grants}>
-        {open === null ? (
+        {open === null || open === 'invite' ? (
           <View style={styles.action}>
             {authority.permissions.length > 0 ? (
-              <Button
-                label={`Invite another adult for ${subject}`}
-                variant="secondary"
-                onPress={() => setOpen('invite')}
-              />
+              <View ref={inviteButton}>
+                <Button
+                  label={`${INVITE_ADULT_TITLE} for ${subject}`}
+                  icon="person_add"
+                  onPress={() => setOpen('invite')}
+                />
+              </View>
             ) : null}
             {mayViewCare ? (
               <Button
@@ -317,19 +344,27 @@ function ManagedPerson({
           <GiveUpPermission personName={subject} grants={givable} onClose={() => setOpen(null)} />
         ) : null}
       </PersonAccessCard>
-      {open === 'invite' ? (
-        <InviteAdultForm
-          subjectPersonId={authority.subjectPersonId}
-          subjectName={subject}
-          heldPermissions={authority.permissions}
-          onClose={() => setOpen(null)}
-        />
-      ) : null}
+      <Sheet
+        open={open === 'invite'}
+        onClose={() => setOpen(null)}
+        title={INVITE_ADULT_TITLE}
+        returnFocusTo={inviteButton}
+      >
+        {open === 'invite' ? (
+          <InviteAdultForm
+            subjectPersonId={authority.subjectPersonId}
+            subjectName={subject}
+            heldPermissions={authority.permissions}
+            onClose={() => setOpen(null)}
+          />
+        ) : null}
+      </Sheet>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = {
+  intro: { paddingHorizontal: layout.gutter, paddingTop: spacing.sm },
+  people: { gap: spacing.md },
   action: { paddingTop: spacing.sm, gap: spacing.sm },
-  own: { paddingHorizontal: spacing.lg, gap: spacing.sm },
-});
+} as const;

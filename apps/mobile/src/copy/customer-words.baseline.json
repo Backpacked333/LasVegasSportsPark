@@ -14,11 +14,6 @@
   "src/navigation/RootNavigator.tsx :: fixture :: Fixture",
   "src/navigation/RootNavigator.tsx :: session package :: Session packages",
 
-  "src/screens/account/FormsScreen.tsx :: acknowledgment :: Forms and acknowledgments",
-  "src/screens/account/FormsScreen.tsx :: acknowledgment :: …t be undone; signing it again records a new acknowledgment.",
-
-  "src/screens/account/components/account-data.ts :: acknowledgment :: Sign forms and acknowledgments",
-
   "src/screens/activity/FixtureDetailScreen.tsx :: DEC- :: …ill being decided (DEC-090); these are the answers recorde…",
   "src/screens/activity/FixtureDetailScreen.tsx :: fixture :: Fixture",
   "src/screens/activity/FixtureDetailScreen.tsx :: fixture :: This fixture is not available. Check the link, or contact t…",
@@ -76,20 +71,6 @@
   "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: Opens the new enrollment",
   "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: The old and new enrollments stay linked, and attendance his…",
   "src/screens/enrollments/TransferEnrollmentScreen.tsx :: enrollment :: the enrollment",
-
-  "src/screens/family/HouseholdsSection.tsx :: household :: A household groups people for billing and messages. …",
-  "src/screens/family/HouseholdsSection.tsx :: household :: Create a household",
-  "src/screens/family/HouseholdsSection.tsx :: household :: Create household",
-  "src/screens/family/HouseholdsSection.tsx :: household :: Household name",
-  "src/screens/family/HouseholdsSection.tsx :: household :: Households",
-  "src/screens/family/HouseholdsSection.tsx :: household :: No household yet",
-  "src/screens/family/HouseholdsSection.tsx :: household :: Shown next to their name in this household.",
-  "src/screens/family/HouseholdsSection.tsx :: household :: This person or household is not available to you.",
-  "src/screens/family/HouseholdsSection.tsx :: household :: You become the household's first member. …",
-  "src/screens/family/HouseholdsSection.tsx :: household :: You cannot create a household",
-  "src/screens/family/HouseholdsSection.tsx :: household :: adding someone to a household",
-  "src/screens/family/HouseholdsSection.tsx :: household :: creating a household",
-  "src/screens/family/HouseholdsSection.tsx :: household :: your households",
 
   "src/screens/inbox/InboxScreen.tsx :: fixture :: Open fixture",
 
