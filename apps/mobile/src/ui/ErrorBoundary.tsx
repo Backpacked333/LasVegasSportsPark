@@ -4,11 +4,11 @@
  * support when the failure came from the API, and a way to try again. Reported once.
  */
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { Text } from 'react-native';
 import { describeFailure, type CrashReporter } from '../providers/crash-report';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
-import { colors, spacing, type } from './theme';
+import { makeStyles, spacing, type } from './theme';
 
 interface BoundaryProps {
   reporter: CrashReporter;
@@ -41,31 +41,47 @@ export class ErrorBoundary extends Component<BoundaryProps, BoundaryState> {
 
   override render(): ReactNode {
     if (!this.state.failed) return this.props.children;
-    const { correlationId } = describeFailure(this.state.error);
     return (
-      // Announced on iOS and a polite live region on Android (ui/announce, SPK-UX-009).
-      <LiveRegion
-        style={styles.container}
-        accessibilityRole="alert"
-        announcement={sentences('Something went wrong', 'Try again to reload the screen')}
-      >
-        <Text style={styles.title} accessibilityRole="header">
-          Something went wrong
-        </Text>
-        <Text style={styles.body}>
-          Nothing you submitted was lost because of this display problem. Try again to reload the
-          screen.
-        </Text>
-        {correlationId ? (
-          <Text style={styles.caption}>Reference for support: {correlationId}</Text>
-        ) : null}
-        <Button label="Try again" onPress={this.retry} />
-      </LiveRegion>
+      <Fallback
+        correlationId={describeFailure(this.state.error).correlationId}
+        onRetry={this.retry}
+      />
     );
   }
 }
 
-const styles = StyleSheet.create({
+/** What the boundary shows; a function component so it follows the theme (`useTheme`). */
+function Fallback({
+  correlationId,
+  onRetry,
+}: {
+  correlationId: string | null | undefined;
+  onRetry: () => void;
+}) {
+  const styles = useStyles();
+  return (
+    // Announced on iOS and a polite live region on Android (ui/announce, SPK-UX-009).
+    <LiveRegion
+      style={styles.container}
+      accessibilityRole="alert"
+      announcement={sentences('Something went wrong', 'Try again to reload the screen')}
+    >
+      <Text style={styles.title} accessibilityRole="header">
+        Something went wrong
+      </Text>
+      <Text style={styles.body}>
+        Nothing you submitted was lost because of this display problem. Try again to reload the
+        screen.
+      </Text>
+      {correlationId ? (
+        <Text style={styles.caption}>Reference for support: {correlationId}</Text>
+      ) : null}
+      <Button label="Try again" onPress={onRetry} />
+    </LiveRegion>
+  );
+}
+
+const useStyles = makeStyles(({ colors }) => ({
   container: {
     flex: 1,
     justifyContent: 'center',
@@ -76,4 +92,4 @@ const styles = StyleSheet.create({
   title: { ...type.title, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

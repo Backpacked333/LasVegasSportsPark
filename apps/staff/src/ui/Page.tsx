@@ -4,6 +4,7 @@
  * headings' text and ids so accessible names do not change.
  */
 import type { ReactNode } from 'react';
+import { Glass } from './glass/Glass';
 import { Icon, type IconName } from './Icon';
 
 export function PageHeader({
@@ -47,7 +48,7 @@ export function Kpi({
   sub?: ReactNode;
 }) {
   return (
-    <div className="kpi">
+    <Glass radius={20} bezel={16} squircle className="kpi-glass" contentClassName="kpi">
       <span className="kpi-label">
         <span className={`tone-${tone}`}>
           <Icon name={icon} size={17} />
@@ -58,7 +59,7 @@ export function Kpi({
         <span className="kpi-value">{value}</span>
         {sub ? <span className="kpi-sub">{sub}</span> : null}
       </span>
-    </div>
+    </Glass>
   );
 }
 

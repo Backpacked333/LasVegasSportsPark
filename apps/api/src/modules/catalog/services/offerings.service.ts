@@ -90,6 +90,7 @@ import {
 } from '../catalog.state-machines';
 import { loadPromotionCandidates, promotionsFor } from '../pricing/promotions';
 import { PoliciesService } from './policies.service';
+import { WaiversService } from './waivers.service';
 import { PriceRulesService } from './price-rules.service';
 
 const Cursor = z.object({ startsOn: z.string(), id: z.string() });
@@ -155,6 +156,7 @@ export class OfferingsService implements OfferingLookupPort {
     private readonly facilities: FacilityDirectory,
     private readonly resources: ResourcesService,
     @Inject(ASSET_DIRECTORY_PORT) private readonly assets: AssetDirectoryPort,
+    private readonly waivers: WaiversService,
   ) {}
 
   /**
@@ -798,6 +800,8 @@ export class OfferingsService implements OfferingLookupPort {
         .execute();
       const forms = (await this.requiredFormIds(trx, organizationId, [id])).get(id) ?? [];
       await this.replaceRequiredForms(trx, organizationId, newId_, forms);
+      // SPK-REG-011 (proposed): the copy requires the waivers its source requires.
+      await this.waivers.copyRequired(trx, principal, organizationId, id, newId_);
       const copiedSessionIds: string[] = [];
       if (body.copySessions) {
         const sessions = await trx
@@ -1203,6 +1207,7 @@ export class OfferingsService implements OfferingLookupPort {
       eligibilityPolicy,
       cancellationPolicy,
       requiredForms,
+      requiredWaiverKeys: await this.waivers.requiredKeys(organizationId, offeringId, trx),
       bookingTerms,
       registrationOpen:
         row.publication_state === 'registration_open' &&
@@ -1701,14 +1706,32 @@ export class OfferingsService implements OfferingLookupPort {
       .execute();
     const ageBands = new Map(programs.map((p) => [p.id, p.age_band as AgeBand]));
     const ids = rows.map((r) => r.id);
-    const prices = await this.priceRules.effectivePriceRules(
-      organizationId,
-      ids,
-      at,
+    const priceTrx =
       'isTransaction' in db && typeof db.isTransaction === 'boolean' && db.isTransaction
         ? (db as Trx)
-        : undefined,
+        : undefined;
+    const prices = await this.priceRules.effectivePriceRules(organizationId, ids, at, priceTrx);
+    // SPK-PAY-013 (PA-02): a per-session price is shown with the sessions still to attend.
+    const perSessionIds = ids.filter((id) => prices.get(id)?.pricingBasis === 'per_session');
+    const remainingSessions = await this.priceRules.remainingSessionCounts(
+      organizationId,
+      perSessionIds,
+      at,
+      priceTrx,
     );
+    // SPK-PAY-014 (PA-03): price tiers are shown only while `price_tiers_addons` is on.
+    const priceTiersVisible =
+      [...prices.values()].some((price) => price.tiers.length > 0) &&
+      (await this.capabilities.isEnabled(organizationId, 'price_tiers_addons', db));
+    // Quality review M-6 (SPK-PAY-013, SPK-PAY-015): the price shown agrees with what a quote
+    // made now would do. Each switch is read only when a rule in view has its field, so an
+    // organization that never used the amendments reads nothing more than before.
+    const memberPricingOn =
+      ![...prices.values()].some((price) => price.memberPriceMinor !== null) ||
+      (await this.capabilities.isEnabled(organizationId, 'member_pricing', db));
+    const perSessionPricingOn =
+      perSessionIds.length === 0 ||
+      (await this.capabilities.isEnabled(organizationId, 'per_session_pricing', db));
     const forms = await this.requiredFormIds(db, organizationId, ids);
     // SPK-SCHED-008: the facility's IANA zone travels with every offering view (K-04).
     const facilities = await this.facilities.describe(
@@ -1736,6 +1759,11 @@ export class OfferingsService implements OfferingLookupPort {
       out.set(row.id, {
         ageBand: ageBands.get(row.program_id) ?? {},
         price,
+        remainingSessionCount:
+          price?.pricingBasis === 'per_session' ? (remainingSessions.get(row.id) ?? 0) : null,
+        priceTiersVisible,
+        memberPricingOn,
+        perSessionPricingOn,
         requiredFormPolicyVersionIds: forms.get(row.id) ?? [],
         facility: { id: facility.id, name: facility.name, timezone: facility.timezone },
         bookingTermsPolicyVersionId:

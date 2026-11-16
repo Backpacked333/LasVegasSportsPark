@@ -43,6 +43,7 @@ import {
   viewerOf,
   type Reader,
 } from '../enrollment.shared';
+import { attendedSessions } from './attended-sessions';
 import { CatalogSessions } from './catalog-sessions';
 import { RegistrationEvaluator } from './registration-evaluator';
 import { SessionBookingsService } from './session-bookings.service';
@@ -145,15 +146,20 @@ export class MakeupsService {
       await requireIssuer();
       const origin = await this.db
         .selectFrom('enrollments')
-        .select(['offering_id'])
+        .select(['offering_id', 'selected_session_ids'])
         .where('organization_id', '=', organizationId)
         .where('id', '=', input.originatingEnrollmentId)
         .executeTakeFirst();
       if (origin) {
-        const sessions = await this.sessions.list(organizationId, origin.offering_id);
+        // SPK-PAY-014 (PA-03): a makeup replaces a session the enrollment attends; a day the
+        // participant did not choose was never theirs to miss (`attended-sessions.ts`).
+        const sessions = attendedSessions(
+          origin.selected_session_ids,
+          await this.sessions.list(organizationId, origin.offering_id),
+        );
         if (!sessions.some((s) => s.id === input.originatingSessionId)) {
           throw errors.validation(
-            "The originating session is not a session of the originating enrollment's offering.",
+            'The originating session is not a session the originating enrollment attends.',
             { path: 'originatingSessionId' },
           );
         }
@@ -321,16 +327,21 @@ export class MakeupsService {
     if (trial) return true;
     const enrolled = await this.db
       .selectFrom('enrollments')
-      .select('offering_id')
-      .distinct()
+      .select(['offering_id', 'selected_session_ids'])
       .where('organization_id', '=', organizationId)
       .where('participant_person_id', '=', participantPersonId)
       .where('confirmed_at', 'is not', null)
       .orderBy('offering_id')
+      .orderBy('id')
       .execute();
-    for (const { offering_id } of enrolled) {
-      const sessions = await this.sessions.list(organizationId, offering_id);
-      if (sessions.some((s) => s.id === sessionId)) return true;
+    const sessionsOf = new Map<string, Awaited<ReturnType<CatalogSessions['list']>>>();
+    for (const { offering_id, selected_session_ids } of enrolled) {
+      if (!sessionsOf.has(offering_id)) {
+        sessionsOf.set(offering_id, await this.sessions.list(organizationId, offering_id));
+      }
+      // SPK-PAY-014 (PA-03): an enrollment with a day selection took part in those days only.
+      const attended = attendedSessions(selected_session_ids, sessionsOf.get(offering_id) ?? []);
+      if (attended.some((s) => s.id === sessionId)) return true;
     }
     return false;
   }

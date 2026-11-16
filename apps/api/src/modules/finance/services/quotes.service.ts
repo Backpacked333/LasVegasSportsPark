@@ -39,7 +39,13 @@ import {
   type QuoteRow,
   type Reader,
 } from '../finance.shared';
-import { computeQuote, type PlanInput, type QuoteLineInput } from '../pricing/quote-calculator';
+import { LinePricing } from '../pricing/line-pricing.service';
+import {
+  computeQuote,
+  priceBasisOf,
+  type PlanInput,
+  type QuoteLineInput,
+} from '../pricing/quote-calculator';
 import { FinanceCustomerScope } from './customer-scope';
 import { FinancePolicyResolver } from './finance-policy.resolver';
 import { MoneyFacts } from './money-facts.service';
@@ -58,6 +64,16 @@ export function quotableLines(basket: Basket): BasketLine[] {
  * price rule's charge lines, credits from the payer's active credits. Nothing the client sends is
  * a price: the request body carries no amounts and unknown properties are rejected. The quote
  * stores its full price and policy basis and expires (POL-013).
+ *
+ * Proposed amendments PA-02 and PA-04 (SPK-PAY-013, SPK-PAY-015; `LinePricing`): with its
+ * capability on, a per-session rule is priced for the sessions still to attend and a member price
+ * applies to a participant who holds the membership at the quote instant; the facts used are
+ * stored on the line (`price_basis`). With both capabilities off every line is priced as before.
+ *
+ * Proposed amendments PA-03 and PA-07 (SPK-PAY-014, SPK-REG-012; ADR-003): a line that names a
+ * price tier is priced by it (tier, then member price, then per-session multiplication), and the
+ * add-ons and priced uniform a basket line chose are quote lines of their own (`line_kind`,
+ * `source_id`, migration 0690), each with its stored basis.
  */
 @Injectable()
 export class QuotesService {
@@ -74,6 +90,7 @@ export class QuotesService {
     private readonly policy: FinancePolicyResolver,
     private readonly facts: MoneyFacts,
     private readonly scope: FinanceCustomerScope,
+    private readonly linePricing: LinePricing,
   ) {}
 
   async load(
@@ -220,6 +237,7 @@ export class QuotesService {
     };
 
     // SPK-PAY-001: the price is the catalog price rule effective now, never the client's.
+    const switches = await this.linePricing.switches(organizationId);
     const lineInputs: QuoteLineInput[] = [];
     let currency: string | null = null;
     const evaluationLines = [];
@@ -237,17 +255,29 @@ export class QuotesService {
           throw errors.validation('Every line of a quote must be priced in the same currency.');
         }
       }
+      // SPK-PAY-013 (PA-02), SPK-PAY-015 (PA-04): the sessions still to attend and the
+      // participant's membership, read here, before the unit of work. Null (a plain term price)
+      // for every line while both capabilities are off.
+      const pricing = rule
+        ? await this.linePricing.factsFor(organizationId, switches, line, rule, now)
+        : null;
+      const unitPriceMinor =
+        rule && pricing
+          ? priceBasisOf(rule.basePriceMinor, pricing).unitPriceMinor
+          : (rule?.basePriceMinor ?? 0);
       const policies: LinePolicyReferences = {
         eligibilityPolicyVersionId: line.policies.eligibilityPolicyVersionId,
         cancellationPolicyVersionId: line.policies.cancellationPolicyVersionId,
         requiredFormPolicyVersionIds: line.policies.requiredFormPolicyVersionIds,
         approvalPolicyVersionId: line.policies.approvalPolicyVersionId ?? null,
       };
-      lineInputs.push({
+      const place: QuoteLineInput = {
         basketLineId: line.id,
         participantPersonId: line.participantPersonId,
         offeringId: line.offeringId,
-        description: snapshot.offering.name,
+        description: pricing?.tier
+          ? `${snapshot.offering.name}: ${pricing.tier.name}`
+          : snapshot.offering.name,
         quantity: line.quantity,
         priceRule: rule
           ? {
@@ -257,17 +287,27 @@ export class QuotesService {
               chargeLines: rule.chargeLines,
             }
           : null,
+        pricing,
         policies,
         equivalenceKey: line.equivalenceKey,
         enrollmentId: line.enrollmentId,
-      });
+      };
+      lineInputs.push(place);
+      // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): each add-on and the priced uniform of the
+      // basket line is a line of its own, priced from catalog now. None for most lines.
+      currency ??= line.addons[0]?.currency ?? line.uniform?.currency ?? null;
+      lineInputs.push(
+        ...(await this.linePricing.extraLines(organizationId, switches, line, place, currency)),
+      );
       evaluationLines.push({
         lineId: line.id,
         offeringId: line.offeringId,
         offeringKind: snapshot.offering.kind,
         programId: snapshot.offering.programId ?? null,
         participantPersonId: line.participantPersonId,
-        baseAmountMinor: (rule?.basePriceMinor ?? 0) * line.quantity,
+        // Discounts are worked out on what the line costs (the unit price after the member
+        // price and the per-session multiplication), as the calculator will compute it.
+        baseAmountMinor: unitPriceMinor * line.quantity,
       });
     }
     // §3.16, POL-040 (DEC-073 pending): a booking whose terms name a deposit plan is quoted on that
@@ -426,6 +466,15 @@ export class QuotesService {
             policy_references: json(line.policies),
             equivalence_key: line.equivalenceKey,
             enrollment_id: line.enrollmentId,
+            // SPK-PAY-002: the facts the unit price came from, written once with the line: the
+            // pricing basis of the place, or the basis of an add-on or uniform line.
+            price_basis: line.extraBasis
+              ? json(line.extraBasis)
+              : line.priceBasis
+                ? json(line.priceBasis)
+                : null,
+            line_kind: line.lineKind,
+            source_id: line.sourceId,
           })),
         )
         .execute();

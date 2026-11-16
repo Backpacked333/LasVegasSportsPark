@@ -147,7 +147,7 @@ describe('SCR-S-50 AssistantPanel', () => {
     expect(within(records).getByText('Freshness: live')).toBeInTheDocument();
     const missing = within(panel).getByRole('region', { name: 'Missing evidence' });
     expect(within(missing).getByText('A referenced person is not available.')).toBeInTheDocument();
-    expect(within(missing).getByText('Missing: not_available')).toBeInTheDocument();
+    expect(within(missing).getByText('Missing: not available')).toBeInTheDocument();
   });
 
   it('sends the selected facility with the question', async () => {

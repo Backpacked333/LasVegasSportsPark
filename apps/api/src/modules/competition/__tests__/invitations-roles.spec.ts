@@ -1,3 +1,4 @@
+import { newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TestApp } from '../../../testing';
 import {
@@ -578,5 +579,30 @@ describe('team invitations and team roles (CMP-03, CMP-07, CMP-13; SPK-CAP-001, 
     expect(
       await port.roleHolders(t.organizationId, team.teamEntryId, ['captain'], t.clock.now()),
     ).toEqual([{ personId: team.captain.personId, role: 'captain' }]);
+  });
+});
+
+describe('team invitation acceptance rate limit (SPK-CAP-001, §4.14)', () => {
+  it('SPK-CAP-001, §4.14: accepting a team invitation by token counts against the `invitations` limit per address', async () => {
+    const t = await competitionTestApp({
+      clockStart: '2026-11-02T17:00:05Z',
+      env: { RATE_LIMITS: 'invitations=2/600' },
+    });
+    try {
+      const guesser = await adultCustomer(t);
+      const accept = () =>
+        t.http
+          .post(`/v1/team-invitations/${newId()}/accept`)
+          .set(guesser.header)
+          .set('Idempotency-Key', key())
+          .send({ token: 'x'.repeat(32) });
+      for (let i = 0; i < 2; i += 1) expect((await accept()).status).not.toBe(429);
+      const refused = await accept();
+      expect(refused.status).toBe(429);
+      expect(refused.body.code).toBe('RATE_LIMITED');
+      expect(refused.headers['retry-after']).toBe('595');
+    } finally {
+      await t.close();
+    }
   });
 });

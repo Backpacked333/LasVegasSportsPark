@@ -21,7 +21,10 @@ import {
   optionsHandler,
   page,
 } from '../../../features/registration/testing/fixtures';
-import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
+import {
+  basketButtonReady,
+  createRegistrationTestApp,
+} from '../../../features/registration/testing/registration-test-app';
 import { placesStatus, previewLines } from '../../../features/registration/CampWeeks';
 import { RegistrationIntentScreen } from '../RegistrationIntentScreen';
 
@@ -37,7 +40,18 @@ const WEEK3 = '0192f1a0-0000-7000-8000-0000000000f3';
 const camp = (overrides: Parameters<typeof offering>[0]) =>
   offering({
     kind: 'camp',
-    price: { priceRuleId: IDS.priceRule, basePriceMinor: 26900, currency: 'USD', chargeLines: [] },
+    price: {
+      priceRuleId: IDS.priceRule,
+      basePriceMinor: 26900,
+      currency: 'USD',
+      chargeLines: [],
+      pricingBasis: 'term',
+      remainingSessionCount: null,
+      remainingSessionsPriceMinor: null,
+      notQuotable: null,
+      memberPrice: null,
+      tiers: [],
+    },
     ...overrides,
   });
 const WEEK_1 = camp({ name: 'Winter Camp Week 1', startsOn: '2026-12-21', endsOn: '2026-12-24' });
@@ -187,6 +201,7 @@ describe('SCR-C-09 camp weeks and live total', () => {
     render(<RegistrationIntentScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('checkbox', { name: 'Ada. Eligible' }));
     fireEvent.press(await screen.findByRole('checkbox', { name: /^Winter Camp Week 2/ }));
+    await basketButtonReady();
     fireEvent.press(screen.getByRole('button', { name: 'Add to your basket' }));
     await screen.findByRole('checkbox', { name: 'Ada. Added to your basket' });
 

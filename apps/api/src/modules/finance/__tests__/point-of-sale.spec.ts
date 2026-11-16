@@ -828,6 +828,9 @@ describe('point of sale (FIN-06; §3.16 POS, SPK-PAY-002/008/010/012, DEC-016, D
             id: newId(),
             line_number: 2,
             charges: json([]),
+            // A product line carries no open-amount facts (0695); a JSON column is not re-inserted
+            // from its selected value.
+            entered_by: null,
             created_at: new Date(),
           })
           .execute(),

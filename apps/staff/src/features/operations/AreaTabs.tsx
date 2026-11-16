@@ -4,6 +4,7 @@
  * border, not colour alone).
  */
 import { NavLink } from 'react-router';
+import { TabTrack } from '../../ui/glass/GlassCard';
 
 export interface AreaTab {
   path: string;
@@ -15,15 +16,17 @@ export interface AreaTab {
 export function AreaTabs({ label, tabs }: { label: string; tabs: readonly AreaTab[] }) {
   return (
     <nav className="ops-tabs" aria-label={label}>
-      <ul>
-        {tabs.map((tab) => (
-          <li key={tab.path}>
-            <NavLink to={tab.path} end={tab.end}>
-              {tab.title}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
+      <TabTrack>
+        <ul>
+          {tabs.map((tab) => (
+            <li key={tab.path}>
+              <NavLink to={tab.path} end={tab.end}>
+                {tab.title}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </TabTrack>
     </nav>
   );
 }
@@ -44,6 +47,8 @@ export const STAFF_TABS: readonly AreaTab[] = [
 export const COMMUNICATIONS_TABS: readonly AreaTab[] = [
   { path: '/communications', title: 'Delivery status', end: true },
   { path: '/communications/compose', title: 'Compose a message' },
+  { path: '/communications/templates', title: 'Message templates' },
+  { path: '/communications/sequences', title: 'Message sequences' },
 ];
 
 export const WORKSPACE_TABS: readonly AreaTab[] = [

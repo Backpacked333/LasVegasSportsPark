@@ -228,6 +228,8 @@ describe('discount redemptions follow the participant (R3-TIME-MONEY-01, SPK-PAY
     const real = service.pricing;
     service.pricing = {
       effectivePriceRule: (...args) => real.effectivePriceRule(...args),
+      remainingSessions: (...args) => real.remainingSessions(...args),
+      offeringExtras: (...args) => real.offeringExtras(...args),
       evaluateDiscounts: (...args) => real.evaluateDiscounts(...args),
       releaseDiscount: (...args) => real.releaseDiscount(...args),
       // What the base branch recorded: one redemption per discount and order, for the payer (a

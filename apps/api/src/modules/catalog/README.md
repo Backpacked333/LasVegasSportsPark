@@ -117,7 +117,8 @@ because the kernel consults the identity port without a transaction handle (see 
 - `POLICY_PORT` → `PoliciesService.getPolicyVersion`, `currentPolicyVersion(kind, key, at)`
   (approved, effective, highest version; IF-48 with the kinds `booking_terms` and `tax_fee`),
   `hasAcknowledgment(subject, policyVersion)`.
-- `PRICING_PORT` → `PricingService.effectivePriceRule`, `evaluateDiscounts` (loads active
+- `PRICING_PORT` → `PricingService.effectivePriceRule`, `remainingSessions` (SPK-PAY-013, see
+  "Price rule amendments"), `evaluateDiscounts` (loads active
   definitions and counters, then the pure evaluator), `redeemDiscount` / `releaseDiscount` inside
   the caller's transaction (finance checkout, §4.11 step 7): replay-safe per reference, exhausted
   limits are `RESOURCE_CONFLICT` with `details.code` `DISCOUNT_REDEMPTION_LIMIT`,
@@ -254,6 +255,15 @@ cannot set `source` or the id. `Program.source` is in every program read, which 
 - A new price rule starts at or after the clock (refused otherwise in every case) and closes the
   current open-ended rule where it begins; bounded windows must not overlap an existing rule;
   historical prices are never rewritten (DEC-007 for the actual prices, taxes and rounding).
+  "From now" (2026-11-15): `effectiveFrom` may be omitted, and an instant at most
+  `PRICE_EFFECTIVE_NOW_TOLERANCE_MS` (60 seconds, `catalog.policy.ts`, a technical tolerance)
+  behind the clock is read as now, because a caller's "now" is always behind the instant the
+  command runs at. Either way the rule is stored with the server's instant, never the caller's,
+  so no passed instant is priced and the exclusion constraint and the immutability trigger are
+  unchanged; anything earlier is refused as before. **Verified**:
+  `__tests__/price-rule-effective-now.spec.ts` (the clock moves between the caller's instant and
+  the command in every test). The staff price form offers "Starts now" by default and sends no
+  instant (`apps/staff/src/screens/programs/__tests__/OfferingSetupScreen.test.tsx`).
   Publication, and any edit of an offering beyond draft, require price rules that cover every
   instant of the remaining registration window, from the later of now and the opening to the
   closing (`price_rule_gap`, SPK-PAY-001).
@@ -450,3 +460,269 @@ Tests in `__tests__/park-ui-gaps.spec.ts`.
   currency the offering meets, with `basis` `early_registration` / `multi_line` / `automatic`.
   Promo codes, exhausted limits and drafts are never listed. Badges are informational; the
   evaluation (`POST /v1/discounts/evaluate`) and finance's quote decide what applies.
+
+## Price rule amendments (PA-02, PA-04): implemented behind capability switches
+
+The two requirements are **Proposed** (`docs/package-a/proposed-specification-amendments.md`): they
+are not part of the master specification until the product owner accepts them, and each is off for
+an organization until its capability is turned on. What the code does is **Verified** by the tests
+named; every value the amendments leave open is **Pending decision**.
+
+| Amendment | Requirement | Capability            | Decision record |
+| --------- | ----------- | --------------------- | --------------- |
+| PA-02     | SPK-PAY-013 | `per_session_pricing` | DEC-096         |
+| PA-04     | SPK-PAY-015 | `member_pricing`      | DEC-098         |
+
+**Verified** (`__tests__/price-rule-amendments.spec.ts`, migration
+`0211_catalog_price_rule_basis_and_member_price.sql`):
+
+- The price rule stays the single source of an offering's price. `price_rules` gains
+  `pricing_basis` (`term`, the default and every earlier row, or `per_session`: the base price is
+  the price of one session), `member_price_minor` and `member_entitlement_definition_id` (the price
+  for a holder of that membership entitlement, on the same basis as the base price). The exclusion
+  constraint `price_rules_one_effective_per_instant` is untouched.
+- The database refuses an unknown pricing basis, a member price without its entitlement and an
+  entitlement without a member price (`price_rules_member_price_complete`), a negative member
+  price, and an entitlement of another organization (composite foreign key
+  `price_rules_member_entitlement_fk`). The three columns are pricing content: `price_rules_guard`
+  refuses any change to them, so a correction is a new version (SPK-PAY-002).
+- `POST /v1/offerings/{id}/price-rules` accepts `pricingBasis`, `memberPriceMinor` and
+  `memberEntitlementDefinitionId`. `per_session` requires `per_session_pricing` and a member price
+  requires `member_pricing`, each checked inside the unit of work; with the capability off the
+  request is refused with ACCESS_DENIED `CAPABILITY_DISABLED` and nothing is written. A request
+  without the new fields (or with `pricingBasis: "term"`) is written exactly as before. A member
+  price names an active `membership_benefit` entitlement of the organization (VALIDATION_FAILED
+  otherwise; an unknown id and another organization's id read the same).
+- `PriceRule` carries the three fields and the entitlement's name. `PublicPrice` (the offering
+  views) carries `pricingBasis`, `remainingSessionCount` and `remainingSessionsPriceMinor` (for a
+  per-session price: the scheduled sessions that start after the view instant, and the base price
+  times that count), and `memberPrice` (price, entitlement id and name). These reads do not depend
+  on the switches: a rule that exists is shown as it is.
+- `PRICING_PORT.remainingSessions(organizationId, offeringId, at)`: the sessions with status
+  `scheduled` that start strictly after `at`, ordered by start. Finance counts them for a quote
+  and stores their ids (see the finance README).
+
+**Proposed** (assumed defaults, each a rule the facility has not confirmed):
+
+- A session counts until it starts (a start equal to the instant no longer counts); there is no
+  minimum charge. Both are **Pending decision** DEC-096, with the list of programs priced this way.
+- Whether a member price may exceed the base price is not restricted. Which offerings carry a
+  member price, what the membership costs and grants, the reference date and whose membership
+  counts for a child are **Pending decision** DEC-098.
+
+Not done here: that the named entitlement is a membership benefit is checked by the service only
+(a rule naming another kind could never apply, because only memberships are read); the
+`catalog.price_rule_created` event payload is unchanged (the audit record carries the new fields);
+the promotion badge compares a minimum line amount with the rule's base price, which for a
+per-session rule is the price of one session.
+
+### The public price follows the switches (quality review M-6)
+
+**Verified** (`__tests__/price-rule-amendments.spec.ts`, "the price an offering shows agrees with
+what a quote would do…"): `PublicPrice` advertises only what a quote made now would give. With
+`member_pricing` off, `memberPrice` is null (a quote charges the standard price). With
+`per_session_pricing` off, a per-session price is `notQuotable` (`per_session_pricing_off`, with a
+plain message), and its session count and product are null: the quote of such a rule is refused,
+so clients show the offering as not open for online registration instead of a price. Each switch
+is read only when a rule in view has its field; an offering that never used the amendments reads
+exactly as before. Registration commands are unchanged: the quote remains what refuses.
+
+## Liability waivers (SPK-REG-011, proposed amendment PA-01): proposed, behind `liability_waivers`
+
+**Proposed.** The requirement is not part of the master specification until the product owner
+accepts it (`docs/package-a/proposed-specification-amendments.md`, DEC-095). It is built ahead of
+that decision and is off for every organization until a system administrator turns the capability
+`liability_waivers` on. What the code does with the capability on is **Verified** by the tests
+named below; the rule values are **Pending decision** (DEC-095) and are therefore content of an
+approved waiver version, never constants.
+
+Design (ADR-004, `.10x/adrs/004-waiver-currency-by-policy-key.md`):
+
+- **A waiver is a policy family of kind `waiver`** (migration `0220_catalog_waivers.sql` widens the
+  kind check). Its versions are drafted, approved (program or league manager, as for a form) and
+  retired through the policy version routes; approved wording is immutable; earlier versions stay.
+  Drafting a waiver version needs the capability. Its content (`WaiverContentSchema`) states every
+  value: `text`, `renewal: { reacceptOnNewVersion, renewEveryMonths }`, `enforcement: 'warn' |
+'block'` and `overrideRoles`. A version that states no complete rule is not judged against.
+- **An acceptance is an acknowledgment of a waiver version**, recorded by the one signing path of
+  `services/acknowledgments.service.ts`, so every SPK-REG-009 rule holds for it (a staff actor
+  names the signer and is never the signer; a child cannot self-sign; a guardian needs
+  `complete_forms`). It adds `acknowledgments.method` (`digital` | `paper`) and `paper_dated_on`.
+  A paper acceptance is only ever a staff entry: the database check
+  `acknowledgments_paper_is_staff_entry` refuses one not recorded by a named staff member or
+  without the paper's date, and refuses a paper date on a digital one. Its `signed_at` is the
+  server time of the staff entry, never a signature time. Rows written before the migration are
+  `digital` with no paper date through the column defaults. Method and paper date are immutable
+  (the 0202 guard now covers them).
+- **A requirement names the waiver by policy key**: `offering_required_waivers (organization_id,
+offering_id, policy_key)`. A copied offering keeps its required waivers.
+- **One evaluation**: `judgeWaiver` (`waivers/waiver-rule.ts`, pure) answers `current`, `lapsed` or
+  `missing` for one person, one family and one instant, with the version in force, the acceptance
+  judged, the rule applied and when it lapses. A paper acceptance counts from the date on the
+  paper. Acceptances recorded under a merged person record still count.
+- **An override of a block** is its own append-only record (`waiver_overrides`): one person, one
+  waiver family and the version in force, one activity, a reason and the staff member. It is
+  permitted only where the version in force blocks and names one of the actor's roles; never for
+  a waiver that is current or only warns, never for oneself.
+  - **The activity is resolved when the override is recorded** (security review L-4, 2026-11-14):
+    an offering or an offering session from the catalog's own tables, a scheduling event through
+    scheduling's exported port (`EventSchedulingPort.getEvent`). An activity that names nothing is
+    refused as not found, and the authorization target always carries the activity's facility,
+    so a staff member scoped to one facility does not override for an activity of another.
+    **A booking was dropped** as an activity an override can name: no port resolves a booking
+    for the catalog (enrollment depends on the catalog, not the reverse), nothing read overrides
+    by booking, and an override for a booked time names its scheduling event. The stored column
+    still admits `booking` for rows written before.
+  - **An override applies to the waiver version it was recorded against** and to no other
+    (`WaiverStatusReader.override` matches `policy_version_id` to the version in force;
+    migration `0221_catalog_waiver_override_version.sql` requires the version on every new
+    override). Once another version is in force the rule asks again, whether or not that version
+    asks for acceptance again, and its own `overrideRoles` decide who may override it. The
+    earlier override stays on the person's record as history.
+
+Routes (contracts in `packages/contracts/src/api/catalog-waivers.ts`):
+
+| Route                                      | Who                                                                           |
+| ------------------------------------------ | ----------------------------------------------------------------------------- |
+| `GET /v1/people/{id}/waivers`              | staff; the person; a guardian holding `complete_forms`; else 404              |
+| `POST /v1/waiver-acceptances`              | digital: the adult, a guardian, or staff naming the signer; paper: staff only |
+| `POST /v1/waiver-overrides`                | staff whose role the approved waiver names                                    |
+| `GET /v1/offerings/{id}/required-waivers`  | any signed-in person once the offering is published; staff before; else 404   |
+| `POST /v1/offerings/{id}/required-waivers` | `catalog.manage_required_waivers`                                             |
+
+`POST /v1/acknowledgments` refuses a waiver version (`USE_WAIVER_ACCEPTANCE`), so a waiver
+acceptance always carries its method and always checks the capability.
+
+`GET /v1/offerings/{id}/required-waivers` answers an offering the caller may not see (a draft or
+an archived one, to anybody who does not read the catalog as staff) exactly as an offering that
+does not exist (`errors.protectedNotFound`, §4.10; security review L-5), as the offering reads
+do.
+
+Port (`PolicyPort`, `catalog.ports.ts`): `waiverStatus`, `waiverStatuses` (a roster in two reads)
+and `waiverFindings` (the missing or lapsed required waivers of some people for one activity, with
+the severity the rule gives them and any recorded override). `OfferingSnapshot.requiredWaiverKeys`
+carries the keys. Enrollment (registration, roster readiness, rental rosters) and entry (check-in)
+read only through this port.
+
+Capability off: the four commands and drafting a waiver version answer ACCESS_DENIED
+`CAPABILITY_DISABLED`; `waiverFindings` returns nothing, so no caller evaluates or shows anything;
+`GET /people/{id}/waivers` answers `evaluated: false`; an offering shows no required waiver.
+Acknowledgments of forms behave exactly as before.
+
+Tests (**Verified**): `__tests__/waivers.spec.ts` (requirement tests named SPK-REG-011 and
+SPK-REG-009, the three states under both renewal rules, the override, the read's authorization,
+capability off, and the database refusing each integrity rule), `waivers/waiver-rule.spec.ts`.
+
+**Assumed defaults (Proposed, DEC-095 open):** warn and do not block; a new version does not
+require re-acceptance; no periodic renewal; paper is still collected. They exist only as the
+content of the waiver version an organization approves (the test fixture `fixtureWaiverContent`
+uses them); answering DEC-095 is approving a version, not a release.
+
+**Known gaps:**
+
+- A renewal of the same version closes the lapsed acknowledgment as `withdrawn` with the reason
+  "Superseded by a renewed acceptance of the same waiver version." (one active acknowledgment per
+  person and version is a database rule). The row is kept; a distinct `superseded` status would say
+  it better and is **Proposed**.
+- The date on a paper has no zone: it is refused only when it is in the future everywhere on earth
+  or its day had ended everywhere before the waiver version existed. The renewal clock of a paper
+  acceptance starts at midnight UTC of that date. **Pending decision** whether the facility's zone
+  should decide (DEC-095, J4).
+- An override has no end of its own: it lasts while the waiver version it was recorded against is
+  in force. Whether an override should also expire after a time, or cover one day of a recurring
+  activity only, is a **Pending decision** (DEC-095).
+- An override cannot be recorded against a booking (see above); **Proposed** to add it when a
+  port resolves a booking to its facility for the catalog.
+- `overrideRoles` can only narrow `catalog.override_waiver` (front desk, program and league
+  manager, general manager, system administrator, support operator); a role outside that list
+  never overrides.
+- Legacy paper-waiver dates cannot be imported as paper acceptances by the migration principal:
+  the database requires a named staff member. **Pending decision** (DEC-095, J4).
+
+## Price tiers, add-ons and uniforms (PA-03, PA-07): implemented behind capability switches
+
+Both requirements are **Proposed** (`docs/package-a/proposed-specification-amendments.md`): they are
+not part of the master specification until the product owner accepts them, and each is off for an
+organization until its capability is turned on. What the code does is **Verified** by the tests
+named; every value the amendments leave open is **Pending decision**.
+
+| Amendment | Requirement | Capability           | Decision record |
+| --------- | ----------- | -------------------- | --------------- |
+| PA-03     | SPK-PAY-014 | `price_tiers_addons` | DEC-097         |
+| PA-07     | SPK-REG-012 | `uniforms`           | DEC-101         |
+
+**Verified** (`__tests__/offering-extras.spec.ts`; migrations `0215_catalog_price_rule_tiers.sql`,
+`0216_catalog_offering_addons.sql`, `0217_catalog_offering_uniforms.sql`; the camp journey
+`apps/api/src/__tests__/journeys/facility-camp.spec.ts`):
+
+- **Price tiers** (`price_rule_tiers`): a price rule may carry tiers, written with the rule by
+  `POST /v1/offerings/{id}/price-rules` (`tiers`, at most 20) and immutable like the rest of its
+  pricing content (no update, no delete: a change is a new rule version, SPK-PAY-002). A tier names
+  what the participant attends (`all_sessions`, or `chosen_sessions` with the fewest and the most
+  sessions the customer picks), its price on the rule's pricing basis, an optional member price
+  (only with the rule's membership entitlement) and an optional purchase deadline
+  (`availableUntil`). `PriceRule.tiers` lists them in order; `PublicPrice.tiers` shows them to
+  customers only while the capability is on. With tiers, the rule's base price is what a line
+  costs only while tiers are off.
+- **Add-ons** (`offering_addons`): `POST /v1/offerings/{id}/addons`, `GET /v1/offerings/{id}/addons`
+  (staff, retired ones included), `POST /v1/offering-addons/{id}/retire`. An add-on has its own
+  price, currency and charge lines, is selected once for the registration or per session, and may
+  have a capacity (enrollment sizes the add-on's own capacity pool from it). Its price, selection
+  and capacity never change: a change is a retirement and a new add-on. One live add-on per code
+  and offering.
+- **Uniforms** (`offering_uniforms`): `POST /v1/offerings/{id}/uniforms`,
+  `GET /v1/offerings/{id}/uniforms` (staff), `POST /v1/offering-uniforms/{id}/retire`. A uniform has
+  an item key (the same key on another offering is the same kit), sizes, a requirement (`required`
+  or `optional`), an optional price with its currency and charge lines, and
+  `returningHolderFree`. One live uniform per offering; its basis never changes.
+- `GET /v1/offerings/{id}/purchase-options` (any signed-in principal of the organization, for an
+  offering they can see; protected NOT_FOUND otherwise): the tiers of the rule effective now that
+  can still be bought, the active add-ons and the active uniform. Each part is empty (or null)
+  while its capability is off.
+- Actions `catalog.manage_offering_addons` and `catalog.manage_offering_uniforms` (the roles of
+  price rules: finance operator, general manager, system administrator), each declaring its
+  capability; every command requires the capability inside its unit of work (ACCESS_DENIED
+  `CAPABILITY_DISABLED` otherwise), is audited and enqueues `catalog.offering_addon_changed` or
+  `catalog.offering_uniform_changed`. Staff reads of records that exist stay available while a
+  capability is off.
+- `PRICING_PORT.offeringExtras(organizationId, offeringId)`: every add-on and uniform of the
+  offering, retired ones included, for enrollment (validating a selection) and finance (pricing it).
+- The database refuses: a tier of another organization's price rule or of another offering's rule
+  (composite foreign key over organization, rule and offering); a tier rewritten or deleted; a tier
+  member price on a rule without a membership entitlement; session bounds that disagree with the
+  attendance; a second live add-on with the same code; an add-on whose price, currency, selection,
+  capacity or charge lines change; a second live uniform of an offering; a uniform whose item key,
+  sizes, price or returning-holder rule change; a uniform price without its currency; an add-on or
+  uniform of another organization's offering; deleting an add-on or a uniform.
+
+**Proposed** (assumed defaults, each a rule the facility has not confirmed):
+
+- Tiers and add-ons are set per offering by staff and exactly one tier applies to a line. Which
+  tiers, deadlines, prices, add-ons and capacities exist is **Pending decision** DEC-097.
+- Stock is not counted, and a returning participant who holds the current uniform is not charged
+  again where the offering says so. Whether ordering moves into registration at all, whether stock
+  is counted, the prices and the returning-participant rule are **Pending decision** DEC-101.
+- Who may set add-ons and uniforms follows price rules (finance). That assignment is an
+  engineering default, not a decided rule.
+
+Not done here: a tier that names a fixed subset of sessions (a tier is every session or a number
+of chosen ones); editing an add-on's capacity after it is created (retire it and add it again, or
+adjust its pool through the capacity endpoints once a pool exists); charge lines of an add-on or a
+uniform in the staff screens (the API takes them); a jersey number chosen with the uniform (numbers
+stay on the team roster, SPK-COMP-005); the two new events in
+`docs/architecture/api-and-events.md` (a shared file, updated at integration).
+
+## Class names on the public schedule (SPK-SCHED-010, proposed amendment PA-06)
+
+**Proposed**, behind `public_schedule` (DEC-100). The public schedule never shows the title stored
+on a schedule event, because a person may have typed it. Catalog vouches for one kind of title
+(`public/public-session-titles.ts`, registered as `catalog.public_sessions` with scheduling's
+`PublicScheduleTitles`): a session that is not canceled, of an offering whose publication state is
+one the public catalog already lists, shows that offering's name. A session of a draft or archived
+offering shows only "Class".
+
+**Verified**: `__tests__/public-session-titles.spec.ts` (a published offering's name is shown; a
+draft offering's name, a canceled session and the typed title are not).
+
+**Pending decision** (DEC-100): whether every published offering's name may appear on a lobby
+screen, or only chosen ones.

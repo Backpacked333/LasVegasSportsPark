@@ -10,9 +10,10 @@ import type {
 } from './core';
 
 /**
- * Catalog module tables (migrations 0200 to 0207, specification §3.2 SPK-CAT-001..004, §3.15
- * SPK-PAY-001..003, §4.4 Catalog + Policies). `date` columns are read through a `::text` cast by
- * the module so both drivers return `YYYY-MM-DD`.
+ * Catalog module tables (migrations 0200 to 0211, specification §3.2 SPK-CAT-001..004, §3.15
+ * SPK-PAY-001..003, §4.4 Catalog + Policies; 0211 adds the price rule columns of the proposed
+ * amendments PA-02 and PA-04). `date` columns are read through a `::text` cast by the module so
+ * both drivers return `YYYY-MM-DD`.
  */
 export type CatalogDate = ColumnType<string, string, string>;
 
@@ -47,7 +48,9 @@ export type PolicyKind =
   | 'overpayment'
   | 'installment'
   | 'booking_terms'
-  | 'tax_fee';
+  | 'tax_fee'
+  // 0220 (SPK-REG-011, proposed): a liability waiver family.
+  | 'waiver';
 export type PolicyApprovalStatus = 'draft' | 'approved' | 'retired';
 export interface PolicyVersionsTable {
   id: string;
@@ -89,6 +92,8 @@ export interface ApprovalsTable {
 export type AcknowledgmentBasis = 'self' | 'guardian';
 export type AcknowledgmentStatus = 'active' | 'withdrawn';
 export type RecordedByKind = 'customer' | 'staff' | 'system';
+/** 0220 (SPK-REG-011, SPK-REG-009): given digitally, or recorded by staff from a signed paper. */
+export type AcknowledgmentMethod = 'digital' | 'paper';
 export interface AcknowledgmentsTable {
   id: string;
   organization_id: string;
@@ -101,6 +106,9 @@ export interface AcknowledgmentsTable {
   recorded_by_person_id: string | null;
   signed_at: Timestamp;
   evidence: GeneratedJson<Record<string, unknown>>;
+  method: Generated<AcknowledgmentMethod>;
+  /** The date written on the paper; null when digital. Read it with `dateOnlyOrNull`. */
+  paper_dated_on: ColumnType<string | Date | null, string | null | undefined, never>;
   status: Generated<AcknowledgmentStatus>;
   withdrawn_at: NullableTimestamp;
   withdrawn_reason: string | null;
@@ -215,6 +223,7 @@ export interface OfferingSessionsTable {
   updated_at: GeneratedTimestamp;
 }
 
+export type PricingBasis = 'term' | 'per_session';
 export interface PriceRulesTable {
   id: string;
   organization_id: string;
@@ -225,6 +234,11 @@ export interface PriceRulesTable {
   base_price_minor: MinorUnits;
   currency: string;
   charge_lines: GeneratedJson<unknown[]>;
+  /** 0211 (SPK-PAY-013, PA-02): what base_price_minor is the price of. */
+  pricing_basis: Generated<PricingBasis>;
+  /** 0211 (SPK-PAY-015, PA-04): the member price and the entitlement it requires, both or neither. */
+  member_price_minor: Generated<number | null>;
+  member_entitlement_definition_id: Generated<string | null>;
   created_by: Json<Record<string, unknown>>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;

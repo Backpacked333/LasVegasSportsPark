@@ -27,7 +27,8 @@ import {
  * Development seed for local sign-in (K-14; §5.2 "domain work against tested adapters and
  * synthetic fixtures"). Everything it creates is synthetic: the organization `dev`, the facility
  * `dev-facility` (time zone from `--timezone`, default UTC; the real facilities are DEC-001) and
- * six local accounts. It writes only kernel tables itself (organization, facility, capability
+ * six local accounts, each with a primary verified email `<subject>@example.test`. It writes
+ * only kernel tables itself (organization, facility, capability
  * switches through the kernel service); people, accounts, staff memberships and the guardian
  * relationship go through identity's exported services with a system principal. Idempotent by
  * natural keys: the organization and facility slugs and the accounts' (issuer, subject).
@@ -173,6 +174,19 @@ export async function seedDevelopment(
         null,
       );
       accountId = account.id;
+    }
+    // Each account's person is reachable: a primary verified email `<subject>@example.test`
+    // (reserved for fiction). Without one every notice to them fails delivery and opens an
+    // operational exception once the worker runs. Added only when it is not there yet.
+    const email = `${spec.subject}@example.test`;
+    const person = await people.getPerson(system, personId);
+    if (!person.contactPoints.some((c) => c.kind === 'email' && c.value === email)) {
+      await people.addContactPoint(
+        system,
+        personId,
+        { kind: 'email', value: email, isPrimary: true, verified: true },
+        null,
+      );
     }
     const roles = [...(existing?.staffRoles ?? [])];
     if (spec.role && !roles.includes(spec.role)) {

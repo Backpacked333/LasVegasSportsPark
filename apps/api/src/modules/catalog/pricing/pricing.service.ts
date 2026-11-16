@@ -3,11 +3,14 @@ import type { DiscountEvaluation, PriceRule } from '@sportspark/contracts';
 import type { Trx } from '../../../kernel';
 import type {
   EvaluateDiscountsRequest,
+  OfferingExtras,
   PricingPort,
   RedeemDiscountInput,
   RedemptionOutcome,
+  RemainingSession,
 } from '../catalog.ports';
 import { DiscountsService } from '../services/discounts.service';
+import { OfferingExtrasService } from '../services/offering-extras.service';
 import { PriceRulesService } from '../services/price-rules.service';
 
 /** PRICING_PORT: the price basis and discount mechanics finance quotes against (SPK-PAY-001..003). */
@@ -16,7 +19,12 @@ export class PricingService implements PricingPort {
   constructor(
     private readonly priceRules: PriceRulesService,
     private readonly discounts: DiscountsService,
+    private readonly extras: OfferingExtrasService,
   ) {}
+
+  offeringExtras(organizationId: string, offeringId: string, trx?: Trx): Promise<OfferingExtras> {
+    return this.extras.offeringExtras(organizationId, offeringId, trx);
+  }
 
   effectivePriceRule(
     organizationId: string,
@@ -25,6 +33,15 @@ export class PricingService implements PricingPort {
     trx?: Trx,
   ): Promise<PriceRule | null> {
     return this.priceRules.effectivePriceRule(organizationId, offeringId, at, trx);
+  }
+
+  remainingSessions(
+    organizationId: string,
+    offeringId: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<RemainingSession[]> {
+    return this.priceRules.remainingSessions(organizationId, offeringId, at, trx);
   }
 
   evaluateDiscounts(

@@ -8,9 +8,19 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { LiveText, sentences } from '../../../ui/announce';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../../ui/theme';
+import { useInputChrome } from '../../../ui/input';
+import {
+  fonts,
+  makeStyles,
+  MIN_TOUCH_SIZE,
+  radius,
+  spacing,
+  type,
+  useTheme,
+} from '../../../ui/theme';
 
 export function SectionHeader({ title, detail }: { title: string; detail?: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle} accessibilityRole="header">
@@ -31,6 +41,7 @@ export function Paragraph({
   muted?: boolean;
   inset?: boolean;
 }) {
+  const styles = useStyles();
   return (
     <Text style={[styles.paragraph, !inset && styles.flush, muted && styles.muted]}>
       {children}
@@ -62,12 +73,15 @@ export function TextField({
   autoComplete = 'off',
   testID,
 }: TextFieldProps) {
+  const styles = useStyles();
+  const input = useInputChrome();
   const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
       {hint ? <Text style={styles.caption}>{hint}</Text> : null}
       <TextInput
+        {...input.props}
         value={value}
         onChangeText={onChangeText}
         editable={editable}
@@ -78,7 +92,12 @@ export function TextField({
         accessibilityLabel={label}
         accessibilityHint={describedBy || undefined}
         accessibilityState={{ disabled: !editable }}
-        style={[styles.input, error ? styles.inputError : null, !editable && styles.disabled]}
+        style={[
+          styles.input,
+          input.focusStyle,
+          error ? styles.inputError : null,
+          !editable && styles.disabled,
+        ]}
         testID={testID}
       />
       {error ? (
@@ -99,6 +118,7 @@ export interface ChoiceOption<V extends string> {
 
 /** A labelled radio group; its rows are `RadioRow`s (or `ChoiceGroup` for plain options). */
 export function RadioGroup({ label, children }: { label: string; children: ReactNode }) {
+  const styles = useStyles();
   return (
     <View style={styles.field} accessibilityRole="radiogroup" accessibilityLabel={label}>
       <Text style={styles.label}>{label}</Text>
@@ -120,6 +140,7 @@ export function RadioRow({
   onPress: () => void;
   disabled?: boolean;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       accessibilityRole="radio"
@@ -196,6 +217,7 @@ export function CheckboxRow({
   error?: string | null;
   testID?: string;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       accessibilityRole="checkbox"
@@ -241,6 +263,8 @@ export function SwitchRow({
   disabled?: boolean;
   testID?: string;
 }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   return (
     <View style={styles.switchRow}>
       <View style={styles.choiceText}>
@@ -254,6 +278,8 @@ export function SwitchRow({
         value={value}
         onValueChange={onChange}
         disabled={disabled}
+        trackColor={{ false: colors.control, true: colors.primary }}
+        ios_backgroundColor={colors.control}
         accessibilityRole="switch"
         accessibilityLabel={accessibilityLabel ?? label}
         accessibilityHint={detail}
@@ -264,7 +290,7 @@ export function SwitchRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   section: { paddingHorizontal: spacing.lg, paddingTop: spacing.xl, gap: spacing.xs },
   sectionTitle: { ...type.heading, color: colors.text },
   paragraph: { ...type.body, color: colors.text, paddingHorizontal: spacing.lg },
@@ -307,4 +333,4 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-});
+}));

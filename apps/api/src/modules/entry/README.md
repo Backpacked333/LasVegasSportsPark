@@ -383,3 +383,45 @@ permission-matrix`).
 - Catalog's `SessionsService`/`OfferingsService` and scheduling's `EventsService` read through the
   root database, so `ActivityResolver` resolves activities before or after a command's transaction
   (it refuses to run inside one).
+
+## Required waivers at check-in (SPK-REG-011, proposed amendment PA-01): proposed
+
+**Proposed**, behind the capability `liability_waivers` (DEC-095; off by default). With it on
+(**Verified**, `__tests__/arrival-waivers.spec.ts`): the arrival checks ask the catalog policy port
+for the missing or lapsed waivers of the participant among the waiver families the session's
+offering requires (`ResolvedActivity.requiredWaiverKeys`, read through catalog's `WaiversService`)
+and add the issue codes `waiver_missing` and `waiver_lapsed` (`ArrivalIssueCodeSchema`). The
+severity is the approved waiver rule: a warning admits, a block holds the check-in until the waiver
+is accepted (a recheck admits) or a permitted override is recorded for the session, its offering or
+its scheduling event, after which the issue stays visible as a warning. A current waiver produces
+no issue. With the capability off nothing is evaluated or shown and the form check is unchanged.
+
+No entry migration was needed (`0881` stays unused): arrival issues are stored as JSON on the
+check-in and no database check lists their codes.
+
+**Pending decision** (DEC-095): whether a missing waiver blocks at the door or only alerts. The
+facility's current system only alerts; that is the assumed default and lives in the waiver version.
+
+## Who a session expects (PA-03): implemented behind the capability `price_tiers_addons`
+
+SPK-PAY-014 is a **Proposed** requirement (`docs/package-a/proposed-specification-amendments.md`),
+off for an organization until `price_tiers_addons` is turned on (**Pending decision** DEC-097).
+
+**Verified** (`apps/api/src/__tests__/journeys/facility-camp.spec.ts`): `GET /v1/attendance` for a
+session, read by staff or by the assigned coach for the whole activity while the capability is on,
+also answers `expected`: the participants of confirmed registrations whose day selection includes
+that session (a registration without a selection attends every session), each with the add-ons
+bought for that day, from enrollment's `SESSION_ROSTER_PORT`; names are read after the read was
+authorized. For an event, for a read of one person (a customer's read) and while the capability is
+off, `expected` is null and the answer is otherwise exactly as before. This is a read only: nothing
+about recording an observation changed.
+
+**Verified** (`__tests__/arrival-days.spec.ts`; quality review M-1): the arrival checks and the
+pass scan use the same rule, enrollment's `enrollmentAttendsSession` (every session when no day
+selection is stored). An enrollment is a participation basis only for the sessions it attends. A
+participant registered for other days of the offering gets the blocking issue
+`not_registered_for_session`, whose message names the days they are registered for in the
+facility's zone, with the next action `register_or_book`; the check-in is held like any other
+blocked arrival. No override exists and none was added: a place for the day is registered or
+booked first. A pass scan offers each family member only the sessions their enrollment attends
+that day. An enrollment without a day selection behaves exactly as before.

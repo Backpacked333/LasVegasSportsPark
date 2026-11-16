@@ -155,7 +155,8 @@ export const EnrollmentActions = defineActions({
   },
   manageWaitlist: {
     id: 'enrollment.manage_waitlist',
-    description: 'List a waitlist and set priority (staff)',
+    description:
+      'Offer a waitlist place, set priority, remove an entry and read the cross-offering queue (staff)',
     staffRoles: PROGRAM_ADMIN,
     requirements: ['SPK-REG-008'],
   },
@@ -338,6 +339,44 @@ export const EnrollmentActions = defineActions({
     allowSelf: true,
     requirements: ['SPK-COND-003'],
   },
+  // SPK-COND-005 (proposed amendment PA-09, DEC-103): rental-group rosters.
+  manageBookingRoster: {
+    id: 'enrollment.manage_booking_roster',
+    description:
+      'Add or invite people to a rental booking roster (staff at the facility; the renter; a member adding themselves or someone they may register)',
+    staffRoles: ['front_desk', 'program_manager', 'scheduler', 'general_manager'],
+    allowSelf: true,
+    subjectPermission: 'register',
+    capability: 'rental_rosters',
+    requirements: ['SPK-COND-005'],
+  },
+  acceptBookingRosterInvitation: {
+    id: 'enrollment.accept_booking_roster_invitation',
+    description:
+      'Join a rental booking roster on an invitation, for yourself or someone you may register',
+    staffRoles: [],
+    allowSelf: true,
+    subjectPermission: 'register',
+    capability: 'rental_rosters',
+    requirements: ['SPK-COND-005', 'SPK-IAM-003'],
+  },
+  removeBookingRosterMember: {
+    id: 'enrollment.remove_booking_roster_member',
+    description:
+      'Remove a rental roster member or revoke an invitation (staff at the facility, the renter, the member or someone who may register them)',
+    staffRoles: ['front_desk', 'program_manager', 'scheduler', 'general_manager'],
+    allowSelf: true,
+    subjectPermission: 'register',
+    requirements: ['SPK-COND-005'],
+  },
+  readBookingRoster: {
+    id: 'enrollment.read_booking_roster',
+    description:
+      "Read a rental booking's roster with each member's waiver status (the renter, or staff in facility scope)",
+    staffRoles: READERS,
+    allowSelf: true,
+    requirements: ['SPK-COND-005', 'SPK-REG-011'],
+  },
   manageAssessmentTemplate: {
     id: 'enrollment.manage_assessment_template',
     description: 'Draft and approve youth assessment templates (ENR-14)',
@@ -393,6 +432,21 @@ export const EnrollmentActions = defineActions({
     description: 'Withdraw a progression recommendation (never gated)',
     staffRoles: ['program_manager', 'coach'],
     requirements: ['SPK-YOUTH-006'],
+  },
+  readUniformOrders: {
+    id: 'enrollment.read_uniform_orders',
+    description:
+      'List the uniforms ordered for a class or a team: size, paid state and hand-over (proposed amendment PA-07; readable while the capability is off)',
+    staffRoles: READERS,
+    requirements: ['SPK-REG-012', '§4.14'],
+  },
+  handOverUniform: {
+    id: 'enrollment.hand_over_uniform',
+    description:
+      'Record that a paid uniform was handed over, or undo a hand-over by a recorded correction (proposed amendment PA-07)',
+    staffRoles: REGISTRATION_STAFF,
+    capability: 'uniforms',
+    requirements: ['SPK-REG-012'],
   },
   readYouthFeedback: {
     id: 'enrollment.read_youth_feedback',

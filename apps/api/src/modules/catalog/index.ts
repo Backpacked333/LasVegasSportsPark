@@ -31,8 +31,16 @@ export {
   parseEntitlementScope,
 } from './services/entitlement-definitions.service';
 export { PoliciesService, parsePolicyContent } from './services/policies.service';
-export { AcknowledgmentsService } from './services/acknowledgments.service';
+export { AcknowledgmentsService, WAIVER_RENEWED_REASON } from './services/acknowledgments.service';
+export { WaiversService } from './services/waivers.service';
+export {
+  acceptedInstant,
+  addMonthsUtc,
+  judgeWaiver,
+  parseWaiverContent,
+} from './waivers/waiver-rule';
 export { PriceRulesService } from './services/price-rules.service';
+export { OfferingExtrasService } from './services/offering-extras.service';
 export { DiscountsService } from './services/discounts.service';
 export {
   OfferingsService,

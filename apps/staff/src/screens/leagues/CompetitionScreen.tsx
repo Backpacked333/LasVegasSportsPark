@@ -26,6 +26,7 @@ import {
 } from '../../features/competition/labels';
 import { LeaguesNav } from '../../features/competition/nav';
 import { Button } from '../../ui/Button';
+import { PublicationPanel } from '../../features/competition/PublicationPanel';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
@@ -334,6 +335,7 @@ export function CompetitionScreen() {
                 {data.description ? <p>{data.description}</p> : null}
                 <CompetitionLifecycle competition={data} />
               </div>
+              <PublicationPanel competitionId={data.id} />
               <Seasons competition={data} />
             </>
           );

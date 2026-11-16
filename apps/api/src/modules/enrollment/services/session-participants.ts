@@ -4,6 +4,7 @@ import { sql } from 'kysely';
 import type { Trx } from '../../../kernel';
 import { SessionsService } from '../../catalog';
 import type { ClosureImpactContribution, ImpactedEventRef } from '../../scheduling';
+import { attendsSession } from './attended-sessions';
 
 /** A participant of a catalog session, or the booker of a rental or party, of a scheduling event. */
 export interface SessionParticipant {
@@ -75,7 +76,7 @@ export class SessionParticipants {
     const offeringIds = [...new Set(sessions.map((s) => s.offeringId))];
     const enrollments = await db
       .selectFrom('enrollments')
-      .select(['offering_id', 'participant_person_id', 'order_ref'])
+      .select(['offering_id', 'participant_person_id', 'order_ref', 'selected_session_ids'])
       .where('organization_id', '=', organizationId)
       .where('offering_id', 'in', offeringIds)
       .where('status', 'in', ['pending', 'confirmed'])
@@ -102,7 +103,15 @@ export class SessionParticipants {
       .execute();
     const out: SessionParticipant[] = [...booked];
     for (const session of sessions) {
-      for (const e of enrollments.filter((x) => x.offering_id === session.offeringId)) {
+      // SPK-PAY-014 (PA-03): a registration with a day selection takes part only in the
+      // sessions selected; one without (every registration before the amendment) in all. The
+      // one rule of `attended-sessions.ts`, so a reminder or a change notice (communications
+      // reads this through SESSION_AUDIENCE_PORT) reaches exactly who the session expects.
+      for (const e of enrollments.filter(
+        (x) =>
+          x.offering_id === session.offeringId &&
+          attendsSession(x.selected_session_ids, session.id),
+      )) {
         out.push({
           schedulingEventId: session.schedulingEventId,
           sessionId: session.id,
@@ -191,6 +200,27 @@ export class SessionParticipants {
       { endedBySessionCancel: true },
     );
     return [...new Set(rows.map((r) => r.personId))].sort();
+  }
+
+  /**
+   * SPK-COMMS-009 (proposed amendment PA-05; SESSION_AUDIENCE_PORT for communications): person
+   * ids of the participants of the offering's live enrollments (pending or confirmed) right now.
+   * A read: a message of the offering's schedule is addressed to them (their guardians through
+   * `receive_messages`) when it is sent, never from a stored list.
+   */
+  async participantsOfOffering(
+    db: Db | Trx,
+    organizationId: string,
+    offeringId: string,
+  ): Promise<string[]> {
+    const rows = await db
+      .selectFrom('enrollments')
+      .select('participant_person_id')
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .where('status', 'in', ['pending', 'confirmed'])
+      .execute();
+    return [...new Set(rows.map((r) => r.participant_person_id))].sort();
   }
 
   /** SPK-SCHED-009: affected customers and the orders their participation was paid through. */

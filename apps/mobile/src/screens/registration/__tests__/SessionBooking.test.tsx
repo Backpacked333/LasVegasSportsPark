@@ -47,6 +47,12 @@ const PRICE = {
   basePriceMinor: 1500,
   currency: 'USD',
   chargeLines: [],
+  pricingBasis: 'term' as const,
+  remainingSessionCount: null,
+  remainingSessionsPriceMinor: null,
+  notQuotable: null,
+  memberPrice: null,
+  tiers: [],
 };
 const SESSION_LABEL = 'Session 1. Sat, Oct 31, 10:00 AM PDT';
 

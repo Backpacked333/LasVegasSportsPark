@@ -815,6 +815,8 @@ describe('competition schema invariants (migration 0400)', () => {
           rejected_by: status === 'rejected' ? actor : null,
           withdrawn_at: status === 'withdrawn' ? clock.now() : null,
           withdrawn_by: status === 'withdrawn' ? actor : null,
+          // SPK-COMP-006 (migration 0467): the wait travels with the waiting state.
+          waiting_since: status === 'waiting' ? clock.now() : null,
         })
         .where('id', '=', teamEntryId)
         .execute();

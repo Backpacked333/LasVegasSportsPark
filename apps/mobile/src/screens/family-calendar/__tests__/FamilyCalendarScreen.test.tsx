@@ -179,6 +179,8 @@ describe('SCR-C-19 family calendar: pickup sessions, team fixtures and facility 
         name: 'You: Adult Pickup Night, 6:00 PM to 7:30 PM PDT. Pickup session, Booking pending',
       }),
     ).toBeOnTheScreen();
+    // The child's name arrives with its own read (`GET /person-names`), after the calendar: wait
+    // for it rather than assume the two answers landed together.
     expect(
       await screen.findByRole('button', {
         name: /^Sam: Junior Skills, 10:00 AM to 11:00 AM PDT\. ▲/,

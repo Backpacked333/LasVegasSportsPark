@@ -54,7 +54,7 @@ export class EnrollmentsController {
     @ZodParams(IdParams) params: z.infer<typeof IdParams>,
     @ZodQuery(TransferPreviewQuery) query: TransferPreviewQuery,
   ): Promise<TransferPreview> {
-    return this.enrollments.transferPreview(principal, params.id, query.targetOfferingId);
+    return this.enrollments.transferPreview(principal, params.id, query);
   }
 
   @Post(':id/cancel')

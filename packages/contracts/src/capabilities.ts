@@ -4,7 +4,7 @@ import { z } from './zod';
 /**
  * Conditional capabilities (§1.6, §6.5 Package G; K-12, IF-30). Whether the complex uses each one
  * is pending: DEC-016 decides applicability for all of them, and most have their own Register E
- * record (DEC-072 to DEC-082). A capability is a per-organization switch that defaults to off; only
+ * record (DEC-072 to DEC-082; DEC-095 to DEC-104 for the proposed amendments PA-01 to PA-10). A capability is a per-organization switch that defaults to off; only
  * a system administrator changes it, naming one of its applicability references, and every change
  * is audited and kept in an append-only history (migration 0011).
  *
@@ -31,6 +31,16 @@ export const CAPABILITY_IDS = [
   'supervised_pickup',
   'advanced_fairness',
   'retention_tools',
+  'liability_waivers',
+  'per_session_pricing',
+  'price_tiers_addons',
+  'member_pricing',
+  'message_sequences',
+  'public_schedule',
+  'uniforms',
+  'open_amount_lines',
+  'rental_rosters',
+  'team_waitlist',
 ] as const;
 
 export const CapabilityIdSchema = z.enum(CAPABILITY_IDS).openapi('CapabilityId');
@@ -161,6 +171,88 @@ export const CAPABILITIES: Readonly<Record<CapabilityId, CapabilityDefinition>> 
     enforcement: 'recorded_only',
     owningModules: ['reporting'],
     description: 'Retention reads and tools (SPK-REPORT-005)',
+  },
+  // The ten proposed amendments of the legacy-parity review (PA-01 to PA-10). Each is built as a
+  // proposal and stays off until its own decision record is answered.
+  liability_waivers: {
+    applicabilityReferences: ['DEC-016', 'DEC-095'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['catalog', 'enrollment', 'entry'],
+    description:
+      'Liability waivers: versioned acceptance, digital or recorded from paper, judged current, lapsed or missing (SPK-REG-011, proposed amendment PA-01)',
+  },
+  per_session_pricing: {
+    applicabilityReferences: ['DEC-016', 'DEC-096'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['catalog', 'finance'],
+    description:
+      'An offering priced per session, charged for the sessions still to come (SPK-PAY-013, proposed amendment PA-02)',
+  },
+  price_tiers_addons: {
+    applicabilityReferences: ['DEC-016', 'DEC-097'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['catalog', 'enrollment', 'finance'],
+    description:
+      'Price tiers and optional add-ons on an offering (SPK-PAY-014, proposed amendment PA-03)',
+  },
+  member_pricing: {
+    applicabilityReferences: ['DEC-016', 'DEC-098'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['catalog', 'enrollment', 'finance'],
+    description:
+      'A price for holders of a named membership on the same offering (SPK-PAY-015, proposed amendment PA-04)',
+  },
+  message_sequences: {
+    applicabilityReferences: ['DEC-016', 'DEC-099'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['communications'],
+    description:
+      'Reusable message templates and dated sequences per season or offering (SPK-COMMS-009, proposed amendment PA-05)',
+  },
+  public_schedule: {
+    applicabilityReferences: ['DEC-016', 'DEC-100'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['scheduling', 'competition'],
+    description:
+      'Schedule, fixtures, results, standings and brackets readable without sign-in, and the lobby display (SPK-SCHED-010, proposed amendment PA-06)',
+  },
+  uniforms: {
+    applicabilityReferences: ['DEC-016', 'DEC-101'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['catalog', 'enrollment', 'finance'],
+    description:
+      'Uniform choice and purchase during registration, with hand-over records (SPK-REG-012, proposed amendment PA-07)',
+  },
+  open_amount_lines: {
+    applicabilityReferences: ['DEC-016', 'DEC-102'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['finance'],
+    description:
+      'A register line with a staff-entered amount, a category and a ceiling (SPK-PAY-016, proposed amendment PA-08)',
+  },
+  rental_rosters: {
+    applicabilityReferences: ['DEC-016', 'DEC-103'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['enrollment'],
+    description:
+      'A roster of the people a renter brings, with their waivers (SPK-COND-005, proposed amendment PA-09)',
+  },
+  team_waitlist: {
+    applicabilityReferences: ['DEC-016', 'DEC-104'],
+    relatedDecisions: [],
+    enforcement: 'commands',
+    owningModules: ['competition'],
+    description:
+      'A waiting list for team entries when a division or season is full (SPK-COMP-006, proposed amendment PA-10)',
   },
 };
 

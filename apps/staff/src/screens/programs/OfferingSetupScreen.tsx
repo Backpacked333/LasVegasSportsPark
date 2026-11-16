@@ -9,11 +9,22 @@
  * viewer without it sees the offering as not available for setup. Session times and the price
  * effective dates are wall-clock time in the facility's zone when the API states it
  * (SPK-SCHED-008). Taxes and fees are whatever finance enters: approved values are pending DEC-007.
+ *
+ * Proposed amendments, each shown only while its capability is on: a price for each session
+ * instead of the whole term (SPK-PAY-013, PA-02, `per_session_pricing`, pending DEC-096) and an
+ * optional member price with the membership it requires (SPK-PAY-015, PA-04, `member_pricing`,
+ * pending DEC-098). A rule that already carries either is always listed as it is.
+ *
+ * Price tiers and add-ons (SPK-PAY-014, PA-03, `price_tiers_addons`, pending DEC-097) and the
+ * uniform (SPK-REG-012, PA-07, `uniforms`, pending DEC-101) are in `OfferingExtras.tsx`: tier
+ * rows in the price form and the add-on and uniform sections appear only while their capability
+ * is on; the tiers a rule already carries are always listed.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
+import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError, fieldErrorsOf } from '../../features/registration-finance/CommandError';
@@ -45,11 +56,22 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { OfferingForm } from './OfferingForm';
+import { MessageScheduleLink } from '../communications/sequences/MessageScheduleLink';
+import {
+  EMPTY_TIER,
+  OfferingAddons,
+  OfferingUniform,
+  RuleTiers,
+  TierEditor,
+  tiersOf,
+  type TierRow,
+} from './OfferingExtras';
+import { OfferingForm, RequiredWaivers } from './OfferingForm';
 import '../../features/grow/grow.css';
 
 type Offering = Schema<'Offering'>;
 type ChargeLine = Schema<'ChargeLine'>;
+type PricingBasis = Schema<'PricingBasis'>;
 
 const OFFERING_KEY = ['api', '/offerings/{id}'] as const;
 
@@ -99,6 +121,7 @@ function EditOffering({ offering }: { offering: Offering }) {
         <p role="status">Offering saved (revision {update.data?.staff?.revision}).</p>
       ) : null}
       <CommandError error={update.error} onReload={reload} />
+      {editable ? <RequiredWaivers offeringId={offering.id} disabled={!online} /> : null}
     </section>
   );
 }
@@ -292,12 +315,37 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
   const create = useApiCommand('post', '/offerings/{id}/price-rules', {
     invalidate: [['api', '/offerings/{id}/price-rules'], OFFERING_KEY],
   });
+  // SPK-PAY-002: a price starts now unless staff choose a later instant. "Now" sends no instant:
+  // the server stores its own, so nobody types the current minute and is refused for being late.
+  const [starts, setStarts] = useState<'now' | 'later'>('now');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [price, setPrice] = useState('');
   const [currency, setCurrency] = useState('');
   const [charges, setCharges] = useState<ChargeRow[]>([]);
   const [local, setLocal] = useState<Record<string, string>>({});
+  // SPK-PAY-013 (PA-02) and SPK-PAY-015 (PA-04): the inputs exist only while the organization
+  // has the capability turned on; with it off the request is exactly the one sent before.
+  const permissions = usePermissions();
+  const perSessionOn = permissions.isCapabilityEnabled('per_session_pricing') === true;
+  const memberOn = permissions.isCapabilityEnabled('member_pricing') === true;
+  // Known to be off (not merely unread yet): what the price list says customers are shown.
+  const perSessionOff = permissions.isCapabilityEnabled('per_session_pricing') === false;
+  const memberOff = permissions.isCapabilityEnabled('member_pricing') === false;
+  // SPK-PAY-014 (PA-03): tier rows exist only while `price_tiers_addons` is on.
+  const tiersOn = permissions.isCapabilityEnabled('price_tiers_addons') === true;
+  const [tierRows, setTierRows] = useState<TierRow[]>([]);
+  const [basis, setBasis] = useState<PricingBasis>('term');
+  const [memberPrice, setMemberPrice] = useState('');
+  const [membershipId, setMembershipId] = useState('');
+  const definitions = useApiQuery({
+    path: '/entitlement-definitions',
+    staleTime: 60_000,
+    enabled: memberOn,
+  });
+  const membershipOptions = (definitions.data ?? [])
+    .filter((d) => d.kind === 'membership_benefit' && d.status === 'active')
+    .map((d) => ({ value: d.id, label: d.name }));
   const server = fieldErrorsOf(create.error);
   const zoneLabel = zone ? `facility time, ${zone}` : 'UTC';
   const updateCharge = (i: number, patch: Partial<ChargeRow>) =>
@@ -309,9 +357,11 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
     if (!/^[A-Z]{3}$/.test(code)) errors.currency = 'Enter a three-letter currency code.';
     const base = /^[A-Z]{3}$/.test(code) ? parseMoneyInput(price, code, true) : null;
     if (base === null) errors.basePriceMinor = 'Enter the base price, for example 125.00.';
-    const effectiveFrom = localToInstant(from, zone);
+    const effectiveFrom = starts === 'later' ? localToInstant(from, zone) : undefined;
     const effectiveTo = to ? localToInstant(to, zone) : undefined;
-    if (!effectiveFrom) errors.effectiveFrom = 'Enter when this price takes effect.';
+    if (starts === 'later' && !effectiveFrom) {
+      errors.effectiveFrom = 'Enter when this price takes effect.';
+    }
     if (to && !effectiveTo) errors.effectiveTo = 'Enter a date and time, or leave empty.';
     const chargeLines: ChargeLine[] = [];
     charges.forEach((row, i) => {
@@ -336,19 +386,38 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
         });
       }
     });
+    // A member price and its membership are given together or not at all.
+    const wantsMember = memberOn && (memberPrice.trim() !== '' || membershipId !== '');
+    const member =
+      wantsMember && /^[A-Z]{3}$/.test(code) ? parseMoneyInput(memberPrice, code, true) : null;
+    if (wantsMember && member === null) {
+      errors.memberPriceMinor = 'Enter the member price, for example 100.00.';
+    }
+    if (wantsMember && !membershipId) {
+      errors.memberEntitlementDefinitionId = 'Choose the membership this price is for.';
+    }
+    // A tier member price needs the membership of the rule, so it is offered only with one.
+    const tiers = tiersOf(tiersOn ? tierRows : [], code, zone, wantsMember);
+    Object.assign(errors, tiers.errors);
     setLocal(errors);
-    if (Object.keys(errors).length > 0 || base === null || !effectiveFrom) return;
+    if (Object.keys(errors).length > 0 || base === null) return;
     create
       .submit({
         path: { id: offering.id },
         body: {
-          effectiveFrom,
+          ...(effectiveFrom ? { effectiveFrom } : {}),
           ...(effectiveTo ? { effectiveTo } : {}),
           basePriceMinor: base,
           currency: code,
           chargeLines,
+          ...(perSessionOn ? { pricingBasis: basis } : {}),
+          ...(wantsMember && member !== null
+            ? { memberPriceMinor: member, memberEntitlementDefinitionId: membershipId }
+            : {}),
+          ...(tiers.tiers.length > 0 ? { tiers: tiers.tiers } : {}),
         },
       })
+      .then(() => setTierRows([]))
       .catch(() => undefined);
   };
 
@@ -380,7 +449,36 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
                   <div className="row-text">
                     <span className="row-title">
                       Version {rule.version}: {formatMoney(rule.basePriceMinor, rule.currency)}
+                      {rule.pricingBasis === 'per_session' ? ' per session' : ''}
                     </span>
+                    {rule.pricingBasis === 'per_session' ? (
+                      <span className="caption">
+                        Joining costs this price for each session still to come when the quote is
+                        made.
+                      </span>
+                    ) : null}
+                    {/* SPK-PAY-013, SPK-PAY-015 (quality review M-6): what customers are shown
+                        follows the organization's switches, and so does this list. */}
+                    {rule.pricingBasis === 'per_session' && perSessionOff ? (
+                      <span className="caption">
+                        Per-session pricing is turned off: a quote of this price is refused, and
+                        customers see this offering as not open for online registration.
+                      </span>
+                    ) : null}
+                    {rule.memberPriceMinor !== null && memberOff ? (
+                      <span className="caption">
+                        Member pricing is turned off: every participant is quoted the standard
+                        price, and customers are not shown the member price.
+                      </span>
+                    ) : null}
+                    {rule.memberPriceMinor !== null ? (
+                      <span className="caption">
+                        Member price: {formatMoney(rule.memberPriceMinor, rule.currency)}
+                        {rule.pricingBasis === 'per_session' ? ' per session' : ''} for holders of{' '}
+                        {rule.memberEntitlementName ?? 'the named membership'}
+                      </span>
+                    ) : null}
+                    <RuleTiers rule={rule} zone={zone} />
                     <span className="caption">
                       Effective {formatInstant(rule.effectiveFrom, zone)}
                       {rule.effectiveTo
@@ -427,14 +525,27 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
             onChange={setCurrency}
             error={local.currency ?? server.currency}
           />
-          <TextField
-            label={`Effective from (${zoneLabel})`}
-            type="datetime-local"
-            required
-            value={from}
-            onChange={setFrom}
-            error={local.effectiveFrom ?? server.effectiveFrom}
+          <SelectField
+            label="This price starts"
+            hint="Now: from the moment you create this version."
+            value={starts}
+            onChange={(v) => setStarts(v === 'later' ? 'later' : 'now')}
+            options={[
+              { value: 'now', label: 'Starts now' },
+              { value: 'later', label: 'Starts at a date and time' },
+            ]}
+            error={starts === 'now' ? server.effectiveFrom : undefined}
           />
+          {starts === 'later' ? (
+            <TextField
+              label={`Effective from (${zoneLabel})`}
+              type="datetime-local"
+              required
+              value={from}
+              onChange={setFrom}
+              error={local.effectiveFrom ?? server.effectiveFrom}
+            />
+          ) : null}
           <TextField
             label={`Effective until (${zoneLabel})`}
             type="datetime-local"
@@ -442,7 +553,49 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
             onChange={setTo}
             error={local.effectiveTo ?? server.effectiveTo}
           />
+          {perSessionOn ? (
+            <SelectField
+              label="The base price is for"
+              hint={`Per session: joining costs the price for each session still to come when the quote is made. Proposed rule, pending ${PENDING.perSessionPricing.ids.join(', ')}: a session counts until it starts, with no minimum charge.`}
+              value={basis}
+              onChange={(v) => setBasis(v as PricingBasis)}
+              options={[
+                { value: 'term', label: 'The whole term' },
+                { value: 'per_session', label: 'Each session' },
+              ]}
+              error={server.pricingBasis}
+            />
+          ) : null}
+          {memberOn ? (
+            <>
+              <TextField
+                label="Member price"
+                inputMode="decimal"
+                hint={`Optional. Applies to a participant who holds the membership when the quote is made. Proposed rule, pending ${PENDING.memberPricing.ids.join(', ')}.`}
+                value={memberPrice}
+                onChange={setMemberPrice}
+                error={local.memberPriceMinor ?? server.memberPriceMinor}
+              />
+              <SelectField
+                label="Membership for the member price"
+                placeholder="None"
+                value={membershipId}
+                onChange={setMembershipId}
+                options={membershipOptions}
+                error={local.memberEntitlementDefinitionId ?? server.memberEntitlementDefinitionId}
+              />
+            </>
+          ) : null}
         </div>
+        {tiersOn ? (
+          <TierEditor
+            rows={tierRows}
+            onChange={setTierRows}
+            errors={local}
+            memberAllowed={memberOn && membershipId !== ''}
+            zoneLabel={zoneLabel}
+          />
+        ) : null}
         <ul className="list" aria-label="Taxes and fees">
           {charges.map((row, i) => (
             <li key={i}>
@@ -516,6 +669,14 @@ function PriceRules({ offering, zone }: { offering: Offering; zone: string | nul
           >
             Add a tax or fee
           </Button>
+          {tiersOn ? (
+            <Button
+              variant="secondary"
+              onClick={() => setTierRows((rows) => [...rows, EMPTY_TIER])}
+            >
+              Add a price tier
+            </Button>
+          ) : null}
           <Button type="submit" busy={create.isProcessing} disabled={!online}>
             Create price rule version
           </Button>
@@ -598,6 +759,21 @@ function CopyOffering({ offering }: { offering: Offering }) {
   );
 }
 
+/** The add-on and uniform sections, each only while its capability is on. */
+function OfferingExtrasSections({ offering }: { offering: Offering }) {
+  const permissions = usePermissions();
+  return (
+    <>
+      {permissions.isCapabilityEnabled('price_tiers_addons') === true ? (
+        <OfferingAddons offering={offering} />
+      ) : null}
+      {permissions.isCapabilityEnabled('uniforms') === true ? (
+        <OfferingUniform offering={offering} />
+      ) : null}
+    </>
+  );
+}
+
 export function OfferingHeader({ offering }: { offering: Offering }) {
   const { nameOf } = useFacilities();
   return (
@@ -647,6 +823,7 @@ export function OfferingSetupScreen() {
                   Publication and registration (SCR-S-15)
                 </Link>
                 <Link to={`/registrations/waitlists/${data.id}`}>Waitlist (SCR-S-26)</Link>
+                <MessageScheduleLink subject="offering" id={data.id} />
                 <Link to={`/registrations/enrollments?offering=${data.id}`}>
                   Enrollments (SCR-S-27)
                 </Link>
@@ -685,6 +862,7 @@ export function OfferingSetupScreen() {
               <EditOffering offering={data} />
               <Sessions offering={data} zone={timeZoneOf(data.facilityId)} />
               <PriceRules offering={data} zone={timeZoneOf(data.facilityId)} />
+              <OfferingExtrasSections offering={data} />
               <CopyOffering offering={data} />
             </>
           )

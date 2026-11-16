@@ -10,11 +10,14 @@ import {
   type DiscountEligibilityRules,
   type EntitlementDefinition,
   type Offering,
+  type OfferingAddon,
   type OfferingFacility,
   type OfferingLocation,
   type OfferingSession,
+  type OfferingUniform,
   type PolicyVersion,
   type PriceRule,
+  type PriceRuleTier,
   type Principal,
   type Program,
   type PublicOffering,
@@ -25,9 +28,12 @@ import type {
   ApprovalsTable,
   DiscountDefinitionsTable,
   EntitlementDefinitionsTable,
+  OfferingAddonsTable,
   OfferingKind,
   OfferingSessionsTable,
+  OfferingUniformsTable,
   PolicyVersionsTable,
+  PriceRuleTiersTable,
   PriceRulesTable,
   ProgramsTable,
   PublicationState,
@@ -49,6 +55,22 @@ export function organizationOf(principal: Principal): string {
 export const iso = (value: Date | string): string => new Date(value).toISOString();
 export const isoOrNull = (value: Date | string | null | undefined): string | null =>
   value === null || value === undefined ? null : iso(value);
+
+/**
+ * A `date` column as `YYYY-MM-DD` whichever driver read it: a string is already the date; a Date is
+ * midnight of that date in UTC (PGlite) or in the process zone (node-postgres), so the date is
+ * read from whichever of the two is at midnight.
+ */
+export function dateOnlyOrNull(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value.slice(0, 10);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const utcMidnight =
+    value.getUTCHours() === 0 && value.getUTCMinutes() === 0 && value.getUTCSeconds() === 0;
+  return utcMidnight
+    ? `${value.getUTCFullYear()}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}`
+    : `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
 
 /** Whether [from, to) contains the instant (to = null means open-ended). */
 export function isEffectiveAt(
@@ -133,6 +155,25 @@ export interface OfferingRow {
 export interface OfferingViewContext {
   ageBand: AgeBand;
   price: PriceRule | null;
+  /**
+   * SPK-PAY-013: for a per-session price, the offering's scheduled sessions that start after the
+   * view instant; null for a term price or an unpriced offering.
+   */
+  remainingSessionCount: number | null;
+  /**
+   * SPK-PAY-014 (PA-03): whether the price tiers of the rule are shown (`price_tiers_addons` is
+   * on); absent or false shows none, as before the amendment.
+   */
+  priceTiersVisible?: boolean;
+  /**
+   * Quality review M-6 (SPK-PAY-013, SPK-PAY-015): what a quote made now would do under the
+   * organization's switches. `memberPricingOn` false: a quote charges the standard price, so no
+   * member price is shown. `perSessionPricingOn` false: a quote of a per-session rule is
+   * refused, so the offering is shown as not open for online registration. Read only for a rule
+   * that has the field; absent means on (a rule without the field is unaffected).
+   */
+  memberPricingOn?: boolean;
+  perSessionPricingOn?: boolean;
   requiredFormPolicyVersionIds: string[];
   /** SPK-SCHED-008: the facility and its IANA zone (kernel facility directory, K-04). */
   facility: OfferingFacility;
@@ -151,8 +192,14 @@ export function eligibilityReferenceDateOf(row: OfferingRow): string {
   return row.eligibility_reference_date ?? row.starts_on;
 }
 
+/** The plain reason shown instead of a per-session price while `per_session_pricing` is off. */
+export const PER_SESSION_PRICING_OFF_MESSAGE =
+  'This activity is priced per class, and per-class pricing is turned off for this organization. It is not open for online registration; ask the front desk.';
+
 export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): PublicOffering {
   const location = row.location as OfferingLocation;
+  const perSession = ctx.price?.pricingBasis === 'per_session';
+  const quotable = !perSession || ctx.perSessionPricingOn !== false;
   return {
     id: row.id,
     programId: row.program_id,
@@ -177,6 +224,27 @@ export function toPublicOffering(row: OfferingRow, ctx: OfferingViewContext): Pu
           basePriceMinor: ctx.price.basePriceMinor,
           currency: ctx.price.currency,
           chargeLines: ctx.price.chargeLines,
+          pricingBasis: ctx.price.pricingBasis,
+          remainingSessionCount: perSession && quotable ? (ctx.remainingSessionCount ?? 0) : null,
+          remainingSessionsPriceMinor:
+            perSession && quotable
+              ? ctx.price.basePriceMinor * (ctx.remainingSessionCount ?? 0)
+              : null,
+          memberPrice:
+            ctx.memberPricingOn !== false &&
+            quotable &&
+            ctx.price.memberPriceMinor !== null &&
+            ctx.price.memberEntitlementDefinitionId
+              ? {
+                  priceMinor: ctx.price.memberPriceMinor,
+                  entitlementDefinitionId: ctx.price.memberEntitlementDefinitionId,
+                  entitlementName: ctx.price.memberEntitlementName ?? '',
+                }
+              : null,
+          tiers: ctx.priceTiersVisible ? ctx.price.tiers : [],
+          notQuotable: quotable
+            ? null
+            : { code: 'per_session_pricing_off', message: PER_SESSION_PRICING_OFF_MESSAGE },
         }
       : null,
     eligibilityPolicyVersionId: row.eligibility_policy_version_id,
@@ -295,6 +363,8 @@ export function toAcknowledgment(row: Selectable<AcknowledgmentsTable>): Acknowl
     recordedByKind: row.recorded_by_kind,
     signedAt: iso(row.signed_at),
     evidence: row.evidence,
+    method: row.method,
+    paperDatedOn: dateOnlyOrNull(row.paper_dated_on),
     status: row.status,
     withdrawnAt: isoOrNull(row.withdrawn_at),
     withdrawnReason: row.withdrawn_reason,
@@ -340,7 +410,66 @@ export function toPublicOfferingSession(row: Selectable<OfferingSessionsTable>):
   };
 }
 
-export function toPriceRule(row: Selectable<PriceRulesTable>): PriceRule {
+/**
+ * `memberEntitlementName` is the name of the rule's membership entitlement (SPK-PAY-015), read by
+ * the caller with the rule; it is null exactly when the rule carries no member price.
+ */
+export function toPriceRuleTier(row: Selectable<PriceRuleTiersTable>): PriceRuleTier {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    sequence: row.sequence,
+    attendance: row.attendance,
+    minSessions: row.min_sessions,
+    maxSessions: row.max_sessions,
+    priceMinor: row.price_minor,
+    memberPriceMinor: row.member_price_minor,
+    availableUntil: isoOrNull(row.available_until),
+  };
+}
+
+export function toOfferingAddon(row: Selectable<OfferingAddonsTable>): OfferingAddon {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    code: row.code,
+    name: row.name,
+    description: row.description,
+    priceMinor: row.price_minor,
+    currency: row.currency,
+    chargeLines: row.charge_lines as ChargeLine[],
+    selection: row.selection,
+    capacity: row.capacity,
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toOfferingUniform(row: Selectable<OfferingUniformsTable>): OfferingUniform {
+  return {
+    id: row.id,
+    offeringId: row.offering_id,
+    itemKey: row.item_key,
+    name: row.name,
+    sizes: row.sizes,
+    requirement: row.requirement,
+    priceMinor: row.price_minor,
+    currency: row.currency,
+    chargeLines: row.charge_lines as ChargeLine[],
+    returningHolderFree: row.returning_holder_free,
+    status: row.status,
+    revision: row.revision,
+    createdAt: iso(row.created_at),
+  };
+}
+
+export function toPriceRule(
+  row: Selectable<PriceRulesTable>,
+  memberEntitlementName: string | null = null,
+  tiers: PriceRuleTier[] = [],
+): PriceRule {
   return {
     id: row.id,
     offeringId: row.offering_id,
@@ -350,6 +479,11 @@ export function toPriceRule(row: Selectable<PriceRulesTable>): PriceRule {
     basePriceMinor: row.base_price_minor,
     currency: row.currency,
     chargeLines: row.charge_lines as ChargeLine[],
+    pricingBasis: row.pricing_basis,
+    memberPriceMinor: row.member_price_minor,
+    memberEntitlementDefinitionId: row.member_entitlement_definition_id,
+    memberEntitlementName: row.member_entitlement_definition_id ? memberEntitlementName : null,
+    tiers,
     revision: row.revision,
     createdAt: iso(row.created_at),
   };

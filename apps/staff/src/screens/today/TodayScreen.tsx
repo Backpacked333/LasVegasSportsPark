@@ -34,7 +34,7 @@ import { Button } from '../../ui/Button';
 import { CommandError } from '../../ui/CommandFeedback';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge, type StatusTone } from '../../ui/StatusBadge';
+import { plainWords, StatusBadge, type StatusTone } from '../../ui/StatusBadge';
 import { Icon } from '../../ui/Icon';
 import { Kpi, KpiRow } from '../../ui/Page';
 import { formatDateTime, formatMinutes, formatTime, formatTimeRange } from '../../ui/time';
@@ -49,6 +49,7 @@ import {
   domainActions,
   permittedVerbs,
 } from './exception-actions';
+import { GlassCard } from '../../ui/glass/GlassCard';
 
 type TodayItem = Schema<'TodayItem'>;
 type TodayFacility = Schema<'TodayFeed'>['facilities'][number];
@@ -167,8 +168,10 @@ function IssueRow({
         {item.title}
       </span>
       <span className="caption">
-        {item.affected ? `Affects ${item.affected.type} ${item.affected.id}` : 'No linked record'} ·
-        Owner: {item.ownerQueue}
+        {item.affected
+          ? `Affects ${plainWords(item.affected.type)} ${item.affected.id}`
+          : 'No linked record'}{' '}
+        · Owner: {plainWords(item.ownerQueue)}
         {item.facilityId ? ` · ${facilityLabel(item.facilityId, names)}` : ''}
         {item.ageMinutes !== null ? ` · Open ${formatMinutes(item.ageMinutes)}` : ''}
         {item.deadlineAt ? ` · Due ${formatDateTime(item.deadlineAt, zone)}` : ''}
@@ -451,7 +454,7 @@ function FieldStatusSection({ facility, now }: { facility: TodayFacility; now: D
   const remaining = stillRunning(events.data?.items ?? [], now);
   const headingId = `field-status-${facility.facilityId}`;
   return (
-    <section className="card card-dark card-flush field-board" aria-labelledby={headingId}>
+    <GlassCard tone="night" className="card-flush field-board" aria-labelledby={headingId}>
       <div className="card-head">
         <span className="field-board-title">
           <h4 id={headingId}>Field status</h4>
@@ -557,7 +560,7 @@ function FieldStatusSection({ facility, now }: { facility: TodayFacility; now: D
           }}
         </QueryBoundary>
       </div>
-    </section>
+    </GlassCard>
   );
 }
 

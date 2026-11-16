@@ -6,10 +6,11 @@
 #
 # As written it runs NODE_ENV=development with the local identity provider and the fake
 # providers, so it starts without any account. For a production rehearsal set NODE_ENV=production,
-# AUTH_MODE=oidc with AUTH_JWKS_URL, AUTH_ISSUER, AUTH_AUDIENCE and PROVIDER_DECISIONS, and every
-# provider selector (docs/deploy/production.md); production refuses the fakes and local identity,
-# and a plaintext connection to a database on another host (the db service here would need TLS
-# and DATABASE_SSL=require).
+# AUTH_MODE=oidc with AUTH_JWKS_URL, AUTH_ISSUER, AUTH_AUDIENCE and PROVIDER_DECISIONS, every
+# provider selector and TRUST_PROXY (false here: nothing is in front of the API)
+# (docs/deploy/production.md); production refuses the fakes and local identity, an unset or
+# trust-everything TRUST_PROXY, and a plaintext connection to a database on another host (the db
+# service here would need TLS and DATABASE_SSL=require).
 name: sportspark
 
 x-app-env: &app-env

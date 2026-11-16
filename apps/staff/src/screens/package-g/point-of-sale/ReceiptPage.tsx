@@ -73,7 +73,17 @@ function ReceiptView({ saleId }: { saleId: string }) {
                   <tbody>
                     {data.lines.map((line, i) => (
                       <tr key={`${line.name}-${i}`}>
-                        <td>{line.name}</td>
+                        <td>
+                          {/* SPK-PAY-016 (proposed): an open amount reads by its description. */}
+                          {line.description ? (
+                            <>
+                              {line.description}
+                              <span className="caption"> {line.name}</span>
+                            </>
+                          ) : (
+                            line.name
+                          )}
+                        </td>
                         <td>{line.quantity}</td>
                         <td>{formatMoney(line.unitPriceMinor, c)}</td>
                         <td>

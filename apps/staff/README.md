@@ -75,6 +75,81 @@ pnpm --filter @sportspark/staff dev      # http://localhost:5173
 | Hosting and the production origin (CORS or a same-origin proxy).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | **Pending decision** DEC-021                                                                                             |                                                                                                                                                                                                                                                                |
 | Schedule (SCR-S-03 to SCR-S-07) and Facilities (SCR-S-41, SCR-S-42) screens; SCR-S-51 and SCR-S-52 are nested in the Schedule area; details in `src/screens/schedule/README.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | **Verified** in jsdom                                                                                                    | `src/screens/*/__tests__`                                                                                                                                                                                                                                      |
 
+## Visual system, Legends mode and quick navigation (SPK-UX-005, SPK-UX-008 to SPK-UX-010)
+
+Status words follow §6.7: **Verified** means implemented and covered by the evidence named;
+**Proposed** means built here as a design proposal that the product owner has not accepted in a
+recorded decision; **Not verified** names what this environment could not check.
+
+- **Two themes from one set of tokens** (`src/ui/styles.css`). Classic (default): a calm warm
+  white, white cards with a soft shadow, pitch green as the one accent. Legends
+  (`[data-theme='legends']`): neutral black, soft white text, gold only where something is active
+  or primary; status tones are lightened for dark surfaces and warning is orange so it is never
+  read as the accent. Every rule takes a token: a colour literal in a feature stylesheet does not
+  follow the theme (the few left are documented where they stand: card colours in the score
+  sheet, the knob of a switch). Verified: both themes rendered for every area in a browser at
+  1440 px and 390 px, and every colour and background pairing of the stylesheets computed in both
+  themes. Proposed: the palettes themselves.
+- **Type and wording.** Archivo at its normal width, sentence case everywhere (nothing is set in
+  capitals), weights from 500 to 700. A status badge shows a lifecycle's state name as plain
+  words ("in service", "recovery required"; `plainWords` in `src/ui/StatusBadge.tsx`), leaving
+  codes in capitals, action ids and file names as written. The inventory screen ids in section
+  tabs stay in each link's name but are not drawn. Verified: `src/ui/__tests__/primitives.test.tsx`
+  and the screens' own tests.
+- **The "Legends mode" switch** (`src/theme/`): in the header, on the sign-in page and in quick
+  navigation. `role="switch"` with its state, keyboard operable; the choice is a display
+  preference kept in this browser (`providers/preferences`, never sent to the API) and applied
+  before first paint by `public/theme-init.js` (a file, because the Content-Security-Policy allows
+  scripts from `'self'` only). Verified: `src/theme/__tests__/legends-mode.test.tsx`.
+- **Layers** (ADR-001, glass-forward). Three of them:
+  - the **backdrop** behind the whole application (`layout/shell.css`): soft fields of colour and
+    the faint markings of a pitch (`public/field-lines.svg`), scrolling with the page;
+  - **content** that people read at length or type into (lists, tables, forms, long text): flat,
+    opaque cards;
+  - **glass** (`src/ui/glass/`) for the chrome and for the headline pieces of a screen: the
+    sidebar, the header groups, the quick navigation dialog, the sign-in card, the workspace's
+    phone tab bar, and through the shared kit the stat tiles (`Kpi`), the hero card (`GlassCard`;
+    `tone="night"` is coloured glass that keeps the dark-card tokens in both themes), the page
+    toolbar (`Toolbar`, for a toolbar that stands on the page, not one inside a card) and the tab
+    strip of every area (`TabTrack`; on a phone it stays on one row, scrolls sideways and brings
+    the current tab into view). The dashboard has no sheets or toasts: a command's outcome stays
+    where the command was given (SPK-UX-008).
+
+  Rules every glass body follows:
+  1. the backdrop bends inside a band along its edge (an SVG displacement filter through
+     `backdrop-filter`; only Chromium renders it, every other engine gets the blur, fill and rim
+     of the stylesheet with no bend);
+  2. a thin rim, brighter towards the top left, with a faint edge line outside it;
+  3. there is something behind it to bend (artwork, or content that scrolls under it);
+  4. its content is flat, sharp and at full contrast, and never another glass body;
+  5. capsules and continuous corners; where content passes under a bar it fades (scroll edge).
+     `prefers-reduced-transparency` and `prefers-contrast: more` replace the optics with a solid
+     fill; `prefers-reduced-motion` removes the transitions.
+     Verified in headless Chromium at both themes: every body carries its filter, lines curve inside
+     the bezel with the blur turned down, and every label on glass measures at least 4.5:1 (glyphs
+     3:1) against the pixels behind it with the fills at their default, halved and doubled, at the
+     scroll positions where the darkest content passes under the header. Coloured glass is the one
+     exception to halving: its tint carries its labels, so it may deepen and never thins. Measured
+     on Today, Finance, Schedule, Leagues, Arrival, People, the registration queue and the message
+     composer.
+     Not verified: Safari and Firefox on real devices (the fallback was checked by removing the
+     filter in Chromium), and staff acceptance on the facility's workstations (§6.3).
+
+- **Quick navigation** (`src/layout/CommandPalette.tsx`, `src/navigation/destinations.ts`): the
+  header's "Jump to", Ctrl+K or Command+K anywhere, or "/" outside a field. It offers every screen
+  that opens without first choosing a record, the facility choices, Legends mode, the sidebar and
+  sign-out; the screens offered follow `GET /v1/me/permissions` exactly as the sidebar does, and
+  the screen opened still renders what the API answers. Recently opened screens are remembered in
+  this browser by screen path only (never a record id). Verified:
+  `src/layout/__tests__/quick-navigation.test.tsx`, `src/navigation/__tests__/destinations.test.ts`.
+- **Shell conveniences.** The sidebar collapses to an icon rail on wide screens (remembered) and
+  is a drawer over a scrim below 900 px (Escape, the scrim or a route change closes it); the
+  facility chosen in the switcher is remembered across reloads and forgotten on sign-out; a thin
+  line at the top of the window while any read is in flight; each page starts at its top; the
+  browser tab is titled with the screen shown; loading states draw quiet placeholder lines; error,
+  offline and pending states each have their own look as well as their words and glyph; a busy
+  button shows a spinner. Verified by the same tests and `src/__tests__/shell.test.tsx`.
+
 ## Today, People and families, support cases (SCR-S-01, SCR-S-02, SCR-S-20 to SCR-S-23, SCR-S-49, SCR-S-50)
 
 Routes: `/today`, `/today/exceptions/:exceptionId`, `/people`, `/people/:personId`,
@@ -231,3 +306,28 @@ Router 7 is used (React Router 8 requires React 19.2.7 or later).
 
 The root `vitest` (5.0.5) runs these tests as the `staff` project; the root also gained
 `eslint-plugin-react-hooks` 7.1.1 (2026-04-17) for the React hooks lint rules.
+
+## Proposed amendments PA-10 and PA-06 at the staff screens (2026-11-14)
+
+Both requirements are **Proposed** and gated on their capability switch (off by default); their
+open values are **Pending decision** and each screen names the decision record.
+
+- **Team waiting list** (SPK-COMP-006, `team_waitlist`, DEC-104), **Verified** by
+  `src/screens/teams/__tests__/TeamWaitingList.test.tsx`: the team entry review (SCR-S-16) adds
+  an entry to the waiting list, says when a placement made the team wait, and shows the season's
+  waiting list in order with the places of each division, where league staff offer a free place
+  to the team they choose and withdraw an open offer
+  (`src/features/competition/WaitingListPanel.tsx`); the Teams home lists each season's waiting
+  list read-only.
+- **Public and lobby views** (SPK-SCHED-010, `public_schedule`, DEC-100), **Verified** by
+  `src/screens/public/__tests__/PublicScreens.test.tsx`: routes OUTSIDE the session guard
+  (`src/screens/public/routes.tsx`, registered in `App.tsx`): `/lobby/:organization/:code` (the
+  facility's public schedule code; advances by itself, shows when it was last updated, keeps the
+  last answer in this browser while its connection is down; `?seasons=<code>,<code>` adds the
+  standings of public seasons, `?rows=` and `?seconds=` change the page length and time), and
+  `/public/:organization/schedule/:code`, `/public/:organization/competitions/:code`,
+  `/public/:organization/seasons/:code/{fixtures,results,standings,bracket}`. Their stylesheet
+  (`src/screens/public/public.css`) uses theme tokens only. Staff controls: "Public pages" on the
+  competition screen and "Public schedule" in the Schedule area.
+- **Not verified**: neither feature was looked at in a browser in this change; the tests render
+  the screens in jsdom. The lobby display has not been tried on a wall screen.

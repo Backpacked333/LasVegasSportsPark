@@ -5,9 +5,9 @@
  * which is pending (DEC-008, POL-015), so no handling is promised here.
  */
 import type { Schema } from '@sportspark/api-client';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, spacing, type } from '../../ui/theme';
 import { formatMoney } from './format';
 
 type Totals = Schema<'ObligationTotals'>;
@@ -18,6 +18,7 @@ export function totalsLabel(totals: Totals): string {
 }
 
 export function ObligationTotals({ totals, testID }: { totals: Totals; testID?: string }) {
+  const styles = useStyles();
   const m = (minor: number) => formatMoney(minor, totals.currency);
   const rows: [string, string][] = [
     ['Team total', m(totals.amountMinor)],
@@ -51,7 +52,7 @@ export function ObligationTotals({ totals, testID }: { totals: Totals; testID?: 
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { gap: spacing.sm },
   rows: { gap: spacing.xs },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
@@ -59,4 +60,4 @@ const styles = StyleSheet.create({
   value: { ...type.body, color: colors.text, ...fonts.semibold },
   excess: { gap: spacing.xs },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

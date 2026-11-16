@@ -431,7 +431,8 @@ export interface ReportingTeamEntriesView {
   division_id: V<string>;
   team_id: V<string>;
   facility_id: V<string | null>;
-  status: V<'applied' | 'approved' | 'withdrawn' | 'rejected'>;
+  /** `waiting` since competition migration 0467 (SPK-COMP-006, proposed): not yet placed. */
+  status: V<'applied' | 'waiting' | 'approved' | 'withdrawn' | 'rejected'>;
   approved_at: V<Date | null>;
   season_status: V<string>;
   season_starts_on: V<string>;
@@ -659,6 +660,46 @@ export interface ReportingPosReturnLinesView {
   refund_attempt_id: V<string | null>;
 }
 
+/**
+ * Migration 1310 (SPK-PAY-016, proposed amendment PA-08): open-amount register lines in effect of
+ * paid sales, apart from product lines, for review.
+ */
+export interface ReportingPosOpenAmountLinesView {
+  sale_line_id: V<string>;
+  organization_id: V<string>;
+  facility_id: V<string>;
+  sale_number: V<string>;
+  reason_category: V<string>;
+  reason_label: V<string>;
+  revenue_category: V<string>;
+  description: V<string>;
+  currency: V<string>;
+  amount_minor: V<number>;
+  charges_minor: V<number>;
+  line_total_minor: V<number>;
+  approval_required: V<boolean>;
+  approved: V<boolean>;
+  approved_at: V<Date | null>;
+  paid_at: V<Date>;
+  /** Migration 1311: the line still waits for its second approval (finance 0697's condition). */
+  awaiting_approval: V<boolean>;
+}
+
+/** Migration 1310: returned open-amount register lines, under the same categories. */
+export interface ReportingPosOpenAmountReturnLinesView {
+  return_id: V<string>;
+  organization_id: V<string>;
+  facility_id: V<string>;
+  sale_line_id: V<string>;
+  reason_category: V<string>;
+  reason_label: V<string>;
+  revenue_category: V<string>;
+  currency: V<string>;
+  amount_minor: V<number>;
+  returned_at: V<Date>;
+  tender_kind: V<string>;
+}
+
 export interface ReportingPosMoneyView {
   movement_id: V<string>;
   organization_id: V<string>;
@@ -820,6 +861,8 @@ export interface ReportingTables {
   reporting_pos_money_v: ReportingPosMoneyView;
   reporting_pos_sale_lines_v: ReportingPosSaleLinesView;
   reporting_pos_return_lines_v: ReportingPosReturnLinesView;
+  reporting_pos_open_amount_lines_v: ReportingPosOpenAmountLinesView;
+  reporting_pos_open_amount_return_lines_v: ReportingPosOpenAmountReturnLinesView;
   reporting_order_lines_v: ReportingOrderLinesView;
   reporting_restrictions_v: ReportingRestrictionsView;
   reporting_maintenance_tasks_v: ReportingMaintenanceTasksView;

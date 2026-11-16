@@ -22,7 +22,7 @@ import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { StatusBadge } from '../../ui/StatusBadge';
+import { StatusBadge, plainWords } from '../../ui/StatusBadge';
 import { CommandError } from '../../features/schedule-facilities/CommandError';
 import {
   FACILITY_STATUS_BADGE,
@@ -306,7 +306,7 @@ function ResourceCard({
           {resource.parentResourceId
             ? `, inside ${names.get(resource.parentResourceId) ?? 'its whole space'}`
             : ''}
-          {' · '}Formats: {resource.compatibleFormats.join(', ') || 'none listed'}
+          {' · '}Formats: {plainWords(resource.compatibleFormats.join(', ')) || 'none listed'}
           {' · '}Setup {resource.defaultSetupMinutes} min, cleanup {resource.defaultCleanupMinutes}{' '}
           min
         </span>

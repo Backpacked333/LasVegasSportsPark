@@ -1,7 +1,12 @@
 {
   "outbox": {
     "automation.recommendation_expiry_due": ["automation.expire_recommendation"],
-    "catalog.offering_updated": ["enrollment.sync_capacity"],
+    "catalog.offering_archived": ["communications.cancel_archived_offering_messages"],
+    "catalog.offering_published": ["communications.schedule_offering_messages"],
+    "catalog.offering_updated": [
+      "communications.follow_offering_messages",
+      "enrollment.sync_capacity"
+    ],
     "catalog.session_canceled": [
       "enrollment.follow_session_canceled",
       "entry.withdraw_on_session_canceled",
@@ -15,10 +20,19 @@
     "communications.delivery_requested": ["communications.dispatch_notification"],
     "communications.notification_dispatched": ["support.index_message"],
     "competition.availability_requested": ["communications.notify_availability_request"],
-    "competition.fixture_changed": ["workforce.follow_fixture"],
+    "competition.fixture_changed": [
+      "communications.follow_season_first_game",
+      "workforce.follow_fixture"
+    ],
     "competition.result_published": ["communications.notify_result_published"],
     "competition.result_reminder_requested": ["communications.notify_result_reminder"],
+    "competition.season_created": ["communications.schedule_season_messages"],
+    "competition.season_updated": ["communications.follow_season_messages"],
+    "competition.team_entry_status_changed": ["communications.notify_team_waiting_status"],
     "competition.team_invitation_created": ["communications.notify_team_invitation"],
+    "competition.team_place_offer_expiry_due": ["competition.expire_team_place_offer"],
+    "competition.team_place_offer_resolved": ["communications.notify_team_place_offer_resolved"],
+    "competition.team_place_offered": ["communications.notify_team_place_offered"],
     "core.capability_changed": ["enrollment.resume_after_capability_enabled"],
     "enrollment.application_decided": ["enrollment.notify_registration_outcome"],
     "enrollment.assessment_published": ["enrollment.notify_assessment_published"],

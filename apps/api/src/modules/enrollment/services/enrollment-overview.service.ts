@@ -45,6 +45,7 @@ import {
   organizationOf,
   redactWaitlistEntry,
 } from '../enrollment.shared';
+import { attendedSessions } from './attended-sessions';
 import { CatalogSessions } from './catalog-sessions';
 import { CustomerScope } from './customer-scope';
 import { EnrollmentViews } from './enrollment-views';
@@ -363,7 +364,12 @@ export class EnrollmentOverviewService {
           await this.sessions.list(organizationId, enrollment.offeringId),
         );
       }
-      const started = (sessionsByOffering.get(enrollment.offeringId) ?? [])
+      // SPK-PAY-014 (PA-03): attendance is counted over the sessions the enrollment attends,
+      // so a day not chosen is never a session "held" without the participant.
+      const started = attendedSessions(
+        enrollment.selectedSessionIds,
+        sessionsByOffering.get(enrollment.offeringId) ?? [],
+      )
         .filter((s) => new Date(s.scheduledStart).getTime() <= now)
         .sort((a, b) => b.scheduledStart.localeCompare(a.scheduledStart))
         .slice(0, PARTICIPANT_RECENT_SESSIONS);

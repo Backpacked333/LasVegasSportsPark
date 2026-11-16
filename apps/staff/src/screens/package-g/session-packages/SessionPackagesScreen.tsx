@@ -58,6 +58,7 @@ import {
 } from './labels';
 import { SESSION_PACKAGES } from './meta';
 import '../../../features/grow/grow.css';
+import { Toolbar } from '../../../ui/glass/GlassCard';
 
 type Redemption = PackageEntitlement['redemptions'][number];
 
@@ -410,7 +411,7 @@ function Entitlements() {
   return (
     <section aria-labelledby="entitlements-title">
       <h3 id="entitlements-title">Session packages held</h3>
-      <div className="pg-toolbar">
+      <Toolbar className="pg-toolbar">
         <SelectField
           label="State"
           value={status}
@@ -425,7 +426,7 @@ function Entitlements() {
           placeholder="All packages"
           options={(offerings.data?.items ?? []).map((o) => ({ value: o.id, label: o.name }))}
         />
-      </div>
+      </Toolbar>
       <PersonPicker label="Participant" value={participant} onChange={setParticipant} />
       <QueryBoundary
         query={pages}

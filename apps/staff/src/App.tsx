@@ -11,6 +11,7 @@ import { operationsRoutes } from './features/operations/routes';
 import { registrationFinanceRoutes } from './features/registration-finance/routes';
 import { Shell } from './layout/Shell';
 import { STAFF_AREAS } from './navigation/areas';
+import { messageSequenceRoutes } from './screens/communications/sequences/routes';
 import { packageGRoutes } from './screens/package-g/routes';
 import { AreaScreen } from './screens/area/AreaScreen';
 import { FacilitiesArea } from './screens/facilities/FacilitiesArea';
@@ -23,6 +24,7 @@ import { InvitationsScreen } from './screens/people/InvitationsScreen';
 import { OpenAccessReviewScreen } from './screens/people/OpenAccessReviewScreen';
 import { PeopleScreen } from './screens/people/PeopleScreen';
 import { PersonRecordScreen } from './screens/people/PersonRecordScreen';
+import { publicRoutes } from './screens/public/routes';
 import { RelationshipsScreen } from './screens/people/RelationshipsScreen';
 import { ScheduleArea } from './screens/schedule/ScheduleArea';
 import { SignInScreen } from './screens/sign-in/SignInScreen';
@@ -37,6 +39,8 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/sign-in" element={<SignInScreen />} />
+      {/* SPK-SCHED-010: the lobby display and the public pages need no sign-in. */}
+      {publicRoutes()}
       <Route
         element={
           <RequireSession>
@@ -52,6 +56,7 @@ export function AppRoutes() {
         {operationsRoutes()}
         {insightAdminRoutes()}
         {packageGRoutes()}
+        {messageSequenceRoutes()}
         <Route path="/today" element={<TodayScreen />} />
         <Route path="/today/exceptions/:exceptionId" element={<ExceptionDetailScreen />} />
         <Route path="/people" element={<PeopleScreen />} />

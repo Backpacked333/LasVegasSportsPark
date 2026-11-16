@@ -23,7 +23,7 @@
  * - ELIGIBILITY_FAILED lists the API's reasons and permitted alternatives (SPK-REG-002).
  */
 import { presentationForError, recoveryActionFor, type ApiError } from '@sportspark/api-client';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import {
   mayHaveTakenEffect,
   refusedBeforeRunning,
@@ -36,7 +36,7 @@ import { OutcomeLost } from '../../ui/OutcomeLost';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, spacing, type } from '../../ui/theme';
 
 export interface CommandErrorProps {
   error: ApiError | null;
@@ -80,6 +80,7 @@ export function CommandError({
   testID = 'command-error',
 }: CommandErrorProps) {
   // R3-SCREEN-STATES-01: "Check again" needs a connection; offline it neither queues nor fails.
+  const styles = useStyles();
   const offline = useConnectivity().reachable === false;
   if (!error) return null;
   const presentation = presentationForError(error);
@@ -186,11 +187,11 @@ export function CommandError({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: { padding: spacing.lg, gap: spacing.md, alignItems: 'flex-start' },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.xs },
   label: { ...type.body, ...fonts.semibold, color: colors.text },
   item: { ...type.body, color: colors.text },
-});
+}));

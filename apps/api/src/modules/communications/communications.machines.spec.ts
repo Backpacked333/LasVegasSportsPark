@@ -5,6 +5,7 @@ import {
   NotificationMachine,
   PushDeviceMachine,
   RecipientMachine,
+  ScheduledMessageMachine,
 } from './communications.machines';
 
 describe('communications state machines (§4.6, SPK-COMMS-004)', () => {
@@ -67,5 +68,34 @@ describe('communications state machines (§4.6, SPK-COMMS-004)', () => {
     expect(PushDeviceMachine.next('active', 'revoke')).toBe('revoked');
     expect(PushDeviceMachine.can('revoked', 'revoke')).toBe(false);
     expect(PushDeviceMachine.isTerminal('revoked')).toBe(true);
+  });
+
+  it('ScheduledMessage (SPK-COMMS-009): nothing is sent that was not confirmed; a confirmed message can return to needing confirmation; sent and canceled are final', () => {
+    expect(ScheduledMessageMachine.initial).toBe('needs_confirmation');
+    expect(ScheduledMessageMachine.states).toEqual([
+      'needs_confirmation',
+      'confirmed',
+      'skipped',
+      'sent',
+      'canceled',
+    ]);
+    expect(ScheduledMessageMachine.next('needs_confirmation', 'confirm')).toBe('confirmed');
+    expect(ScheduledMessageMachine.next('confirmed', 'send')).toBe('sent');
+    expect(ScheduledMessageMachine.next('confirmed', 'reopen')).toBe('needs_confirmation');
+    expect(ScheduledMessageMachine.next('needs_confirmation', 'skip')).toBe('skipped');
+    expect(ScheduledMessageMachine.next('confirmed', 'skip')).toBe('skipped');
+    expect(ScheduledMessageMachine.next('skipped', 'restore')).toBe('needs_confirmation');
+    // only a confirmed message is ever sent
+    expect(ScheduledMessageMachine.can('needs_confirmation', 'send')).toBe(false);
+    expect(ScheduledMessageMachine.can('skipped', 'send')).toBe(false);
+    expect(ScheduledMessageMachine.can('skipped', 'confirm')).toBe(false);
+    for (const state of ['needs_confirmation', 'confirmed', 'skipped'] as const) {
+      expect(ScheduledMessageMachine.next(state, 'cancel')).toBe('canceled');
+    }
+    for (const final of ['sent', 'canceled'] as const) {
+      expect(ScheduledMessageMachine.isTerminal(final)).toBe(true);
+      expect(ScheduledMessageMachine.eventsFrom(final)).toEqual([]);
+    }
+    expect(() => ScheduledMessageMachine.next('sent', 'reopen')).toThrowError(DomainError);
   });
 });

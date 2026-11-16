@@ -8,6 +8,8 @@ import {
   type Application,
   type Basket,
   type BasketLine,
+  type BasketLineAddon,
+  type BasketLineUniform,
   type CapacityPool,
   type EligibilityOverride,
   type EligibilityResult,
@@ -171,10 +173,43 @@ export function resolveCustomerPayer(
  */
 export function owesNothing(price: PriceSnapshot | null | undefined, quantity: number): boolean {
   if (!price) return true;
-  if (price.basePriceMinor * quantity !== 0) return false;
+  if (priceEach(price) * quantity !== 0) return false;
   return price.chargeLines.every(
     (charge) => charge.inclusive === true || (charge.amountMinor ?? 0) === 0,
   );
+}
+
+/**
+ * What a line is priced at each before charges: its estimate where it has one (a per-session
+ * price, a tier, a member price: SPK-PAY-013, SPK-PAY-014, SPK-PAY-015), else the rule's base
+ * price, as before the amendments.
+ */
+export function priceEach(price: PriceSnapshot): number {
+  return price.estimate?.unitPriceMinor ?? price.basePriceMinor;
+}
+
+/**
+ * SPK-PAY-014, SPK-REG-012: a line owes nothing only when its place, every add-on and its uniform
+ * are all free. A priced add-on or uniform always goes through the finance checkout, where the
+ * quote decides what is charged (a returning participant's uniform may be charged nothing).
+ */
+export function lineOwesNothing(line: BasketLine): boolean {
+  return (
+    owesNothing(line.price, line.quantity) &&
+    line.addons.every((addon) => addon.priceMinor === 0) &&
+    (line.uniform?.priceMinor ?? 0) === 0
+  );
+}
+
+/** The estimated amount of a line before charges and discounts: place, add-ons and uniform. */
+export function lineSubtotal(line: BasketLine): number {
+  const place = line.price ? priceEach(line.price) * line.quantity : 0;
+  const addons = line.addons.reduce((sum, addon) => sum + addon.priceMinor * addon.quantity, 0);
+  const uniform =
+    line.uniform && !(line.uniform.returningHolderFree && line.uniform.heldUniformOrderId)
+      ? (line.uniform.priceMinor ?? 0)
+      : 0;
+  return place + addons + uniform;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -513,6 +548,8 @@ export function toEnrollment(row: Selectable<EnrollmentsTable>): Enrollment {
     transferredFromEnrollmentId: row.transferred_from_enrollment_id,
     transferConsequence: emptyToNull<FinancialConsequence>(row.transfer_consequence),
     completedAt: isoOrNull(row.completed_at),
+    priceTierId: row.price_tier_id ?? null,
+    selectedSessionIds: row.selected_session_ids ?? null,
     // ENR-02: HTTP views enrich these (EnrollmentViews); ports return the bare record.
     offering: null,
     pendingReason: null,
@@ -525,6 +562,9 @@ export function toEnrollment(row: Selectable<EnrollmentsTable>): Enrollment {
 export interface BasketLineRow extends Selectable<BasketLinesTable> {
   offering_kind?: string | null;
   application_status?: string | null;
+  /** SPK-PAY-014, SPK-REG-012: what the line chose, resolved by `RegistrationExtras`. */
+  addons?: BasketLineAddon[];
+  uniform?: BasketLineUniform | null;
 }
 
 export function toBasketLine(row: BasketLineRow): BasketLine {
@@ -551,6 +591,10 @@ export function toBasketLine(row: BasketLineRow): BasketLine {
     enrollmentId: row.enrollment_id,
     outcome: row.outcome,
     outcomeReason: row.outcome_reason,
+    priceTierId: row.price_tier_id ?? null,
+    selectedSessionIds: row.selected_session_ids ?? null,
+    addons: row.addons ?? [],
+    uniform: row.uniform ?? null,
     revision: row.revision,
   };
 }
@@ -573,10 +617,7 @@ export function toBasket(
   lines: BasketLine[],
   holds: Hold[],
 ): Basket {
-  const subtotalMinor = lines.reduce(
-    (sum, line) => sum + (line.price ? line.price.basePriceMinor * line.quantity : 0),
-    0,
-  );
+  const subtotalMinor = lines.reduce((sum, line) => sum + lineSubtotal(line), 0);
   return {
     id: row.id,
     ownerPersonId: row.owner_person_id,
@@ -744,6 +785,13 @@ export function toWaitlistEntry(
     acceptedEnrollmentId: row.accepted_enrollment_id,
     withdrawnAt: isoOrNull(row.withdrawn_at),
     removedAt: isoOrNull(row.removed_at),
+    priceTierId: row.price_tier_id ?? null,
+    selectedSessionIds: row.selected_session_ids ?? null,
+    addons: (row.requested_extras?.addons ?? []).map((addon) => ({
+      addonId: addon.addonId,
+      sessionIds: [...addon.sessionIds],
+    })),
+    uniform: row.requested_extras?.uniform ?? null,
     revision: row.revision,
     createdAt: iso(row.created_at),
   };

@@ -24,7 +24,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useMemo, useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApiRecords } from '../../features/registration/queries';
 import { ordinal, plural } from '../../features/teams/format';
@@ -35,7 +35,15 @@ import { useKeyedCommands } from '../../features/teams/useKeyedCommands';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, radius, spacing, type } from '../../ui/theme';
+import {
+  fonts,
+  makeStyles,
+  radius,
+  spacing,
+  type,
+  useTheme,
+  type ThemeColors,
+} from '../../ui/theme';
 
 type Revision = Schema<'ResultRevision'>;
 type SeasonFixture = Schema<'SeasonFixture'>;
@@ -72,6 +80,8 @@ export function formFixtures(fixtures: readonly SeasonFixture[]): SeasonFixture[
 }
 
 export function FormGuide({ workspace }: { workspace: Workspace }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const entryId = workspace.entry.id;
   const fixtures = useApiQuery({
     path: '/seasons/{id}/fixtures',
@@ -97,6 +107,7 @@ export function FormGuide({ workspace }: { workspace: Workspace }) {
     })
     .filter((o): o is FormOutcome => o !== null);
   if (form.length === 0) return null;
+  const look = formLook(colors);
   return (
     <View
       style={styles.form}
@@ -105,22 +116,25 @@ export function FormGuide({ workspace }: { workspace: Workspace }) {
       testID="form-guide"
     >
       {form.map((o, i) => (
-        <View key={i} style={[styles.formPill, FORM_LOOK[o].pill]}>
-          <Text style={[styles.formText, FORM_LOOK[o].text]}>{o}</Text>
+        <View key={i} style={[styles.formPill, look[o].pill]}>
+          <Text style={[styles.formText, look[o].text]}>{o}</Text>
         </View>
       ))}
     </View>
   );
 }
 
-const FORM_LOOK = {
-  W: { pill: { backgroundColor: colors.floodlight }, text: { color: colors.night } },
-  D: { pill: { backgroundColor: colors.background }, text: { color: colors.night } },
-  L: {
-    pill: { backgroundColor: colors.nightRaised, borderColor: colors.nightMuted, borderWidth: 1 },
-    text: { color: colors.primaryText },
-  },
-} as const;
+/** Pills of the form guide, on the night workspace card: win in floodlight, draw light, loss outlined. */
+function formLook(colors: ThemeColors) {
+  return {
+    W: { pill: { backgroundColor: colors.floodlight }, text: { color: colors.onFloodlight } },
+    D: { pill: { backgroundColor: colors.onNight }, text: { color: colors.night } },
+    L: {
+      pill: { backgroundColor: colors.nightRaised, borderColor: colors.nightMuted, borderWidth: 1 },
+      text: { color: colors.onNight },
+    },
+  } as const;
+}
 
 /** The rows shown: all of a short table, else five around the team (with the playoff line's). */
 export function miniRows(standings: Standings, entryId: string): Standings['rows'] {
@@ -143,6 +157,7 @@ export function useStandings(workspace: Workspace) {
 }
 
 export function MiniStandings({ workspace }: { workspace: Workspace }) {
+  const styles = useStyles();
   const standings = useStandings(workspace);
   const data = standings.data;
   if (!data || data.sourceResultIds.length === 0 || data.rows.length === 0) return null;
@@ -205,6 +220,7 @@ export function rsvpProgress(summary: Schema<'AvailabilitySummary'>) {
 }
 
 export function RsvpProgress({ game }: { game: Upcoming }) {
+  const styles = useStyles();
   const { available, total } = rsvpProgress(game.availability);
   if (total === 0) return null;
   const text = `${available} of ${total} available`;
@@ -241,6 +257,7 @@ export function MatchCheckIn({
   viewer: Viewer;
   game: Upcoming;
 }) {
+  const styles = useStyles();
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -353,7 +370,7 @@ export function MatchCheckIn({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   form: { flexDirection: 'row', gap: 6, paddingTop: spacing.sm },
   formPill: {
     width: 30,
@@ -402,4 +419,4 @@ const styles = StyleSheet.create({
   },
   playerName: { ...type.body, ...fonts.bold, color: colors.text },
   markButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-});
+}));

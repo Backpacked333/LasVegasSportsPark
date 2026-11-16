@@ -60,7 +60,7 @@ import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type Checkout = Schema<'Checkout'>;
 
@@ -150,6 +150,7 @@ function RetryPayment({
 }
 
 function OutcomeContent({ checkout }: { checkout: Checkout }) {
+  const styles = useStyles();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { progress, update } = useRegistrationProgress();
@@ -334,11 +335,27 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
                 key={line.id}
                 style={styles.line}
                 accessible
-                accessibilityLabel={`${name}: ${offeringName}. ${lineStatus.label}`}
+                accessibilityLabel={[
+                  `${name}: ${offeringName}`,
+                  lineStatus.label,
+                  ...line.addons.map((addon) => addon.name),
+                  ...(line.uniform ? [`${line.uniform.name}, size ${line.uniform.size}`] : []),
+                ].join('. ')}
                 testID={`outcome-line-${line.id}`}
               >
                 <Body>{`${name}: ${offeringName}`}</Body>
                 <StatusBadge {...lineStatus} />
+                {/* SPK-PAY-014, SPK-REG-012: what was bought with the place. */}
+                {line.addons.map((addon) => (
+                  <Body key={addon.addonId} muted>
+                    {addon.selection === 'per_session'
+                      ? `${addon.name} × ${addon.quantity === 1 ? '1 day' : `${addon.quantity} days`}`
+                      : addon.name}
+                  </Body>
+                ))}
+                {line.uniform ? (
+                  <Body muted>{`${line.uniform.name}, size ${line.uniform.size}`}</Body>
+                ) : null}
               </View>
             );
           })}
@@ -422,11 +439,11 @@ export function CheckoutOutcomeRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   line: {
     paddingVertical: spacing.sm,
     gap: spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-});
+}));

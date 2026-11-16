@@ -32,14 +32,14 @@ import {
   type ApiError,
 } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { Icon } from './Icon';
 import { useRowLayout } from './ListRow';
 import { StatusBadge } from './StatusBadge';
-import { colors, radius, spacing, toneBackgrounds, type } from './theme';
+import { continuousCorners, makeStyles, radius, spacing, type, useTheme } from './theme';
 
 interface ActionProps {
   /** Label of the recovery or creation action. */
@@ -86,6 +86,8 @@ export type StateViewProps =
     };
 
 export function StateView(props: StateViewProps) {
+  const { colors, toneBackgrounds } = useTheme();
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   // A command refused because its capability is turned off is not a failure (K-12, DEC-016).
   const turnedOff = props.variant === 'error' ? turnedOffFromError(props.error) : null;
@@ -99,7 +101,7 @@ export function StateView(props: StateViewProps) {
           error: props.error,
         }
       : props;
-  const icon = VARIANT_ICONS[shown.variant];
+  const tile = VARIANT_TILES[shown.variant];
   // Inside a card frame (a feature Section) the state is drawn flat, without a card of its own.
   const flat = useRowLayout() === 'flat';
   return (
@@ -113,25 +115,61 @@ export function StateView(props: StateViewProps) {
       occurrence={shown.variant === 'error' || shown.variant === 'turned-off' ? shown.error : null}
       testID={`state-${shown.variant}`}
     >
-      {icon ? (
-        <View style={[styles.tile, { backgroundColor: icon[1] }]}>
-          <Icon name={icon[0]} size={22} color={icon[2]} />
+      {tile ? (
+        <View
+          style={[
+            styles.tile,
+            {
+              backgroundColor:
+                tile.tone === 'accent' ? colors.floodlight : toneBackgrounds[tile.tone],
+            },
+          ]}
+        >
+          <Icon
+            name={tile.icon}
+            size={22}
+            color={tile.tone === 'accent' ? colors.onFloodlight : colors[tile.tone]}
+          />
         </View>
       ) : null}
-      {renderBody(shown)}
+      <StateBody state={shown} />
+      {shown.variant === 'loading' && !flat ? <LoadingOutline /> : null}
     </LiveRegion>
   );
 }
 
-/** Decorative tile per state: [icon, tile, icon colour]. The words carry the state. */
-const VARIANT_ICONS: Record<StateViewProps['variant'], readonly [string, string, string] | null> = {
+/**
+ * Decorative outline of the content that is loading: two soft bars under the progress line, so the
+ * page keeps its shape while it waits (SPK-UX-010 clear hierarchy). Static (no shimmer: restrained
+ * animation, nothing moves for people who turned motion off) and hidden from screen readers, who
+ * hear the progress indicator.
+ */
+function LoadingOutline() {
+  const styles = useStyles();
+  return (
+    <View
+      style={styles.outline}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      testID="state-loading-outline"
+    >
+      <View style={[styles.outlineBar, styles.outlineBarWide]} />
+      <View style={[styles.outlineBar, styles.outlineBarShort]} />
+    </View>
+  );
+}
+
+type TileTone = 'accent' | 'danger' | 'warning' | 'neutral' | 'pending';
+
+/** Decorative tile per state: its icon and tone. The words carry the state. */
+const VARIANT_TILES: Record<StateViewProps['variant'], { icon: string; tone: TileTone } | null> = {
   loading: null,
-  empty: ['sports_soccer', colors.floodlight, colors.night],
-  error: ['error', toneBackgrounds.danger, colors.danger],
-  'offline-stale': ['cloud_off', toneBackgrounds.warning, colors.warning],
-  unavailable: ['lock', toneBackgrounds.neutral, colors.neutral],
-  'pending-decision': ['schedule', toneBackgrounds.pending, colors.pending],
-  'turned-off': ['toggle_off', toneBackgrounds.neutral, colors.neutral],
+  empty: { icon: 'sports_soccer', tone: 'accent' },
+  error: { icon: 'error', tone: 'danger' },
+  'offline-stale': { icon: 'cloud_off', tone: 'warning' },
+  unavailable: { icon: 'lock', tone: 'neutral' },
+  'pending-decision': { icon: 'schedule', tone: 'pending' },
+  'turned-off': { icon: 'toggle_off', tone: 'neutral' },
 };
 
 const DEFAULT_UNAVAILABLE =
@@ -189,7 +227,9 @@ export function announcementFor(props: StateViewProps, deviceOffline = false): s
   }
 }
 
-function renderBody(props: StateViewProps): ReactNode {
+function StateBody({ state: props }: { state: StateViewProps }): ReactNode {
+  const { colors } = useTheme();
+  const styles = useStyles();
   switch (props.variant) {
     case 'loading':
       return (
@@ -295,7 +335,7 @@ function renderBody(props: StateViewProps): ReactNode {
   }
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   container: {
     marginHorizontal: spacing.lg,
     marginVertical: spacing.sm,
@@ -304,6 +344,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     backgroundColor: colors.background,
     borderRadius: radius.lg,
+    ...continuousCorners,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -313,12 +354,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     borderWidth: 0,
   },
-  loading: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  loading: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.md },
   flatLoading: { paddingHorizontal: 0 },
+  outline: { gap: spacing.sm },
+  outlineBar: { height: 14, borderRadius: radius.pill, backgroundColor: colors.surface },
+  outlineBarWide: { width: '72%' },
+  outlineBarShort: { width: '44%' },
   tile: {
     width: 40,
     height: 40,
     borderRadius: radius.sm,
+    ...continuousCorners,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -326,4 +372,4 @@ const styles = StyleSheet.create({
   title: { ...type.title, fontSize: 22, lineHeight: 24, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

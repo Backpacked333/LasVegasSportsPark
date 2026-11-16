@@ -95,23 +95,23 @@ redemption_limit)` is the final guarantee.
 
 ## Endpoints (`/v1`, contracts in `packages/contracts/src/api/enrollment.ts`)
 
-| Method   | Path                                                                                                      | Who (action)                                                                                                       |
-| -------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| POST/GET | `/applications`, `/applications/{id}`                                                                     | adult self or a holder of `register` (`enrollment.apply`); staff assisting; reads: `view` holders, staff readers   |
-| POST     | `/applications/{id}/override-eligibility`                                                                 | program/league manager, GM, sysadmin (`enrollment.override_eligibility`) with reason; audited                      |
-| POST     | `/applications/{id}/accept`, `/decline`, `/withdraw`                                                      | review: program administration (`enrollment.review_application`); withdraw: participant authority or staff         |
-| POST/GET | `/baskets`, `/baskets/{id}`, `/baskets/{id}/lines`, `/lines/{lineId}/remove`                              | the household adult (self) or desk staff (`enrollment.manage_basket`)                                              |
-| POST     | `/baskets/{id}/hold`, `/release`, `/complete`                                                             | same, re-checked per line; `release` refuses 409 `CHECKOUT_IN_PROGRESS` in a checkout; `complete` if nothing owed  |
-| GET      | `/enrollments`, `/enrollments/{id}`, `/enrollments/{id}/cancellation-preview`                             | `view` holders (payer and registrant redacted for other adults, SPK-AT-004), staff readers                         |
-| POST     | `/enrollments/{id}/cancel`, `/transfer` (`commit=false` preview), `/complete`                             | participant authority or desk staff; a transfer target requiring approval and complete: program administration     |
-| POST/GET | `/waitlist-entries`, `/waitlist-entries/{id}`, `/withdraw`, `/remove`                                     | participant authority (`enrollment.join_waitlist`); listing and `remove` (reason required): program administration |
-| GET/POST | `/waitlist-offers/{id}`, `/accept`, `/decline`                                                            | participant authority                                                                                              |
-| POST/GET | `/placement-requests`, `/{id}`, `/{id}/candidates`, `/propose`, `/reject-proposal`, `/assign`, `/release` | request: participant authority; everything else league administration (`enrollment.manage_placement`)              |
-| POST/GET | `/session-bookings`, `/{id}`, `/confirm`, `/cancel`                                                       | pickup seats: participant authority (`enrollment.book_session`); session lists: staff                              |
-| POST/GET | `/makeup-entitlements`, `/{id}`, `/{id}/redeem`, `/{id}/revoke`                                           | issue/revoke: program administration and front desk; redeem: participant authority                                 |
-| POST/GET | `/trial-participations`, `/{id}`, `/outcome`, `/convert`                                                  | participant authority; attendance outcomes: staff                                                                  |
-| POST/GET | `/capacity-pools`, `/capacity-pools/{id}/adjust`, `/offerings/{id}/capacity-pools/sync`                   | program administration (`enrollment.manage_capacity`); staffing changes need a reason                              |
-| GET      | `/me/family-calendar?from&to`                                                                             | the acting adult: self plus every person they hold `view` over (`enrollment.read_family_calendar`)                 |
+| Method   | Path                                                                                                      | Who (action)                                                                                                                                                                                                           |
+| -------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST/GET | `/applications`, `/applications/{id}`                                                                     | adult self or a holder of `register` (`enrollment.apply`); staff assisting; reads: `view` holders, staff readers                                                                                                       |
+| POST     | `/applications/{id}/override-eligibility`                                                                 | program/league manager, GM, sysadmin (`enrollment.override_eligibility`) with reason; audited                                                                                                                          |
+| POST     | `/applications/{id}/accept`, `/decline`, `/withdraw`                                                      | review: program administration (`enrollment.review_application`); withdraw: participant authority or staff                                                                                                             |
+| POST/GET | `/baskets`, `/baskets/{id}`, `/baskets/{id}/lines`, `/lines/{lineId}/remove`                              | the household adult (self) or desk staff (`enrollment.manage_basket`)                                                                                                                                                  |
+| POST     | `/baskets/{id}/hold`, `/release`, `/complete`                                                             | same, re-checked per line; `release` refuses 409 `CHECKOUT_IN_PROGRESS` in a checkout; `complete` if nothing owed                                                                                                      |
+| GET      | `/enrollments`, `/enrollments/{id}`, `/enrollments/{id}/cancellation-preview`                             | `view` holders (payer and registrant redacted for other adults, SPK-AT-004), staff readers                                                                                                                             |
+| POST     | `/enrollments/{id}/cancel`, `/transfer` (`commit=false` preview), `/complete`                             | participant authority or desk staff; a transfer target requiring approval and complete: program administration                                                                                                         |
+| POST/GET | `/waitlist-entries`, `/waitlist-entries/{id}`, `/withdraw`, `/remove`                                     | participant authority (`enrollment.join_waitlist`); listing an offering's queue: `enrollment.read_waitlist` staff (front desk included) at the offering's facility; `remove` (reason required): program administration |
+| GET/POST | `/waitlist-offers/{id}`, `/accept`, `/decline`                                                            | participant authority                                                                                                                                                                                                  |
+| POST/GET | `/placement-requests`, `/{id}`, `/{id}/candidates`, `/propose`, `/reject-proposal`, `/assign`, `/release` | request: participant authority; everything else league administration (`enrollment.manage_placement`)                                                                                                                  |
+| POST/GET | `/session-bookings`, `/{id}`, `/confirm`, `/cancel`                                                       | pickup seats: participant authority (`enrollment.book_session`); session lists: staff                                                                                                                                  |
+| POST/GET | `/makeup-entitlements`, `/{id}`, `/{id}/redeem`, `/{id}/revoke`                                           | issue/revoke: program administration and front desk; redeem: participant authority                                                                                                                                     |
+| POST/GET | `/trial-participations`, `/{id}`, `/outcome`, `/convert`                                                  | participant authority; attendance outcomes: staff                                                                                                                                                                      |
+| POST/GET | `/capacity-pools`, `/capacity-pools/{id}/adjust`, `/offerings/{id}/capacity-pools/sync`                   | program administration (`enrollment.manage_capacity`); staffing changes need a reason                                                                                                                                  |
+| GET      | `/me/family-calendar?from&to`                                                                             | the acting adult: self plus every person they hold `view` over (`enrollment.read_family_calendar`)                                                                                                                     |
 
 Every consequential POST is `@Idempotent()` and zod-validated; every write runs in
 `UnitOfWork.run` with an audit record and outbox follow-ups. Customer-private records answer
@@ -154,6 +154,15 @@ holdIds)` (locks in id order; CAPACITY_UNAVAILABLE and nothing written when any 
 - `FINANCE_POLICY_PORT` (`FinancePolicyPort` interface): finance registers `FINANCE_POLICY_IMPL`
   (`transferConsequence`, `cancellationConsequence`); until then the consequence is `none`
   (resolved lazily through the kernel's `lazyPort`).
+- `MEMBERSHIP_PRICING_PORT` (`MembershipPricingPort`, finance): `memberStanding(organizationId,
+participantPersonId, entitlementDefinitionId, at)` says whether the participant, after
+  merged-person resolution (SPK-IAM-007), holds a confirmed, unsuspended membership granting that
+  entitlement whose term covers the instant, which membership qualified, and otherwise why not
+  (`no_active_membership`, `membership_suspended`). It is the membership ledger's own rule
+  (ENR-12, SPK-COND-001). **Verified** `__tests__/membership-pricing.spec.ts`. It serves the
+  **Proposed** requirement SPK-PAY-015 (amendment PA-04; the reference date and whose membership
+  counts for a child are **Pending decision** DEC-098), and finance calls it only while the
+  `member_pricing` capability is on.
 - Fixtures for downstream tests: `testing/enrollment-fixtures.ts` (`createCapacityPoolFixture`,
   `createEnrollmentFixture`, `createHoldFixture`, `createSessionBookingFixture`,
   `createMakeupEntitlementFixture`).
@@ -925,3 +934,319 @@ Read-only (no idempotency key), in `services/enrollment-overview.service.ts`; te
 - `GET /v1/offering-availability?offeringIds=` (at most 20): places left (capacity minus committed
   and held) of the tightest active offering-level pool; published offerings for anyone of the
   organization, unpublished ones for staff with `enrollment.read_capacity` there.
+
+## Required waivers at registration and on rosters (SPK-REG-011, proposed amendment PA-01)
+
+**Proposed**, behind the capability `liability_waivers` (DEC-095; off by default). Enrollment owns
+no waiver data: it asks the catalog policy port (`PolicyPort.waiverFindings`) and maps the answer.
+
+- **Registration** (`services/registration-evaluator.ts`,
+  `eligibility/registration-eligibility.ts`): for each waiver family the offering requires
+  (`OfferingSnapshot.requiredWaiverKeys`) a missing or lapsed waiver becomes a reason
+  `waiver_missing` or `waiver_lapsed` whose severity is the approved waiver rule: a warning leaves
+  the application eligible; a block makes it ineligible until the waiver is accepted or a permitted
+  override is recorded for the offering (then it is a warning that says so). **Verified**
+  `__tests__/registration-waivers.spec.ts`, `eligibility/registration-eligibility.spec.ts`.
+- **Roster readiness** (`services/competition-forms-check.ts`, competition's FORMS_CHECK_IMPL): the
+  season's registration offering's required waivers are judged for the whole roster in one port
+  call; findings carry the count only and the severity of the rule (`warning` or `blocking`).
+  **Verified** `__tests__/registration-waivers.spec.ts`,
+  `services/competition-forms-check.spec.ts`.
+- With the capability off the port returns nothing, so neither caller evaluates or shows anything
+  and the form behaviour is unchanged (**Verified**, same files).
+
+A rental's booker is the participant of the booking's registration, so a waiver the rental
+offering requires and whose rule blocks must be accepted by the booker before booking. That is this
+section's rule, not the roster's.
+
+## Rental-group rosters (SPK-COND-005, proposed amendment PA-09): proposed, behind `rental_rosters`
+
+**Proposed.** Not part of the master specification until accepted
+(`docs/package-a/proposed-specification-amendments.md`, DEC-103). Built ahead of the decision and
+off until a system administrator turns the capability `rental_rosters` on. What the code does with
+it on is **Verified** by `__tests__/booking-rosters.spec.ts`.
+
+A rental booking (one booking row also covers a standing weekly series) may have a group roster:
+the people the renter brings. `services/booking-rosters.service.ts`, beside
+`services/bookings.service.ts`; tables in migrations `0530_enrollment_booking_rosters.sql` and
+`0531_enrollment_booking_roster_acceptance.sql`:
+
+- `booking_roster_members`: a person, or an invited contact with no record yet; `invited`,
+  `joined` or `removed`. One live row per booking and person, and one open row per booking and
+  contact, are partial unique indexes. A row's booking never changes and its person is named once;
+  the lifecycle only moves forward (transition guard); rows are never deleted.
+- `booking_roster_invitations`: the invitation behind an invited row (token hash, expiry;
+  `pending` then `accepted`, `declined`, `revoked` or `expired`), modelled on `team_invitations`.
+  One pending invitation per roster row; nothing about who was invited can be rewritten. An
+  accepted invitation records who joined (`accepted_for_person_id`), who acted
+  (`accepted_by_person_id`) and in what capacity (`accepted_as`: `self` or `representative`;
+  `legacy` only for rows accepted before migration 0531, whose capacity was never checked).
+- Lifecycles: `BookingRosterMemberMachine` and `BookingRosterInvitationMachine`
+  (`enrollment.state-machines.ts`).
+
+| Route                                                     | Who                                                                                                                                | Needs the capability |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `GET /v1/bookings/{id}/roster`                            | the renter; staff at the facility; anyone else 404                                                                                 | no                   |
+| `POST /v1/bookings/{id}/roster`                           | staff (anyone); the renter or a joined member, for themselves or someone they may register                                         | yes                  |
+| `POST /v1/bookings/{id}/roster/invitations`               | staff (a contact, or any active person); the renter (a contact, or themselves or someone they may register)                        | yes                  |
+| `POST /v1/bookings/{id}/roster/members/{memberId}/remove` | the renter; staff; the member or someone who may register them                                                                     | no                   |
+| `GET /v1/me/booking-roster-invitations`                   | the open invitations that name the signed-in person or someone they may register                                                   | no                   |
+| `GET /v1/booking-roster-invitations/{id}`                 | the person it names or someone who may register them; the renter; staff                                                            | no                   |
+| `POST /v1/booking-roster-invitations/{id}/open`           | the holder of a contact invitation's token (token in the body; a read)                                                             | no                   |
+| `POST /v1/booking-roster-invitations/{id}/accept`         | the person it names or someone who may register them (no token); or a contact invitation's token holder, for themselves or a child | yes                  |
+| `POST /v1/booking-roster-invitations/{id}/decline`        | the person it names or someone who may register them; or a contact invitation's token holder                                       | no                   |
+| `POST /v1/booking-roster-invitations/{id}/revoke`         | the renter; staff                                                                                                                  | no                   |
+
+- Only a live rental has a roster that can be added to (`ROSTER_RENTAL_ONLY`, `BOOKING_NOT_LIVE`);
+  an ended booking's roster stays readable.
+- The roster read carries each joined member's waiver status for the rental offering's required
+  waiver families, from `PolicyPort.waiverStatuses` (the worst when several are required):
+  `current`, `lapsed`, `missing`, or `not_evaluated` when liability waivers are off, the offering
+  requires no waiver, the row has not joined, or the row is removed. `waiver.state` says which.
+- **Whose person may be named, shown and joined** (security review M-1 and L-1, 2026-11-14;
+  **Verified** by the `whose person may be named, shown and joined` tests and the migration 0531
+  database test):
+  - A renter or member names a person by reference only when that person is themselves or
+    someone they hold registering authority for (`CustomerScope.subjectIds`, the rule a
+    registration uses; a staff role held elsewhere never widens it), when adding and when
+    inviting. Any other reference, whether or not it names anybody, gets one answer
+    (`ROSTER_INVITE_BY_CONTACT` when inviting, `ROSTER_INVITATION_REQUIRED` when adding) and no
+    lookup is made. Everybody else is invited by contact. Staff name any active person.
+  - A person's details are theirs until they join. A row that has never joined (`invited`, or
+    removed before joining) shows no display name and no waiver status to any reader, and nothing
+    is read about its person. Its person reference is returned only to staff and to a reader who
+    may act for that person; the renter sees the contact they typed, or only that somebody is
+    invited. The same holds for the invitation a renter reads or withdraws: when staff invited
+    somebody by name, the renter's answer carries no `recipientPersonId`.
+  - An invitation that names a person joins that person and nobody else, and is read, accepted
+    and declined only by that person or by somebody who may register them. Its token is neither
+    needed nor enough. A contact invitation is opened and answered by the holder of its token and
+    joins the signed-in caller or a child they may register; the roster row becomes that joiner.
+  - The database refuses an acceptance that joins somebody other than the person named
+    (`booking_roster_invitations_named_joiner`), that misstates whether the acting person is the
+    joiner (`booking_roster_invitations_capacity`), or whose roster row is not joined as the
+    recorded joiner (`booking_roster_invitations_joiner`, a trigger). Whether a representative
+    holds registering authority is a relationship fact of the identity module: the service checks
+    it inside the unit of work and the audit record names the actor.
+  - The token is returned once and is not kept with the idempotency record
+    (`@Idempotent({ withhold: ['token'] })`); a replay answers `IDEMPOTENCY_SECRET_WITHHELD`. A
+    token is read from a request body only (`POST .../open`, `accept`, `decline`), never from a
+    query string, and is compared in constant time. Those three routes count against the
+    `invitations` rate limit per client address, like account, staff and team invitations
+    (**Verified**: `booking-rosters.spec.ts`, "…share the `invitations` limit per address").
+- **A missing waiver is shown and never blocks the booking** (the assumed default; **Pending
+  decision** DEC-103). Nothing in this service reads or changes the booking's state.
+- **Being on a roster grants nothing else.** The service writes only its two tables: no
+  enrollment, entitlement, hold, team entry or roster membership, and no module subscribes to its
+  events (`enrollment.booking_roster_changed`, `enrollment.booking_roster_invitation_created`).
+  **Verified**: the requirement test counts the other records and the event handlers.
+- Capability off: adding, inviting and accepting answer ACCESS_DENIED `CAPABILITY_DISABLED`;
+  every read, and declining, revoking and removing, keep working.
+
+**Deviations from the team invitation model, and known gaps:**
+
+- An invitation that names a person is accepted by that person signed in (or by somebody who may
+  register them), without the token: signing in proves who they are. The token is required only
+  for an invitation to a contact, and does nothing for one that names a person. No messaging
+  channel delivers tokens (DEC-012, DEC-062), so the inviter is shown the token once and passes it
+  on.
+- A renter cannot name another adult by reference, so a known adult is invited by contact, or by
+  staff. **Pending decision** (DEC-103): whether a renter should be able to find and name people
+  they already share a team or a household with.
+- A contact invitation is accepted by whoever holds its token; the contact is **not** matched
+  against a verified contact point of the acceptor (a team invitation is). A roster grants nothing,
+  so the exposure is a name on a list the renter can remove. **Proposed** to match the contact
+  once delivery exists.
+- Invitations expire lazily: an attempt to accept past the expiry records it; reads show `expired`
+  meanwhile. There is no periodic job, so an unanswered expired invitation keeps its roster row
+  `invited` until somebody removes it.
+- The invitation expiry default (14 days) is an engineering default, **Proposed**.
+- The renter and staff see joined members' display names, children included. **Pending decision**
+  (DEC-103, with J1 and D18) whether a renter should see a child's name or only "a child of ...".
+  Staff see no name on an invited row either; the person record is where staff read a name.
+- How regular renters are billed (I2) is not touched by this amendment.
+
+## Tiers, days, add-ons and uniforms of a registration (PA-03, PA-07): implemented behind capability switches
+
+SPK-PAY-014 (price tiers and add-ons, capability `price_tiers_addons`, DEC-097) and SPK-REG-012
+(uniforms, capability `uniforms`, DEC-101) are **Proposed** requirements
+(`docs/package-a/proposed-specification-amendments.md`); each is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendments leave open are **Pending decision**.
+
+**Verified** (`__tests__/registration-extras.spec.ts`, also under PostgreSQL; the camp journey
+`apps/api/src/__tests__/journeys/facility-camp.spec.ts`; migrations
+`0521_enrollment_registration_selections.sql`, `0522_enrollment_basket_line_addons.sql`,
+`0523_enrollment_uniform_orders.sql`):
+
+- `POST /v1/baskets/{id}/lines` accepts `priceTierId`, `selectedSessionIds`, `addons`
+  (`{ addonId, sessionIds? }`) and `uniform` (`{ offeringUniformId, size }`). A field of an
+  amendment whose capability is off is refused inside the unit of work (ACCESS_DENIED
+  `CAPABILITY_DISABLED`); a line without them is added, held and completed exactly as before.
+  `services/registration-extras.ts` validates the choices against catalog's `PRICING_PORT`:
+  - exactly one tier applies: while the effective rule has tiers, a line names one of them
+    (`TIER_REQUIRED`, `TIER_NOT_OFFERED`), that can still be bought (`TIER_NOT_AVAILABLE` after its
+    deadline), with a day selection within its bounds (`TIER_SESSION_COUNT`,
+    `TIER_ATTENDS_ALL_SESSIONS`) of sessions of the offering that are scheduled and have not
+    started (`SESSION_NOT_SELECTABLE`);
+  - an add-on is an active add-on of the offering (`ADDON_NOT_OFFERED`), named once, with sessions
+    exactly when it is selected per session (`ADDON_SELECTION_SHAPE`), each a session the
+    participant attends (`ADDON_SESSION_NOT_SELECTED`);
+  - a uniform is the offering's active uniform in one of its sizes (`UNIFORM_NOT_OFFERED`,
+    `UNIFORM_SIZE_NOT_OFFERED`), and a required uniform must be chosen (`UNIFORM_REQUIRED`);
+  - a line with a tier, add-ons or a uniform is for one participant (`QUANTITY_ONE`).
+- `BasketLine` carries `priceTierId`, `selectedSessionIds` (null: every session), `addons` (name,
+  price each, sessions, quantity) and `uniform` (name, size, price, `returningHolderFree`,
+  `heldUniformOrderId`). The tier and the selection are copied to the enrollment the line becomes
+  and never change afterwards.
+- **Price estimate** (the debt Track A reported, closed here): the price snapshot of a basket line
+  and of an enrollment gains `estimate` when the line is not a plain term price. It is worked out
+  from the same facts a quote uses, in the quote's order (tier, member price, per-session
+  multiplication): the tier named on the line, the participant's membership through this module's
+  ledger (`MembershipPricing`), and the sessions still to attend through
+  `PRICING_PORT.remainingSessions`. `Basket.subtotalMinor` sums the estimate (or the base price),
+  the add-ons and the priced uniform. A plain term line stores the snapshot exactly as before (no
+  `estimate`). A basket with a priced add-on or uniform never completes without the checkout
+  (`PAYMENT_REQUIRED`). A cancellation or transfer preview passes the estimate, not the base
+  price, where the enrollment has one.
+- **Capacity**: while the effective rule lets some customers choose days, every line with a tier
+  holds the session pool of each session it attends (`ensureSessionPool`), so a full-week place
+  and a single day share that day's seats and a participant counts only on the sessions selected;
+  a line of chosen days takes no place in the offering-wide pool. Add-on capacity is its own pool
+  (`capacity_pools.scope_type = 'addon'`, `scope_session_id` for an add-on limited per session,
+  no offering, `CapacityService.ensureAddonPool`), held and committed with the line like any other
+  pool. Twelve concurrent holds for the last place of an add-on yield exactly one.
+- **Uniform orders** (`services/uniform-orders.service.ts`, `UniformOrderMachine` in
+  `packages/contracts/src/state-machines.ts`): holding a line orders its uniform (`ordered`);
+  confirming the registration makes it `paid` (a uniform that is not charged records no price);
+  canceling a registration cancels a uniform not yet handed over. `GET /v1/uniform-orders`
+  (`?offeringId=` and/or `?teamEntryId=`, staff, `enrollment.read_uniform_orders`) lists size, paid
+  state and hand-over with the participant's name. `POST /v1/uniform-orders/{id}/hand-over` and
+  `POST /v1/uniform-orders/{id}/hand-over-corrections` (`enrollment.hand_over_uniform`, capability
+  `uniforms`) record who handed it over and when, and undo that only by a correction with a
+  reason; both write the append-only `uniform_handover_events`, the audit log and
+  `enrollment.uniform_order_changed`. The list stays readable with the capability off. The two
+  hand-over commands answer a caller who may not hand uniforms over at the order's facility (a
+  customer, the family itself included, or staff without the role or the scope) exactly as they
+  answer an unknown order (`errors.protectedNotFound`, §4.10; security review L-5; **Verified**
+  in `__tests__/uniform-orders-visibility.spec.ts`).
+- `SESSION_ROSTER_PORT` (`services/session-roster.ts`, for the entry module):
+  `expectedAtSession(organizationId, offeringId, sessionId)` names the participants of confirmed
+  registrations whose selection includes the session, each with the add-ons bought for that day.
+  `SessionParticipants` (session notices, closure previews) applies the same selection.
+- The database refuses: a tier of another offering on a line or an enrollment; a day selection
+  without a tier, empty, with a day listed twice, or with a session of another offering; a tier or
+  selection changed after it was written; an add-on of another offering, in the wrong shape, twice,
+  or for a session outside the participant's selection; an add-on selection rewritten, or removed
+  from a decided line; an add-on pool beyond its capacity, without an add-on, or a second pool for
+  the same add-on and session; a uniform of another offering or in a size it does not come in; a
+  second live uniform order for the same participant and offering; a uniform order moved against
+  its machine, handed over without a recorded hand-over, or changed in what it ordered; a hand-over
+  event rewritten or deleted, corrected twice, or corrected without a reason; every such record
+  pointing at another organization.
+
+**Proposed** (assumed defaults): tiers and add-ons are set per offering and exactly one tier
+applies; the purchase instant a tier deadline is checked against is the instant of the command
+(and of the quote) (**Pending decision** DEC-097). No stock is counted and a returning participant
+who holds the current uniform is not charged again where the offering says so (**Pending
+decision** DEC-101).
+
+Known limits:
+
+- A canceled session of a day selection is not followed here (nothing re-prices a purchase; the
+  refund and credit policy, DEC-009, is not built). A transfer moves the place only: its add-ons
+  and uniform stay with the original registration and finance reviews the money.
+- A selection of chosen days on an offering that has no `seats` or `session_seats` capacity unit
+  holds no pool at all (quality review n-7, not changed).
+- A team season's uniform is the uniform of the league offering its teams register through; the
+  list by team reads the team entry recorded on the basket line. Nothing is stored on the season.
+
+## Tiers, days and uniforms on every path into an enrollment (quality review of 2026-11-14)
+
+Findings M-1 to M-4 and M-8 of `.10x/reviews/2026-11-14-qa-report.md`. SPK-PAY-013, SPK-PAY-014
+and SPK-REG-012 stay **Proposed** requirements behind `per_session_pricing`, `price_tiers_addons`
+and `uniforms`; with the capabilities off every path below behaves as before
+(`__tests__/selection-paths.spec.ts` "with the capabilities off…", and the earlier capability-off
+tests). What is described is **Verified** by the tests named, on PGlite and on PostgreSQL 16.
+
+**The sessions an enrollment attends are one rule** (`services/attended-sessions.ts`, exported from
+`index.ts`): every session of the offering when no day selection is stored, the selected sessions
+otherwise. `Enrollment` states `priceTierId` and `selectedSessionIds`. Readers, all through that
+function: the attendance list (`session-roster.ts`), the notice and reminder audience and the
+closure impact (`session-participants.ts`, which communications reads through
+`SESSION_AUDIENCE_PORT`), the family calendar, a participant's recent attendance
+(`enrollment-overview.service.ts`), the session a makeup replaces (`makeups.service.ts`), session
+capacity (`CapacityService.seatRegistrations`), and in the entry module the arrival checks and
+the pass scan. **Verified**: `services/attended-sessions.spec.ts`, `selection-paths.spec.ts`
+("the family calendar shows only the sessions the participant attends"),
+`entry/__tests__/arrival-days.spec.ts`.
+
+**The waiting list of an offering sold by tier** (migration 0524). `POST /v1/waitlist-entries`
+takes `priceTierId`, `selectedSessionIds`, `addons` and `uniform` with the rules of a basket line
+(`RegistrationExtras.resolve`). The entry waits on the pools its selection needs
+(`RegistrationExtras.selectionPools`: the seat pool of each session attended, the offering-wide
+pools unless days were chosen, the pool of each limited add-on) and is refused with
+`CAPACITY_AVAILABLE` only when each of them has a free place and nobody waits on one of them. An
+offer holds a place in each of those pools; offers follow the queue order, an entry that asked for
+a tier and cannot be served is passed over and keeps the pools it waits on, and an entry that
+names no tier once the offering is sold by tier, or whose selection can no longer be bought,
+leaves the queue with a notice (`removal_reason` `tier_required`, `selection_not_available`).
+Accepting opens a basket line with the tier, days, add-ons and uniform and holds it; a pool the
+selection needs that the offer did not hold (a session scheduled since) is held then.
+"Waitlist first" (DEC-006) counts who waits on a pool the new registration would take a place in,
+once somebody in the queue asked for a tier; before that, everyone waiting, as before.
+**Verified**: `selection-paths.spec.ts` (two tests, and the database refusals of 0524),
+`finance/__tests__/selection-paths-money.spec.ts` (the accepted line is quoted by its tier and
+paid).
+
+**One check where an enrollment is created.** `EnrollmentsService.createPending` is the only place
+an enrollment row is written; it calls `RegistrationExtras.assertComplete`: while the price rule in
+effect has tiers the registration names one (`TIER_REQUIRED`), and a required uniform was chosen
+with a size (`UNIFORM_REQUIRED`). `details.nextAction` says what to do: `choose_price_tier`,
+`choose_uniform_size` (the command can name it), `remove_line_and_choose_tier`,
+`remove_line_and_choose_uniform_size` (a basket line added before the offering changed),
+`name_tier`, `register_in_basket` (a transfer). A basket hold, a waitlist acceptance
+(`AcceptWaitlistOfferRequest.uniform` for an entry that recorded none), a trial conversion
+(`ConvertTrialRequest` takes the choices) and a transfer pass it. A rental or party booking is
+not a participant's registration and is not checked. Free-agent placement creates no enrollment
+(the registration it places was created through a basket), so it needs no check of its own.
+**Verified**: `selection-paths.spec.ts` (trial conversion; "a line added before the offering
+required a uniform…"; the transfer test).
+
+**Session seats count everyone who attends** (migration 0525). Where the price rule lets customers
+choose days, a session's seats are shared by everyone who attends that day. Before a seat of a
+session pool is reserved (a basket hold, a waitlist entry and its offer, a transfer, a pickup,
+trial or makeup booking), every live enrollment of the offering that attends the session and has
+no place in its pool is committed to it, under the locks of the offering's pools
+(`CapacityService.seatRegistrations`, called by `RegistrationExtras.selectionPools` and
+`reconcileSessionSeats`). Why this and not a migration that backfills or a count derived from
+enrollments: a rule with a tier of chosen days can be added to an offering at any time after a
+migration ran, so a one-time backfill cannot be the mechanism, and a count read from enrollments
+would move the guarantee out of the pool row, where the check constraint
+`capacity_pools_within_capacity` enforces it under concurrency. The pool row stays the ledger;
+`allocations_one_per_enrollment_idx` (0525) is the database's refusal of counting one enrollment
+twice in one pool. A session already over its seats when days start to be sold keeps everyone on
+its pool (capacity is kept at what is used) and raises the operational exception
+`enrollment.capacity_below_commitments` for program staff. **Verified**: `selection-paths.spec.ts`
+("add a single-day tier to a half-sold camp…", "eight concurrent holds…" under PostgreSQL and
+PGlite, "a session that is already over its seats…", "the database refuses a second active
+allocation…").
+
+**A transfer names the tier and days and stores its price.** `TransferEnrollmentRequest` and the
+transfer preview take `priceTierId` and `selectedSessionIds`; the new enrollment stores them, sits
+on the pools of that selection, and stores the price worked out from the tier, the member price
+and the sessions counted at the transfer (`PriceSnapshot.estimate`, through
+`RegistrationExtras.priceSnapshot`), so a later cancellation is a share of that price and never of
+the rule's base price. A transfer into an offering that requires a uniform is refused
+(`UNIFORM_REQUIRED`, `register_in_basket`): a transfer has no basket line a uniform could be
+charged on. **Verified**: `selection-paths.spec.ts` (the transfer test),
+`finance/__tests__/selection-paths-money.spec.ts` (transfer then cancellation: half of 168.00,
+not of 24.00).
+
+**Proposed** (assumed, no decision recorded): an entry is passed over rather than blocking the
+queue when it waits for other pools; an entry whose selection can no longer be bought is removed
+rather than held; the price a transferred place is later canceled on is the price it was moved in
+at, whatever finance decides about the transfer itself (**Pending decision** DEC-009). Not built:
+the staff and customer transfer screens do not choose a tier or days (the API answer says to
+register in a basket where they cannot), no staff screen converts a trial, and the staff waitlist
+screen does not show what an entry waits for.

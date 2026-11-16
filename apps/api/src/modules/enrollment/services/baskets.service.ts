@@ -47,6 +47,7 @@ import type { BasketPort } from '../enrollment.ports';
 import {
   assistedBy,
   awaitsApproval,
+  lineOwesNothing,
   minutesFrom,
   organizationOf,
   owesNothing,
@@ -73,6 +74,8 @@ import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { EnrollmentFacilityScope } from './facility-scope';
 import { RegistrationEvaluator, type Evaluation } from './registration-evaluator';
+import { EMPTY_SELECTION, RegistrationExtras, type ResolvedSelection } from './registration-extras';
+import { UniformOrdersService } from './uniform-orders.service';
 
 export type BasketRow = Selectable<BasketsTable>;
 
@@ -83,6 +86,10 @@ export type BasketRow = Selectable<BasketsTable>;
  * Holding a basket acquires a server-owned hold on every required pool and creates the pending
  * enrollments in one transaction; finance commits the holds after payment facts, or the basket
  * completes here when nothing is owed.
+ *
+ * Proposed amendments PA-03 and PA-07 (SPK-PAY-014, SPK-REG-012; `RegistrationExtras`): a line may
+ * name a price tier, the days chosen under it, add-ons and a uniform size. With their capability
+ * off those fields are refused and a line behaves exactly as before.
  */
 @Injectable()
 export class BasketsService implements BasketPort {
@@ -102,6 +109,8 @@ export class BasketsService implements BasketPort {
     @Inject(OFFERING_LOOKUP_PORT) private readonly offerings: OfferingLookupPort,
     private readonly scope: EnrollmentFacilityScope,
     private readonly capabilities: CapabilityService,
+    private readonly extras: RegistrationExtras,
+    private readonly uniforms: UniformOrdersService,
   ) {}
 
   /**
@@ -192,8 +201,15 @@ export class BasketsService implements BasketPort {
         kinds.set(line.offering_id, snapshot?.offering.kind ?? null);
       }
     }
+    // SPK-PAY-014, SPK-REG-012: the add-ons and uniform each line chose (none for most lines).
+    const decorations = await this.extras.decorations(db, organizationId, lineRows);
     const lines: BasketLine[] = lineRows.map((line) =>
-      toBasketLine({ ...line, offering_kind: kinds.get(line.offering_id) ?? null }),
+      toBasketLine({
+        ...line,
+        offering_kind: kinds.get(line.offering_id) ?? null,
+        addons: decorations.get(line.id)?.addons ?? [],
+        uniform: decorations.get(line.id)?.uniform ?? null,
+      }),
     );
     const holds = await this.capacity.holdsOfBasket(db, organizationId, row.id);
     return toBasket(row, lines, holds.map(toHold));
@@ -323,6 +339,9 @@ export class BasketsService implements BasketPort {
       input.offeringId,
       input.sessionId,
     );
+    // SPK-PAY-014: the offering's sessions, for a day selection and per-session add-ons; read
+    // before the transaction and only while `price_tiers_addons` is on.
+    const offeringSessions = await this.extras.sessionsBefore(organizationId, input.offeringId);
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
@@ -385,6 +404,7 @@ export class BasketsService implements BasketPort {
       }
       return this.addLineInTrx(trx, organizationId, principal, basket, person, input, session, {
         correlationId,
+        offeringSessions,
       });
     });
   }
@@ -402,11 +422,24 @@ export class BasketsService implements BasketPort {
     person: PersonSummary,
     input: AddBasketLineInput,
     session: OfferingSession | null | undefined,
-    options: { correlationId: string | null; renewedFromEnrollmentId?: string | null },
+    options: {
+      correlationId: string | null;
+      renewedFromEnrollmentId?: string | null;
+      /** SPK-PAY-014: the offering's sessions, read before the transaction (`sessionsBefore`). */
+      offeringSessions?: readonly OfferingSession[];
+    },
   ): Promise<Basket> {
     const correlationId = options.correlationId;
     const basketId = basket.id;
     await this.assertLinesCapable(trx, organizationId, [{ intent: input.intent }]);
+    // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): the tier, days, add-ons and uniform the line
+    // chose, each refused while its capability is off (DEC-016) and validated against catalog.
+    const selection = await this.extras.resolve(
+      trx,
+      organizationId,
+      input,
+      options.offeringSessions ?? [],
+    );
     const snapshot = await this.evaluator.snapshot(trx, organizationId, input.offeringId);
     // R3-TRACE-A-02: staff rules (reusing another adult's application, the assisted record) apply
     // to a role holding manage_basket at the offering's facility only.
@@ -474,7 +507,13 @@ export class BasketsService implements BasketPort {
         correlationId,
       });
     }
-    const price = await this.evaluator.priceSnapshot(trx, organizationId, snapshot.offering.id);
+    const price = await this.extras.priceSnapshot(trx, organizationId, {
+      offering_id: snapshot.offering.id,
+      participant_person_id: person.id,
+      session_id: session?.id ?? null,
+      price_tier_id: selection.tier?.id ?? null,
+      selected_session_ids: selection.selectedSessionIds,
+    });
     if (price && basket.currency && basket.currency !== price.currency) {
       throw errors.validation(`A basket holds one currency (${basket.currency}).`);
     }
@@ -510,10 +549,13 @@ export class BasketsService implements BasketPort {
         requires_approval: evaluation.requiresApproval,
         enrollment_id: null,
         renewed_from_enrollment_id: options.renewedFromEnrollmentId ?? null,
+        price_tier_id: selection.tier?.id ?? null,
+        selected_session_ids: selection.selectedSessionIds,
         outcome: 'pending',
         outcome_reason: null,
       })
       .execute();
+    await this.extras.write(trx, organizationId, lineId, snapshot.offering.id, selection);
     await trx
       .updateTable('baskets')
       .set({
@@ -539,6 +581,28 @@ export class BasketsService implements BasketPort {
         applicationId: application.id,
         eligible: evaluation.result.eligible,
         priceRuleId: price?.priceRuleId ?? null,
+        ...(selection.tier
+          ? {
+              priceTierId: selection.tier.id,
+              selectedSessionIds: selection.selectedSessionIds,
+            }
+          : {}),
+        ...(selection.addons.length > 0
+          ? {
+              addons: selection.addons.map(({ addon, sessionIds }) => ({
+                addonId: addon.id,
+                sessionIds,
+              })),
+            }
+          : {}),
+        ...(selection.uniform
+          ? {
+              uniform: {
+                offeringUniformId: selection.uniform.uniform.id,
+                size: selection.uniform.size,
+              },
+            }
+          : {}),
       },
     });
     return this.view(trx, organizationId, (await this.load(trx, organizationId, basketId))!);
@@ -618,6 +682,15 @@ export class BasketsService implements BasketPort {
       organizationId,
       preview.map((l) => ({ offeringId: l.offering_id, sessionId: l.session_id })),
     );
+    // SPK-PAY-014: the sessions of each line's offering, for the pools of a day selection; read
+    // before the transaction and only while `price_tiers_addons` is on.
+    const offeringSessions = new Map<string, OfferingSession[]>();
+    for (const offeringId of [...new Set(preview.map((l) => l.offering_id))]) {
+      offeringSessions.set(
+        offeringId,
+        await this.extras.sessionsBefore(organizationId, offeringId),
+      );
+    }
     return this.uow.run(async ({ trx }) => {
       const basket = await this.load(trx, organizationId, basketId, true);
       if (!basket) throw errors.protectedNotFound('basket');
@@ -671,6 +744,7 @@ export class BasketsService implements BasketPort {
             sessions,
             currency,
             correlationId,
+            offeringSessions.get(line.offering_id) ?? [],
           );
         if (basket.fulfillment_mode === 'partial') {
           try {
@@ -827,6 +901,7 @@ export class BasketsService implements BasketPort {
     sessions: ReadonlyMap<string, OfferingSession>,
     currency: string | null,
     correlationId: string | null,
+    offeringSessions: readonly OfferingSession[],
   ): Promise<{ holdIds: string[]; enrollmentId: string; currency: string | null }> {
     await this.assertLineAuthority(principal, organizationId, basket, line);
     const snapshot = await this.evaluator.snapshot(trx, organizationId, line.offering_id);
@@ -877,31 +952,45 @@ export class BasketsService implements BasketPort {
         },
       );
     }
+    // SPK-PAY-014 (PA-03): the pools of the line's day selection and add-ons, with the tier,
+    // days and capability checked again now. Nothing for a line without them.
+    const selectionPools = await this.extras.poolsForHold(
+      trx,
+      organizationId,
+      line,
+      snapshot,
+      offeringSessions,
+      principal,
+    );
     // SPK-REG-005, §4.7 invariant 3: a join_team line also takes a place in the roster-place pools
-    // staff configured for the team entry it names, the constraint placement respects as well.
+    // staff configured for the team entry it names, the constraint placement respects as well. A
+    // line of chosen days counts on its sessions only, not on the offering-wide places.
     const pools = [
-      ...this.capacity.poolsForIntent(
-        await this.capacity.ensurePoolsForOffering(trx, organizationId, snapshot, principal),
-        line.intent,
-      ),
+      ...(selectionPools.replacesOfferingPools
+        ? []
+        : this.capacity.poolsForIntent(
+            await this.capacity.ensurePoolsForOffering(trx, organizationId, snapshot, principal),
+            line.intent,
+          )),
       ...(line.intent === 'join_team' && line.team_entry_id
         ? await this.capacity.teamEntryPools(trx, organizationId, line.team_entry_id)
         : []),
     ];
     // SPK-PAY-001/002, SPK-REG-004: the line is priced from the rule effective at the hold instant
     // (an open basket never expires, so the add-time snapshot may be stale).
-    const price = await this.evaluator.priceSnapshot(trx, organizationId, snapshot.offering.id);
+    const price = await this.extras.priceSnapshot(trx, organizationId, line);
     if (price && currency && price.currency !== currency) {
       throw errors.validation(`A basket holds one currency (${currency}).`, { lineId: line.id });
     }
+    // DEC-006 (proposed `waitlistFirst`): a free place goes to who waits for it. Where waiters
+    // asked for a tier, days or add-ons, only those who wait on a pool this line would take a
+    // place in are ahead of it (quality review M-2); otherwise everyone waiting, as before.
     if (
       this.evaluator.configuration.waitlistFirst &&
-      (await this.capacity.othersWaiting(
-        trx,
-        organizationId,
-        { offeringId: snapshot.offering.id, sessionId: null },
-        person.id,
-      )) > 0
+      (await this.extras.waitingAhead(trx, organizationId, snapshot, person.id, [
+        ...pools.map((p) => p.id),
+        ...selectionPools.extraPoolIds,
+      ])) > 0
     ) {
       throw errors.capacityUnavailable(
         'Places of this offering are offered to its waitlist first.',
@@ -913,7 +1002,10 @@ export class BasketsService implements BasketPort {
       );
     }
     const holds = await this.capacity.acquireHolds(trx, organizationId, {
-      pools: pools.map((p) => ({ poolId: p.id, quantity: line.quantity })),
+      pools: [
+        ...pools.map((p) => ({ poolId: p.id, quantity: line.quantity })),
+        ...selectionPools.extraPoolIds.map((poolId) => ({ poolId, quantity: 1 })),
+      ],
       ownerKind: 'basket',
       ownerId: line.id,
       basketId: basket.id,
@@ -954,11 +1046,14 @@ export class BasketsService implements BasketPort {
       basketLineId: line.id,
       trialParticipationId: line.trial_participation_id,
       renewedFromEnrollmentId: line.renewed_from_enrollment_id,
+      priceTierId: line.price_tier_id,
+      selectedSessionIds: line.selected_session_ids,
       priceSnapshot: price,
       policyReferences: this.evaluator.policyReferences(snapshot, evaluation.approvalPolicy),
       eligibilityResult: result,
       correlationId,
     });
+    await this.orderUniformOfLine(trx, organizationId, line, enrollment.id, correlationId);
     await trx
       .updateTable('basket_lines')
       .set((eb) => ({
@@ -977,6 +1072,29 @@ export class BasketsService implements BasketPort {
       enrollmentId: enrollment.id,
       currency: price?.currency ?? null,
     };
+  }
+
+  /** SPK-REG-012 (PA-07): the uniform chosen on a line is ordered with its registration. */
+  private async orderUniformOfLine(
+    trx: Trx,
+    organizationId: string,
+    line: BasketLineRow,
+    enrollmentId: string,
+    correlationId: string | null,
+  ): Promise<void> {
+    const chosenUniform = await this.extras.uniformOfLine(trx, organizationId, line);
+    if (!chosenUniform) return;
+    await this.uniforms.order(trx, organizationId, {
+      enrollmentId,
+      basketLineId: line.id,
+      offeringId: line.offering_id,
+      participantPersonId: line.participant_person_id,
+      teamEntryId: line.team_entry_id,
+      uniform: chosenUniform.uniform,
+      size: chosenUniform.size,
+      charged: chosenUniform.charged,
+      correlationId,
+    });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1195,14 +1313,20 @@ export class BasketsService implements BasketPort {
       const now = this.clock.now();
       const owing: string[] = [];
       for (const line of held) {
-        const priced: PriceSnapshot | null = await this.evaluator.priceSnapshot(
+        const priced: PriceSnapshot | null = await this.extras.priceSnapshot(
           trx,
           organizationId,
-          line.offeringId,
+          {
+            offering_id: line.offeringId,
+            participant_person_id: line.participantPersonId,
+            session_id: line.sessionId,
+            price_tier_id: line.priceTierId,
+            selected_session_ids: line.selectedSessionIds,
+          },
           now,
         );
-        if (!owesNothing(line.price, line.quantity) || !owesNothing(priced, line.quantity))
-          owing.push(line.id);
+        // SPK-PAY-014, SPK-REG-012: a priced add-on or uniform is owed like the place itself.
+        if (!lineOwesNothing(line) || !owesNothing(priced, line.quantity)) owing.push(line.id);
       }
       if (owing.length > 0) {
         throw errors.resourceConflict(
@@ -1472,6 +1596,12 @@ export class BasketsService implements BasketPort {
        * `party_request` line.
        */
       forBooking?: boolean;
+      /**
+       * SPK-PAY-014, SPK-REG-012 (quality review M-2, M-4): the tier, days, add-ons and uniform
+       * the line carries, already validated by `RegistrationExtras.resolve` (a waitlist entry's
+       * request, a trial conversion's choices). Without one the line names none.
+       */
+      selection?: ResolvedSelection;
       correlationId: string | null;
     },
   ): Promise<{ basket: BasketRow; lineId: string }> {
@@ -1496,11 +1626,14 @@ export class BasketsService implements BasketPort {
     await this.assertLinesCapable(trx, organizationId, [{ intent: input.intent }]);
     const now = this.clock.now();
     const basketId = input.existingBasketId ?? newId();
-    const price = await this.evaluator.priceSnapshot(
-      trx,
-      organizationId,
-      input.snapshot.offering.id,
-    );
+    const selection = input.selection ?? EMPTY_SELECTION;
+    const price = await this.extras.priceSnapshot(trx, organizationId, {
+      offering_id: input.snapshot.offering.id,
+      participant_person_id: input.participant.id,
+      session_id: input.sessionId,
+      price_tier_id: selection.tier?.id ?? null,
+      selected_session_ids: selection.selectedSessionIds,
+    });
     if (!input.existingBasketId)
       await trx
         .insertInto('baskets')
@@ -1560,10 +1693,13 @@ export class BasketsService implements BasketPort {
         ),
         requires_approval: input.evaluation.requiresApproval,
         enrollment_id: null,
+        price_tier_id: selection.tier?.id ?? null,
+        selected_session_ids: selection.selectedSessionIds,
         outcome: 'pending',
         outcome_reason: null,
       })
       .execute();
+    await this.extras.write(trx, organizationId, lineId, input.snapshot.offering.id, selection);
     void now;
     const basket = await this.load(trx, organizationId, basketId);
     if (!basket) throw errors.internal('basket vanished');
@@ -1581,6 +1717,8 @@ export class BasketsService implements BasketPort {
     existingHoldIds: readonly string[],
     expiresAt: Date,
     correlationId: string | null,
+    /** SPK-PAY-014: the offering's sessions, read before the transaction (`sessionsBefore`). */
+    offeringSessions: readonly OfferingSession[] = [],
   ): Promise<{ basket: BasketRow; enrollmentId: string }> {
     const line = (await this.lineRows(trx, organizationId, basket.id)).find((l) => l.id === lineId);
     if (!line) throw errors.internal('basket line vanished');
@@ -1598,6 +1736,40 @@ export class BasketsService implements BasketPort {
       );
     }
     const snapshot = await this.evaluator.snapshot(trx, organizationId, line.offering_id);
+    // SPK-PAY-014 (quality review M-2, M-3): the pools of the line's selection, as a basket hold
+    // takes them. The holds moved to the line (a waitlist offer's) cover what the offer was made
+    // for; a pool the selection needs and none of them covers (a session scheduled since the
+    // offer) is held now, so the participant sits on every session they attend. Nothing for a
+    // line without tier and add-ons.
+    const selectionPools = await this.extras.poolsForHold(
+      trx,
+      organizationId,
+      line,
+      snapshot,
+      offeringSessions,
+      actor,
+    );
+    const newHoldIds: string[] = [];
+    if (selectionPools.extraPoolIds.length > 0) {
+      const covered = new Set<string>();
+      for (const holdId of existingHoldIds) {
+        const hold = await this.capacity.loadHold(trx, organizationId, holdId);
+        if (hold) covered.add(hold.pool_id);
+      }
+      const uncovered = selectionPools.extraPoolIds.filter((poolId) => !covered.has(poolId));
+      if (uncovered.length > 0) {
+        const holds = await this.capacity.acquireHolds(trx, organizationId, {
+          pools: uncovered.map((poolId) => ({ poolId, quantity: 1 })),
+          ownerKind: 'basket',
+          ownerId: line.id,
+          basketId: basket.id,
+          actor,
+          expiresAt,
+          correlationId,
+        });
+        newHoldIds.push(...holds.map((h) => h.id));
+      }
+    }
     const application = line.application_id
       ? await this.applications.load(trx, organizationId, line.application_id)
       : undefined;
@@ -1614,11 +1786,14 @@ export class BasketsService implements BasketPort {
       basketId: basket.id,
       basketLineId: line.id,
       trialParticipationId: line.trial_participation_id,
+      priceTierId: line.price_tier_id,
+      selectedSessionIds: line.selected_session_ids,
       priceSnapshot: (line.price_snapshot as unknown as Basket['lines'][number]['price']) ?? null,
       policyReferences: this.evaluator.policyReferences(snapshot, null),
       eligibilityResult: line.eligibility_result as unknown as EligibilityResult,
       correlationId,
     });
+    await this.orderUniformOfLine(trx, organizationId, line, enrollment.id, correlationId);
     await trx
       .updateTable('basket_lines')
       .set((eb) => ({
@@ -1644,7 +1819,7 @@ export class BasketsService implements BasketPort {
       payload: {
         organizationId,
         basketId: basket.id,
-        holdIds: [...existingHoldIds],
+        holdIds: [...existingHoldIds, ...newHoldIds],
         enrollmentIds: [enrollment.id],
         expiresAt: expiresAt.toISOString(),
         approvalPending: line.requires_approval && application?.status !== 'accepted',

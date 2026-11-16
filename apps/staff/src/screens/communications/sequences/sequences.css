@@ -1,0 +1,104 @@
+/*
+ * Message templates, sequences and schedules (SPK-COMMS-009, proposed amendment PA-05). Lists,
+ * forms and message text are plain solid cards; only the schedule's action bar stands on the page
+ * as a toolbar. Colours come from the tokens of ui/styles.css, so both themes work.
+ */
+.ms {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.ms-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+}
+.ms .form {
+  max-width: 44rem;
+}
+.ms .form h4 {
+  margin: 0;
+}
+/* A form or panel opened under a row takes the row's full width. */
+.ms-wide {
+  flex: 1 1 100%;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+.ms-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+.ms-inline > .field {
+  flex: 1 1 11rem;
+  min-width: 0;
+}
+
+/* The schedule: one solid card per message, in the order they are due. */
+.ms-schedule {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ms-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.ms-card p,
+.ms-card h5 {
+  margin: 0;
+}
+
+/* Message text keeps the line breaks staff typed. */
+.ms-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.ms-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sand-2);
+  color: var(--ink);
+}
+
+/* The placeholder vocabulary under a text field. */
+.ms-placeholders ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.ms-placeholders li {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.ms-placeholders code {
+  font-size: 12px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--card);
+  color: var(--ink);
+}

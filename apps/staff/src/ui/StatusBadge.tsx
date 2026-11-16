@@ -15,11 +15,23 @@ export const STATUS_GLYPHS: Record<StatusTone, string> = {
   pending: '◷',
 };
 
+/**
+ * A lifecycle's state name as plain words: "in_service" reads "in service" (SPK-UX-010 clear,
+ * consistent wording). Only names written in lower case with underscores change; a reference or
+ * code in capitals (DEC-018, ACCESS_DENIED), an action id (entry.sync_offline) and a file name
+ * (daily_schedule-2026-10-24.csv) are left as written.
+ */
+export function plainWords(label: string): string {
+  return label.replace(/(?<![\w.\-/])[a-z]+(?:_[a-z]+)+(?![\w\-/]|\.\w)/g, (name) =>
+    name.replace(/_/g, ' '),
+  );
+}
+
 export function StatusBadge({ tone, label }: { tone: StatusTone; label: string }) {
   return (
     <span className={`badge tone-${tone}`} data-tone={tone}>
       <span aria-hidden="true">{STATUS_GLYPHS[tone]}</span>
-      <span className="badge-label">{label}</span>
+      <span className="badge-label">{plainWords(label)}</span>
     </span>
   );
 }

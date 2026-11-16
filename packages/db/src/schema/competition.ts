@@ -29,10 +29,25 @@ export interface CompetitionsTable {
   description: string | null;
   status: Generated<CompetitionStatus>;
   created_by: Json<Record<string, unknown>>;
+  /** SPK-SCHED-010 (migration 0470): private until a permitted staff member publishes it. */
+  public_visibility: Generated<CompetitionPublicVisibility>;
+  /** Issued when first made public and kept afterwards. */
+  public_code: Generated<string | null>;
+  public_changed_at: ColumnType<
+    Date | null,
+    Date | string | null | undefined,
+    Date | string | null
+  >;
+  public_changed_by: ColumnType<
+    Record<string, unknown> | null,
+    string | null | undefined,
+    string | null
+  >;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
 }
+export type CompetitionPublicVisibility = 'private' | 'public';
 
 export interface RuleSetsTable {
   id: string;
@@ -62,6 +77,8 @@ export interface SeasonsTable {
   /** CMP-09 (migration 0456). */
   source: Generated<CompetitionRecordSource>;
   created_by: Json<Record<string, unknown>>;
+  /** SPK-SCHED-010 (migration 0470): the season's code in public links; null until issued. */
+  public_code: Generated<string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -96,7 +113,8 @@ export interface TeamsTable {
   updated_at: GeneratedTimestamp;
 }
 
-export type TeamEntryStatus = 'applied' | 'approved' | 'withdrawn' | 'rejected';
+/** `waiting` is the team waiting list (SPK-COMP-006, migration 0467). */
+export type TeamEntryStatus = 'applied' | 'waiting' | 'approved' | 'withdrawn' | 'rejected';
 export type TeamEntryEligibilityStatus = 'pending' | 'eligible' | 'ineligible' | 'review_required';
 export interface TeamEntriesTable {
   id: string;
@@ -123,6 +141,33 @@ export interface TeamEntriesTable {
   renewed_from_entry_id: string | null;
   /** CMP-09 (migration 0456). */
   source: Generated<CompetitionRecordSource>;
+  /** SPK-COMP-006 (migration 0467): set exactly while the entry waits; the list order. */
+  waiting_since: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  /** The division whose list the entry waits on; null waits for any place in the season. */
+  waiting_division_id: Generated<string | null>;
+  revision: Generated<number>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
+/** SPK-COMP-006 (migration 0467): a freed division place offered to a waiting entry. */
+export type TeamEntryPlaceOfferStatus =
+  'offered' | 'accepted' | 'declined' | 'expired' | 'withdrawn';
+export interface TeamEntryPlaceOffersTable {
+  id: string;
+  organization_id: string;
+  season_id: string;
+  team_entry_id: string;
+  division_id: string;
+  status: Generated<TeamEntryPlaceOfferStatus>;
+  position_at_offer: number;
+  offered_at: Timestamp;
+  offered_by: Json<Record<string, unknown>>;
+  expires_at: Timestamp;
+  note: string | null;
+  resolved_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  resolved_by: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  resolution_reason: Generated<string | null>;
   revision: Generated<number>;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
@@ -321,6 +366,7 @@ export interface CompetitionTables {
   divisions: DivisionsTable;
   teams: TeamsTable;
   team_entries: TeamEntriesTable;
+  team_entry_place_offers: TeamEntryPlaceOffersTable;
   team_roles: TeamRolesTable;
   roster_memberships: RosterMembershipsTable;
   team_invitations: TeamInvitationsTable;

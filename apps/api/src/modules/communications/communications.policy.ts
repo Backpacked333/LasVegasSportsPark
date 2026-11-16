@@ -66,6 +66,10 @@ export const DEFAULT_COMMUNICATIONS_POLICY: CommunicationsPolicy = {
     activity_reminder: 'operational',
     // SPK-RESULT-001: league staff remind captains of a missing result.
     result_reminder: 'operational',
+    // SPK-COMP-006: a place offered to a waiting team and the team's waiting state concern the
+    // team's place in a season, never marketing.
+    team_place_offer: 'operational',
+    team_waiting_list: 'operational',
     renewal_opportunity: 'promotional',
     staff_broadcast: 'choose',
   },

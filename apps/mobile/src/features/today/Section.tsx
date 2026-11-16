@@ -7,10 +7,10 @@
  */
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { StateView } from '../../ui/StateView';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 
 export function Section({
   title,
@@ -21,6 +21,7 @@ export function Section({
   children: ReactNode;
   testID?: string;
 }) {
+  const styles = useStyles();
   return (
     <View style={styles.section} testID={testID}>
       <Text style={styles.title} accessibilityRole="header">
@@ -86,6 +87,7 @@ export function oldestUpdate(dates: readonly (Date | null)[]): Date | null {
 }
 
 export function Caption({ children, testID }: { children: ReactNode; testID?: string }) {
+  const styles = useStyles();
   return (
     <Text style={styles.caption} testID={testID}>
       {children}
@@ -93,8 +95,8 @@ export function Caption({ children, testID }: { children: ReactNode; testID?: st
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   section: { gap: spacing.sm, paddingTop: spacing.lg, paddingBottom: spacing.xs },
   title: { ...type.eyebrow, color: colors.textMuted, paddingHorizontal: spacing.lg + 2 },
   caption: { ...type.caption, color: colors.textMuted, paddingHorizontal: spacing.lg },
-});
+}));

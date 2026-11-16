@@ -23,6 +23,7 @@ import {
 import type { ReactNode } from 'react';
 import { Button } from './Button';
 import { CommandButton } from './CommandButton';
+import { Icon } from './Icon';
 import { StatusBadge } from './StatusBadge';
 
 interface ActionProps {
@@ -71,7 +72,12 @@ export function StateView(props: StateViewProps) {
         }
       : props;
   return (
-    <section className="state" aria-live="polite" data-testid={`state-${shown.variant}`}>
+    <section
+      className="state"
+      aria-live="polite"
+      data-variant={shown.variant}
+      data-testid={`state-${shown.variant}`}
+    >
       {body(shown)}
     </section>
   );
@@ -88,6 +94,9 @@ function body(props: StateViewProps): ReactNode {
     case 'empty':
       return (
         <>
+          <span className="state-glyph" aria-hidden="true">
+            <Icon name="inbox" size={20} />
+          </span>
           <h2>{props.title}</h2>
           <p>{props.description}</p>
           {props.actionLabel && props.onAction ? (

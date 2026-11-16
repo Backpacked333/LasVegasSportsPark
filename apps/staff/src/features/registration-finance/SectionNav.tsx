@@ -4,6 +4,7 @@
  * keyboard (SPK-UX-009).
  */
 import { NavLink } from 'react-router';
+import { TabTrack } from '../../ui/glass/GlassCard';
 
 export interface SectionLink {
   to: string;
@@ -12,18 +13,35 @@ export interface SectionLink {
   end?: boolean;
 }
 
+/**
+ * A label with its inventory screen id ("Waitlists (SCR-S-26)"): the name leads, the id is kept
+ * as a quiet tag (SPK-UX-010 clear hierarchy). The link's text and accessible name are unchanged.
+ */
+function SectionLabel({ label }: { label: string }) {
+  const match = /^(.*?) (\(SCR-[A-Z]-\d+\))$/.exec(label);
+  if (!match) return <>{label}</>;
+  return (
+    <>
+      {`${match[1]} `}
+      <span className="screen-id">{match[2]}</span>
+    </>
+  );
+}
+
 export function SectionNav({ label, links }: { label: string; links: readonly SectionLink[] }) {
   return (
     <nav aria-label={label} className="rf-section-nav">
-      <ul>
-        {links.map((link) => (
-          <li key={link.to}>
-            <NavLink to={link.to} end={link.end}>
-              {link.label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
+      <TabTrack>
+        <ul>
+          {links.map((link) => (
+            <li key={link.to}>
+              <NavLink to={link.to} end={link.end}>
+                <SectionLabel label={link.label} />
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </TabTrack>
     </nav>
   );
 }

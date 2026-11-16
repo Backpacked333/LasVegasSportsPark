@@ -4,6 +4,7 @@ import type {
   FixtureStatus,
   Principal,
   RosterPlayingStatus,
+  SeasonStatus,
   TeamEntryStatus,
   TeamRoleValue,
 } from '@sportspark/contracts';
@@ -28,6 +29,38 @@ export interface TeamEntrySummary {
   financialStatusRef: string | null;
   eligibilityStatus: string;
   revision: number;
+}
+
+/**
+ * A season's own facts for a module that already authorized its command (SPK-COMMS-009, proposed
+ * amendment PA-05: communications fills message placeholders and counts due times from them).
+ * Dates are the season's calendar dates (`YYYY-MM-DD`); the names are the operator's own text.
+ */
+export interface SeasonSummary {
+  id: string;
+  organizationId: string;
+  competitionId: string;
+  competitionName: string;
+  name: string;
+  startsOn: string;
+  endsOn: string;
+  registrationOpensAt: Date | null;
+  registrationClosesAt: Date | null;
+  status: SeasonStatus;
+  revision: number;
+}
+
+/**
+ * A division's own facts (SPK-COMP-006, QA M-7: a notice to a captain names the division a place
+ * was offered in). The name is the operator's own text; `facilityId` is null when the division
+ * names no facility.
+ */
+export interface DivisionSummary {
+  id: string;
+  organizationId: string;
+  seasonId: string;
+  name: string;
+  facilityId: string | null;
 }
 
 export interface PersonEntryMembership {
@@ -62,6 +95,20 @@ export interface TeamEntryQueryPort {
     seasonId: string,
     trx?: Trx,
   ): Promise<TeamEntrySummary[]>;
+  /**
+   * SPK-COMMS-009 (proposed amendment PA-05): the season's own facts, or null for an unknown or
+   * cross-organization id. A read: it writes nothing.
+   */
+  findSeason(organizationId: string, seasonId: string, trx?: Trx): Promise<SeasonSummary | null>;
+  /**
+   * SPK-COMP-006 (QA M-7): a division's own facts, or null for an unknown or cross-organization
+   * id. A read: it writes nothing.
+   */
+  findDivision(
+    organizationId: string,
+    divisionId: string,
+    trx?: Trx,
+  ): Promise<DivisionSummary | null>;
   /** Entries a person is effectively on (roster or role) at the instant. */
   entriesOfPerson(
     organizationId: string,

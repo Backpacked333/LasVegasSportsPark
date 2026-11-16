@@ -4,8 +4,7 @@
  * nothing is in flight, and withholding or dropping an answer to produce an unknown outcome: a
  * timeout (`withholdAnswers`) or a connection lost after sending (`dropAnswers`).
  */
-import { waitFor } from '@testing-library/react-native';
-import { createTestApp, type TestAppOptions } from '../../../testing/test-app';
+import { createTestApp, settleQueries, type TestAppOptions } from '../../../testing/test-app';
 
 /** A lost connection after the request was sent (`kind: 'network'`), see testing/test-app. */
 export { dropAnswers } from '../../../testing/test-app';
@@ -19,9 +18,11 @@ export function createTeamsTestApp(options: TestAppOptions = {}) {
     requestsTo(method, route).map((r) => r.headers['idempotency-key']);
   /** Bodies of the requests to one route, in order. */
   const bodiesOf = (method: string, route: string) => requestsTo(method, route).map((r) => r.body);
-  /** Waits until no query or command is in flight, so no update lands after the test. */
-  const settle = () =>
-    waitFor(() => expect(app.queryClient.isFetching() + app.queryClient.isMutating()).toBe(0));
+  /**
+   * Waits until no query or command is in flight and the screen shows it (`settleQueries`), so no
+   * update lands after the test and what the test presses next is in the state the cache is in.
+   */
+  const settle = () => settleQueries(app.queryClient);
   return { ...app, requestsTo, keysOf, bodiesOf, settle };
 }
 

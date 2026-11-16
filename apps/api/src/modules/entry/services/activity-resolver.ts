@@ -8,7 +8,7 @@ import {
 } from '@sportspark/contracts';
 import type { Db } from '@sportspark/db';
 import { currentTransaction, DATABASE, type Trx } from '../../../kernel';
-import { OfferingsService, SessionsService } from '../../catalog';
+import { OfferingsService, SessionsService, WaiversService } from '../../catalog';
 import { EventsService } from '../../scheduling';
 
 /** What entry needs to know about the activity a record concerns, read from its owning module. */
@@ -33,16 +33,36 @@ export interface ResolvedActivity {
   schedulingEventId: string | null;
   /** Forms the participant must have acknowledged (catalog required form policy versions). */
   requiredFormPolicyVersionIds: string[];
+  /**
+   * SPK-REG-011 (proposed): the waiver families the activity's offering requires, by policy key
+   * (empty for an activity that is not an offering session).
+   */
+  requiredWaiverKeys: string[];
   /** For an event that schedules a competition fixture: the fixture id (event source). */
   fixtureId: string | null;
   /** People committed to the event by scheduling (officials, named participants). */
   personCommitments: string[];
+  /**
+   * SPK-PAY-014 (proposed amendment PA-03): for a session activity, when each scheduled session
+   * of its offering starts, so arrival can name the days a participant is registered for when
+   * this session is not one of them. Absent for an event.
+   */
+  offeringSessionStarts?: ReadonlyArray<{ sessionId: string; start: Date }>;
 }
 
 export interface FacilityFacts {
   id: string;
   timezone: string;
   settings: Record<string, unknown>;
+}
+
+/** When each scheduled session of an offering starts (`ResolvedActivity.offeringSessionStarts`). */
+function sessionStarts(
+  sessions: ReadonlyArray<{ id: string; status: string; scheduledStart: string }>,
+): Array<{ sessionId: string; start: Date }> {
+  return sessions
+    .filter((s) => s.status === 'scheduled')
+    .map((s) => ({ sessionId: s.id, start: new Date(s.scheduledStart) }));
 }
 
 export function activityKey(ref: ActivityRef): string {
@@ -64,7 +84,8 @@ export function refOf(detail: ActivityDetail): ActivityRef {
 
 /**
  * Resolves activities through the owning modules' exported services (§4.2): catalog offering
- * sessions (OfferingsService, SessionsService) and scheduling events (EventsService). It never
+ * sessions (OfferingsService, SessionsService, and WaiversService for the waiver families an
+ * offering requires) and scheduling events (EventsService). It never
  * reads their tables. Those services read through the root database, so resolution must happen
  * before or after a command's transaction, never inside it (under PGlite a root read inside an
  * open transaction would wait for the only connection); the guard turns that mistake into an
@@ -78,6 +99,7 @@ export class ActivityResolver {
     private readonly offerings: OfferingsService,
     private readonly sessions: SessionsService,
     private readonly events: EventsService,
+    private readonly waivers: WaiversService,
   ) {}
 
   async facility(organizationId: string, facilityId: string, trx?: Trx): Promise<FacilityFacts> {
@@ -143,6 +165,7 @@ export class ActivityResolver {
     if (offering.facilityId !== facilityId) return [];
     const facility = await this.facility(organizationId, facilityId);
     const sessions = await this.sessions.list(system, offeringId);
+    const requiredWaiverKeys = await this.waivers.requiredKeys(organizationId, offeringId);
     return sessions
       .filter(
         (s) =>
@@ -169,8 +192,10 @@ export class ActivityResolver {
         offeringId,
         schedulingEventId: session.schedulingEventId,
         requiredFormPolicyVersionIds: [...offering.requiredFormPolicyVersionIds],
+        requiredWaiverKeys,
         fixtureId: null,
         personCommitments: [],
+        offeringSessionStarts: sessionStarts(sessions),
       }));
   }
 
@@ -186,7 +211,8 @@ export class ActivityResolver {
       }
       throw error;
     });
-    const session = (await this.sessions.list(system, offeringId)).find((s) => s.id === sessionId);
+    const sessions = await this.sessions.list(system, offeringId);
+    const session = sessions.find((s) => s.id === sessionId);
     if (!session) throw errors.notFound('session', sessionId);
     const facility = await this.facility(organizationId, offering.facilityId);
     return {
@@ -208,8 +234,10 @@ export class ActivityResolver {
       offeringId,
       schedulingEventId: session.schedulingEventId,
       requiredFormPolicyVersionIds: [...offering.requiredFormPolicyVersionIds],
+      requiredWaiverKeys: await this.waivers.requiredKeys(organizationId, offeringId),
       fixtureId: null,
       personCommitments: [],
+      offeringSessionStarts: sessionStarts(sessions),
     };
   }
 
@@ -235,6 +263,7 @@ export class ActivityResolver {
       offeringId: null,
       schedulingEventId: event.id,
       requiredFormPolicyVersionIds: [],
+      requiredWaiverKeys: [],
       fixtureId: event.sourceType === 'fixture' && event.sourceId ? event.sourceId : null,
       personCommitments: event.commitments
         .filter((c) => c.partyType === 'person')

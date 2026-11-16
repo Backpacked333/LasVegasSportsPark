@@ -36,6 +36,7 @@ import { CommandError } from '../../features/registration/CommandError';
 import { ExpiryNotice } from '../../features/registration/ExpiryNotice';
 import { useFormsStatus, type FormsStatus } from '../../features/registration/forms';
 import { formatMoney } from '../../features/registration/format';
+import { basketLinePrice } from '../../features/registration/price-basis';
 import { INTENT_LABELS } from '../../features/registration/intents';
 import { JoinWaitlistButton } from '../../features/registration/JoinWaitlist';
 import { useParticipantNames } from '../../features/registration/participants';
@@ -57,7 +58,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type Basket = Schema<'Basket'>;
 type BasketLine = Schema<'BasketLine'>;
@@ -139,6 +140,7 @@ function LineCard({
   onRemoved: () => void;
   onFailure: (failure: Failure) => void;
 }) {
+  const styles = useStyles();
   const router = useRouter();
   const remove = useApiCommand('post', '/baskets/{id}/lines/{lineId}/remove', {
     invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
@@ -148,6 +150,7 @@ function LineCard({
   const alternatives =
     line.eligibility && !line.eligibility.eligible ? line.eligibility.alternatives : [];
   const title = `${participantName}: ${offeringName}`;
+  const price = line.price ? basketLinePrice(line.price) : null;
 
   const removeLine = async () => {
     try {
@@ -167,18 +170,59 @@ function LineCard({
         <Body muted>{INTENT_LABELS[line.intent].title}</Body>
         <StatusBadge {...status} />
       </View>
-      {line.price ? (
+      {price ? (
         // Only the amount the API sent; line totals belong to the quote (SPK-PAY-001, SCR-C-12).
+        // SPK-PAY-013, SPK-PAY-014, SPK-PAY-015: where the line is priced per class, by tier or
+        // at a member price, the API's estimate is shown, never the price of one class.
         <>
-          <Detail
-            label="Base price each"
-            value={formatMoney(line.price.basePriceMinor, line.price.currency)}
-          />
+          <Detail label={price.label} value={price.value} />
+          {price.notes.map((note) => (
+            <Body key={note} muted>
+              {note}
+            </Body>
+          ))}
           {line.quantity > 1 ? <Detail label="Quantity" value={String(line.quantity)} /> : null}
         </>
       ) : (
         <Detail label="Price" value="No price published" />
       )}
+      {line.selectedSessionIds ? (
+        <Detail
+          label="Days chosen"
+          value={String(line.selectedSessionIds.length)}
+          testID={`line-days-${line.id}`}
+        />
+      ) : null}
+      {line.addons.map((addon) => (
+        // SPK-PAY-014: each add-on with its own price; the quote shows it as its own line.
+        <Detail
+          key={addon.addonId}
+          label={
+            addon.selection === 'per_session'
+              ? `${addon.name} × ${addon.quantity === 1 ? '1 day' : `${addon.quantity} days`}`
+              : addon.name
+          }
+          value={`${formatMoney(addon.priceMinor, addon.currency)} each`}
+        />
+      ))}
+      {line.uniform ? (
+        // SPK-REG-012: the uniform and the size chosen for this participant.
+        <>
+          <Detail
+            label={`${line.uniform.name}, size ${line.uniform.size}`}
+            value={
+              line.uniform.priceMinor !== null && line.uniform.currency
+                ? formatMoney(line.uniform.priceMinor, line.uniform.currency)
+                : 'Not charged'
+            }
+          />
+          {line.uniform.returningHolderFree && line.uniform.heldUniformOrderId ? (
+            <Body
+              muted
+            >{`${participantName} already has this uniform: it is not charged again.`}</Body>
+          ) : null}
+        </>
+      ) : null}
       {reasons.map((reason) => (
         <Body key={reason}>{`✕ ${reason}`}</Body>
       ))}
@@ -241,6 +285,9 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
   const status = basketStatus(basket, now);
   const ended = basket.status === 'expired' || basket.status === 'released';
   const capacityFailed = failure?.error.code === 'CAPACITY_UNAVAILABLE';
+  const waitlistFirst =
+    capacityFailed &&
+    (failure?.error.details as { waitlistFirst?: unknown } | undefined)?.waitlistFirst === true;
   const forms = useFormsStatus(
     basket.lines.map((l) => ({
       participantPersonId: l.participantPersonId,
@@ -353,9 +400,12 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
       />
       {capacityFailed ? (
         <Section title="No place available">
+          {/* SPK-PAY-014 (quality review M-2, m-6): what is full may be the activity, a day or
+              an extra that was chosen; the waitlist is joined for exactly what the line chose. */}
           <Body>
-            There is no place left for at least one line. Nothing was charged. You can join the
-            waitlist for a participant, or remove the line and continue.
+            {waitlistFirst
+              ? 'Places that come free go to the people already waiting. Nothing was charged. You can join the waitlist for what you chose, or remove the line and continue.'
+              : 'The activity, a day or an extra you chose is full for at least one line. Nothing was charged. You can join the waitlist for exactly what you chose, or remove the line and choose something else.'}
           </Body>
         </Section>
       ) : null}
@@ -451,7 +501,7 @@ export function BasketRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   line: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
@@ -460,4 +510,4 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   lineActions: { gap: spacing.sm, paddingTop: spacing.xs },
-});
+}));

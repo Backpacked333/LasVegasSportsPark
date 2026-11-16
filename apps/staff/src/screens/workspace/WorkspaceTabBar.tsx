@@ -4,9 +4,13 @@
  * `aria-current`). Shown only on workspace pages and, by its stylesheet, only at phone width; the
  * workspace's own tabs stay for wider screens and keyboard users. Every tab is an existing
  * workspace screen: nothing here decides what the viewer may do.
+ *
+ * The bar is a liquid glass capsule floating above the page that scrolls beneath it (`ui/glass`);
+ * its tabs are flat, the current one a tinted pill with a filled glyph and heavier text.
  */
 import { NavLink, useLocation } from 'react-router';
 import { WORKSPACE_PATH } from '../../navigation/areas';
+import { Glass } from '../../ui/glass/Glass';
 import { Icon, type IconName } from '../../ui/Icon';
 import './workspace.css';
 
@@ -23,20 +27,22 @@ export function WorkspaceTabBar() {
   if (pathname !== WORKSPACE_PATH && !pathname.startsWith(`${WORKSPACE_PATH}/`)) return null;
   return (
     <nav className="ws-tabbar" aria-label="Workspace tabs">
-      <ul>
-        {TABS.map((tab) => (
-          <li key={tab.to}>
-            <NavLink to={tab.to} end={tab.end} className="ws-tab">
-              {({ isActive }) => (
-                <>
-                  <Icon name={tab.icon} size={22} filled={isActive} />
-                  <span>{tab.label}</span>
-                </>
-              )}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
+      <Glass radius={32} blur={5}>
+        <ul>
+          {TABS.map((tab) => (
+            <li key={tab.to}>
+              <NavLink to={tab.to} end={tab.end} className="ws-tab">
+                {({ isActive }) => (
+                  <>
+                    <Icon name={tab.icon} size={22} filled={isActive} />
+                    <span>{tab.label}</span>
+                  </>
+                )}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </Glass>
     </nav>
   );
 }

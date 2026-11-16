@@ -13,7 +13,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  background: #ebe9e2;
+  background: var(--track);
   border-radius: 10px;
   width: fit-content;
   max-width: 100%;
@@ -31,7 +31,7 @@
   text-decoration: none;
 }
 .staff-area .ops-tabs a:hover {
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--track-hover);
   color: var(--ink);
 }
 .staff-area .ops-tabs a[aria-current='page'] {
@@ -39,7 +39,7 @@
   color: var(--ink);
   font-weight: 700;
   border: 0;
-  box-shadow: 0 1px 2px rgba(16, 24, 20, 0.08);
+  box-shadow: var(--shadow-chip);
 }
 .staff-area .ops-section {
   background: var(--card);
@@ -55,7 +55,7 @@
 }
 .staff-area .ops-section > h3 {
   font-size: 20px;
-  letter-spacing: 0.03em;
+  letter-spacing: 0;
 }
 .staff-area .ops-field input,
 .staff-area .ops-field select,
@@ -98,15 +98,14 @@
   border-top: 1px solid var(--line-soft);
 }
 .cover-list > li[data-selected='true'] {
-  background: #f4f8f5;
+  background: var(--success-wash);
   box-shadow: inset 3px 0 0 var(--pitch);
 }
 .cover-list > li[data-tone='danger'] {
   box-shadow: inset 3px 0 0 var(--tone-danger);
 }
 .cover-time {
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   font-size: 17px;
   line-height: 1.05;
   font-variant-numeric: tabular-nums;
@@ -156,8 +155,8 @@
 }
 .cand-head {
   padding: 16px 18px;
-  background: #fff8f7;
-  border-bottom: 1px solid #f4d3cf;
+  background: var(--danger-wash);
+  border-bottom: 1px solid var(--tone-danger-line);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -167,17 +166,14 @@
   border-bottom-color: var(--line);
 }
 .cand-kicker {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--tone-danger);
 }
 .cand-title {
   font-size: 22px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   line-height: 1.05;
 }
 .cand-list {
@@ -200,11 +196,11 @@
   height: 34px;
   border-radius: 50%;
   background: var(--pitch);
-  color: #fff;
+  color: var(--on-primary);
   display: grid;
   place-items: center;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   flex: none;
 }
 .cand-list > li[data-eligible='false'] .cand-avatar {
@@ -225,8 +221,7 @@
   color: var(--tone-danger);
 }
 .rank {
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   font-size: 15px;
   color: var(--faint);
   width: 1.2rem;
@@ -250,7 +245,7 @@
 }
 .fee-summary-head strong {
   font-size: 18px;
-  font-weight: 800;
+  font-weight: 700;
 }
 @media (max-width: 900px) {
   .staff-area .compete-head > .actions-row {

@@ -2,8 +2,8 @@
  * Marks a screen that is part of the navigation shell but not built yet, naming its inventory id
  * so nobody mistakes it for a real SPK-UX-008 empty state.
  */
-import { StyleSheet, Text, View } from 'react-native';
-import { colors, spacing, type } from './theme';
+import { Text, View } from 'react-native';
+import { makeStyles, spacing, type } from './theme';
 
 export function Placeholder({
   screenId,
@@ -14,6 +14,7 @@ export function Placeholder({
   title: string;
   purpose: string;
 }) {
+  const styles = useStyles();
   return (
     <View style={styles.box} accessible accessibilityLabel={`${title}. Not built yet. ${purpose}`}>
       <Text style={styles.title} accessibilityRole="header">
@@ -25,7 +26,7 @@ export function Placeholder({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: {
     margin: spacing.lg,
     padding: spacing.lg,
@@ -38,4 +39,4 @@ const styles = StyleSheet.create({
   title: { ...type.heading, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

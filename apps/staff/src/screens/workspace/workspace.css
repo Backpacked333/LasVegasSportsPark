@@ -19,14 +19,13 @@
   font-size: 12px;
   font-weight: 700;
   font-stretch: 100%;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
   color: var(--floodlight);
 }
 .ws-now-clock {
   font-size: 56px;
   line-height: 0.9;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   color: #fff;
 }
 .ws-now-zone {
@@ -48,11 +47,11 @@
   background: var(--night-2);
   font-size: 12.5px;
   font-weight: 700;
-  color: #e8f0eb;
+  color: var(--night-ink);
 }
 .ws-now-chip[data-attention='true'] {
-  background: #3b2a5e;
-  color: #e3d8ff;
+  background: var(--night-pending-bg);
+  color: var(--night-pending);
 }
 .ws-now-chip[data-attention='true']::before {
   content: '◷';
@@ -62,7 +61,7 @@
   margin-top: 6px;
   padding: 14px;
   border-radius: 14px;
-  background: #122c21;
+  background: var(--night-raised);
   border: 1px solid var(--night-line);
   display: flex;
   flex-direction: column;
@@ -71,15 +70,13 @@
 .ws-now-title {
   font-size: 22px;
   line-height: 1.05;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   color: #fff;
 }
 .ws-now-meta,
 .ws-now-until {
   font-size: 13.5px;
-  color: #b9cbc1;
+  color: var(--night-soft);
 }
 .ws-now-until {
   color: var(--floodlight);
@@ -112,14 +109,14 @@ a.ws-now-open {
   border-radius: 12px;
   color: var(--night);
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 700;
   align-self: flex-start;
   padding: 0 20px;
 }
 a.ws-now-open:hover {
   color: var(--night);
   text-decoration: none;
-  background: #d4f78c;
+  background: var(--floodlight-hover);
 }
 
 /* ---------- Assignment cards ---------- */
@@ -147,7 +144,7 @@ a.ws-now-open:hover {
 }
 .ws-card[data-status='offered'] {
   border: 2px solid var(--tone-pending-line);
-  background: #fbf9ff;
+  background: var(--pending-wash);
   padding: 11px 15px 11px 11px;
 }
 .ws-card[data-status='declined'],
@@ -170,20 +167,18 @@ a.ws-now-open:hover {
   background: var(--tone-pending);
 }
 .ws-when-day {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--floodlight);
 }
 .ws-card[data-status='offered'] .ws-when-day {
-  color: #e3d8ff;
+  color: var(--night-pending);
 }
 .ws-when-time {
   font-size: 21px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
 }
 .ws-card .row-text {
   flex: none;
@@ -215,11 +210,11 @@ a.ws-now-open:hover {
   border-radius: 12px;
   background: var(--floodlight);
   color: var(--night);
-  font-weight: 800;
+  font-weight: 700;
   font-size: 15px;
 }
 .ws-accept.button:hover:not([disabled]) {
-  background: #d4f78c;
+  background: var(--floodlight-hover);
 }
 .ws-card-error {
   grid-column: 1 / -1;
@@ -253,8 +248,7 @@ a.ws-now-open:hover {
 .ws-hero-clock {
   font-size: 46px;
   line-height: 0.95;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   color: #fff;
 }
 .ws-hero-place {
@@ -263,13 +257,13 @@ a.ws-now-open:hover {
   gap: 4px;
   font-size: 14px;
   font-weight: 700;
-  color: #e8f0eb;
+  color: var(--night-ink);
 }
 .ws-hero-place .icon {
   color: var(--floodlight);
 }
 .ws-hero > p {
-  color: #e8f0eb;
+  color: var(--night-ink);
 }
 .ws-hero-actions .button {
   min-height: 52px;
@@ -280,10 +274,10 @@ a.ws-now-open:hover {
 .ws-hero-actions .button-primary {
   background: var(--floodlight);
   color: var(--night);
-  font-weight: 800;
+  font-weight: 700;
 }
 .ws-hero-actions .button-primary:hover:not([disabled]) {
-  background: #d4f78c;
+  background: var(--floodlight-hover);
 }
 .ws-hero-actions .button-secondary {
   background: transparent;
@@ -339,10 +333,8 @@ a.ws-now-open:hover {
 .ws-tile a {
   color: var(--ink);
   font-size: 16px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .ws-tile a::after {
   content: '';
@@ -375,9 +367,7 @@ a.ws-now-open:hover {
   gap: 4px 12px;
   font-size: 28px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
 }
 .ws-matchup-v {
   font-size: 16px;
@@ -423,8 +413,7 @@ a.ws-now-open:hover {
 .ws-jersey {
   width: 30px;
   font-size: 20px;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   color: var(--muted);
   text-align: right;
 }
@@ -485,7 +474,7 @@ a.ws-now-open:hover {
   padding: 2px 8px;
 }
 .ws-scoreboard .error-text {
-  color: #ff9c92;
+  color: var(--night-danger);
 }
 .ws-score-grid {
   display: grid;
@@ -495,8 +484,7 @@ a.ws-now-open:hover {
 }
 .ws-score-dash {
   font-size: 48px;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
   color: var(--night-3);
 }
 .ws-score-side {
@@ -508,11 +496,9 @@ a.ws-now-open:hover {
 }
 .ws-score-team {
   font-size: 16px;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #b9cbc1;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--night-soft);
   text-align: center;
   overflow-wrap: anywhere;
 }
@@ -536,13 +522,12 @@ a.ws-now-open:hover {
   padding: 0;
   border: 1px solid var(--night-3);
   border-radius: 14px;
-  background: #122c21;
+  background: var(--night-raised);
   color: #fff;
   text-align: center;
   font-size: 84px;
   line-height: 1;
-  font-weight: 800;
-  font-stretch: 75%;
+  font-weight: 700;
 }
 .ws-score-steps {
   display: flex;
@@ -552,7 +537,7 @@ a.ws-now-open:hover {
   width: 56px;
   height: 56px;
   border-radius: 16px;
-  border: 1px solid #2f5444;
+  border: 1px solid var(--night-edge);
   background: transparent;
   color: #fff;
   font: inherit;
@@ -564,7 +549,7 @@ a.ws-now-open:hover {
   border: 0;
   background: var(--floodlight);
   color: var(--night);
-  font-weight: 800;
+  font-weight: 700;
 }
 .ws-step[disabled] {
   opacity: 0.4;
@@ -597,7 +582,7 @@ a.ws-now-open:hover {
   padding: 0 28px;
   border-radius: 14px;
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 /* ---------- Phones beside a field ---------- */
@@ -642,7 +627,7 @@ a.ws-now-open:hover {
     z-index: 5;
     margin: 0 -14px -14px;
     padding: 10px 14px 14px;
-    background: linear-gradient(rgba(255, 255, 255, 0), var(--card) 30%);
+    background: linear-gradient(transparent, var(--card) 30%);
   }
   .ws-submit .button {
     width: 100%;
@@ -714,11 +699,9 @@ a.ws-now-open:hover {
   padding: 0;
 }
 .ws-report .ws-pick legend {
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   font-size: 15px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   margin-bottom: 8px;
 }
 .ws-chips {
@@ -738,7 +721,7 @@ a.ws-now-open:hover {
   padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #fff;
+  background: var(--card);
   color: var(--ink);
   font: inherit;
   font-weight: 600;
@@ -777,30 +760,55 @@ a.ws-now-open:hover {
     position: sticky;
     bottom: 0;
     z-index: 20;
-    background: var(--night);
-    border-top: 1px solid var(--night-2);
-    padding-bottom: env(safe-area-inset-bottom);
+    padding: 0 10px calc(10px + env(safe-area-inset-bottom));
+    pointer-events: none;
+  }
+  /* Scroll edge: the page fades as it passes under the floating bar. */
+  .ws-tabbar::before {
+    content: '';
+    position: absolute;
+    inset: -22px 0 0 0;
+    background: linear-gradient(transparent, var(--scroll-edge) 70%);
+    pointer-events: none;
+  }
+  .ws-tabbar .glass {
+    pointer-events: auto;
+    max-width: 520px;
+    margin: 0 auto;
   }
   .ws-tabbar ul {
     list-style: none;
     margin: 0;
-    padding: 0;
+    padding: 5px;
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
   }
   .ws-tab {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 2px;
-    min-height: 58px;
+    min-height: 54px;
     justify-content: center;
-    color: var(--night-muted);
+    border-radius: 27px;
+    color: var(--glass-ink-2);
     text-decoration: none;
     font-size: 11.5px;
-    font-weight: 700;
+    font-weight: 600;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background 0.16s,
+      color 0.16s;
+  }
+  .ws-tab:hover {
+    text-decoration: none;
+    color: var(--glass-ink);
   }
   .ws-tab[aria-current='page'] {
-    color: var(--floodlight);
+    background: color-mix(in srgb, var(--pitch) 16%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pitch) 26%, transparent);
+    color: var(--accent-ink);
+    font-weight: 700;
   }
 }

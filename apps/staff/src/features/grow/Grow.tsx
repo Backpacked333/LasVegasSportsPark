@@ -89,7 +89,11 @@ export function Avatar({
       className="grow-avatar"
       data-size={size}
       aria-hidden="true"
-      style={size === 'sm' ? undefined : { ['--avatar' as string]: colourOf(seed ?? name) }}
+      style={
+        size === 'sm'
+          ? undefined
+          : { ['--avatar' as string]: colourOf(seed ?? name), ['--on-avatar' as string]: '#fff' }
+      }
     >
       {initialsOf(name)}
     </span>

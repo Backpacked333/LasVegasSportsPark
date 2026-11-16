@@ -7,6 +7,7 @@ import { consoleCrashReporter, installGlobalCrashHandler } from '../src/provider
 import { createDeviceServices } from '../src/providers/services';
 import { RootNavigator } from '../src/navigation/RootNavigator';
 import { ErrorBoundary } from '../src/ui/ErrorBoundary';
+import { GlassProvider } from '../src/ui/GlassSurface';
 import { FONT_ASSETS } from '../src/ui/theme';
 
 const services = createDeviceServices();
@@ -20,7 +21,10 @@ export default function RootLayout() {
   return (
     <AppProviders services={services}>
       <ErrorBoundary reporter={reporter} now={services.now}>
-        <RootNavigator />
+        {/* Glass where the device offers it (src/ui/GlassSurface); solid everywhere else. */}
+        <GlassProvider>
+          <RootNavigator />
+        </GlassProvider>
       </ErrorBoundary>
     </AppProviders>
   );

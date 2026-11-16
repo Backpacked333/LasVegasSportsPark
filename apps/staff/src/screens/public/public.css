@@ -1,0 +1,416 @@
+/*
+ * Public pages and the lobby display (SPK-SCHED-010, proposed amendment PA-06). Only theme tokens
+ * of ui/styles.css and ui/glass are used, so both themes (classic and Legends) apply without a
+ * rule here: no colour is written in this file. The page sits on the application backdrop (the
+ * same fields of colour and pitch markings as the dashboard); its header is the one glass body,
+ * and everything read from a distance (schedules, results, standings) is on solid surfaces
+ * (ADR-001).
+ */
+.public-page {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  padding: var(--space-5) clamp(16px, 4vw, 48px) var(--space-6);
+  background: var(--color-page);
+  color: var(--color-text);
+  font-family: var(--font);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.public-page::before,
+.public-page::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.public-page::before {
+  background:
+    radial-gradient(46% 520px at 6% 80px, var(--backdrop-a), transparent 72%),
+    radial-gradient(38% 460px at 96% 40px, var(--backdrop-b), transparent 72%),
+    radial-gradient(44% 560px at 70% 900px, var(--backdrop-c), transparent 72%);
+  background-size: 100% 1700px;
+  background-repeat: repeat-y;
+}
+.public-page::after {
+  background: var(--backdrop-line);
+  -webkit-mask: url('/field-lines.svg') 50% 40px / max(1200px, 92%) auto repeat-y;
+  mask: url('/field-lines.svg') 50% 40px / max(1200px, 92%) auto repeat-y;
+}
+
+.public-header-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-5);
+  padding: 22px 26px;
+}
+.public-header-text {
+  min-width: 0;
+}
+.public-header h1,
+.public-state h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3.2vw, 2.25rem);
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.public-organization {
+  margin: 0 0 var(--space-1);
+  color: var(--glass-ink-2);
+  font-weight: 600;
+}
+
+.public-subtitle {
+  margin: var(--space-1) 0 0;
+  font-size: 1.125rem;
+  color: var(--glass-ink-2);
+}
+
+/* "Last updated": a quiet capsule with a live dot; words carry the meaning, the dot only marks it. */
+.public-updated {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--glass-chip);
+  color: var(--glass-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.public-updated::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone-success);
+  box-shadow: 0 0 0 4px var(--tone-success-bg);
+  flex: none;
+}
+
+.public-updated[data-stale='true'] {
+  border: 1px solid var(--tone-warning-line);
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning);
+}
+.public-updated[data-stale='true']::before {
+  background: var(--tone-warning);
+  box-shadow: none;
+}
+
+.public-state {
+  margin: auto;
+  max-width: 36rem;
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  text-align: center;
+}
+
+.public-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 16px;
+  background: var(--track);
+}
+
+.public-nav a,
+.public-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 12px;
+  color: var(--ink-2);
+  font-weight: 600;
+  text-decoration: none;
+}
+.public-links a {
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-link);
+}
+
+.public-nav .public-nav-end {
+  margin-inline-start: auto;
+}
+
+.public-nav a:hover {
+  background: var(--track-hover);
+  color: var(--ink);
+}
+.public-links a:hover {
+  border-color: var(--color-link);
+}
+
+.public-nav a:focus-visible,
+.public-links a:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.public-nav a[aria-current='page'] {
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 700;
+  box-shadow: var(--shadow-chip);
+}
+:root[data-theme='legends'] .public-nav a[aria-current='page'] {
+  background: var(--accent-wash);
+  color: var(--floodlight);
+}
+
+.public-section h2,
+.public-lobby-page h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 1.25rem;
+}
+
+.public-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-card);
+}
+/* The leader of a table: the accent, with the position still written as a number. */
+.public-standings tbody tr:first-child th[scope='row'],
+.public-standings tbody tr:first-child td:first-child {
+  color: var(--accent-ink);
+}
+.public-standings tbody tr:first-child {
+  background: var(--accent-wash);
+}
+
+.public-pager {
+  margin: var(--space-3) 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+.public-pager-dots {
+  display: inline-flex;
+  gap: 6px;
+}
+.public-pager-dots > span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+.public-pager-dots > span[data-current='true'] {
+  width: 28px;
+  border-radius: 999px;
+  background: var(--pitch);
+}
+
+.public-table th,
+.public-table td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.public-table thead th {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.public-table tbody tr:last-child th,
+.public-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.public-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.public-kind {
+  font-weight: 600;
+}
+
+/* The kind is always said in words; the edge only repeats it for a glance across a room. */
+.public-table tr[data-kind] td:first-child {
+  border-left: 4px solid var(--color-border-strong);
+}
+
+.public-table tr[data-kind='game'] td:first-child {
+  border-left-color: var(--kind-league);
+}
+
+.public-table tr[data-kind='class'] td:first-child,
+.public-table tr[data-kind='practice'] td:first-child {
+  border-left-color: var(--kind-program);
+}
+
+.public-table tr[data-kind='pickup'] td:first-child {
+  border-left-color: var(--kind-dropin);
+}
+
+.public-table tr[data-kind='reserved'] td:first-child {
+  border-left-color: var(--kind-rental);
+}
+
+.public-table tr[data-kind='reserved'] .public-kind,
+.public-table tr[data-kind='unavailable'] .public-kind {
+  color: var(--color-muted);
+}
+
+.public-score,
+.public-points {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.public-standings td,
+.public-standings thead th {
+  text-align: right;
+}
+
+.public-standings th[scope='row'],
+.public-standings thead th:nth-child(2) {
+  text-align: left;
+}
+
+.public-empty,
+.public-note {
+  color: var(--color-muted);
+}
+
+.public-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.public-links li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+.public-link-title {
+  flex: 1 1 100%;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.public-bracket {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+}
+
+.public-bracket h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+  color: var(--color-muted);
+}
+
+.public-bracket ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.public-match {
+  display: grid;
+  min-width: 14rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+.public-match span {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.public-match span + span {
+  border-top: 1px solid var(--color-border);
+}
+
+.public-match span[data-winner='true'] {
+  font-weight: 700;
+  color: var(--tone-success);
+}
+
+.public-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The lobby display is read from across a room. */
+.public-page[data-variant='lobby'] {
+  padding: var(--space-6);
+  font-size: 1.5rem;
+}
+
+.public-page[data-variant='lobby'] .public-header h1 {
+  font-size: clamp(2.4rem, 4.6vw, 4rem);
+}
+.public-page[data-variant='lobby'] .public-header-inner {
+  padding: 30px 36px;
+}
+.public-page[data-variant='lobby'] .public-updated {
+  font-size: 1.125rem;
+  padding: 10px 20px;
+}
+.public-page[data-variant='lobby'] .public-table th,
+.public-page[data-variant='lobby'] .public-table td {
+  padding: 18px 24px;
+}
+
+.public-page[data-variant='lobby'] .public-subtitle,
+.public-page[data-variant='lobby'] .public-lobby-page h2 {
+  font-size: 1.75rem;
+}
+
+.public-page[data-variant='lobby'] .public-table thead th {
+  font-size: 1.125rem;
+}
+
+@media (max-width: 40rem) {
+  .public-page {
+    padding: var(--space-4);
+  }
+
+  .public-table th,
+  .public-table td {
+    padding: var(--space-2);
+  }
+}

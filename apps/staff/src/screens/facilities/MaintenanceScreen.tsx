@@ -70,6 +70,7 @@ import {
   type EvidenceDraft,
 } from './maintenance-shared';
 import { ActiveRestrictions } from './ReleaseReadiness';
+import { Toolbar } from '../../ui/glass/GlassCard';
 
 type Task = Schema<'MaintenanceTask'>;
 type Severity = Task['severity'];
@@ -196,7 +197,7 @@ function TaskList({ facility }: { facility: FacilityContext }) {
   return (
     <section aria-labelledby="tasks-title">
       <h4 id="tasks-title">Maintenance tasks</h4>
-      <div className="toolbar" role="group" aria-label="Task filters">
+      <Toolbar role="group" aria-label="Task filters">
         <label>
           Status{' '}
           <select value={status} onChange={(e) => setStatus(e.target.value as '' | TaskStatus)}>
@@ -227,7 +228,7 @@ function TaskList({ facility }: { facility: FacilityContext }) {
           />{' '}
           Overdue only
         </label>
-      </div>
+      </Toolbar>
       <QueryBoundary
         query={tasks}
         label="maintenance tasks"

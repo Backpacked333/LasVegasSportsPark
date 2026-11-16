@@ -22,7 +22,7 @@
 import type { Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useConnectivity } from '../../providers/AppProviders';
@@ -30,7 +30,7 @@ import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, radius, spacing } from '../../ui/theme';
+import { makeStyles, radius, spacing } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
 import { ChoiceGroup, Paragraph, TextField } from '../account/components/forms';
 
@@ -75,6 +75,7 @@ export function CareNotes({
   personName: string;
   canManage: boolean;
 }) {
+  const styles = useStyles();
   const notes = useApiQuery({
     path: '/people/{id}/care-notes',
     request: { path: { id: personId } },
@@ -152,6 +153,7 @@ function RetireCareNote({
   personId: string;
   onClose: () => void;
 }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const queryClient = useQueryClient();
@@ -234,6 +236,7 @@ const KIND_OPTIONS = (Object.keys(CARE_NOTE_KIND) as CareNoteKind[]).map((value)
 }));
 
 function AddCareNote({ personId }: { personId: string }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const [open, setOpen] = useState(false);
@@ -343,7 +346,7 @@ function AddCareNote({ personId }: { personId: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   box: {
     marginTop: spacing.sm,
     padding: spacing.md,
@@ -355,4 +358,4 @@ const styles = StyleSheet.create({
   },
   form: { gap: spacing.sm, paddingVertical: spacing.sm },
   actions: { gap: spacing.sm, paddingTop: spacing.xs },
-});
+}));

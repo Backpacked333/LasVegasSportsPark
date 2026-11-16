@@ -112,3 +112,9 @@ export const SchedulingEvents = {
   ClosureLifted,
   ClosureWithdrawn,
 };
+
+/** SPK-SCHED-010 (proposed amendment PA-06): a facility's public schedule was enabled or disabled. */
+export const PublicScheduleViewChanged = defineEvent(
+  'scheduling.public_schedule_view_changed',
+  z.object({ facilityId: z.uuid(), enabled: z.boolean(), revision: z.number().int() }),
+);

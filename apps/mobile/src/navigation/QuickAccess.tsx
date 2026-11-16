@@ -8,12 +8,14 @@
  * the count is loading, failed or zero there is no badge and the plain name, never a guess.
  */
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { inboxButtonLabel, unreadBadgeText, useInboxUnreadCount } from '../api/inbox-unread';
 import { Icon } from '../ui/Icon';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing } from '../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, useTheme } from '../ui/theme';
 
 export function QuickAccess() {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const router = useRouter();
   const unread = useInboxUnreadCount();
   const badge = unread.data ? unreadBadgeText(unread.data) : null;
@@ -55,7 +57,7 @@ export function QuickAccess() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, dark }) => ({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -70,6 +72,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderRadius: radius.pill,
     backgroundColor: colors.night,
+    // A hairline keeps the pill's edge on a page that is itself dark (Legends mode).
+    borderWidth: 1,
+    borderColor: dark ? colors.nightLine : colors.night,
   },
   passText: { ...fonts.extrabold, fontSize: 14, lineHeight: 18, color: colors.floodlight },
   inbox: {
@@ -95,5 +100,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   badgeText: { ...fonts.extrabold, fontSize: 11, lineHeight: 14, color: colors.primaryText },
-  pressed: { opacity: 0.8 },
-});
+  pressed: { opacity: 0.8, transform: [{ scale: 0.97 }] },
+}));

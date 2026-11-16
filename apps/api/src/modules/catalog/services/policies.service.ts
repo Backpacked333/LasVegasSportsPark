@@ -15,6 +15,7 @@ import {
   type PolicyVersion,
   type Principal,
   type RetirePolicyVersionInput,
+  type WaiverStatus,
 } from '@sportspark/contracts';
 import { isUniqueViolation, json, type Db } from '@sportspark/db';
 import { sql } from 'kysely';
@@ -22,6 +23,7 @@ import {
   assertExpectedRevision,
   AuditWriter,
   AuthorizationService,
+  CapabilityService,
   CLOCK,
   DATABASE,
   Outbox,
@@ -34,10 +36,11 @@ import {
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
 import { POLICY_APPROVAL_ACTION } from '../catalog.policy';
-import type { PolicyPort } from '../catalog.ports';
+import type { PolicyPort, WaiverFinding, WaiverFindingsRequest } from '../catalog.ports';
 import { assertCatalogReferences } from './entitlement-definitions.service';
 import { organizationOf, toApproval, toPolicyVersion } from '../catalog.shared';
 import { PolicyVersionMachine } from '../catalog.state-machines';
+import { WaiverStatusReader } from './waiver-status.reader';
 
 const Cursor = z.object({ kind: z.string(), key: z.string(), version: z.number(), id: z.string() });
 
@@ -81,6 +84,8 @@ export class PoliciesService implements PolicyPort {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly capabilities: CapabilityService,
+    private readonly waivers: WaiverStatusReader,
   ) {}
 
   async createPolicyVersion(
@@ -95,6 +100,11 @@ export class PoliciesService implements PolicyPort {
     });
     const content = parsePolicyContent(body.kind, body.content);
     return this.uow.run(async ({ trx }) => {
+      // SPK-REG-011 (proposed, DEC-095): a waiver family exists only where the organization has
+      // turned liability waivers on. Approving and retiring a version are never gated.
+      if (body.kind === 'waiver') {
+        await this.capabilities.require(organizationId, 'liability_waivers', trx);
+      }
       // §4.3: an eligibility rule requiring membership names offerings or programs that exist.
       if (body.kind === 'eligibility') {
         await assertCatalogReferences(
@@ -494,6 +504,34 @@ export class PoliciesService implements PolicyPort {
       .where('status', '=', 'active')
       .execute();
     return new Set(rows.map((r) => r.subject_person_id));
+  }
+
+  waiverStatus(
+    organizationId: string,
+    personId: string,
+    policyKey: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<WaiverStatus> {
+    return this.waivers.status(organizationId, personId, policyKey, at, trx);
+  }
+
+  waiverStatuses(
+    organizationId: string,
+    personIds: readonly string[],
+    policyKey: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<Map<string, WaiverStatus>> {
+    return this.waivers.statuses(organizationId, personIds, policyKey, at, trx);
+  }
+
+  waiverFindings(
+    organizationId: string,
+    request: WaiverFindingsRequest,
+    trx?: Trx,
+  ): Promise<WaiverFinding[]> {
+    return this.waivers.findings(organizationId, request, trx);
   }
 
   // -------------------------------------------------------------------------------------------

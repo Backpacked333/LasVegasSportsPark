@@ -158,6 +158,32 @@ route above resolves to its screen.
 | DEC-016, DEC-072 to DEC-082 conditional capabilities          | Product owner                                  | SCR-C-07 filters, SCR-C-09 intents (from `GET /me/permissions`) |
 | DEC-006, DEC-026 to DEC-030 holds, waitlist, approval, basket | Product and operations                         | Only server values are shown (expiry, approval flags)           |
 | DEC-007, DEC-057 prices, taxes, discounts                     | Finance                                        | SCR-C-12 shows the API's prices and its stated defaults         |
+| DEC-096 per-session price, DEC-098 member price               | Product owner; Finance for the values          | SCR-C-08 and SCR-C-12 show what the API states (see below)      |
+
+Per-session and member price (SPK-PAY-013, SPK-PAY-015; amendments PA-02 and PA-04, **Proposed**,
+shown only when the API carries them, which needs the organization's `per_session_pricing` or
+`member_pricing` capability): SCR-C-08 shows "Price per class", the classes still to come with
+their product as the API counted them ("$24.00 per class × 7 classes = $168.00"), and the member
+price with the membership it is for. SCR-C-12 shows, per line, the basis the quote stored: the
+same product, and "Member price applied: <membership>" or why the standard price applied. The app
+computes none of it. **Verified** `__tests__/OfferingDetailScreen.test.tsx`,
+`__tests__/QuoteReviewScreen.test.tsx`; not seen on a device. The basket (SCR-C-11) shows the
+estimate the API states for the line ("Estimated price each", worked out by the API from the same
+facts as the quote) where the line is not a plain term price, and the base price otherwise.
+
+Price tiers, days, add-ons and uniform (SPK-PAY-014, SPK-REG-012; amendments PA-03 and PA-07,
+**Proposed**, capabilities `price_tiers_addons` and `uniforms`, **Pending decision** DEC-097 and
+DEC-101): while one of the two capabilities is on, SCR-C-09 reads
+`GET /offerings/{id}/purchase-options` and asks, per participant, for the tier, the days of a
+tier of chosen days (within the tier's bounds), the add-ons (per day where the add-on is sold per
+day, only for days the participant attends) and the uniform size (a required uniform must be
+chosen); an offering with such choices is registered alone, one offering at a time. SCR-C-11
+shows the days, add-ons and uniform of each line with their prices; SCR-C-12 shows every add-on
+and the uniform as a line of its own with the basis the quote stored (the tier that applied, the
+price each and the days, "Not charged: this uniform is already held"); SCR-C-15 names what was bought
+with each place and the receipt (SCR-C-34) labels each add-on and uniform line. With both
+capabilities off the options are not read and every screen is as before. **Verified**
+`__tests__/PurchaseChoices.test.tsx`, `__tests__/PurchaseReceipt.test.tsx`; not seen on a device.
 
 ## Configuration
 
@@ -184,3 +210,30 @@ route above resolves to its screen.
 - The responsible manager on SCR-C-08: the API gives it to staff only (`Offering.staff`).
 - Requested teammates on SCR-C-10: other players' identities are never exposed (SPK-PLACE-005).
   A preferred division is not collected: DEC-051 names the preferred competition only.
+
+## Required waivers within a registration (SPK-REG-011, proposed amendment PA-01)
+
+**Proposed**, behind `liability_waivers` (DEC-095 pending). Required forms (SCR-C-13) also shows
+the waiver families each offering requires (`GET /v1/offerings/{id}/required-waivers`) per
+participant with the API's judgement and lets the person or guardian accept. With the capability
+off, or for an offering that requires no waiver, the screen is exactly as before. **Verified**
+`__tests__/RequiredWaivers.test.tsx`.
+
+## After the quality review of 2026-11-14 (findings M-2, M-6, m-6)
+
+SPK-PAY-013, SPK-PAY-014, SPK-PAY-015 and SPK-REG-012 are **Proposed** requirements behind their
+capability switches.
+
+- **Verified** (`__tests__/BasketScreen.test.tsx`, "when what a line chose is full…"): "Join the
+  waitlist" sends what the basket line chose (the price option, the days, the extras, the uniform
+  size; `features/registration/JoinWaitlist.tsx`), so the customer waits for the day or the extra
+  that was full. The basket says that the activity, a day or an extra is full, and says separately
+  when places go to people already waiting; it no longer tells a customer to join a waitlist the
+  API refuses.
+- **Verified** (`__tests__/OfferingDetailScreen.test.tsx`, "with per-class pricing turned off…"):
+  an offering whose price is `notQuotable` shows the API's reason and no amount, and offers no
+  registration; discover cards and camp weeks show no amount for it. A member price is shown only
+  when the API sends one (it sends none while member pricing is off).
+- Not built: the waitlist status screen does not list what an entry waits for, and the transfer
+  screen (`../enrollments`) does not choose a price option or days; for a target sold by price
+  option it shows the API's answer, which says to register in a basket and then cancel.

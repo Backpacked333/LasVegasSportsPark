@@ -178,6 +178,22 @@ export const CatalogEvents = {
       reason: z.string(),
     }),
   ),
+  /** SPK-REG-011 (proposed): a staff override of a blocking waiver rule; identifiers only. */
+  waiverOverrideRecorded: defineEvent(
+    'catalog.waiver_override_recorded',
+    z.object({
+      waiverOverrideId: z.uuid(),
+      personId: z.uuid(),
+      policyKey: z.string(),
+      activityType: z.enum(['offering', 'offering_session', 'scheduling_event', 'booking']),
+      activityId: z.uuid(),
+    }),
+  ),
+  /** SPK-REG-011 (proposed): the waiver families an offering requires were replaced. */
+  offeringRequiredWaiversChanged: defineEvent(
+    'catalog.offering_required_waivers_changed',
+    z.object({ offeringId: z.uuid(), policyKeys: z.array(z.string()) }),
+  ),
   priceRuleCreated: defineEvent(
     'catalog.price_rule_created',
     z.object({
@@ -189,6 +205,24 @@ export const CatalogEvents = {
       basePriceMinor: z.number().int(),
       currency: z.string(),
       supersededPriceRuleId: z.uuid().nullable(),
+    }),
+  ),
+  /** SPK-PAY-014 (PA-03): an add-on of an offering was created or retired. */
+  offeringAddonChanged: defineEvent(
+    'catalog.offering_addon_changed',
+    z.object({
+      addonId: z.uuid(),
+      offeringId: z.uuid(),
+      status: z.enum(['active', 'retired']),
+    }),
+  ),
+  /** SPK-REG-012 (PA-07): the uniform of an offering was set or retired. */
+  offeringUniformChanged: defineEvent(
+    'catalog.offering_uniform_changed',
+    z.object({
+      offeringUniformId: z.uuid(),
+      offeringId: z.uuid(),
+      status: z.enum(['active', 'retired']),
     }),
   ),
   discountCreated: defineEvent(

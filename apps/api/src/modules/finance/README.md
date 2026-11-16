@@ -529,14 +529,16 @@ register closed through the API. The staff dashboard's sale page offers the tend
 sale whatever the switch, and hides only adding a line while it is off (`SalePage.test.tsx`
 "DEC-016 / CAPABILITIES-01: ...").
 
-| Method   | Path                                                                                                             | Who (action)                                                                    |
-| -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| POST/GET | `/pos-products`, PATCH `/pos-products/{id}`, POST `/pos-products/{id}/retire`                                    | finance operator, GM (`finance.manage_pos_products`); read `finance.read_pos`   |
-| POST/GET | `/pos-registers`, POST `/pos-registers/{id}/retire`                                                              | finance operator, GM (`finance.manage_pos_registers`) within facility scope     |
-| POST/GET | `/pos-registers/{id}/sessions`, GET `/pos-register-sessions/{id}`, POST `/pos-register-sessions/{id}/close`      | front desk, finance operator (`finance.operate_register`) within facility scope |
-| POST/GET | `/pos-sales`, `/pos-sales/{id}`, POST `/pos-sales/{id}/lines`, `/pos-sales/{id}/tenders`, `/pos-sales/{id}/void` | `finance.operate_register`; read `finance.read_pos`                             |
-| POST     | `/pos-sales/{id}/returns`                                                                                        | finance operator, GM (`finance.approve_pos_return`)                             |
-| GET      | `/pos-sales/{id}/receipt`, `/me/pos-receipts`                                                                    | facility staff, or the customer the sale names (`finance.read_pos_receipt`)     |
+| Method   | Path                                                                                                             | Who (action)                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| POST/GET | `/pos-products`, PATCH `/pos-products/{id}`, POST `/pos-products/{id}/retire`                                    | finance operator, GM (`finance.manage_pos_products`); read `finance.read_pos`                         |
+| POST/GET | `/pos-registers`, POST `/pos-registers/{id}/retire`                                                              | finance operator, GM (`finance.manage_pos_registers`) within facility scope                           |
+| POST/GET | `/pos-registers/{id}/sessions`, GET `/pos-register-sessions/{id}`, POST `/pos-register-sessions/{id}/close`      | front desk, finance operator (`finance.operate_register`) within facility scope                       |
+| POST/GET | `/pos-sales`, `/pos-sales/{id}`, POST `/pos-sales/{id}/lines`, `/pos-sales/{id}/tenders`, `/pos-sales/{id}/void` | `finance.operate_register`; read `finance.read_pos`                                                   |
+| POST     | `/pos-sales/{id}/returns`                                                                                        | finance operator, GM (`finance.approve_pos_return`)                                                   |
+| GET      | `/pos-sales/{id}/receipt`, `/me/pos-receipts`                                                                    | facility staff, or the customer the sale names (`finance.read_pos_receipt`)                           |
+| POST     | `/pos-sales/{id}/lines` with an open amount, `/pos-sales/{id}/lines/{lineId}/approval` (SPK-PAY-016, proposed)   | `finance.enter_open_amount_line`; `finance.approve_open_amount_line` (capability `open_amount_lines`) |
+| GET      | `/pos-open-amount-rules`, `/pos-register-sessions/{id}/open-amount-lines` (SPK-PAY-016, proposed)                | `finance.read_pos`, or desk staff through `finance.operate_register`                                  |
 
 - Reads: finance operator, GM, system administrator and support operator hold
   `finance.read_pos` / `finance.read_pos_receipt`; the front desk reads the sales, sessions,
@@ -772,3 +774,237 @@ Verified by `__tests__/desk.spec.ts` and `__tests__/pos-line-quantity.spec.ts`:
 and a session's sales in keyset pages for POS readers of the facility (`finance.read_pos`); a
 customer or a role without it is refused, an unknown id is NOT_FOUND. The staff session page
 (SCR-S-55) lists both. Test: `__tests__/pos-lists.spec.ts`.
+
+## Quote pricing amendments (PA-02, PA-04): implemented behind capability switches
+
+SPK-PAY-013 (per-session price, capability `per_session_pricing`, DEC-096) and SPK-PAY-015 (member
+price, capability `member_pricing`, DEC-098) are **Proposed** requirements
+(`docs/package-a/proposed-specification-amendments.md`); each is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendments leave open are **Pending decision**.
+
+**Verified** (`pricing/quote-calculator.spec.ts`, `__tests__/quote-pricing-amendments.spec.ts`,
+`apps/api/src/__tests__/journeys/facility-class.spec.ts`; migration
+`0687_finance_quote_line_price_basis.sql`):
+
+- `LinePricing` (`pricing/line-pricing.service.ts`) gathers, before the unit of work, the facts a
+  line's unit price depends on: the sessions still to attend from catalog's
+  `PRICING_PORT.remainingSessions`, and the participant's membership from enrollment's
+  `MEMBERSHIP_PRICING_PORT` (finance reads no enrollment or catalog table). The arithmetic is the
+  pure `priceBasisOf`: the member price is chosen first, then a per-session price is multiplied by
+  the sessions counted. `quantity` stays the basket quantity and
+  `base_amount_minor = unit_price_minor * quantity` holds as before; discounts and charges are
+  worked out on the resulting amount.
+- Per session: a session counts when its status is `scheduled` and it starts strictly after the
+  quote instant; a line that names one session counts that session only. A child joining a
+  ten-session class after three sessions is quoted the per-session price times seven. When nothing
+  remains the quote is refused with RESOURCE_CONFLICT `NO_SESSIONS_REMAINING` (no minimum charge is
+  invented) and the basket estimate (`GET /v1/basket-prices/{id}`) is `unpriced`.
+- Member price: it applies only when the participant, after merged-person resolution
+  (SPK-IAM-007), holds a confirmed, unsuspended membership granting the rule's entitlement whose
+  term covers the quote instant. The line states which price applied and why (`active_membership`,
+  `no_active_membership`, `membership_suspended`) and names the membership that qualified.
+- `quote_lines.price_basis` stores that explanation (`QuoteLine.priceBasis`): the pricing basis,
+  the standard and applied price, the member decision, the session ids counted with their count
+  and the instant, and the unit price. `unitPriceFromBasis` reproduces the unit price from the
+  stored document alone (SPK-PAY-002). The database refuses a basis that is not an object, that
+  states another unit price than the line's, or that explains a line without a price rule; quote
+  lines stay append-only. The checkout copies the document to the order line's `price_basis`
+  (`pricing`), so a session canceled or added later, or a membership that lapses, is suspended or
+  is refunded after purchase, never changes a price already quoted or paid.
+- With `member_pricing` off, a member price on the rule is not evaluated and the standard price
+  applies. With both capabilities off every line is priced as before and `price_basis` is null.
+- With `per_session_pricing` off, a rule that was written per session cannot be quoted: the quote
+  is refused with ACCESS_DENIED `CAPABILITY_DISABLED` (the rule's base price is the price of one
+  session, so charging it as a term price would be wrong) and the basket estimate is `unpriced`.
+  Quotes and orders that already exist stay readable with their basis.
+
+**Proposed** (assumed defaults): a session counts until it starts and there is no minimum charge
+(**Pending decision** DEC-096); the reference date for membership is the quote instant and the
+membership follows the participant, never the paying adult (**Pending decision** DEC-098).
+
+**Pending decision**, not built: what happens to a paid per-session price when a session is
+canceled or added afterwards is left to the approved refund and credit policy (DEC-009); nothing
+re-prices a purchase.
+
+- Cancellation and transfer consequences (`FinancePolicyAdapter`, **Verified** in the same finance
+  test): enrollment passes the rule's base price, which is not what a place priced per session or
+  at a member price cost. For a place whose order line carries a price basis, a cancellation is
+  worked out on the unit price that was quoted; a transfer out of such a place, or into an offering
+  priced that way, answers `review_required` instead of a difference of base prices. A place
+  bought at a plain term price is handled exactly as before.
+
+Known limits (see `.10x/decisions/sde/track-a.md`): enrollment's price snapshot on a basket line and
+on an enrollment still records the rule's base price (for a per-session rule, the price of one
+session), and the screens that show that snapshot before the quote show that figure; a checkout
+re-prices nothing and relies on the quote's expiry (POL-013) for sessions that start between quote
+and payment.
+
+## Open-amount register lines (PA-08): implemented behind a capability switch
+
+SPK-PAY-016 (capability `open_amount_lines`, DEC-102) is a **Proposed** requirement
+(`docs/package-a/proposed-specification-amendments.md`); it is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendment leaves open are **Pending decision**.
+
+**Verified** (`__tests__/pos-open-amount.spec.ts`,
+`apps/api/src/__tests__/journeys/facility-register.spec.ts`; migrations
+`0695_finance_pos_open_amount_lines.sql`, `0696_finance_pos_line_approvals.sql`,
+`0697_finance_pos_open_amount_sale_total.sql`; `services/pos/pos-open-amount.service.ts`):
+
+- A sale line is a product line, exactly as before, or an open-amount line (`kind`
+  `open_amount`): no product and no SKU; a typed description (1 to 200 characters), a positive
+  amount, the reason category chosen (its label as approved is the line's `name`), the revenue
+  category it books to, who entered it, the ceiling that applied to that person, the total that
+  person then had in open-amount lines on the sale, whether that total is above the ceiling, and
+  the policy version the category and ceiling came from. The database refuses a line that is both
+  or neither (`pos_sale_lines_shape`), an amount that is not positive or a quantity other than one
+  (`pos_sale_lines_open_amount_positive`), a category that is not a code or an empty description
+  (`pos_sale_lines_open_amount_text`), and an approval flag that does not follow from the total
+  and the ceiling (`pos_sale_lines_open_amount_ceiling`). A discount or a refund is never a
+  negative line (SPK-PAY-003, SPK-PAY-008).
+- `POST /v1/pos-sales/{id}/lines` takes either body: a product and a quantity, or a description,
+  an amount and a reason category (`finance.enter_open_amount_line`: front desk, finance
+  operator). The second needs `point_of_sale` and `open_amount_lines`; with the second switch off
+  it is refused with ACCESS_DENIED `CAPABILITY_DISABLED` and product lines are unchanged. A
+  category that is not on the list is refused (`OPEN_AMOUNT_CATEGORY_UNKNOWN`).
+- The category gives the tax treatment: the keys of approved `tax_fee` policies applied to the
+  line, with the same refusals as a product's charges (`CHARGE_POLICY_NOT_APPROVED` and the others,
+  DEC-057). The ceiling is on the amounts entered, before taxes and fees.
+- **The ceiling is for what one person enters on one sale, not for each line** (security review
+  M-4, 2026-11-14; migration 0697). A line needs the second approval when the open-amount lines
+  in effect that its enterer has on the sale, this line included, total more than the ceiling
+  recorded with it; one line above the ceiling is the case of a total of one line. So lines each
+  just under the ceiling no longer reach a tender without a second person: the line that takes
+  the total above the ceiling, and every later one, waits. The database derives the total under
+  the sale lock (`entered_total_minor`, never taken from the writer) and refuses a line whose
+  approval flag does not follow from it; the service computes the same first. Each person's total
+  is their own: another person's lines on the sale count against that person's ceiling. A line
+  that needed an approval keeps that fact; it stops blocking when it is approved, or when lines
+  were removed until its enterer's total on the sale is within the ceiling again
+  (`pos_sale_awaits_line_approval`; `awaitingApproval` on the line in the API), which is how
+  removing a single line above the ceiling already lifted the block.
+- **Not limited: totals across separate sales.** A person may enter open amounts up to their
+  ceiling on each sale of a register session with no second approval. This is visible, not
+  prevented: `GET /v1/pos-register-sessions/{id}/open-amount-lines` lists every open-amount line
+  of the session with who entered it and the total it was judged against. Whether a ceiling per
+  session or per day is wanted is a **Pending decision** (DEC-102).
+- Categories and ceilings are policy content, read through `FinancePolicyResolver.openAmountRules`:
+  the approved catalog policy version of the family `OPEN_AMOUNT_POLICY` (`finance.policy.ts`) in
+  effect, whose content is `OpenAmountPolicyContent` (categories with a revenue category and
+  charge policy keys; a default ceiling and ceilings by staff role; optionally the currency the
+  ceilings are stated in, which then refuses a sale in another currency,
+  `OPEN_AMOUNT_POLICY_CURRENCY_MISMATCH`). An approved version whose content is not usable refuses
+  every open-amount line (`OPEN_AMOUNT_POLICY_INVALID`). A person's ceiling at a facility is the
+  highest among the roles through which they may enter a line there. The read
+  `/v1/pos-open-amount-rules?facilityId=` gives the categories and the caller's own ceiling.
+- Above the ceiling a second person approves: `POST /v1/pos-sales/{id}/lines/{lineId}/approval`
+  (`finance.approve_open_amount_line`: finance operator, general manager; expected revision and a
+  reason required) writes its own append-only record (`pos_line_approvals`: who, when, why, the
+  amount, the ceiling and the enterer's total it was given for). The approver is never the person who entered the line
+  (`SECOND_PERSON_REQUIRED`; `pos_line_approvals_second_person` in the database), there is one
+  approval per line, and it is never rewritten or deleted. Until then the sale takes no tender
+  (`OPEN_AMOUNT_APPROVAL_REQUIRED`; `pos_tenders_open_amount_approved`) and is not paid
+  (`pos_sales_open_amount_approved`). The approval moves the sale's revision on (§4.9).
+- An open-amount line is corrected only by removing it (the quantity command of a line,
+  `/v1/pos-sales/{id}/lines/{lineId}/quantity`, with 0; any other quantity answers
+  `OPEN_AMOUNT_LINE_QUANTITY`; `pos_sale_lines_open_amount_supersede` in the database). The
+  removed line is kept as history, and removing it lifts the block on tenders. When a card tender
+  taken earlier has settled meanwhile and covers what the sale still holds, the removal pays the
+  sale.
+- The sale's journal credits `pos_revenue` per product kind and, for open-amount lines, per revenue
+  category (memo `open amount, revenue category <code>`); a return debits the same back. A return
+  or a void follows the rules of any sale line (finance approves a return; a void needs no
+  approval of the line).
+- Never gated by `open_amount_lines` (DEC-016): reads, removing a line (which then needs no
+  `point_of_sale` either), tenders, voids and returns. The approval is gated: with the switch off
+  a waiting line is removed, or its sale voided, so no sale is stranded.
+- The receipt shows an open-amount line with its description and category label, never who entered
+  or approved it. `GET /v1/pos-register-sessions/{id}/open-amount-lines` lists a session's
+  open-amount lines in effect apart from its sales, newest first, with description, categories,
+  who entered and who approved, for POS readers of the facility.
+
+**Proposed** (assumed defaults, `DEFAULT_FINANCE_POLICY.openAmountLines`, applied while no policy
+version is approved and recorded on the line as `policy_version_id` null): three categories (field
+damage fee and lost key booking to `facility_fees`, one-off service booking to `services`), none
+taxed; a ceiling of 50.00 in the sale's currency for the front desk and 250.00 for a finance
+operator. The role assignments of the two actions are proposed as well.
+
+**Pending decision** (DEC-102): who may use an open-amount line and each ceiling (questionnaire
+H2); whether a ceiling also applies across the sales of a register session or a day (today it is
+per person and sale, and the session report shows the rest); the categories, including tips and
+deposits (H9, G12), which are not revenue and for which no ledger account is assumed here;
+whether the approver needs a ceiling of their own.
+
+Known limits (see `.10x/decisions/sde/track-f.md`): the policy family uses the finance-approved
+catalog kind `overpayment` with the key `register-open-amount`, because catalog has no kind for
+register rules; revenue categories are codes in the journal memo under `pos_revenue`, not ledger
+accounts of their own, so the accounting export maps them through that one account.
+
+Known limits: a checkout re-prices nothing and relies on the quote's expiry (POL-013) for sessions
+that start between quote and payment. The limit `.10x/decisions/sde/track-a.md` reported about
+enrollment's price snapshot (the base price of a per-session rule shown as the price each) is
+closed: the snapshot now carries an estimate worked out from the same facts as the quote, and the
+screens label it as an estimate (see the enrollment module's README and
+`.10x/decisions/sde/track-d.md`).
+
+## Tier pricing and add-on and uniform lines (PA-03, PA-07): implemented behind capability switches
+
+SPK-PAY-014 (price tiers and add-ons, capability `price_tiers_addons`, DEC-097) and SPK-REG-012
+(uniforms, capability `uniforms`, DEC-101) are **Proposed** requirements
+(`docs/package-a/proposed-specification-amendments.md`); each is off for an organization until its
+capability is turned on. What the code does is **Verified** by the tests named; the values the
+amendments leave open are **Pending decision**.
+
+**Verified** (`pricing/quote-calculator.spec.ts`, `__tests__/quote-extras.spec.ts`, also under
+PostgreSQL; `apps/api/src/__tests__/journeys/facility-camp.spec.ts`; migrations
+`0690_finance_quote_line_kinds.sql`, `0691_finance_order_line_kinds.sql`; ADR-003):
+
+- **Order of a unit price**: tier, then member price, then per-session multiplication. A line that
+  names a tier is priced at the tier's price (the member price is then the tier's), multiplied by
+  the sessions counted when the rule is per session; a line with a day selection counts the
+  selected sessions only. `QuoteLine.priceBasis.tier` stores the tier that applied with the facts
+  that selected it (its bounds and deadline, the purchase instant, the days chosen), and
+  `unitPriceFromBasis` reproduces the unit price from the stored document alone (SPK-PAY-002). A
+  basis without a tier is stored exactly as before.
+- **Extra lines**: each add-on and each priced uniform of a basket line is a quote line of its
+  own (`line_kind` `addon` or `uniform`, `source_id` the add-on or the offering uniform), with the
+  same basket line and enrollment as the place, priced from catalog's own records at the quote
+  instant (`PRICING_PORT.offeringExtras`), never from the basket. An add-on line is its price each
+  times the sessions selected (once for an add-on selected per registration) with the add-on's own
+  charge lines; a uniform line is its price, or zero with the reason `returning_holder` when the
+  participant already holds the current uniform (enrollment's fact) and the offering does not
+  charge it again; a uniform without a price is no line. Discounts are evaluated for the place and
+  never applied to an extra line. Each extra line stores its basis (`QuoteLine.addon`,
+  `QuoteLine.uniform`).
+- The uniqueness `(quote_id, basket_line_id)` of quote lines is deliberately widened: one place
+  line per basket line and quote, and one line per add-on or uniform. The database also refuses an
+  extra line without its source or its basis, a place line with a source, and a source that is
+  not an add-on or a uniform of the line's own offering and organization. Order lines carry the
+  same `line_kind` and `source_id`, and the database refuses an order line that relabels its quote
+  line. Both tables stay append-only.
+- The checkout compares place lines with held basket lines one to one and every extra line with
+  the add-ons and uniform of its held line (`QUOTE_STALE` otherwise), creates one order line per
+  quote line tied to the enrollment of its place, and confirms each enrollment once. The basket
+  price estimate (`GET /v1/basket-prices/{id}`) counts the extra lines.
+- **Consequences follow the lines bought** (`FinancePolicyAdapter`): a cancellation share applies
+  to the place and its add-on lines together; a uniform line is not part of that amount, is named
+  in the explanation, and a cancellation where only the uniform was charged answers
+  `review_required`. A transfer of a place bought with add-ons or a uniform, or into an offering
+  sold by tier, answers `review_required`. A plain place is handled exactly as before. Reports
+  read order lines by enrollment and offering, so an extra line is reported with its registration.
+- With a capability off: the tiers of a rule are not evaluated and a line without a tier is priced
+  at the rule's base price with no basis, exactly as before. A line that names a tier, an add-on
+  or a uniform chosen while the capability was on is not quoted once it is off (ACCESS_DENIED
+  `CAPABILITY_DISABLED`; the basket estimate is `unpriced`). With the capability on, a line
+  without a tier of a rule that has tiers is refused with RESOURCE_CONFLICT `TIER_REQUIRED`, a tier
+  past its deadline or of a superseded rule with `TIER_NOT_AVAILABLE`, and a retired add-on or
+  uniform with `ADDON_NOT_OFFERED` or `UNIFORM_NOT_OFFERED`. Quotes and orders that exist stay
+  readable.
+
+**Proposed** (assumed defaults): the purchase instant a tier deadline is checked against is the
+quote instant; discounts do not apply to add-ons or uniforms (**Pending decision** DEC-097,
+DEC-101, and DEC-007 for the tax treatment of an add-on or a uniform).
+
+**Pending decision**, not built: whether a uniform is refunded with a canceled registration, and
+what a transfer means for add-ons and a uniform (DEC-009, DEC-101); finance reviews both.

@@ -24,6 +24,7 @@ import { AppRoutes } from '../App';
 import type { StaffConfig } from '../config/config';
 import { createManualConnectivity } from '../connectivity/sources';
 import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
+import { memoryPreferences } from '../providers/preferences';
 import type { StaffServices } from '../providers/services';
 
 export const TEST_NOW = new Date('2026-10-24T12:00:00.000Z');
@@ -113,6 +114,8 @@ export interface TestAppOptions {
   online?: boolean;
   config?: Partial<StaffConfig>;
   now?: () => Date;
+  /** Display preferences already stored in this browser (theme, sidebar, recent screens). */
+  preferences?: Record<string, string>;
 }
 
 export function createTestApp(options: TestAppOptions = {}) {
@@ -140,6 +143,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     fetch: fake.fetch,
     generateKey: sequentialKeys(),
     now: options.now ?? (() => TEST_NOW),
+    preferences: memoryPreferences(options.preferences),
   };
   const queryClient = new QueryClient({
     defaultOptions: {

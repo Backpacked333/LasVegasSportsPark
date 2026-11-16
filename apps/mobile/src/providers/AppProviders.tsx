@@ -1,6 +1,7 @@
 /**
  * Root providers: session (§4.13), the typed API client (§4.8 to §4.10), connectivity and
- * foreground refresh (SPK-UX-001, SCR-C-40), and the TanStack Query data layer.
+ * foreground refresh (SPK-UX-001, SCR-C-40), the TanStack Query data layer, and the theme in use
+ * (classic or Legends mode, `ui/ThemeProvider`).
  */
 import {
   ApiError,
@@ -27,6 +28,7 @@ import {
 } from 'react';
 import type { Reachability } from '../connectivity/sources';
 import { linkSecretsFollowSession, linkSecretsSessionExpired } from '../links/link-secrets';
+import { ThemeProvider } from '../ui/ThemeProvider';
 import type { AppServices } from './services';
 
 export type SessionStatus = 'loading' | 'signed_out' | 'signed_in';
@@ -210,7 +212,7 @@ export function AppProviders({ services, queryClient, children }: AppProvidersPr
     <QueryClientProvider client={client}>
       <AppContext.Provider value={value}>
         <ConnectivityContext.Provider value={{ reachable }}>
-          {children}
+          <ThemeProvider store={services.themeStore}>{children}</ThemeProvider>
         </ConnectivityContext.Provider>
       </AppContext.Provider>
     </QueryClientProvider>

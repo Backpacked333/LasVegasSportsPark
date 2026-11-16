@@ -14,9 +14,15 @@
  *   when the directory is not available to the viewer or the person is not listed. The API
  *   validates that the manager is an active person; no role is preset here.
  * - Input is kept after a validation or stale-version answer (SPK-UX-008).
+ * - "Requires waiver" (SPK-REG-011, proposed amendment PA-01; DEC-095 pending): shown only while
+ *   the organization has turned liability waivers on, for an offering that already exists. It is
+ *   its own command (`POST /v1/offerings/{id}/required-waivers`), naming waiver families by key:
+ *   the waiver's own approved version says whether a missing one warns or blocks.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
+import { usePermissions } from '../../api/permissions';
+import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useFacilities } from '../../features/registration-finance/facilities';
 import {
@@ -29,6 +35,7 @@ import { instantToLocal, localToInstant } from '../../features/registration-fina
 import { CAPACITY_UNIT, OFFERING_KIND } from '../../features/registration-finance/labels';
 import { PENDING } from '../../features/registration-finance/pending';
 import { Button } from '../../ui/Button';
+import { CommandError } from '../../ui/CommandFeedback';
 import { optionalInt } from './ProgramsScreen';
 
 type Offering = Schema<'Offering'>;
@@ -68,6 +75,112 @@ function usePolicyOptions(kind: 'eligibility' | 'cancellation' | 'form') {
     })),
     unavailable: policies.error !== null && policies.data === undefined,
   };
+}
+
+export const MANAGE_REQUIRED_WAIVERS_ACTION = 'catalog.manage_required_waivers';
+const REQUIRED_WAIVERS_KEY = ['api', '/offerings/{id}/required-waivers'] as const;
+
+/**
+ * "Requires waiver" for an existing offering (SPK-REG-011, proposed). Absent while liability
+ * waivers are turned off: nothing is shown and nothing is asked of the API.
+ */
+export function RequiredWaivers({
+  offeringId,
+  disabled,
+}: {
+  offeringId: string;
+  disabled: boolean;
+}) {
+  const permissions = usePermissions();
+  const enabled = permissions.isCapabilityEnabled('liability_waivers') === true;
+  const required = useApiQuery({
+    path: '/offerings/{id}/required-waivers',
+    request: { path: { id: offeringId } },
+    enabled,
+  });
+  const families = useApiQuery({
+    path: '/policy-versions',
+    request: { query: { kind: 'waiver', approvalStatus: 'approved', limit: 200 } },
+    staleTime: 60_000,
+    enabled,
+  });
+  const [chosen, setChosen] = useState<string[] | null>(null);
+  const save = useApiCommand('post', '/offerings/{id}/required-waivers', {
+    invalidate: [REQUIRED_WAIVERS_KEY],
+  });
+  if (!enabled) return null;
+  const saved = (required.data?.waivers ?? []).map((w) => w.policyKey);
+  const values = chosen ?? saved;
+  // one option per waiver family: its newest approved version names it
+  const byKey = new Map<string, { title: string; version: number }>();
+  for (const version of families.data?.items ?? []) {
+    const known = byKey.get(version.key);
+    if (!known || version.version > known.version) {
+      byKey.set(version.key, { title: version.title, version: version.version });
+    }
+  }
+  const enforcement = new Map(
+    (required.data?.waivers ?? []).map((w) => [w.policyKey, w.enforcement]),
+  );
+  const options = [...new Set([...byKey.keys(), ...saved])].sort().map((key) => {
+    const family = byKey.get(key);
+    const rule = enforcement.get(key);
+    return {
+      value: key,
+      label: `${family?.title ?? key}${family ? ` (version ${family.version})` : ''}${
+        rule ? `: a missing waiver ${rule === 'block' ? 'blocks' : 'warns'}` : ''
+      }`,
+    };
+  });
+  const mayManage = permissions.isPermitted(MANAGE_REQUIRED_WAIVERS_ACTION) === true;
+  const changed = chosen !== null && [...chosen].sort().join('|') !== [...saved].sort().join('|');
+  return (
+    <section className="rf-panel" aria-labelledby="required-waivers-title">
+      <h4 id="required-waivers-title">Requires waiver</h4>
+      <p className="caption">
+        Proposed (DEC-095 pending). A participant&apos;s waiver is judged current, lapsed or missing
+        at registration, on rosters and at check-in. Whether a missing waiver warns or blocks, and
+        how often it is renewed, is what the approved waiver says.
+      </p>
+      {required.error && required.data === undefined ? (
+        <CommandError error={required.error} onRetry={() => void required.refetch()} />
+      ) : (
+        <CheckboxGroup
+          legend="Waivers this offering requires"
+          hint={
+            families.error && families.data === undefined
+              ? 'Waivers are not available to you.'
+              : options.length === 0
+                ? 'No approved waiver exists yet. Draft and approve one under policies first.'
+                : undefined
+          }
+          options={options}
+          values={values}
+          onChange={setChosen}
+        />
+      )}
+      <div className="rf-actions">
+        <Button
+          variant="secondary"
+          busy={save.isProcessing}
+          disabled={disabled || !mayManage || !changed}
+          onClick={() => {
+            save
+              .submit({ path: { id: offeringId }, body: { policyKeys: values } })
+              .then(() => setChosen(null))
+              .catch(() => undefined);
+          }}
+        >
+          Save required waivers
+        </Button>
+      </div>
+      {!mayManage ? (
+        <p className="caption">Changing the required waivers is not available to your role.</p>
+      ) : null}
+      {save.status === 'success' && !changed ? <p role="status">Required waivers saved.</p> : null}
+      <CommandError error={save.error} onRetry={() => save.resend()} />
+    </section>
+  );
 }
 
 export interface OfferingFormProps {

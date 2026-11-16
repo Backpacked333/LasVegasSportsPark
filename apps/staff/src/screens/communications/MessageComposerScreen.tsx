@@ -51,6 +51,7 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { AudienceCount } from './AudienceCount';
 import './communications.css';
+import { GlassCard } from '../../ui/glass/GlassCard';
 
 type Kind = Schema<'NotificationKind'>;
 type Category = Schema<'NotificationCategory'>;
@@ -428,7 +429,7 @@ export function Composer({
         </section>
       </form>
       <aside className="cm-side" aria-label="Live preview">
-        <section className="card card-dark cm-reach" aria-labelledby="cm-reach-title">
+        <GlassCard tone="night" className="cm-reach" aria-labelledby="cm-reach-title">
           <span className="cm-reach-kicker" id="cm-reach-title">
             Audience so far
           </span>
@@ -450,7 +451,7 @@ export function Composer({
                 : 'Counted from current permissions when you preview, and again at send.'}
             </li>
           </ul>
-        </section>
+        </GlassCard>
         <section className="card cm-preview" aria-labelledby="cm-preview-title">
           <span className="label-caps" id="cm-preview-title">
             What recipients see

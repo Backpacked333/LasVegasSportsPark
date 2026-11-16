@@ -28,7 +28,7 @@ import { apiQueryKey, presentationForError, type Schema } from '@sportspark/api-
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { teamRoutes } from '../../features/teams/routes';
 import {
@@ -64,7 +64,7 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, radius, spacing, type } from '../../ui/theme';
+import { makeStyles, radius, spacing, type } from '../../ui/theme';
 
 type FixtureDetail = Schema<'FixtureDetail'>;
 type FixtureSide = Schema<'FixtureSide'>;
@@ -133,6 +133,7 @@ export function visibleReadiness(
 }
 
 function FixtureContent({ fixtureId }: { fixtureId: string }) {
+  const styles = useStyles();
   const router = useRouter();
   const now = useNow();
   const signedIn = useSignedIn();
@@ -446,7 +447,7 @@ export function FixtureDetailRoute() {
   return <FixtureDetailScreen fixtureId={typeof id === 'string' ? id : undefined} />;
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   pad: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   issues: { gap: spacing.sm },
   answer: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
@@ -461,4 +462,4 @@ const styles = StyleSheet.create({
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
   score: { ...type.title, color: colors.text },
-});
+}));

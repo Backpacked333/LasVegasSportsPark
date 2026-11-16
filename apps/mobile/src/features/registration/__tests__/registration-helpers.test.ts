@@ -176,6 +176,12 @@ describe('session bookings (SPK-PLACE-004, SPK-YOUTH-003, ENR-11)', () => {
       basePriceMinor: 0,
       currency: 'USD',
       chargeLines: [],
+      pricingBasis: 'term' as const,
+      remainingSessionCount: null,
+      remainingSessionsPriceMinor: null,
+      notQuotable: null,
+      memberPrice: null,
+      tiers: [],
     };
     expect(owesNothing(base)).toBe(true);
     expect(owesNothing({ ...base, basePriceMinor: 1 })).toBe(false);

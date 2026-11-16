@@ -10,7 +10,7 @@ import {
   type Schema,
 } from '@sportspark/api-client';
 import { createContext, useContext, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import {
   mayHaveTakenEffect,
   refusedBeforeRunning,
@@ -20,11 +20,12 @@ import {
 import { SectionCard } from '../../ui/Card';
 import { LiveRegion, LiveText, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
+import { useInputChrome } from '../../ui/input';
 import { OutcomeLost } from '../../ui/OutcomeLost';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import { roleWords } from './format';
 import { severityStatus } from './status';
 
@@ -46,6 +47,7 @@ export function Section({
 }
 
 export function Title({ children }: { children: string }) {
+  const styles = useStyles();
   return (
     <Text style={styles.title} accessibilityRole="header">
       {children}
@@ -55,6 +57,7 @@ export function Title({ children }: { children: string }) {
 
 /** A heading inside a section (announced as a header, one level below the section's). */
 export function Subheading({ children }: { children: string }) {
+  const styles = useStyles();
   return (
     <Text style={styles.subheading} accessibilityRole="header">
       {children}
@@ -63,6 +66,7 @@ export function Subheading({ children }: { children: string }) {
 }
 
 export function Body({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
+  const styles = useStyles();
   return <Text style={muted ? styles.caption : styles.body}>{children}</Text>;
 }
 
@@ -76,6 +80,7 @@ export function Detail({
   value: string;
   testID?: string;
 }) {
+  const styles = useStyles();
   return (
     <View
       style={styles.detail}
@@ -90,6 +95,7 @@ export function Detail({
 }
 
 export function ButtonRow({ children }: { children: ReactNode }) {
+  const styles = useStyles();
   return <View style={styles.buttonRow}>{children}</View>;
 }
 
@@ -116,6 +122,7 @@ export function RadioRow({
   disabled?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
   const groupError = useContext(ChoiceErrorContext);
   return (
     <Pressable
@@ -161,6 +168,7 @@ export function RadioGroup({
   error?: string | null;
   children: ReactNode;
 }) {
+  const styles = useStyles();
   return (
     <View
       accessibilityRole="radiogroup"
@@ -180,6 +188,7 @@ export function RadioGroup({
  * person who sends a form without choosing hears why nothing was sent.
  */
 export function FieldError({ error, testID }: { error?: string | null; testID?: string }) {
+  const styles = useStyles();
   if (!error) return null;
   return (
     <LiveText style={styles.error} announcement={error} accessibilityRole="alert" testID={testID}>
@@ -212,11 +221,14 @@ export function TextField({
   editable?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
+  const input = useInputChrome();
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {hint ? <Text style={styles.caption}>{hint}</Text> : null}
       <TextInput
+        {...input.props}
         accessibilityLabel={error ? `${label}. ${error}` : label}
         accessibilityHint={hint}
         accessibilityState={{ disabled: !editable }}
@@ -226,7 +238,12 @@ export function TextField({
         multiline={multiline}
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize}
-        style={[styles.input, multiline && styles.multiline, !editable && styles.inactive]}
+        style={[
+          styles.input,
+          input.focusStyle,
+          multiline && styles.multiline,
+          !editable && styles.inactive,
+        ]}
         testID={testID}
       />
       {error ? (
@@ -248,6 +265,7 @@ type Reason = Pick<
  * needs league approval is shown as a pending approval, never as a denial (SCR-C-26).
  */
 export function ReasonList({ reasons, testID }: { reasons: Reason[]; testID?: string }) {
+  const styles = useStyles();
   return (
     <View accessibilityRole="list" style={styles.group} testID={testID}>
       {reasons.map((reason, index) => (
@@ -350,6 +368,7 @@ export function CommandFailure({
   read?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
   const presentation = presentationForError(error);
   if (presentation === 'unavailable') {
     return (
@@ -446,6 +465,7 @@ export function CommandFailure({
 
 /** A command that needs a connection while the device is offline (SPK-UX-008, §4.15). */
 export function OfflineNotice({ what }: { what: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.notice} accessible accessibilityLabel={`${what} needs a connection`}>
       <StatusBadge tone="warning" label="Needs a connection" />
@@ -456,7 +476,7 @@ export function OfflineNotice({ what }: { what: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   title: {
     ...type.display,
     fontSize: 30,
@@ -509,4 +529,4 @@ const styles = StyleSheet.create({
   reason: { gap: spacing.xs, paddingVertical: spacing.xs },
   failure: { gap: spacing.sm, paddingVertical: spacing.sm },
   notice: { gap: spacing.xs, paddingVertical: spacing.xs },
-});
+}));

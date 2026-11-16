@@ -4,6 +4,7 @@ import type {
   FixtureStatus,
   JoinRequestStatus,
   SeasonStatus,
+  TeamEntryPlaceOfferStatus,
   TeamEntryStatus,
   TeamInvitationStatus,
   TeamStatus,
@@ -55,17 +56,47 @@ export const TeamMachine = defineStateMachine<TeamStatus, TeamEvent>({
   },
 });
 
-export type TeamEntryEvent = 'approve' | 'reject' | 'withdraw';
+/**
+ * `wait` and `accept_place` are the team waiting list (SPK-COMP-006, proposed amendment PA-10,
+ * migration 0467): an applied entry that finds no free place waits; accepting an offered place
+ * returns it to `applied`, in the offered division, for the ordinary approval path (SPK-COMP-004).
+ */
+export type TeamEntryEvent = 'approve' | 'reject' | 'withdraw' | 'wait' | 'accept_place';
 export const TeamEntryMachine = defineStateMachine<TeamEntryStatus, TeamEntryEvent>({
   name: 'TeamEntry',
   initial: 'applied',
-  states: ['applied', 'approved', 'withdrawn', 'rejected'],
+  states: ['applied', 'waiting', 'approved', 'withdrawn', 'rejected'],
   terminal: ['withdrawn', 'rejected'],
   transitions: {
-    applied: { approve: 'approved', reject: 'rejected', withdraw: 'withdrawn' },
+    applied: { approve: 'approved', reject: 'rejected', withdraw: 'withdrawn', wait: 'waiting' },
+    waiting: { accept_place: 'applied', reject: 'rejected', withdraw: 'withdrawn' },
     approved: { withdraw: 'withdrawn' },
     withdrawn: {},
     rejected: {},
+  },
+});
+
+/** SPK-COMP-006 (migration 0467): a place offer is resolved once. */
+export type TeamEntryPlaceOfferEvent = 'accept' | 'decline' | 'expire' | 'withdraw';
+export const TeamEntryPlaceOfferMachine = defineStateMachine<
+  TeamEntryPlaceOfferStatus,
+  TeamEntryPlaceOfferEvent
+>({
+  name: 'TeamEntryPlaceOffer',
+  initial: 'offered',
+  states: ['offered', 'accepted', 'declined', 'expired', 'withdrawn'],
+  terminal: ['accepted', 'declined', 'expired', 'withdrawn'],
+  transitions: {
+    offered: {
+      accept: 'accepted',
+      decline: 'declined',
+      expire: 'expired',
+      withdraw: 'withdrawn',
+    },
+    accepted: {},
+    declined: {},
+    expired: {},
+    withdrawn: {},
   },
 });
 

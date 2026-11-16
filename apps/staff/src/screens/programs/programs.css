@@ -32,7 +32,7 @@
   --sport: var(--kind-program);
 }
 [data-sport='futsal'] {
-  --sport: #0e7c74;
+  --sport: var(--kind-futsal);
 }
 [data-sport='other'] {
   --sport: var(--kind-dropin);
@@ -60,10 +60,9 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--sport);
   min-width: 0;
   overflow-wrap: anywhere;
@@ -77,9 +76,7 @@
 .program-name {
   font-size: 19px;
   line-height: 1.05;
-  font-weight: 800;
-  font-stretch: 75%;
-  text-transform: uppercase;
+  font-weight: 700;
   color: var(--ink);
   text-decoration: none;
   overflow-wrap: anywhere;

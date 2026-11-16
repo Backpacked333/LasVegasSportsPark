@@ -109,7 +109,7 @@ describe('SCR-S-52 Parties', () => {
     expect(off).toHaveTextContent('(DEC-016, DEC-077)');
     const list = await within(pageEl).findByRole('list', { name: 'Party bookings' });
     expect(within(list).getAllByRole('listitem')).toHaveLength(1);
-    expect(within(list).getByText('awaiting_staff')).toBeInTheDocument();
+    expect(within(list).getByText('awaiting staff')).toBeInTheDocument();
     expect(within(list).getByText(/12 guests/)).toBeInTheDocument();
   });
 

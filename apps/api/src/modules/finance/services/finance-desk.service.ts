@@ -35,7 +35,12 @@ import { FinanceActions } from '../finance.actions';
 import { PaymentReminderRequested } from '../finance.events';
 import { PAYMENT_REMINDER_MIN_INTERVAL_HOURS } from '../finance.policy';
 import { iso, organizationOf } from '../finance.shared';
-import { computeQuote, type QuoteLineInput } from '../pricing/quote-calculator';
+import { LinePricing } from '../pricing/line-pricing.service';
+import {
+  computeQuote,
+  type LinePricingFacts,
+  type QuoteLineInput,
+} from '../pricing/quote-calculator';
 import { FinanceCustomerScope } from './customer-scope';
 import { quotableLines } from './quotes.service';
 
@@ -111,6 +116,7 @@ export class FinanceDeskService {
     private readonly outbox: Outbox,
     private readonly facilities: FacilityDirectory,
     private readonly scope: FinanceCustomerScope,
+    private readonly linePricing: LinePricing,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -427,11 +433,26 @@ export class FinanceDeskService {
     if (lines.length === 0) return unpriced();
     const inputs: QuoteLineInput[] = [];
     let currency: string | null = null;
+    const switches = await this.linePricing.switches(organizationId);
     for (const line of lines) {
       const rule = await this.pricing.effectivePriceRule(organizationId, line.offeringId, now);
       if (!rule) return unpriced();
       currency ??= rule.currency;
       if (rule.currency !== currency) return unpriced();
+      // SPK-PAY-013, SPK-PAY-015: the estimate follows the quote's own pricing (sessions still to
+      // attend, member price). A line the quote would refuse has no estimate.
+      let pricing: LinePricingFacts | null;
+      try {
+        pricing = await this.linePricing.factsFor(organizationId, switches, line, rule, now);
+      } catch (error) {
+        if (
+          DomainError.is(error) &&
+          (error.code === 'RESOURCE_CONFLICT' || error.code === 'ACCESS_DENIED')
+        ) {
+          return unpriced();
+        }
+        throw error;
+      }
       const snapshot = await this.offerings.getOffering(organizationId, line.offeringId, now);
       const policies: LinePolicyReferences = {
         eligibilityPolicyVersionId: line.policies.eligibilityPolicyVersionId,
@@ -439,7 +460,7 @@ export class FinanceDeskService {
         requiredFormPolicyVersionIds: line.policies.requiredFormPolicyVersionIds,
         approvalPolicyVersionId: line.policies.approvalPolicyVersionId ?? null,
       };
-      inputs.push({
+      const place: QuoteLineInput = {
         basketLineId: line.id,
         participantPersonId: line.participantPersonId,
         offeringId: line.offeringId,
@@ -451,10 +472,27 @@ export class FinanceDeskService {
           currency: rule.currency,
           chargeLines: rule.chargeLines,
         },
+        pricing,
         policies,
         equivalenceKey: line.equivalenceKey,
         enrollmentId: line.enrollmentId,
-      });
+      };
+      inputs.push(place);
+      // SPK-PAY-014, SPK-REG-012: the estimate counts the add-on and uniform lines the quote
+      // would have; a line the quote would refuse has no estimate.
+      try {
+        inputs.push(
+          ...(await this.linePricing.extraLines(organizationId, switches, line, place, currency)),
+        );
+      } catch (error) {
+        if (
+          DomainError.is(error) &&
+          ['RESOURCE_CONFLICT', 'ACCESS_DENIED', 'VALIDATION_FAILED'].includes(error.code)
+        ) {
+          return unpriced();
+        }
+        throw error;
+      }
     }
     try {
       const computed = computeQuote({

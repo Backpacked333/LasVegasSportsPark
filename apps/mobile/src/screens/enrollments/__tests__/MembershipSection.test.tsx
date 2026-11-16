@@ -147,8 +147,11 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
         fakeResponse(403, capabilityDisabledBody('memberships', ['DEC-016', 'DEC-072'])),
     });
     fireEvent.press(await screen.findByRole('radio', { name: /^Family membership 2027/ }));
+    // The button waits for the open baskets, a read of its own (quality review m-7).
+    const add = screen.getByRole('button', { name: 'Add the renewal to your basket' });
+    await waitFor(() => expect(add).not.toBeDisabled());
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Add the renewal to your basket' }));
+      fireEvent.press(add);
     });
     expect(await screen.findByLabelText('Memberships turned off')).toBeOnTheScreen();
     expect(screen.queryByText('Something went wrong')).toBeNull();

@@ -34,3 +34,32 @@ POL-018; DEC-023, DEC-032, POL-043; DEC-022): `src/features/pos-access-accountin
   `/accounting-export-batches`, ...) use `useApiPages` and `LoadMore`.
 - Test with `mePermissions({ enabled: ['point_of_sale'] })` from `src/testing/test-app.tsx`; the
   default is every switch off.
+
+## Rental group roster (SPK-COND-005, proposed amendment PA-09)
+
+**Proposed**, behind the capability `rental_rosters` (DEC-103 pending). `bookings/BookingRoster.tsx`
+is a panel of the rental booking detail (SCR-S-51): who is on the roster, who is invited, who was
+removed, and each member's liability waiver (current, lapsed, missing, not evaluated), with adding
+a person by reference, inviting a contact (the invitation code is shown once, because no messaging
+channel is approved: DEC-012, DEC-062) and removing with a reason. It says that a missing waiver
+does not block the booking and that being on the roster grants nothing else. Somebody who is only
+invited is listed by the contact the invitation went to, or as "Invited person", with no name and
+no waiver until they join (security review M-1). Absent, and asking
+nothing of the API, while the capability is off and on a party. **Verified**
+`bookings/__tests__/BookingRoster.test.tsx`. No route or navigation entry was added.
+
+## Open-amount lines at the register (SPK-PAY-016, proposed amendment PA-08)
+
+**Proposed**, behind the capability `open_amount_lines` (DEC-102 pending: the categories, the
+ceilings, who may enter and who may approve). `point-of-sale/OpenAmount.tsx` adds to SCR-S-55:
+"Other amount" on an open sale (what it is for, an amount, a reason category; the form names the
+decision while the API applies its proposed default, and says before sending when the amount,
+with the other amounts the viewer already entered on the sale, is above the viewer's ceiling: the
+ceiling counts everything one person enters on one sale, security review M-4); the approval step (the sale offers no tender, the page says who
+approves and that the sale cannot finish before, and a permitted second person approves with a
+reason; the person who entered the line is told another person approves it); the line on the sale,
+its ticket (removal only) and its receipt by its description and category; and the session's
+open-amount lines listed apart from its sales. With the switch off none of this is offered and the
+API is not asked for it; a line that already exists is still shown, removable and payable.
+**Verified** in jsdom `point-of-sale/__tests__/OpenAmount.test.tsx`. No route or navigation entry
+was added. Not looked at in a browser in this work.

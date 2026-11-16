@@ -14,6 +14,9 @@
  * (DEC-016, DEC-072 to DEC-082, Product owner): a signed-in customer gets their filter only while
  * the organization's switch is on (`GET /v1/me/permissions`).
  *
+ * A signed-out visitor is also offered today's schedule and the public league standings when the
+ * organization has made them public (SPK-SCHED-010, proposed amendment PA-06; PublicViews.tsx).
+ *
  * States: loading; empty (nothing published for the filter); ready; validation failure (filter
  * input); offline (cached list with its age); unavailable (catalog not reachable, retry); paged
  * with "Load more activities". A signed-out visitor browses the organization configured for this
@@ -34,7 +37,7 @@
 import type { CapabilityId } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import { OFFERING_KIND_LABELS, type OfferingKind } from '../../features/registration/format';
@@ -43,6 +46,7 @@ import { registrationRoutes } from '../../features/registration/routes';
 import { promotionBadges } from '../../features/registration/promotions';
 import { registrationWindowStatus } from '../../features/registration/status';
 import { Body, ButtonRow, TextField } from '../../features/registration/ui';
+import { PublicLinks } from '../public/PublicViews';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -54,7 +58,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { KIND_LOOK, offeringSummary } from './offering-look';
 import { PickedFor } from './PickedFor';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type, useTheme } from '../../ui/theme';
 
 export const DISCOVER_PAGE_SIZE = 50;
 
@@ -142,7 +146,8 @@ function SearchBox({ applied, onApply }: { applied: string; onApply: (q: string)
         testID="discover-q"
       />
       <ButtonRow>
-        <Button label="Search" variant="secondary" onPress={search} />
+        {/* The one action of this card: solid, so it reads as the next step. */}
+        <Button label="Search" onPress={search} />
         {applied ? (
           <Button
             label="Clear search"
@@ -168,6 +173,8 @@ function KindFilter({
   value: OfferingKind | null;
   onChange: (kind: OfferingKind | null) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const options: { kind: OfferingKind | null; label: string }[] = [
     { kind: null, label: 'All activities' },
     ...kinds.map((kind) => ({ kind, label: OFFERING_KIND_LABELS[kind] })),
@@ -189,7 +196,7 @@ function KindFilter({
             <Icon
               name={option.kind ? KIND_LOOK[option.kind][0] : 'apps'}
               size={18}
-              color={checked ? colors.floodlight : colors.text}
+              color={checked ? colors.chipSelectedIcon : colors.text}
             />
             <Text style={[styles.chipText, checked && styles.chipTextOn]}>
               {checked ? `✓ ${option.label}` : option.label}
@@ -266,6 +273,8 @@ function MoreFilters({
 }
 
 export function DiscoverScreen() {
+  const { colors, kindColors } = useTheme();
+  const styles = useStyles();
   const { session, services } = useApp();
   const router = useRouter();
   const [kind, setKind] = useState<OfferingKind | null>(null);
@@ -319,6 +328,8 @@ export function DiscoverScreen() {
   return (
     <Screen>
       {signedIn ? <InProgressCard /> : null}
+      {/* SPK-SCHED-010: today's schedule and public standings need no sign-in. */}
+      {!signedIn ? <PublicLinks /> : null}
       {/* Keyed like the filters below: the field always shows the search that is applied. */}
       <SearchBox key={`q:${q}`} applied={q} onApply={setQ} />
       {signedIn && !filtered ? <PickedFor /> : null}
@@ -362,7 +373,7 @@ export function DiscoverScreen() {
                 status={registrationWindowStatus(offering)}
                 badges={promotionBadges(offering)}
                 icon={KIND_LOOK[offering.kind][0]}
-                iconTone={[KIND_LOOK[offering.kind][1], colors.primaryText]}
+                iconTone={[kindColors[KIND_LOOK[offering.kind][1]], colors.primaryText]}
                 onPress={() => router.push(registrationRoutes.offering(offering.id))}
                 accessibilityHint="Opens the activity details"
                 testID={`offering-${offering.id}`}
@@ -382,7 +393,7 @@ export function DiscoverScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   filters: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -401,8 +412,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.background,
   },
-  chipOn: { backgroundColor: colors.night, borderColor: colors.night },
+  chipOn: { backgroundColor: colors.chipSelected, borderColor: colors.chipSelected },
   chipText: { ...type.caption, ...fonts.bold, color: colors.text },
-  chipTextOn: { color: colors.primaryText },
+  chipTextOn: { color: colors.onChipSelected },
   caption: { ...type.caption, color: colors.textMuted, padding: spacing.lg },
-});
+}));

@@ -6,6 +6,7 @@ import {
   type ActivityAttendance,
   type AttendanceQuery,
   type CorrectAttendanceObservationBody,
+  type ExpectedParticipant,
   type ObservedState,
   type PersonAttendance,
   type Principal,
@@ -16,6 +17,7 @@ import { isUniqueViolation, json, type Db, type ObservationFlag } from '@sportsp
 import {
   AuditWriter,
   AuthorizationService,
+  CapabilityService,
   CLOCK,
   OperationalExceptions,
   Outbox,
@@ -24,6 +26,7 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
+import { SESSION_ROSTER_PORT, type SessionRosterPort } from '../../enrollment';
 import {
   PERSON_DIRECTORY_PORT,
   type PersonDirectoryPort,
@@ -139,6 +142,8 @@ export class AttendanceService implements AttendancePort {
     private readonly exceptions: OperationalExceptions,
     private readonly resolver: ActivityResolver,
     private readonly scope: StaffScope,
+    @Inject(SESSION_ROSTER_PORT) private readonly roster: SessionRosterPort,
+    private readonly capabilities: CapabilityService,
   ) {}
 
   async record(
@@ -348,7 +353,45 @@ export class AttendanceService implements AttendancePort {
       ...summarize(personId, list, audience),
       ...nameFields(names.get(personId)),
     }));
-    return { activity: activity.detail, people };
+    return {
+      activity: activity.detail,
+      people,
+      expected: await this.expected(organizationId, activity.detail, audience, personFilter),
+    };
+  }
+
+  /**
+   * SPK-PAY-014 (proposed amendment PA-03): who a session expects, for staff and the assigned
+   * coach reading the whole activity while `price_tiers_addons` is on: only the participants
+   * whose day selection includes this session (enrollment's SESSION_ROSTER_PORT), each with the
+   * add-ons bought for the day. Null for an event, for a read of one person and while the
+   * capability is off, where the read answers exactly as before. Names are read only after the
+   * attendance read was authorized (§4.14).
+   */
+  private async expected(
+    organizationId: string,
+    activity: ActivityAttendance['activity'],
+    audience: ReadAudience,
+    personFilter: string | null,
+  ): Promise<ExpectedParticipant[] | null> {
+    if (activity.type !== 'session' || audience !== 'staff' || personFilter !== null) return null;
+    if (!activity.offeringId || !activity.sessionId) return null;
+    if (!(await this.capabilities.isEnabled(organizationId, 'price_tiers_addons'))) return null;
+    const rows = await this.roster.expectedAtSession(
+      organizationId,
+      activity.offeringId,
+      activity.sessionId,
+    );
+    const names = await this.people.displayNames(
+      organizationId,
+      rows.map((row) => row.participantPersonId),
+    );
+    return rows.map((row) => ({
+      personId: row.participantPersonId,
+      ...nameFields(names.get(row.participantPersonId)),
+      enrollmentId: row.enrollmentId,
+      addons: row.addons,
+    }));
   }
 
   // -------------------------------------------------------------------------------------------

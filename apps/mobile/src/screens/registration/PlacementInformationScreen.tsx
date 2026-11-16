@@ -24,7 +24,7 @@
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../features/registration/CommandError';
@@ -41,7 +41,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 type Basket = Schema<'Basket'>;
 type AvailabilityWindow = Schema<'AvailabilityWindow'>;
@@ -72,6 +72,7 @@ function CompetitionChoice({
   onChange: (competitionId: string | null) => void;
   error?: string;
 }) {
+  const styles = useStyles();
   const competitions = useApiQuery({
     path: '/competitions',
     request: { query: { status: 'active' } },
@@ -152,6 +153,7 @@ function AvailabilityEditor({
   onChange: (next: AvailabilityWindow[]) => void;
   error?: string;
 }) {
+  const styles = useStyles();
   const [weekday, setWeekday] = useState<number | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -460,7 +462,7 @@ export function PlacementInformationRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   editor: { gap: spacing.sm },
   label: { ...type.body, ...fonts.semibold, color: colors.text },
   days: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
@@ -480,4 +482,4 @@ const styles = StyleSheet.create({
   dayTextOn: { color: colors.primaryText },
   window: { gap: spacing.xs },
   error: { ...type.caption, color: colors.danger },
-});
+}));

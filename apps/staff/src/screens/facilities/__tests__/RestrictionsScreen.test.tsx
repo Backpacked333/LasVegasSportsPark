@@ -149,7 +149,7 @@ describe('SCR-S-42 RestrictionsScreen', () => {
         /^Pitch 1closed: Turf repair, .* \(through shared space\).*restricted$/,
       ),
       expect.stringMatching(/^Pitch 1 Northclosed: Turf repair, .*restricted$/),
-      expect.stringMatching(/^Pitch 1 South.*in_service$/),
+      expect.stringMatching(/^Pitch 1 South.*in service$/),
     ]);
     expect(await screen.findByRole('list', { name: 'Restrictions' })).toHaveTextContent(
       'Pitch 1 North: Turf repair',

@@ -29,6 +29,7 @@ import { Icon, type IconName } from '../../ui/Icon';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { NeedsYourCall } from './NeedsYourCall';
+import { Toolbar } from '../../ui/glass/GlassCard';
 
 type Competition = Schema<'Competition'>;
 type Season = Schema<'Season'>;
@@ -224,7 +225,7 @@ export function LeaguesScreen() {
       ) : null}
       <div className="season-grid">
         <div className="season-main">
-          <div className="toolbar">
+          <Toolbar>
             <SelectField
               label="Competition status"
               value={status}
@@ -232,7 +233,7 @@ export function LeaguesScreen() {
               options={STATUS_OPTIONS}
               placeholder="All statuses"
             />
-          </div>
+          </Toolbar>
           <QueryBoundary
             query={competitions}
             label="competitions"

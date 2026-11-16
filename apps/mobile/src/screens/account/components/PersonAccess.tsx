@@ -8,7 +8,7 @@
  */
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, fonts, radius, spacing, type } from '../../../ui/theme';
+import { fonts, makeStyles, radius, spacing, type, useTheme } from '../../../ui/theme';
 import { permissionState, type GrantView } from '../../family/grants';
 import {
   GRANT_PERMISSIONS,
@@ -33,6 +33,8 @@ export function PersonAccessCard({
   grants?: readonly GrantView[];
   children?: ReactNode;
 }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const read = personNameText(usePersonName(givenName ? '' : authority.subjectPersonId));
   const name = givenName ?? read;
   return (
@@ -79,6 +81,7 @@ export function PersonAccessCard({
 
 /** One line per person: "Sam Rivera: View, Register and Pay" (SCR-C-02 restored access). */
 export function PersonAccessLine({ authority }: { authority: Authority }) {
+  const styles = useStyles();
   const name = personNameText(usePersonName(authority.subjectPersonId));
   const text = `${name}: ${listPermissions(authority.permissions)}`;
   return (
@@ -89,7 +92,7 @@ export function PersonAccessLine({ authority }: { authority: Authority }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   card: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.md,
@@ -112,4 +115,4 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-});
+}));

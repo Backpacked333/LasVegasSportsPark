@@ -18,6 +18,7 @@ import { startInlineWorker } from './kernel/workers/inline-worker';
  *   pnpm dev:all                       API on :3000 with the inline worker
  *   pnpm dev:all -- --seed             also creates the development seed first (seed:dev)
  *   pnpm dev:all -- --seed --seed-summary <file>   and writes its account ids to <file>
+ *   pnpm dev:all -- --lan              answers other machines on the network too (default: this one)
  *
  * Production runs `dist/main.js` and `dist/worker.js` as separate processes (§4.1).
  */
@@ -42,9 +43,12 @@ async function main(): Promise<void> {
     const file = at > 0 ? process.argv[at + 1] : undefined;
     if (file) writeFileSync(file, `${JSON.stringify(summary, null, 2)}\n`);
   }
-  await app.listen(config.PORT);
+  // This process serves the local identity provider's sign-in, so it answers this machine only
+  // unless asked otherwise (`--lan`, for a phone on the same network; §4.14).
+  const host = process.argv.includes('--lan') ? '0.0.0.0' : '127.0.0.1';
+  await app.listen(config.PORT, host);
   const worker = startInlineWorker(app, config);
-  logger.log(`API and inline worker on :${config.PORT} (${config.NODE_ENV})`);
+  logger.log(`API and inline worker on ${host}:${config.PORT} (${config.NODE_ENV})`);
 
   let stopping = false;
   const stop = async (signal: string): Promise<void> => {

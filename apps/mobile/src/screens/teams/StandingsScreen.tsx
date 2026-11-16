@@ -33,7 +33,7 @@ import { Body, Section, Title } from '../../features/teams/ui';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
-import { colors, fonts, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, spacing, type } from '../../ui/theme';
 
 /** The published component is nullable (reported); a null answer reads as "no official results". */
 type Standings = NonNullable<Schema<'Standings'>>;
@@ -86,6 +86,7 @@ export function StandingsTable({
   standings: Pick<Standings, 'rows'>;
   entryId: string;
 }) {
+  const styles = useStyles();
   const { fontScale } = useWindowDimensions();
   if (fontScale > LARGE_TEXT_SCALE) {
     // SPK-UX-009 large text: one readable row per team instead of clipped numeric cells.
@@ -154,6 +155,7 @@ export function TiebreakList({
   explanations: Tiebreak[];
   names: Map<string, string>;
 }) {
+  const styles = useStyles();
   if (explanations.length === 0) return null;
   const name = (id: string) => names.get(id) ?? 'Team';
   return (
@@ -286,6 +288,7 @@ function Bracket({ workspace, names }: { workspace: Workspace; names: Map<string
 }
 
 function StandingsContent({ workspace }: { workspace: Workspace }) {
+  const styles = useStyles();
   const entryId = workspace.entry.id;
   const standings = useApiQuery({
     path: '/seasons/{id}/standings',
@@ -373,7 +376,7 @@ export function StandingsRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   group: { gap: spacing.sm },
   table: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   tableRow: {
@@ -396,4 +399,4 @@ const styles = StyleSheet.create({
   stepTitle: { ...type.body, ...fonts.semibold, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

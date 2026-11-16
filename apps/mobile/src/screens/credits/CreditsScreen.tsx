@@ -27,7 +27,7 @@
 import { presentationForError } from '@sportspark/api-client';
 import { Stack, useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
@@ -53,7 +53,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, radius, spacing } from '../../ui/theme';
+import { makeStyles, radius, spacing } from '../../ui/theme';
 import { SessionPackagesSection } from '../session-packages/MySessionPackagesScreen';
 
 const REFERENCE_LABELS: Record<string, string> = {
@@ -64,6 +64,7 @@ const REFERENCE_LABELS: Record<string, string> = {
 };
 
 function Card({ children, testID }: { children: ReactNode; testID?: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.card} testID={testID}>
       {children}
@@ -161,6 +162,7 @@ function SectionUnavailable({ what }: { what: string }) {
 }
 
 function CreditsSection({ person }: { person: AccountPerson }) {
+  const styles = useStyles();
   const credits = useApiPages({
     path: '/credits',
     request: { query: { ownerPersonId: person.personId, limit: 50 } },
@@ -202,6 +204,7 @@ function CreditsSection({ person }: { person: AccountPerson }) {
 }
 
 function MakeupsSection({ person }: { person: AccountPerson }) {
+  const styles = useStyles();
   const makeups = useApiQuery({
     path: '/makeup-entitlements',
     request: { query: { participantPersonId: person.personId } },
@@ -263,7 +266,7 @@ export function CreditsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   card: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -273,7 +276,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   list: { gap: spacing.sm },
-});
+}));
 
 /** Route component for app/credits/index.tsx. */
 export function CreditsRoute() {

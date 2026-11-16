@@ -1,4 +1,4 @@
-import type { Generated } from 'kysely';
+import type { ColumnType, Generated } from 'kysely';
 import type {
   GeneratedJson,
   GeneratedTimestamp,
@@ -77,8 +77,19 @@ export interface QuoteLinesTable {
   policy_references: Json<Record<string, unknown>>;
   equivalence_key: string | null;
   enrollment_id: string | null;
+  /**
+   * 0687 (SPK-PAY-002, SPK-PAY-013, SPK-PAY-015): the facts the unit price was worked out from
+   * (sessions counted, member price applied and why); null for a plain term price.
+   */
+  price_basis: ColumnType<Record<string, unknown> | null, string | null | undefined, never>;
+  /** 0690 (SPK-PAY-014, SPK-REG-012): the place, an add-on of it, or its uniform. */
+  line_kind: Generated<QuoteLineKindValue>;
+  /** 0690: the add-on or offering uniform of an extra line; null for the place. */
+  source_id: Generated<string | null>;
   created_at: GeneratedTimestamp;
 }
+
+export type QuoteLineKindValue = 'registration' | 'addon' | 'uniform';
 
 export type OrderPaymentStatus = 'awaiting_payment' | 'paid' | 'canceled';
 export type OrderFulfillmentStatus =
@@ -129,6 +140,9 @@ export interface OrderLinesTable {
   currency: string;
   price_basis: Json<Record<string, unknown>>;
   policy_references: Json<Record<string, unknown>>;
+  /** 0691: the kind and source of the quote line this order line purchases. */
+  line_kind: Generated<QuoteLineKindValue>;
+  source_id: Generated<string | null>;
   created_at: GeneratedTimestamp;
 }
 

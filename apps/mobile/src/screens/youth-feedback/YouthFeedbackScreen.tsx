@@ -24,7 +24,7 @@
  */
 import { CAPABILITY_PRESENTATION, type Schema } from '@sportspark/api-client';
 import { Stack, useRouter, type Href } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { registrationRoutes } from '../../features/registration/routes';
@@ -43,7 +43,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, radius, spacing, type } from '../../ui/theme';
 
 type YouthFeedback = Schema<'YouthFeedback'>;
 type Assessment = YouthFeedback['assessments'][number];
@@ -73,6 +73,7 @@ export function scaleText(
 }
 
 function AssessmentRow({ assessment }: { assessment: Assessment }) {
+  const styles = useStyles();
   const area = assessment.skillArea.label ?? assessment.skillArea.key;
   const zone = displayZone(null);
   const facts = [
@@ -116,6 +117,7 @@ function RecommendationRow({
   offeringName: string | null;
   fromName: string | null;
 }) {
+  const styles = useStyles();
   const router = useRouter();
   const zone = displayZone(null);
   const target = recommendation.recommendedOfferingId
@@ -149,6 +151,7 @@ function RecommendationRow({
 }
 
 function FeedbackRecord({ feedback }: { feedback: YouthFeedback }) {
+  const styles = useStyles();
   const me = useMe();
   const people = [
     ...new Set([
@@ -280,7 +283,7 @@ export function YouthFeedbackRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   list: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   card: {
     padding: spacing.md,
@@ -293,4 +296,4 @@ const styles = StyleSheet.create({
   title: { ...type.body, ...fonts.bold, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
-});
+}));

@@ -41,6 +41,13 @@ export interface AppConfig {
    * `null` while pending: screens show the pending state instead of presenting pickup as decided.
    */
   supervisedPickup?: boolean | null;
+  /**
+   * `real` (the default) or `demo`. Demo mode (src/demo) exists in development builds only:
+   * a release bundle contains no demo code whatever this says.
+   */
+  appMode?: 'real' | 'demo';
+  /** Demo mode: seeded demo accounts by seed subject (`dev-parent` -> account UUID). */
+  demoAccounts?: Readonly<Record<string, string>>;
 }
 
 export interface SupportContact {
@@ -58,6 +65,26 @@ interface Extra {
   supportContact?: unknown;
   verifiedLinkHosts?: unknown;
   supervisedPickup?: unknown;
+  appMode?: unknown;
+  demoAccounts?: unknown;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Seed subject to account UUID pairs from JSON text; anything else is dropped. */
+export function readDemoAccounts(value: unknown): Record<string, string> {
+  if (typeof value !== 'string' || value.length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === 'string' && UUID.test(entry[1]),
+      ),
+    );
+  } catch {
+    return {};
+  }
 }
 
 function text(value: unknown): string | null {
@@ -97,5 +124,7 @@ export function readAppConfig(): AppConfig {
       ? extra.verifiedLinkHosts.filter((h): h is string => typeof h === 'string' && h.length > 0)
       : [],
     supervisedPickup: typeof extra.supervisedPickup === 'boolean' ? extra.supervisedPickup : null,
+    appMode: extra.appMode === 'demo' ? 'demo' : 'real',
+    demoAccounts: readDemoAccounts(extra.demoAccounts),
   };
 }

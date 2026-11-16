@@ -26,7 +26,7 @@ import {
   type Clock,
   type Trx,
 } from '../../../kernel';
-import { ENROLLMENT_PORT, type EnrollmentPort } from '../../enrollment';
+import { ENROLLMENT_PORT, enrollmentAttendsSession, type EnrollmentPort } from '../../enrollment';
 import {
   AUTHORITY_LOOKUP_PORT,
   CareNotesService,
@@ -349,6 +349,9 @@ export class PassesService {
       }
       for (const enrollment of participation?.enrollments ?? []) {
         for (const session of await sessionsOf(enrollment.offeringId)) {
+          // SPK-PAY-014 (proposed amendment PA-03): a scan offers the sessions the enrollment
+          // attends; a day the participant did not choose is not an expected arrival.
+          if (!enrollmentAttendsSession(enrollment, session.detail.id)) continue;
           if (seen.has(session.detail.id)) continue;
           seen.add(session.detail.id);
           activities.push({

@@ -1,11 +1,16 @@
 import type { CoreTables } from './core';
 import type { AutomationTables } from './automation';
+import type { CatalogExtrasTables } from './catalog-extras';
+import type { CatalogWaiversTables } from './catalog-waivers';
 import type { CatalogTables } from './catalog';
+import type { CommunicationsSequencesTables } from './communications-sequences';
 import type { CommunicationsTables } from './communications';
 import type { CompetitionFieldTables } from './competition-field';
 import type { CompetitionMatchesTables } from './competition-matches';
 import type { CompetitionTables } from './competition';
+import type { EnrollmentExtrasTables } from './enrollment-extras';
 import type { EnrollmentPackageGTables } from './enrollment-package-g';
+import type { EnrollmentRostersTables } from './enrollment-rosters';
 import type { EnrollmentTables } from './enrollment';
 import type { EntryTables } from './entry';
 import type { FacilitiesTables } from './facilities';
@@ -21,12 +26,17 @@ import type { WorkforceTables } from './workforce';
 
 export * from './core';
 export * from './automation';
+export * from './catalog-extras';
+export * from './catalog-waivers';
 export * from './catalog';
+export * from './communications-sequences';
 export * from './communications';
 export * from './competition-field';
 export * from './competition-matches';
 export * from './competition';
+export * from './enrollment-extras';
 export * from './enrollment-package-g';
+export * from './enrollment-rosters';
 export * from './enrollment';
 export * from './entry';
 export * from './facilities';
@@ -48,12 +58,17 @@ export interface Database
   extends
     CoreTables,
     AutomationTables,
+    CatalogExtrasTables,
+    CatalogWaiversTables,
     CatalogTables,
+    CommunicationsSequencesTables,
     CommunicationsTables,
     CompetitionFieldTables,
     CompetitionMatchesTables,
     CompetitionTables,
+    EnrollmentExtrasTables,
     EnrollmentPackageGTables,
+    EnrollmentRostersTables,
     EnrollmentTables,
     EntryTables,
     FacilitiesTables,

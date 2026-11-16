@@ -30,7 +30,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
-import { Share, StyleSheet, View } from 'react-native';
+import { Share, View } from 'react-native';
 import { mustNotCreateAgain, tookEffectOutcomeLost } from '../../api/command-outcome';
 import { useApiCommand } from '../../api/useApiCommand';
 import { buildAppLink } from '../../links/link-targets';
@@ -40,7 +40,7 @@ import { Button } from '../../ui/Button';
 import { SecretWithheld } from '../../ui/SecretWithheld';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 import {
   formatDateTime,
   GRANT_PERMISSIONS,
@@ -75,6 +75,7 @@ export function InviteAdultForm({
   heldPermissions: readonly GrantPermission[];
   onClose: () => void;
 }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   // DEC-075 (Product owner): whether supervised pickup is used at all. While pending (null) the
@@ -292,6 +293,7 @@ function IssuedInvitation({
   onDone: () => void;
   onAnother: () => void;
 }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const [reason, setReason] = useState('');
@@ -390,9 +392,9 @@ function IssuedInvitation({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   form: { gap: spacing.md, paddingTop: spacing.md },
   permissions: { paddingHorizontal: spacing.lg, gap: spacing.xs },
   actions: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   error: { ...type.caption, color: colors.danger },
-});
+}));

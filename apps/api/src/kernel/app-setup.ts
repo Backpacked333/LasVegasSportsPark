@@ -71,7 +71,10 @@ export function configureApp(
   };
   express.disable('x-powered-by');
   // Behind a load balancer or proxy (§4.14): which forwarded headers to believe for the client
-  // address (rate limits) and the scheme (Strict-Transport-Security).
+  // address (rate limits) and the scheme (Strict-Transport-Security). The value is a hop count
+  // or the proxies' own addresses; production refuses to boot without one, and refuses a value
+  // that believes every sender (`ConfigSchema`, security review M-3). Unset outside production:
+  // forwarded headers are ignored.
   if (config?.TRUST_PROXY !== undefined) express.set('trust proxy', config.TRUST_PROXY);
   app.use(correlationMiddleware);
   if (config?.HTTP_ACCESS_LOG ?? true) app.use(requestLogMiddleware());

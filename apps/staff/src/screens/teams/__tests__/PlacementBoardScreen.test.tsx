@@ -214,7 +214,7 @@ describe('SCR-S-18 PlacementBoardScreen (SPK-PLACE-001 to SPK-PLACE-003)', () =>
     await user.click(await screen.findByRole('button', { name: 'Show candidate teams' }));
     await user.click(await screen.findByRole('button', { name: 'Assign to Red' }));
     expect(await screen.findByText('Placement assigned')).toBeInTheDocument();
-    expect(await screen.findByText('recovery_required')).toBeInTheDocument();
+    expect(await screen.findByText('recovery required')).toBeInTheDocument();
   });
 
   it('releases an assigned placement only with a reason', async () => {

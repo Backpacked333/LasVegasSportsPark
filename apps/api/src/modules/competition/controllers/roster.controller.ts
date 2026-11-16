@@ -18,7 +18,14 @@ import {
   type TeamInvitationAccepted,
   type TeamInvitationIssued,
 } from '@sportspark/contracts';
-import { CurrentPrincipal, Idempotent, ZodBody, ZodParams, ZodQuery } from '../../../kernel';
+import {
+  CurrentPrincipal,
+  Idempotent,
+  RateLimited,
+  ZodBody,
+  ZodParams,
+  ZodQuery,
+} from '../../../kernel';
 import { CorrelationId } from '../competition.shared';
 import { RosterService } from '../services/roster.service';
 
@@ -75,6 +82,8 @@ export class RosterController {
   }
 
   @Post('team-invitations/:id/accept')
+  // §4.14: accepting takes the invitation's token; guesses share the invitations limit per address.
+  @RateLimited('invitations')
   @HttpCode(200)
   @Idempotent()
   accept(

@@ -11,6 +11,14 @@
  * `catalog.withdraw_acknowledgment`; the API re-checks that the caller is the signer. Withdrawing
  * is recorded, never deleted: signing again records a new acknowledgment.
  *
+ * Liability waivers (SPK-REG-011, proposed amendment PA-01; DEC-095 pending), only while the
+ * organization has turned them on (`GET /v1/me/permissions` capability `liability_waivers`): for
+ * this person and each person they hold `complete_forms` over, `GET /v1/people/{id}/waivers` lists
+ * each waiver as accepted, lapsed or not accepted yet, with how the acceptance on record was
+ * given, and offers accepting it (`POST /v1/waiver-acceptances`). A waiver the front desk recorded
+ * from a signed paper reads "Recorded from paper", never "Signed" (SPK-REG-009), in the waiver
+ * list and in the list of forms alike. With the switch off nothing of this is shown or asked for.
+ *
  * States: loading; empty (no forms signed for a person); ready; validation failure (a reason is
  * required); permission restriction (a person whose forms the API does not show is "not
  * available", no hint of what exists; withdraw is not offered unless listed); stale version
@@ -28,6 +36,8 @@ import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formWording } from '../../features/registration/forms';
+import { WaiverCard } from '../../features/waivers/WaiverCard';
+import { formatCalendarDate, type PersonWaiver } from '../../features/waivers/waivers';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
@@ -107,7 +117,15 @@ function FormsBody({ me }: { me: MeData }) {
   const permissions = usePermissions();
   // Offered only when the API lists the action for this account; it re-checks every request.
   const mayWithdraw = Boolean(permissions.actionPermission('catalog.withdraw_acknowledgment'));
+  // SPK-REG-011 (proposed): nothing about waivers is shown or asked for while the switch is off.
+  const waiversOn = permissions.isCapabilityEnabled('liability_waivers') === true;
   const selfId = me.person?.id ?? '';
+  const mayAcceptFor = (personId: string): boolean =>
+    personId === selfId
+      ? me.person?.kind === 'adult'
+      : me.authorities.some(
+          (a) => a.subjectPersonId === personId && a.permissions.includes('complete_forms'),
+        );
   return (
     <View>
       {formSubjects(me).map((personId) => (
@@ -117,9 +135,84 @@ function FormsBody({ me }: { me: MeData }) {
           selfId={selfId}
           selfName={me.person ? personDisplayName(me.person) : ''}
           mayWithdraw={mayWithdraw}
+          waivers={waiversOn && (personId === selfId || mayAcceptFor(personId))}
+          mayAcceptWaivers={mayAcceptFor(personId)}
         />
       ))}
     </View>
+  );
+}
+
+/** The waivers of one person, each judged by the API now (SPK-REG-011, proposed). */
+function PersonWaivers({
+  personId,
+  heading,
+  shortName,
+  selfId,
+  canAccept,
+}: {
+  personId: string;
+  heading: string;
+  /** "You", or the person's name, as the accept button names them. */
+  shortName: string;
+  selfId: string;
+  canAccept: boolean;
+}) {
+  const { reachable } = useConnectivity();
+  const waivers = useApiQuery({
+    path: '/people/{id}/waivers',
+    request: { path: { id: personId } },
+  });
+  return (
+    <QueryBoundary
+      query={waivers}
+      label={`waivers for ${heading}`}
+      isEmpty={(data) => !data.evaluated || data.waivers.length === 0}
+      empty={{ title: 'No waiver to accept', description: 'No waiver is in force right now.' }}
+      unavailableOffline={['accepting a waiver']}
+    >
+      {(data) => (
+        <View accessibilityRole="list" accessibilityLabel={`Waivers for ${heading}`}>
+          {data.waivers.map((waiver) => (
+            <SignedWaiverCard
+              key={waiver.policyKey}
+              personId={personId}
+              personName={shortName}
+              waiver={waiver}
+              selfId={selfId}
+              canAccept={canAccept}
+              offline={reachable === false}
+              onAccepted={() => void waivers.refetch()}
+            />
+          ))}
+        </View>
+      )}
+    </QueryBoundary>
+  );
+}
+
+/** A waiver card with the name of whoever accepted the acceptance on record. */
+function SignedWaiverCard({
+  selfId,
+  waiver,
+  ...rest
+}: {
+  personId: string;
+  personName: string;
+  waiver: PersonWaiver;
+  selfId: string;
+  canAccept: boolean;
+  offline: boolean;
+  onAccepted: () => void;
+}) {
+  const signedBy = waiver.acceptance?.signedByPersonId ?? selfId;
+  const signer = usePersonName(signedBy);
+  return (
+    <WaiverCard
+      {...rest}
+      waiver={waiver}
+      signerName={signedBy === selfId ? 'you' : personNameText(signer)}
+    />
   );
 }
 
@@ -128,11 +221,16 @@ function PersonForms({
   selfId,
   selfName,
   mayWithdraw,
+  waivers,
+  mayAcceptWaivers,
 }: {
   personId: string;
   selfId: string;
   selfName: string;
   mayWithdraw: boolean;
+  /** Whether this person's waivers are listed (the switch is on and the account may read them). */
+  waivers: boolean;
+  mayAcceptWaivers: boolean;
 }) {
   const isSelf = personId === selfId;
   const name = usePersonName(personId);
@@ -144,6 +242,15 @@ function PersonForms({
   return (
     <View testID={`forms-person-${isSelf ? 'self' : 'managed'}`}>
       <SectionHeader title={heading} />
+      {waivers ? (
+        <PersonWaivers
+          personId={personId}
+          heading={heading}
+          shortName={isSelf ? 'You' : personNameText(name)}
+          selfId={selfId}
+          canAccept={mayAcceptWaivers}
+        />
+      ) : null}
       <QueryBoundary
         query={forms}
         label={`forms for ${heading}`}
@@ -171,8 +278,19 @@ function PersonForms({
   );
 }
 
+/** SPK-REG-009: a paper record entered by staff is never worded or badged as a signature. */
+function isPaper(acknowledgment: Acknowledgment): boolean {
+  return acknowledgment.method === 'paper';
+}
+
 function signerDetail(acknowledgment: Acknowledgment, selfId: string, signer: string): string {
   const by = acknowledgment.signedByPersonId === selfId ? 'you' : signer;
+  if (isPaper(acknowledgment)) {
+    const dated = acknowledgment.paperDatedOn
+      ? `paper dated ${formatCalendarDate(acknowledgment.paperDatedOn)}`
+      : 'paper';
+    return `Recorded from paper by the front desk (${dated}); the paper names ${by} as the signer`;
+  }
   const desk = acknowledgment.recordedByKind === 'staff' ? ', recorded at the front desk' : '';
   return `Signed ${formatDateTime(acknowledgment.signedAt)} by ${by}${desk}`;
 }
@@ -205,7 +323,11 @@ function FormRow({
       <ListRow
         title={title}
         detail={signerDetail(acknowledgment, selfId, personNameText(signer))}
-        status={{ tone: 'success', label: 'Signed' }}
+        status={
+          isPaper(acknowledgment)
+            ? { tone: 'info', label: 'Recorded from paper' }
+            : { tone: 'success', label: 'Signed' }
+        }
       />
       <View style={styles.inset}>
         {wording.length > 0 ? (

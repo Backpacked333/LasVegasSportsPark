@@ -144,6 +144,44 @@ describe('SPK-REG-002 registration eligibility (pure evaluation)', () => {
     expect(noEntry.reasons.map((r) => r.code)).toEqual(['team_entry_missing']);
   });
 
+  it('SPK-COMP-006: a team on the waiting list tells a new player to wait for its place, not to choose another team', () => {
+    const season = { ...input().offering, kind: 'season' as const };
+    const entryId = '01a16c09-0000-7000-8000-0000000000cc';
+    const waiting = evaluateRegistrationEligibility(
+      input({
+        intent: 'join_team',
+        offering: season,
+        teamEntry: { id: entryId, status: 'waiting' },
+      }),
+    );
+    expect(waiting.eligible).toBe(false);
+    expect(waiting.reasons).toEqual([
+      {
+        code: 'team_entry_waiting',
+        severity: 'blocking',
+        message:
+          'The team is waiting for a place in the season. Registration opens when the team is placed.',
+        source: { type: 'team_entry', id: entryId },
+        requiredAction: 'wait_for_team_place',
+      },
+    ]);
+    // nothing sends the player elsewhere
+    expect(waiting.alternatives).toEqual([]);
+
+    // a withdrawn or rejected team is still closed, with the earlier advice
+    const closed = evaluateRegistrationEligibility(
+      input({
+        intent: 'join_team',
+        offering: season,
+        teamEntry: { id: entryId, status: 'withdrawn' },
+      }),
+    );
+    expect(closed.reasons.map((r) => [r.code, r.requiredAction])).toEqual([
+      ['team_entry_not_open', 'choose_another_team'],
+    ]);
+    expect(closed.alternatives.map((a) => a.kind)).toEqual(['request_placement']);
+  });
+
   it('lists outstanding forms as warnings that do not fail the evaluation (SPK-REG-009)', () => {
     const result = evaluateRegistrationEligibility(input({ requiredForms: [form] }));
     expect(result.eligible).toBe(true);
@@ -158,5 +196,53 @@ describe('SPK-REG-002 registration eligibility (pure evaluation)', () => {
         ),
       ),
     ).toEqual([]);
+  });
+
+  it('SPK-REG-011: a missing or lapsed waiver is a reason whose severity is the approved rule; a block fails the evaluation, a warning or an overridden block does not', () => {
+    const finding = {
+      policyKey: 'liability',
+      title: 'Liability waiver',
+      policyVersionId: '01a16c09-0000-7000-8000-000000000003',
+      overridden: false,
+    };
+    const warned = evaluateRegistrationEligibility(
+      input({ waiverFindings: [{ ...finding, status: 'missing', severity: 'warning' }] }),
+    );
+    expect(warned.eligible).toBe(true);
+    expect(warned.reasons).toEqual([
+      {
+        code: 'waiver_missing',
+        severity: 'warning',
+        message:
+          '"Liability waiver" has not been accepted for the participant; the participant or a guardian should accept it.',
+        source: { type: 'waiver', id: finding.policyVersionId },
+        requiredAction: 'accept_waiver',
+      },
+    ]);
+    expect(warned.alternatives.map((a) => a.kind)).toEqual(['complete_acknowledgment']);
+    const blocked = evaluateRegistrationEligibility(
+      input({ waiverFindings: [{ ...finding, status: 'lapsed', severity: 'blocking' }] }),
+    );
+    expect(blocked.eligible).toBe(false);
+    expect(blocked.reasons).toEqual([
+      expect.objectContaining({
+        code: 'waiver_lapsed',
+        severity: 'blocking',
+        message:
+          '"Liability waiver" has lapsed for the participant and must be accepted before registering.',
+      }),
+    ]);
+    const overridden = evaluateRegistrationEligibility(
+      input({
+        waiverFindings: [{ ...finding, status: 'missing', severity: 'warning', overridden: true }],
+      }),
+    );
+    expect(overridden.eligible).toBe(true);
+    expect(overridden.reasons[0]?.message).toContain('staff recorded an override');
+    // no finding (a current waiver, none required, or the capability off): nothing is added
+    expect(evaluateRegistrationEligibility(input({ waiverFindings: [] })).reasons).toEqual([]);
+    expect(evaluateRegistrationEligibility(input()).reasons).toEqual([]);
+    // a waiver reason is not an unacknowledged form
+    expect(missingAcknowledgments(warned)).toEqual([]);
   });
 });

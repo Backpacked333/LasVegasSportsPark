@@ -1,4 +1,4 @@
-import type { Generated } from 'kysely';
+import type { ColumnType, Generated } from 'kysely';
 import type {
   GeneratedJson,
   GeneratedTimestamp,
@@ -17,6 +17,11 @@ import type {
 type GeneratedMinor = Generated<number>;
 
 export type PosProductKind = 'merchandise' | 'concession' | 'service';
+/**
+ * 0695 (SPK-PAY-016, proposed amendment PA-08): a line is a product line of one of the product
+ * kinds, or an open-amount line (`open_amount`: no product, a typed description and a category).
+ */
+export type PosSaleLineKind = PosProductKind | 'open_amount';
 export type PosLifecycleStatus = 'active' | 'retired';
 
 export interface PosProductsTable {
@@ -125,10 +130,13 @@ export interface PosSaleLinesTable {
   sale_id: string;
   currency: string;
   line_number: number;
-  product_id: string;
-  sku: string;
+  /** Null on an open-amount line (0695, constraint pos_sale_lines_shape). */
+  product_id: string | null;
+  /** Null on an open-amount line. */
+  sku: string | null;
+  /** The product's name as sold; on an open-amount line the reason category's approved label. */
   name: string;
-  kind: PosProductKind;
+  kind: PosSaleLineKind;
   unit_price_minor: MinorUnits;
   quantity: number;
   base_minor: MinorUnits;
@@ -137,6 +145,47 @@ export interface PosSaleLinesTable {
   line_total_minor: MinorUnits;
   /** 0686: the line this one corrects (quantity change or removal, quantity 0); null otherwise. */
   supersedes_line_id: Generated<string | null>;
+  /**
+   * 0695, open-amount lines only (all null on a product line): the typed description, the reason
+   * category code, the revenue category the line books to, who entered it, the ceiling that
+   * applied to that person, whether the amount is above it (derived by the database), and the
+   * approved policy version the category and ceiling came from (null: the engineering default).
+   */
+  description: Generated<string | null>;
+  reason_category: Generated<string | null>;
+  revenue_category: Generated<string | null>;
+  entered_by: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  entered_by_person_id: Generated<string | null>;
+  approval_ceiling_minor: Generated<number | null>;
+  approval_required: Generated<boolean | null>;
+  /**
+   * 0697: the open-amount total its enterer had in effect on the sale, this line included, when
+   * the line was entered. Derived by the database; `approval_required` follows from it and the
+   * ceiling. Null on product lines and on lines written before 0697 (judged alone).
+   */
+  entered_total_minor: Generated<number | null>;
+  policy_version_id: Generated<string | null>;
+  created_at: GeneratedTimestamp;
+}
+
+/**
+ * 0696 (SPK-PAY-016): the second approval of an open-amount line above the ceiling of the person
+ * who entered it. Append-only; one per line; the approver is never that person.
+ */
+export interface PosLineApprovalsTable {
+  id: string;
+  organization_id: string;
+  sale_id: string;
+  sale_line_id: string;
+  currency: string;
+  amount_minor: MinorUnits;
+  ceiling_minor: MinorUnits;
+  /** 0697: the enterer's open-amount total on the sale the approval was given for (derived). */
+  entered_total_minor: Generated<number | null>;
+  reason: string;
+  approved_by: Json<Record<string, unknown>>;
+  approved_by_person_id: string;
+  approved_at: Timestamp;
   created_at: GeneratedTimestamp;
 }
 
@@ -197,6 +246,7 @@ export interface FinancePosTables {
   pos_register_sessions: PosRegisterSessionsTable;
   pos_sales: PosSalesTable;
   pos_sale_lines: PosSaleLinesTable;
+  pos_line_approvals: PosLineApprovalsTable;
   pos_tenders: PosTendersTable;
   pos_returns: PosReturnsTable;
 }

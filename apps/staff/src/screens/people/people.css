@@ -175,10 +175,9 @@
   border-bottom: 1px solid var(--line-soft);
 }
 .money-summary dt {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--faint);
 }
 .money-summary dd {

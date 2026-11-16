@@ -73,7 +73,7 @@ import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { Icon } from '../../ui/Icon';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, radius, spacing, type, useTheme } from '../../ui/theme';
 import { CommandError, type NotAvailableCopy } from '../account/components/CommandError';
 import { usePassStore, type StoredPass } from './pass-store';
 
@@ -142,6 +142,8 @@ export function groupReference(reference: string): string {
 const ALREADY_WITHDRAWN = new Set(['STALE_REVISION', 'INVALID_TRANSITION', 'NOT_FOUND']);
 
 function PassContent() {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const { session } = useApp();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -518,6 +520,7 @@ export const ISSUE_WITHHELD_LABEL = 'Pass issued, but its reference cannot be sh
  * withdrawn, and the next "Get my pass" or "Replace" is a new request.
  */
 function IssueWithheld({ error, hasPass }: { error: ApiError; hasPass: boolean }) {
+  const styles = useStyles();
   const text = hasPass
     ? 'Your earlier request issued a new pass, but its reference is shown only once, in an answer that did not reach this device. The pass on this device still works. The new one is listed under "Other active passes": withdraw it there.'
     : 'Your earlier request issued a pass, but its reference is shown only once, in an answer that did not reach this device. It is listed under "Other active passes": withdraw it there, then get a new pass.';
@@ -549,6 +552,7 @@ function PassStateLine({
   offline: boolean;
   now: Date;
 }) {
+  const styles = useStyles();
   const checked = passes.updatedAt ? formatAge(passes.updatedAt, now) : null;
   if (offline) {
     return (
@@ -615,6 +619,7 @@ function OtherPass({
   offline: boolean;
   onReload: () => void;
 }) {
+  const styles = useStyles();
   const [confirming, setConfirming] = useState(false);
   const withdraw = useApiCommand('post', '/passes/{id}/revoke', { invalidate: [MY_PASSES_KEY] });
   const submit = () =>
@@ -680,13 +685,16 @@ export function PassScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, dark }) => ({
   hero: {
     marginHorizontal: spacing.lg,
     padding: spacing.lg,
     gap: spacing.md,
     borderRadius: radius.xl,
     backgroundColor: colors.night,
+    // A hairline keeps the pass's edge on a page that is itself dark (Legends mode).
+    borderWidth: 1,
+    borderColor: dark ? colors.nightLine : colors.night,
     alignItems: 'stretch',
   },
   heroLabel: { ...type.eyebrow, color: colors.nightMuted, textAlign: 'center' },
@@ -716,7 +724,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.nightRaised,
   },
-  heroNoteText: { ...type.caption, ...fonts.semibold, color: colors.primaryText, flex: 1 },
+  heroNoteText: { ...type.caption, ...fonts.semibold, color: colors.onNight, flex: 1 },
   pad: { paddingHorizontal: spacing.lg, gap: spacing.xs },
   actions: { padding: spacing.lg, gap: spacing.sm },
   confirm: { gap: spacing.sm },
@@ -728,4 +736,4 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   body: { ...type.body, color: colors.text },
-});
+}));

@@ -160,6 +160,53 @@ describe('enrollment records follow their offering’s facility (§4.3, §4.14)'
     ).toBe(403);
   });
 
+  it('SPK-REG-008, §4.14: the front desk lists the waitlist of an offering at its facility but cannot offer a place; a customer cannot list it', async () => {
+    const full = await offering(t, {
+      basePriceMinor: 0,
+      capacityUnits: [{ unit: 'seats', limit: 1 }],
+    });
+    await heldIn(full);
+    const guardian = await adult(t);
+    const kid = await child(t, [guardian]);
+    await acknowledge(t, full, kid, guardian.personId);
+    const joined = await post(t, '/v1/waitlist-entries', guardian.header, {
+      offeringId: full.offeringId,
+      participantPersonId: kid,
+      intent: 'youth',
+    });
+    expect(joined.status, JSON.stringify(joined.body)).toBe(201);
+
+    const deskA = await scopedStaff(['front_desk'], [t.facilityId]);
+    const listed = await t.http
+      .get(`/v1/waitlist-entries?offeringId=${full.offeringId}`)
+      .set(deskA.header);
+    expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+    expect(ids(listed.body)).toEqual([joined.body.id]);
+
+    // Reading is not managing: the offer stays with program administration.
+    const offered = await post(
+      t,
+      `/v1/waitlist-entries/${joined.body.id as string}/offer`,
+      deskA.header,
+      { reason: 'next in line' },
+    );
+    // The desk holds no staff authority for it and no authority over the participant.
+    expect(offered.status).toBe(403);
+    expect(offered.body.code).toBe('PARTICIPANT_AUTHORITY_REQUIRED');
+    const offers = await t.db
+      .selectFrom('waitlist_offers')
+      .select('id')
+      .where('waitlist_entry_id', '=', joined.body.id as string)
+      .execute();
+    expect(offers).toEqual([]);
+
+    // A customer reads their own entries, never the queue of an offering.
+    const byCustomer = await t.http
+      .get(`/v1/waitlist-entries?offeringId=${full.offeringId}`)
+      .set(guardian.header);
+    expect(byCustomer.status).toBe(403);
+  });
+
   it('§4.14: facility-scoped staff cannot cancel or resize capacity at another facility; staff of that facility can', async () => {
     const target = await heldIn(atB);
     const deskA = await scopedStaff(['front_desk'], [t.facilityId]);

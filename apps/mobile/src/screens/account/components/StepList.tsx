@@ -2,9 +2,9 @@
  * Numbered progress steps (SCR-C-01): each step is read as "Step 2 of 4, Participant record,
  * Linked"; the status is a StatusBadge (glyph and words), never colour alone (SPK-UX-009).
  */
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { StatusBadge, type StatusBadgeProps } from '../../../ui/StatusBadge';
-import { colors, fonts, spacing, type } from '../../../ui/theme';
+import { fonts, makeStyles, spacing, type } from '../../../ui/theme';
 
 export interface Step {
   title: string;
@@ -12,6 +12,7 @@ export interface Step {
 }
 
 export function StepList({ steps, label }: { steps: readonly Step[]; label: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.list} accessibilityRole="list" accessibilityLabel={label}>
       {steps.map((step, index) => (
@@ -32,10 +33,10 @@ export function StepList({ steps, label }: { steps: readonly Step[]; label: stri
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   list: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.sm },
   row: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
   number: { ...type.heading, color: colors.textMuted, width: 24, textAlign: 'center' },
   text: { flex: 1, gap: spacing.xs },
   title: { ...type.body, ...fonts.semibold, color: colors.text },
-});
+}));

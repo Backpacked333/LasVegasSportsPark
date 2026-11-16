@@ -18,6 +18,7 @@ import { OFFERING_LOOKUP_PORT, type OfferingLookupPort } from '../../catalog';
 import { RelationshipAuthority } from '../../identity';
 import { EnrollmentActions } from '../enrollment.actions';
 import { organizationOf } from '../enrollment.shared';
+import { attendedSessions } from './attended-sessions';
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 
@@ -26,8 +27,8 @@ const MAX_WINDOW_DAYS = 120;
 
 /**
  * Family coordination (SPK-YOUTH-007). One calendar for the acting adult and every person they
- * currently hold `view` over: sessions of active enrollments and session bookings (pickup, trial,
- * makeup). Overlapping commitments are highlighted, never prevented — a parent may knowingly accept
+ * currently hold `view` over: the sessions each active enrollment attends (every session, or the
+ * days chosen under a price tier, SPK-PAY-014) and session bookings (pickup, trial, makeup). Overlapping commitments are highlighted, never prevented — a parent may knowingly accept
  * an overlap; physical resource and staffing conflicts are enforced separately (scheduling,
  * capacity pools). Authority comes from identity's current grants, never from household
  * membership (§4.5), and is re-checked per person through the kernel authorization path.
@@ -104,7 +105,12 @@ export class FamilyCalendarService {
           await this.sessions.list(organizationId, enrollment.offering_id),
         );
       }
-      for (const session of sessionsByOffering.get(enrollment.offering_id) ?? []) {
+      // SPK-PAY-014 (PA-03): only the sessions the participant attends. A child registered for
+      // two days of a camp week has two calendar items, not five (`attended-sessions.ts`).
+      for (const session of attendedSessions(
+        enrollment.selected_session_ids,
+        sessionsByOffering.get(enrollment.offering_id) ?? [],
+      )) {
         if (session.status !== 'scheduled') continue;
         const start = new Date(session.scheduledStart);
         const end = new Date(session.scheduledEnd);

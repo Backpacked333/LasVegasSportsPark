@@ -28,7 +28,7 @@
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { calendarWindowQuery, overlapIndex } from '../../features/today/calendar';
 import {
@@ -71,7 +71,7 @@ import { ListRow } from '../../ui/ListRow';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 
 type FamilyCalendar = Schema<'FamilyCalendar'>;
 type MyTeamEntry = Schema<'MyTeamEntry'>;
@@ -138,6 +138,7 @@ function FilterChips({
   selected: string;
   onSelect: (id: string) => void;
 }) {
+  const styles = useStyles();
   const options = [EVERYONE, ...people];
   return (
     <View
@@ -170,6 +171,7 @@ function FilterChips({
 }
 
 function FamilyCalendarContent() {
+  const styles = useStyles();
   const router = useRouter();
   const now = useNow();
   const device = displayZone(null);
@@ -405,6 +407,7 @@ function FamilyCalendarContent() {
  * the capability on; while it is off the section says so, and booked ones stay on the calendar.
  */
 function PickupSessions({ onFind }: { onFind: () => void }) {
+  const styles = useStyles();
   const permissions = usePermissions();
   const on = permissions.isCapabilityEnabled('pickup_sessions') === true;
   return (
@@ -438,7 +441,7 @@ export function FamilyCalendarScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   pad: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.xs },
   weekNav: { padding: spacing.lg, gap: spacing.sm },
   weekTitle: { ...type.heading, color: colors.text },
@@ -460,7 +463,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.background,
   },
-  chipSelected: { backgroundColor: colors.night, borderColor: colors.night },
+  chipSelected: { backgroundColor: colors.chipSelected, borderColor: colors.chipSelected },
   chipText: { ...type.body, color: colors.text, ...fonts.bold },
-  chipTextSelected: { color: colors.primaryText },
-});
+  chipTextSelected: { color: colors.onChipSelected },
+}));

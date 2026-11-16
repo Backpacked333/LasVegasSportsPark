@@ -13,6 +13,18 @@
  *   pending decision is shown instead.
  * - "Override with reason": not offered. Admitting without a required form needs an approved
  *   policy, and none is recorded; the issue stays blocking (SPK-ENTRY-004).
+ *
+ * A required liability waiver (SPK-REG-011, proposed amendment PA-01; issues `waiver_missing` and
+ * `waiver_lapsed`, present only while the organization has turned liability waivers on) gets its
+ * own group, on a held and on an admitted check-in alike:
+ *
+ * - "Sign on this tablet": a digital acceptance by the named signer (staff never sign).
+ * - "Record paper waiver": a staff entry in the staff member's name with the date on the paper;
+ *   never shown as the customer's digital signature (SPK-REG-009).
+ * - "Override with reason": only for a waiver that blocks, and only when the check-in carries an
+ *   activity the API resolves (an offering session, an offering or a scheduling event); otherwise
+ *   a sentence says where an override can be recorded. The approved waiver names the roles that
+ *   may override; the API refuses any other role, and that refusal is shown.
  */
 import type { Schema } from '@sportspark/api-client';
 import { useState } from 'react';
@@ -20,7 +32,11 @@ import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError, CommandSuccess } from '../../features/operations/feedback';
-import { CheckboxField, SelectField } from '../../features/operations/fields';
+import { CheckboxField, SelectField, TextAreaField } from '../../features/operations/fields';
+import {
+  ACCEPT_WAIVER_ACTION,
+  WaiverAcceptanceForm,
+} from '../../features/waivers/WaiverAcceptanceForm';
 import { useApp } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { StateView } from '../../ui/StateView';
@@ -28,6 +44,29 @@ import { StateView } from '../../ui/StateView';
 type SessionCheckin = Schema<'SessionCheckin'>;
 
 const RECORD_ACKNOWLEDGMENT = 'catalog.record_acknowledgment';
+const OVERRIDE_WAIVER = 'catalog.override_waiver';
+
+export interface WaiverIssue {
+  code: 'waiver_missing' | 'waiver_lapsed';
+  /** The waiver version in force, the one that would be accepted. */
+  policyVersionId: string;
+  blocking: boolean;
+}
+
+/** The required waivers a check-in found missing or lapsed (SPK-REG-011, proposed). */
+export function waiverIssues(checkin: SessionCheckin): WaiverIssue[] {
+  const out: WaiverIssue[] = [];
+  for (const issue of checkin.issues) {
+    if (issue.code !== 'waiver_missing' && issue.code !== 'waiver_lapsed') continue;
+    if (issue.reference?.type !== 'policy_version') continue;
+    out.push({
+      code: issue.code,
+      policyVersionId: issue.reference.id,
+      blocking: issue.severity === 'blocking',
+    });
+  }
+  return out;
+}
 
 /** The policy versions a held check-in is missing an acknowledgment of. */
 export function missingForms(checkin: SessionCheckin): string[] {
@@ -167,7 +206,196 @@ function TabletSigning({
   );
 }
 
-export function WaiverActions({
+type WaiverOverrideActivity = Schema<'WaiverOverrideActivityRef'>;
+
+/**
+ * The activity an override of this check-in is recorded against, as the API resolves it: the
+ * session of an offering, the offering itself, or a scheduling event. Null when the check-in
+ * carries none of them: the check-in's own activity id is not one the API resolves (it answers
+ * NOT_FOUND), so no override is offered then.
+ */
+export function overrideActivityOf(
+  activity: SessionCheckin['activity'],
+): WaiverOverrideActivity | null {
+  if (activity.type === 'session') {
+    if (activity.sessionId) return { type: 'offering_session', id: activity.sessionId };
+    if (activity.offeringId) return { type: 'offering', id: activity.offeringId };
+    return null;
+  }
+  return activity.eventId ? { type: 'scheduling_event', id: activity.eventId } : null;
+}
+
+/** Records that a permitted role lets the participant in although the waiver rule blocks. */
+function WaiverOverrideForm({
+  checkin,
+  activity,
+  policyVersionId,
+  onRecorded,
+  onCancel,
+}: {
+  checkin: SessionCheckin;
+  activity: WaiverOverrideActivity;
+  policyVersionId: string;
+  onRecorded: () => void;
+  onCancel: () => void;
+}) {
+  const policy = useApiQuery({
+    path: '/policy-versions/{id}',
+    request: { path: { id: policyVersionId } },
+  });
+  const [reason, setReason] = useState('');
+  const record = useApiCommand('post', '/waiver-overrides');
+  const ready = policy.data !== undefined && reason.trim().length > 0;
+  const submit = () => {
+    if (!ready || !policy.data) return;
+    void record
+      .submit({
+        body: {
+          personId: checkin.personId,
+          policyKey: policy.data.key,
+          activity,
+          reason: reason.trim(),
+        },
+      })
+      .then(() => onRecorded())
+      .catch(() => undefined);
+  };
+  return (
+    <div className="waiver-tablet" role="group" aria-label="Override the waiver for this activity">
+      <TextAreaField
+        label="Why is this participant let in without a current waiver?"
+        value={reason}
+        onChange={setReason}
+        required
+        rows={2}
+        hint="Kept with your name on the person's record. It covers this activity and this version of the waiver only, and the waiver stays missing until it is accepted."
+      />
+      <div className="ops-actions">
+        <Button busy={record.isProcessing} disabled={!ready} onClick={submit}>
+          Record override
+        </Button>
+        <Button variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+      {record.error ? (
+        <CommandError
+          error={record.error}
+          onRetry={() => void record.resend()}
+          subject="This override"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function WaiverIssueActions({
+  checkin,
+  onRecheck,
+}: {
+  checkin: SessionCheckin;
+  onRecheck?: () => void;
+}) {
+  const { online } = useApp();
+  const permissions = usePermissions();
+  const issues = waiverIssues(checkin);
+  const [open, setOpen] = useState<{
+    policyVersionId: string;
+    mode: 'tablet' | 'paper' | 'override';
+  } | null>(null);
+  const [outcome, setOutcome] = useState<string | null>(null);
+  if (checkin.status === 'withdrawn' || issues.length === 0) return null;
+  const mayAccept = permissions.isPermitted(ACCEPT_WAIVER_ACTION) === true;
+  const mayOverride = permissions.isPermitted(OVERRIDE_WAIVER) === true;
+  const overrideActivity = overrideActivityOf(checkin.activity);
+  const done = (message: string) => {
+    setOpen(null);
+    setOutcome(message);
+    // Only a held check-in is evaluated again; an admitted one keeps its record.
+    if (checkin.status === 'held') onRecheck?.();
+  };
+  return (
+    <div className="waiver-actions" role="group" aria-label="Liability waiver">
+      {open?.mode === 'override' ? (
+        overrideActivity ? (
+          <WaiverOverrideForm
+            checkin={checkin}
+            activity={overrideActivity}
+            policyVersionId={open.policyVersionId}
+            onCancel={() => setOpen(null)}
+            onRecorded={() => done('Override recorded')}
+          />
+        ) : null
+      ) : open ? (
+        <WaiverAcceptanceForm
+          personId={checkin.personId}
+          policyVersionId={open.policyVersionId}
+          mode={open.mode}
+          onCancel={() => setOpen(null)}
+          onRecorded={() =>
+            done(open.mode === 'paper' ? 'Paper waiver recorded' : 'Waiver acceptance recorded')
+          }
+        />
+      ) : outcome ? null : (
+        issues.map((issue) => (
+          <div className="ops-actions" key={`${issue.code}-${issue.policyVersionId}`}>
+            <Button
+              variant="secondary"
+              disabled={!online || !mayAccept}
+              onClick={() => setOpen({ policyVersionId: issue.policyVersionId, mode: 'tablet' })}
+            >
+              Sign waiver on this tablet
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={!online || !mayAccept}
+              onClick={() => setOpen({ policyVersionId: issue.policyVersionId, mode: 'paper' })}
+            >
+              Record paper waiver
+            </Button>
+            {issue.blocking && overrideActivity ? (
+              <Button
+                variant="secondary"
+                disabled={!online || !mayOverride}
+                onClick={() =>
+                  setOpen({ policyVersionId: issue.policyVersionId, mode: 'override' })
+                }
+              >
+                Override with reason
+              </Button>
+            ) : null}
+          </div>
+        ))
+      )}
+      {outcome ? <CommandSuccess label={outcome} /> : null}
+      {!outcome && !overrideActivity && issues.some((issue) => issue.blocking) ? (
+        <p className="caption">
+          This check-in names no session, offering or event, so an override cannot be recorded here.
+          An override is recorded from the check-in of the session or event the participant attends.
+        </p>
+      ) : null}
+      {!mayAccept ? (
+        <p className="caption">Recording a waiver is not available to your role.</p>
+      ) : null}
+      <p className="caption">
+        Proposed rule (DEC-095 pending): whether a missing waiver warns or blocks, and who may
+        override a block, is what the approved waiver says. A paper waiver is always recorded as a
+        staff entry with the date on the paper.
+      </p>
+    </div>
+  );
+}
+
+export function WaiverActions(props: { checkin: SessionCheckin; onRecheck?: () => void }) {
+  return (
+    <>
+      <MissingFormActions {...props} />
+      <WaiverIssueActions {...props} />
+    </>
+  );
+}
+
+function MissingFormActions({
   checkin,
   onRecheck,
 }: {

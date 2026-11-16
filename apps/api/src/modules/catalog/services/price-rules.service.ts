@@ -5,12 +5,14 @@ import {
   PUBLIC_PUBLICATION_STATES,
   type CreatePriceRuleInput,
   type PriceRule,
+  type PriceRuleTier,
   type Principal,
 } from '@sportspark/contracts';
 import { isExclusionViolation, json, type Db } from '@sportspark/db';
 import {
   AuditWriter,
   AuthorizationService,
+  CapabilityService,
   CLOCK,
   DATABASE,
   Outbox,
@@ -22,7 +24,9 @@ import {
 } from '../../../kernel';
 import { CatalogActions } from '../catalog.actions';
 import { CatalogEvents } from '../catalog.events';
-import { organizationOf, toPriceRule } from '../catalog.shared';
+import { PRICE_EFFECTIVE_NOW_TOLERANCE_MS } from '../catalog.policy';
+import type { RemainingSession } from '../catalog.ports';
+import { organizationOf, toPriceRule, toPriceRuleTier } from '../catalog.shared';
 
 /**
  * Versioned price rules (SPK-PAY-001, SPK-PAY-002 "historical purchases retain their price
@@ -30,6 +34,17 @@ import { organizationOf, toPriceRule } from '../catalog.shared';
  * previously open-ended rule is closed at that instant. The exclusion constraint in migration
  * 0200 is the final guarantee that one rule is effective per offering per instant; the trigger
  * keeps every rule's pricing content immutable.
+ *
+ * "Now" is this service's clock: a request without `effectiveFrom`, or with one at most
+ * `PRICE_EFFECTIVE_NOW_TOLERANCE_MS` behind the clock, starts the rule at the clock's instant.
+ *
+ * Proposed amendments (migration 0211): a rule may be priced per session (SPK-PAY-013, PA-02,
+ * capability `per_session_pricing`) and may carry a member price with the membership entitlement
+ * it requires (SPK-PAY-015, PA-04, capability `member_pricing`). With a capability off the
+ * corresponding fields are refused on write; a rule without them is written exactly as before.
+ *
+ * Proposed amendment PA-03 (migration 0215, SPK-PAY-014, capability `price_tiers_addons`): a rule
+ * may carry price tiers, written with it and immutable like the rest of its pricing content.
  */
 @Injectable()
 export class PriceRulesService {
@@ -40,6 +55,7 @@ export class PriceRulesService {
     private readonly authorization: AuthorizationService,
     private readonly audit: AuditWriter,
     private readonly outbox: Outbox,
+    private readonly capabilities: CapabilityService,
   ) {}
 
   async create(
@@ -66,8 +82,54 @@ export class PriceRulesService {
       if (offering.publication_state === 'archived') {
         throw errors.invalidTransition('OfferingPublication', 'archived', 'price');
       }
+      // SPK-PAY-013 (PA-02), SPK-PAY-015 (PA-04): each amendment is a new commitment of its own
+      // capability, refused inside the unit of work while the organization has it off (DEC-016).
+      if (body.pricingBasis === 'per_session') {
+        await this.capabilities.require(organizationId, 'per_session_pricing', trx);
+      }
+      let memberEntitlementName: string | null = null;
+      if (body.memberEntitlementDefinitionId !== undefined) {
+        await this.capabilities.require(organizationId, 'member_pricing', trx);
+        // An unknown id and another organization's id read the same (§4.10); the composite
+        // foreign key of migration 0211 is the guarantee.
+        const definition = await trx
+          .selectFrom('entitlement_definitions')
+          .select(['id', 'name', 'kind', 'status'])
+          .where('organization_id', '=', organizationId)
+          .where('id', '=', body.memberEntitlementDefinitionId)
+          .executeTakeFirst();
+        if (!definition) {
+          throw errors.validation('The membership entitlement is not known.', {
+            path: 'memberEntitlementDefinitionId',
+          });
+        }
+        if (definition.kind !== 'membership_benefit' || definition.status !== 'active') {
+          throw errors.validation(
+            'A member price names an active membership entitlement (SPK-PAY-015, SPK-COND-001).',
+            {
+              path: 'memberEntitlementDefinitionId',
+              kind: definition.kind,
+              status: definition.status,
+            },
+          );
+        }
+        memberEntitlementName = definition.name;
+      }
+      // SPK-PAY-014 (PA-03): tiers are a commitment of `price_tiers_addons`, refused while it is
+      // off; a rule without tiers is written exactly as before.
+      if (body.tiers.length > 0) {
+        await this.capabilities.require(organizationId, 'price_tiers_addons', trx);
+      }
       const now = this.clock.now();
-      const effectiveFrom = new Date(body.effectiveFrom);
+      const requestedFrom = body.effectiveFrom === undefined ? null : new Date(body.effectiveFrom);
+      // "From now": no instant given, or the caller's own "now", which is always a little behind
+      // this clock. The rule is then stored with this clock's instant, never the caller's, so no
+      // instant that has passed is priced.
+      const fromNow =
+        requestedFrom === null ||
+        (requestedFrom.getTime() < now.getTime() &&
+          now.getTime() - requestedFrom.getTime() <= PRICE_EFFECTIVE_NOW_TOLERANCE_MS);
+      const effectiveFrom = fromNow || requestedFrom === null ? now : requestedFrom;
       const effectiveTo = body.effectiveTo ? new Date(body.effectiveTo) : null;
       // SPK-PAY-002: a new rule never prices instants that have already passed, in any branch.
       if (effectiveFrom.getTime() < now.getTime()) {
@@ -75,6 +137,13 @@ export class PriceRulesService {
           'effectiveFrom must be at or after now; historical prices are never rewritten (SPK-PAY-002).',
           { path: 'effectiveFrom' },
         );
+      }
+      // The contract checks the window against the instant the caller gave; a rule that starts
+      // now is checked against the instant it is stored with.
+      if (effectiveTo && effectiveTo.getTime() <= effectiveFrom.getTime()) {
+        throw errors.validation('effectiveTo must be after effectiveFrom', {
+          path: 'effectiveTo',
+        });
       }
 
       const overlapping = await trx
@@ -139,6 +208,9 @@ export class PriceRulesService {
             base_price_minor: body.basePriceMinor,
             currency: body.currency,
             charge_lines: json(body.chargeLines),
+            pricing_basis: body.pricingBasis,
+            member_price_minor: body.memberPriceMinor ?? null,
+            member_entitlement_definition_id: body.memberEntitlementDefinitionId ?? null,
             created_by: json(snapshotActor(principal)),
           })
           .returningAll()
@@ -148,6 +220,36 @@ export class PriceRulesService {
           throw errors.resourceConflict('A price rule is already effective in this window.');
         }
         throw error;
+      }
+      const tiers: PriceRuleTier[] = [];
+      for (const [index, tier] of body.tiers.entries()) {
+        const availableUntil = tier.availableUntil ? new Date(tier.availableUntil) : null;
+        if (availableUntil && availableUntil.getTime() <= effectiveFrom.getTime()) {
+          throw errors.validation(
+            'A tier purchase deadline is after the instant the rule takes effect.',
+            { path: `tiers.${index}.availableUntil` },
+          );
+        }
+        const tierRow = await trx
+          .insertInto('price_rule_tiers')
+          .values({
+            id: newId(),
+            organization_id: organizationId,
+            price_rule_id: id,
+            offering_id: offeringId,
+            code: tier.code,
+            name: tier.name,
+            sequence: index + 1,
+            attendance: tier.attendance,
+            min_sessions: tier.minSessions ?? null,
+            max_sessions: tier.maxSessions ?? null,
+            price_minor: tier.priceMinor,
+            member_price_minor: tier.memberPriceMinor ?? null,
+            available_until: availableUntil,
+          })
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        tiers.push(toPriceRuleTier(tierRow));
       }
       await this.audit.record(trx, {
         organizationId,
@@ -163,6 +265,15 @@ export class PriceRulesService {
           version,
           basePriceMinor: body.basePriceMinor,
           currency: body.currency,
+          pricingBasis: body.pricingBasis,
+          memberPriceMinor: body.memberPriceMinor ?? null,
+          memberEntitlementDefinitionId: body.memberEntitlementDefinitionId ?? null,
+          tiers: tiers.map((tier) => ({
+            id: tier.id,
+            code: tier.code,
+            attendance: tier.attendance,
+            priceMinor: tier.priceMinor,
+          })),
           supersededPriceRuleId,
           policyReferences: body.policyReferences ?? [],
         },
@@ -183,7 +294,7 @@ export class PriceRulesService {
         },
         correlationId,
       });
-      return toPriceRule(row);
+      return toPriceRule(row, memberEntitlementName, tiers);
     });
   }
 
@@ -220,7 +331,62 @@ export class PriceRulesService {
       .where('offering_id', '=', offeringId)
       .orderBy('version')
       .execute();
-    return rows.map(toPriceRule);
+    const names = await this.memberEntitlementNames(this.db, organizationId, rows);
+    const tiers = await this.tiersOf(
+      this.db,
+      organizationId,
+      rows.map((row) => row.id),
+    );
+    return rows.map((row) =>
+      toPriceRule(
+        row,
+        names.get(row.member_entitlement_definition_id ?? '') ?? null,
+        tiers.get(row.id) ?? [],
+      ),
+    );
+  }
+
+  /** SPK-PAY-014 (PA-03): the tiers of the given rules in display order, in one read. */
+  private async tiersOf(
+    db: Db | Trx,
+    organizationId: string,
+    priceRuleIds: readonly string[],
+  ): Promise<Map<string, PriceRuleTier[]>> {
+    const out = new Map<string, PriceRuleTier[]>();
+    if (priceRuleIds.length === 0) return out;
+    const rows = await db
+      .selectFrom('price_rule_tiers')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('price_rule_id', 'in', [...priceRuleIds])
+      .orderBy('price_rule_id')
+      .orderBy('sequence')
+      .execute();
+    for (const row of rows) {
+      const list = out.get(row.price_rule_id) ?? [];
+      list.push(toPriceRuleTier(row));
+      out.set(row.price_rule_id, list);
+    }
+    return out;
+  }
+
+  /** The names of the membership entitlements the rules name (SPK-PAY-015), in one read. */
+  private async memberEntitlementNames(
+    db: Db | Trx,
+    organizationId: string,
+    rows: ReadonlyArray<{ member_entitlement_definition_id: string | null }>,
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(rows.flatMap((row) => row.member_entitlement_definition_id ?? [])),
+    ].sort();
+    if (ids.length === 0) return new Map();
+    const definitions = await db
+      .selectFrom('entitlement_definitions')
+      .select(['id', 'name'])
+      .where('organization_id', '=', organizationId)
+      .where('id', 'in', ids)
+      .execute();
+    return new Map(definitions.map((d) => [d.id, d.name]));
   }
 
   async effectivePriceRule(
@@ -242,7 +408,8 @@ export class PriceRulesService {
   ): Promise<Map<string, PriceRule>> {
     const out = new Map<string, PriceRule>();
     if (offeringIds.length === 0) return out;
-    const rows = await (trx ?? executorFor(this.db))
+    const db = trx ?? executorFor(this.db);
+    const rows = await db
       .selectFrom('price_rules')
       .selectAll()
       .where('organization_id', '=', organizationId)
@@ -250,7 +417,72 @@ export class PriceRulesService {
       .where('effective_from', '<=', at)
       .where((eb) => eb.or([eb('effective_to', 'is', null), eb('effective_to', '>', at)]))
       .execute();
-    for (const row of rows) out.set(row.offering_id, toPriceRule(row));
+    const names = await this.memberEntitlementNames(db, organizationId, rows);
+    const tiers = await this.tiersOf(
+      db,
+      organizationId,
+      rows.map((row) => row.id),
+    );
+    for (const row of rows) {
+      out.set(
+        row.offering_id,
+        toPriceRule(
+          row,
+          names.get(row.member_entitlement_definition_id ?? '') ?? null,
+          tiers.get(row.id) ?? [],
+        ),
+      );
+    }
+    return out;
+  }
+
+  /**
+   * SPK-PAY-013 (PA-02): the sessions of an offering a participant joining at `at` can still
+   * attend: status `scheduled` and a start strictly after `at` (the proposed cut-off, DEC-096
+   * pending: a session counts until it starts). Ordered by start, then id, so the list a quote
+   * stores is stable.
+   */
+  async remainingSessions(
+    organizationId: string,
+    offeringId: string,
+    at: Date,
+    trx?: Trx,
+  ): Promise<RemainingSession[]> {
+    const rows = await (trx ?? executorFor(this.db))
+      .selectFrom('offering_sessions')
+      .select(['id', 'scheduled_start'])
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .where('status', '=', 'scheduled')
+      .where('scheduled_start', '>', at)
+      .orderBy('scheduled_start')
+      .orderBy('id')
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      scheduledStart: new Date(row.scheduled_start).toISOString(),
+    }));
+  }
+
+  /** Batched count of `remainingSessions` per offering id, for listings (absent = none). */
+  async remainingSessionCounts(
+    organizationId: string,
+    offeringIds: readonly string[],
+    at: Date,
+    trx?: Trx,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (offeringIds.length === 0) return out;
+    const rows = await (trx ?? executorFor(this.db))
+      .selectFrom('offering_sessions')
+      .select((eb) => ['offering_id', eb.fn.countAll<string>().as('count')])
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', 'in', [...offeringIds])
+      .where('status', '=', 'scheduled')
+      .where('scheduled_start', '>', at)
+      .groupBy('offering_id')
+      .execute();
+    for (const row of rows) out.set(row.offering_id, Number(row.count));
     return out;
   }
 }

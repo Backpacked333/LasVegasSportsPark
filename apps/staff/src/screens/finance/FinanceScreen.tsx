@@ -46,6 +46,7 @@ import { PACKAGE_G_LIST } from '../package-g/registry';
 import { Debtor } from './ObligationsScreen';
 import { affectedLink, EXCEPTION_GROUPS } from './PaymentExceptionsScreen';
 import './finance.css';
+import { GlassCard } from '../../ui/glass/GlassCard';
 
 const CONDITIONAL = PACKAGE_G_LIST.filter((screen) => screen.area === 'finance');
 
@@ -511,7 +512,7 @@ function ReconciliationCard({ currency, now }: { currency: string | null; now: D
     enabled: currency !== null && from !== null && to !== null,
   });
   return (
-    <section className="card card-dark fin-recon" aria-labelledby="fin-recon-title">
+    <GlassCard tone="night" className="fin-recon" aria-labelledby="fin-recon-title">
       <div className="fin-recon-head">
         <h3 id="fin-recon-title">Reconciliation</h3>
         <span className="caption">Month to date (UTC){currency ? ` · ${currency}` : ''}</span>
@@ -577,7 +578,7 @@ function ReconciliationCard({ currency, now }: { currency: string | null; now: D
       <Link className="button button-lime" to="/finance/reconciliation">
         Open reconciliation
       </Link>
-    </section>
+    </GlassCard>
   );
 }
 
@@ -699,7 +700,7 @@ export function FinanceScreen() {
                   {screen.title}
                 </Link>
                 <span className="caption">{screen.purpose}</span>
-                <span className="label-caps">{screen.id}</span>
+                <span className="label-caps screen-id">{screen.id}</span>
               </div>
             </li>
           ))}
@@ -718,7 +719,9 @@ export function FinanceScreen() {
                   {screen.title}
                 </Link>
                 <span className="caption">{screen.purpose}</span>
-                <span className="label-caps">{screen.id}, used only when turned on (DEC-016)</span>
+                <span className="label-caps">
+                  <span className="screen-id">{screen.id}, </span>Used only when turned on (DEC-016)
+                </span>
               </div>
             </li>
           ))}

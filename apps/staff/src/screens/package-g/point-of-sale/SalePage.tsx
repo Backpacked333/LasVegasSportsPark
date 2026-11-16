@@ -17,6 +17,14 @@
  * The ticket names the customer's household account: the open balance and credits from
  * `GET /v1/people/{id}/money-summary` (protected; shown only to roles that read it), and lists the
  * configured tax and fee lines the API applied (`charges`, approved `tax_fee` versions).
+ *
+ * SPK-PAY-016 (proposed amendment PA-08; capability `open_amount_lines`, DEC-102 pending): while
+ * that switch is on, a permitted seller is offered "Other amount" (OpenAmount.tsx). A line above
+ * the ceiling of the person who entered it puts the sale in an approval step: no tender is
+ * offered, and the page says who must approve and that the sale cannot finish before. An
+ * open-amount line shows its description, category, who entered and who approved it; on the
+ * ticket it can only be removed. With the switch off nothing of this is offered, and a line that
+ * already exists is still shown, removable and payable.
  */
 import type { Schema } from '@sportspark/api-client';
 import { Link } from 'react-router';
@@ -28,7 +36,7 @@ import { useFacilityDirectory } from '../../../features/pos-access-accounting/fa
 import { LinkNotAvailable, useRecordParam } from '../../../features/pos-access-accounting/fields';
 import {
   CARD_PAYMENT_STATUS,
-  POS_PRODUCT_KIND,
+  POS_LINE_KIND,
   POS_SALE_STATUS,
   POS_TENDER_KIND,
   POS_TENDER_STATUS,
@@ -48,6 +56,14 @@ import { Facts } from '../../../ui/FormFields';
 import { Icon } from '../../../ui/Icon';
 import { QueryBoundary } from '../../../ui/QueryBoundary';
 import { StatusBadge } from '../../../ui/StatusBadge';
+import {
+  linesAwaitingApproval,
+  OpenAmountApprovals,
+  OpenAmountLineText,
+  OtherAmountForm,
+  RemoveOpenAmountLine,
+  useOpenAmountOffer,
+} from './OpenAmount';
 import { POS_PATHS, SALE_QUERY_PREFIX } from './paths';
 import { AddLineForm, LineQuantity, ReturnForm, TenderForm } from './SaleForms';
 import './pos.css';
@@ -102,6 +118,9 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
   const switchOn = offer.capabilityOn('point_of_sale');
   const tendering = sale.status === 'open' && operate;
   const selling = tendering && switchOn;
+  // SPK-PAY-016 (proposed): offered only while open_amount_lines is on and the role enters them.
+  const openAmount = useOpenAmountOffer(sale.facilityId);
+  const awaitingApproval = linesAwaitingApproval(sale);
   const returnable =
     (sale.status === 'paid' || sale.status === 'partially_returned') &&
     offer.allowed(POS_ACTIONS.approveReturn, sale.facilityId);
@@ -124,13 +143,17 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
           </section>
         ) : null}
         {selling ? <AddLineForm sale={sale} onReload={onReload} /> : null}
+        {selling && openAmount.mayEnter ? (
+          <OtherAmountForm sale={sale} onReload={onReload} />
+        ) : null}
+        <OpenAmountApprovals sale={sale} onReload={onReload} />
         {tendering && !switchOn ? (
           <p className="caption">
             Point of sale is turned off: no line is added to this sale, but what it already holds
             can still be paid, or the sale voided.
           </p>
         ) : null}
-        <Lines sale={sale} />
+        <Lines sale={sale} zone={zone} />
         <Tenders sale={sale} zone={zone} />
         <Returns sale={sale} zone={zone} />
         {returnable ? <ReturnForm sale={sale} onReload={onReload} /> : null}
@@ -185,12 +208,28 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
           ) : (
             sale.lines.map((line) => (
               <li key={line.id}>
-                {selling ? (
+                {line.openAmount ? (
+                  // Removing an open-amount line unwinds it: offered on any open sale (DEC-016).
+                  tendering ? (
+                    <RemoveOpenAmountLine sale={sale} line={line} onReload={onReload} />
+                  ) : (
+                    <span className="pos-qty">{line.quantity}×</span>
+                  )
+                ) : selling ? (
                   <LineQuantity sale={sale} line={line} onReload={onReload} />
                 ) : (
                   <span className="pos-qty">{line.quantity}×</span>
                 )}
-                <span className="pos-ticket-name">{line.name}</span>
+                <span className="pos-ticket-name">
+                  {line.openAmount ? (
+                    <>
+                      {line.openAmount.description}
+                      <span className="caption"> · {line.name}</span>
+                    </>
+                  ) : (
+                    line.name
+                  )}
+                </span>
                 <span className="pos-ticket-amount">{formatMoney(line.lineTotalMinor, c)}</span>
               </li>
             ))
@@ -221,7 +260,12 @@ function SaleBody({ sale, onReload }: { sale: Sale; onReload: () => void }) {
           />
         </div>
         <div className="pos-ticket-actions">
-          {tendering && sale.lines.length > 0 && sale.remainingMinor > 0 ? (
+          {awaitingApproval.length > 0 ? (
+            <p className="caption" data-testid="tender-blocked">
+              No tender can be taken yet: {awaitingApproval.length === 1 ? 'a line' : 'lines'} on
+              this sale wait for a second approval.
+            </p>
+          ) : tendering && sale.lines.length > 0 && sale.remainingMinor > 0 ? (
             <TenderForm sale={sale} onReload={onReload} />
           ) : null}
           {sale.status === 'open' && operate ? (
@@ -302,7 +346,7 @@ function UnknownCardRecovery({ tenders }: { tenders: Schema<'PosTender'>[] }) {
   );
 }
 
-function Lines({ sale }: { sale: Sale }) {
+function Lines({ sale, zone }: { sale: Sale; zone: string | null }) {
   if (sale.lines.length === 0) {
     return <p className="caption">No lines yet. Add a product to the sale.</p>;
   }
@@ -326,7 +370,13 @@ function Lines({ sale }: { sale: Sale }) {
             <tr key={line.id}>
               <td>{line.lineNumber}</td>
               <td>
-                {line.name} ({line.sku}) · {POS_PRODUCT_KIND[line.kind]}
+                {line.openAmount ? (
+                  <OpenAmountLineText line={line} zone={zone} />
+                ) : (
+                  <>
+                    {line.name} ({line.sku}) · {POS_LINE_KIND[line.kind]}
+                  </>
+                )}
               </td>
               <td>{formatMoney(line.unitPriceMinor, c)}</td>
               <td>{line.quantity}</td>

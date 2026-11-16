@@ -69,7 +69,7 @@ import { Button } from '../../ui/Button';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type Upcoming = Schema<'UpcomingFixture'>;
 type FixtureResponse = Schema<'FixtureResponse'>;
@@ -94,6 +94,7 @@ function AnswerControl({
   timeZone: string | null;
   onReload: () => void;
 }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const respond = useApiCommand('post', '/fixtures/{id}/availability', {
@@ -223,6 +224,7 @@ function GameCard({
   viewer: Viewer;
 }) {
   // The same read as Answers (one request): the venue gives the facility's zone.
+  const styles = useStyles();
   const detail = useApiQuery({
     path: '/fixtures/{id}',
     request: { path: { id: game.fixture.id } },
@@ -260,6 +262,7 @@ function GameCard({
 }
 
 function AvailabilityContent({ workspace, viewer }: { workspace: Workspace; viewer: Viewer }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const games = workspace.upcomingFixtures;
   return (
@@ -320,7 +323,7 @@ export function AvailabilityRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   answer: {
     gap: spacing.xs,
     paddingVertical: spacing.sm,
@@ -334,4 +337,4 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   pending: { gap: spacing.xs },
-});
+}));

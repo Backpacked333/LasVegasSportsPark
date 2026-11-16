@@ -23,6 +23,9 @@ import {
   type Quote,
   type QuoteDiscountLine,
   type QuoteLine,
+  type QuoteLineAddonBasis,
+  type QuoteLinePriceBasis,
+  type QuoteLineUniformBasis,
   type QuotePolicyReferences,
   type Receipt,
   type Refund,
@@ -226,6 +229,17 @@ export function toQuoteLine(row: QuoteLineRow): QuoteLine {
     charges: row.charge_lines as unknown as AppliedCharge[],
     policies: row.policy_references as unknown as LinePolicyReferences,
     enrollmentId: row.enrollment_id,
+    // 0687 (SPK-PAY-013, SPK-PAY-015): null for a plain term price and for every earlier line.
+    // 0690 (SPK-PAY-014, SPK-REG-012): the stored basis of an extra line is its own document.
+    priceBasis:
+      row.line_kind === 'registration'
+        ? ((row.price_basis as unknown as QuoteLinePriceBasis | null) ?? null)
+        : null,
+    lineKind: row.line_kind,
+    sourceId: row.source_id,
+    addon: row.line_kind === 'addon' ? (row.price_basis as unknown as QuoteLineAddonBasis) : null,
+    uniform:
+      row.line_kind === 'uniform' ? (row.price_basis as unknown as QuoteLineUniformBasis) : null,
   };
 }
 
@@ -335,6 +349,8 @@ export function toOrder(
       totalMinor: line.total_minor,
       currency: line.currency,
       policies: line.policy_references as unknown as LinePolicyReferences,
+      lineKind: line.line_kind,
+      sourceId: line.source_id,
     })),
     obligationIds,
     installmentPlanId,

@@ -1,6 +1,7 @@
 /**
  * Test harness for screens and components: real providers with deterministic services (memory
- * session store, manual connectivity, fake fetch from @sportspark/api-client/testing, fixed clock).
+ * session store, manual connectivity, fake fetch from @sportspark/api-client/testing, fixed clock,
+ * memory theme store).
  *
  *   const app = createTestApp({ routes: { 'GET /me/inbox': { status: 200, body: page } } });
  *   render(<InboxScreen />, { wrapper: app.wrapper });
@@ -15,12 +16,14 @@ import {
   type FakePermissionsOptions,
 } from '@sportspark/api-client/testing';
 import { QueryClient, focusManager, onlineManager } from '@tanstack/react-query';
-import { waitFor } from '@testing-library/react-native';
+import { act, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import type { AppConfig } from '../config/app-config';
 import { createManualSources, type Reachability } from '../connectivity/sources';
 import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
 import type { AppServices } from '../providers/services';
+import type { ThemeName } from '../ui/theme';
+import { MemoryThemeStore } from '../ui/theme-preference';
 
 export const TEST_NOW = new Date('2026-10-24T12:00:00.000Z');
 export const TEST_SESSION: Session = {
@@ -48,6 +51,8 @@ export interface TestAppOptions {
   reachable?: Reachability;
   config?: Partial<AppConfig>;
   now?: () => Date;
+  /** The stored theme choice at launch (`'legends'` for Legends mode); none by default. */
+  theme?: ThemeName | null;
 }
 
 export function createTestApp(options: TestAppOptions = {}) {
@@ -60,6 +65,7 @@ export function createTestApp(options: TestAppOptions = {}) {
   const sessionStore = new MemorySessionStore(
     options.session === undefined ? TEST_SESSION : options.session,
   );
+  const themeStore = new MemoryThemeStore(options.theme ?? null);
   const services: AppServices = {
     config: {
       apiBaseUrl: 'http://api.test/v1',
@@ -74,6 +80,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     fetch: fake.fetch,
     generateKey: sequentialKeys(),
     now: options.now ?? (() => TEST_NOW),
+    themeStore,
   };
   // No retries and no cache time in tests: each assertion sees the API's first answer.
   const queryClient = new QueryClient({
@@ -89,7 +96,7 @@ export function createTestApp(options: TestAppOptions = {}) {
       </AppProviders>
     );
   }
-  return { services, fake, sources, sessionStore, queryClient, wrapper };
+  return { services, fake, sources, sessionStore, themeStore, queryClient, wrapper };
 }
 
 /**
@@ -129,4 +136,58 @@ export async function waitForAbsent(query: () => unknown, what = 'The element'):
   await waitFor(() => {
     if (query() !== null) throw new Error(`${what} is still shown.`);
   });
+}
+
+/**
+ * Waits until no query or command is in flight and the screen shows it, so no update lands after
+ * the test and what the test presses next is in the state the cache is in.
+ *
+ * An idle cache is not yet an idle screen. TanStack Query stores an answer at once but hands it to
+ * the components watching the query in a timer task of its own (`notifyManager`, a zero timeout),
+ * and only then does React render it. Until that task has run the cache says "nothing in flight"
+ * while the screen still shows the read as running: a button that is busy during the read is still
+ * disabled, and a press on it does nothing (the intermittent "Check again" failures of the
+ * contribution screen tests). So after the cache is idle this lets the due timer tasks run and
+ * React render, inside `act`, and repeats until a whole pass went by without any query or command
+ * changing state: a render may itself start a read.
+ */
+export async function settleQueries(queryClient: QueryClient): Promise<void> {
+  // Every change of a query's or a command's state (a fetch started, an answer stored, ...).
+  let stateChanges = 0;
+  const count = (event: { type: string }) => {
+    if (event.type === 'updated') stateChanges += 1;
+  };
+  const stop = [
+    queryClient.getQueryCache().subscribe(count),
+    queryClient.getMutationCache().subscribe(count),
+  ];
+  const idle = () => queryClient.isFetching() + queryClient.isMutating() === 0;
+  try {
+    for (;;) {
+      await waitFor(() => expect(idle()).toBe(true));
+      const seen = stateChanges;
+      await act(async () => {
+        await dueTimerTasks();
+      });
+      if (idle() && stateChanges === seen) return;
+    }
+  } finally {
+    for (const unsubscribe of stop) unsubscribe();
+  }
+}
+
+/**
+ * Resolves after the timer tasks that are due now have run: with real timers a zero timeout set
+ * after them (timers of one delay run in the order they were set); with Jest's fake timers, which
+ * a real timeout would never leave, the due timers are run without moving the clock.
+ */
+function dueTimerTasks(): Promise<void> {
+  const fake =
+    (setTimeout as { _isMockFunction?: boolean })._isMockFunction === true ||
+    Object.prototype.hasOwnProperty.call(setTimeout, 'clock');
+  if (fake) {
+    jest.advanceTimersByTime(0);
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }

@@ -39,6 +39,7 @@ import {
   type BookingKind,
   type BookingStatus,
 } from './labels';
+import { Toolbar } from '../../../ui/glass/GlassCard';
 
 /** A decision or a follow-up is still open: the card is edged so it stands out in the list. */
 function needsAttention(booking: Booking): boolean {
@@ -162,7 +163,7 @@ export function BookingList({ kind }: { kind: BookingKind }) {
           </span>
         ) : null}
       </div>
-      <div className="pg-toolbar">
+      <Toolbar className="pg-toolbar">
         <SelectField
           label="Status"
           value={status}
@@ -170,7 +171,7 @@ export function BookingList({ kind }: { kind: BookingKind }) {
           placeholder="All statuses"
           options={BOOKING_STATUSES.map((s) => ({ value: s, label: BOOKING_STATUS[s].label }))}
         />
-      </div>
+      </Toolbar>
       <p className="caption">Newest first.</p>
       <QueryBoundary
         query={query}

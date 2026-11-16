@@ -23,7 +23,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -31,7 +31,7 @@ import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
-import { colors, radius, spacing, type } from '../../ui/theme';
+import { makeStyles, radius, spacing, type } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
 import { ChoiceGroup, Paragraph, SectionHeader, TextField } from '../account/components/forms';
 
@@ -110,6 +110,7 @@ function HouseholdCard({
   /** People who may be added (empty when adding is not offered). */
   candidates: readonly HouseholdCandidate[];
 }) {
+  const styles = useStyles();
   const [adding, setAdding] = useState(false);
   const others = otherMembersText(household.otherMemberCount);
   const addable = candidates.filter(
@@ -153,6 +154,7 @@ function AddMember({
   candidates: readonly HouseholdCandidate[];
   onClose: () => void;
 }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const [personId, setPersonId] = useState<string | null>(candidates[0]?.personId ?? null);
@@ -244,6 +246,7 @@ function AddMember({
 }
 
 function CreateHousehold() {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const [open, setOpen] = useState(false);
@@ -332,7 +335,7 @@ function CreateHousehold() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   card: {
     marginHorizontal: spacing.lg,
     marginTop: spacing.md,
@@ -346,4 +349,4 @@ const styles = StyleSheet.create({
   title: { ...type.heading, color: colors.text, paddingHorizontal: spacing.lg },
   inset: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
   form: { gap: spacing.sm, paddingTop: spacing.sm },
-});
+}));

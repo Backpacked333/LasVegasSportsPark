@@ -1,4 +1,4 @@
-import { newId } from '@sportspark/contracts';
+import { CAPABILITY_IDS, newId } from '@sportspark/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // Loading the domain modules registers every action, as in the running application.
 import '../../modules';
@@ -104,7 +104,7 @@ describe('GET /v1/me/permissions (K-05, SPK-UX-005, §4.14)', () => {
       (a: { id: string }) => a.id === 'finance.pay_obligation',
     );
     expect(pay).toMatchObject({ subjectPermission: 'pay' });
-    expect(res.body.capabilities).toHaveLength(15);
+    expect(res.body.capabilities).toHaveLength(CAPABILITY_IDS.length);
     expect(res.body.capabilities.every((c: { enabled: boolean }) => c.enabled === false)).toBe(
       true,
     );

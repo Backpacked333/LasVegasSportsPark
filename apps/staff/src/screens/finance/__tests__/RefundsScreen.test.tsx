@@ -489,7 +489,7 @@ describe('SCR-S-37 CreditsScreen', () => {
     const [pending, active] = within(list)
       .getAllByRole('listitem')
       .filter((li) => li.parentElement === list);
-    expect(within(pending!).getByText('pending_approval')).toBeInTheDocument();
+    expect(within(pending!).getByText('pending approval')).toBeInTheDocument();
     expect(within(pending!).getByText('No date set (expiry rules pending)')).toBeInTheDocument();
     expect(within(pending!).getByText(/overpayment/)).toBeInTheDocument();
     expect(

@@ -174,6 +174,89 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
     });
   });
 
+  it('SPK-PAY-013, SPK-PAY-015: the quote shows the per-class price, the count and the product, and which price applied and why', async () => {
+    const user = userEvent.setup();
+    const [base] = quote().lines;
+    const line = base as NonNullable<typeof base>;
+    const member = {
+      priceMinor: 2000,
+      entitlementDefinitionId: '0192f1a0-0000-7000-8000-000000002101',
+      entitlementName: 'Annual membership',
+      membershipEnrollmentId: null,
+      checkedAt: '2026-11-02T15:00:00.000Z',
+    };
+    const sessionIds = Array.from(
+      { length: 7 },
+      (_, i) => `0192f1a0-0000-7000-8000-00000000300${i}`,
+    );
+    const priced = quote({
+      lines: [
+        {
+          ...line,
+          unitPriceMinor: 16800,
+          baseAmountMinor: 16800,
+          totalMinor: 16800,
+          priceBasis: {
+            pricingBasis: 'per_session',
+            standardPriceMinor: 2400,
+            appliedPrice: 'standard',
+            appliedPriceMinor: 2400,
+            member: { ...member, applied: false, reason: 'no_active_membership' },
+            sessions: { count: 7, sessionIds, countedAt: '2026-11-02T15:00:00.000Z' },
+            unitPriceMinor: 16800,
+          },
+        },
+        {
+          ...line,
+          id: '0192f1a0-0000-7000-8000-000000000707',
+          sequence: 2,
+          unitPriceMinor: 25000,
+          baseAmountMinor: 25000,
+          totalMinor: 25000,
+          priceBasis: {
+            pricingBasis: 'term',
+            standardPriceMinor: 30000,
+            appliedPrice: 'member',
+            appliedPriceMinor: 25000,
+            member: {
+              ...member,
+              priceMinor: 25000,
+              applied: true,
+              reason: 'active_membership',
+            },
+            sessions: null,
+            unitPriceMinor: 25000,
+          },
+        },
+      ],
+      subtotalMinor: 41800,
+      totalMinor: 41800,
+      dueNowMinor: 41800,
+    });
+    const app = createTestApp({
+      routes: routes({
+        'GET /baskets/{id}': ok(HELD),
+        'POST /registration-quotes': ok(priced, 201),
+      }),
+    });
+    render(app.at(`/registrations/assisted/${BASKET_ID}`));
+    await user.click(await screen.findByRole('button', { name: 'Price the basket' }));
+    const lines = await screen.findByRole('table', { name: 'Quote lines' });
+    const [, first, second] = within(lines).getAllByRole('row');
+    expect(
+      within(first as HTMLElement).getByText('$24.00 per class × 7 classes = $168.00'),
+    ).toBeInTheDocument();
+    expect(
+      within(first as HTMLElement).getByText(
+        'Standard price applied: Annual membership was not held when the quote was made.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(second as HTMLElement).getByText('Member price applied: Annual membership'),
+    ).toBeInTheDocument();
+    expect(within(second as HTMLElement).queryByText(/per class/)).not.toBeInTheDocument();
+  });
+
   it('QUOTE_EXPIRED offers a new price; PAYMENT_OUTCOME_UNKNOWN says not to take payment again', async () => {
     const user = userEvent.setup();
     let checkouts = 0;
@@ -254,7 +337,7 @@ describe('SCR-S-25 AssistedRegistrationScreen', () => {
       'href',
       `/finance/orders/${ORDER_ID}`,
     );
-    expect(await within(refs).findByText('Operation recovery_required')).toBeInTheDocument();
+    expect(await within(refs).findByText('Operation recovery required')).toBeInTheDocument();
     expect(screen.getByText(/FULFILLMENT_INCOMPLETE: A line could not be confirmed/)).toBeVisible();
     const attempts = await screen.findByRole('list', { name: 'Payment attempts of the order' });
     expect(

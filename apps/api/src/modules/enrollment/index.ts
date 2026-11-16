@@ -18,6 +18,11 @@ export {
   type EligibilityInput,
 } from './eligibility/registration-eligibility';
 export { overlapsOf } from './services/family-calendar.service';
+export {
+  attendedSessions,
+  attendsSession,
+  enrollmentAttendsSession,
+} from './services/attended-sessions';
 export { RegistrationEvaluator } from './services/registration-evaluator';
 export { CapacityService } from './services/capacity.service';
 export { EnrollmentsService } from './services/enrollments.service';

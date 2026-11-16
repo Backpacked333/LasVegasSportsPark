@@ -6,13 +6,24 @@
  * default); inside a card that already frames its content (the feature `Section` cards), rows are
  * flat with a divider between them (`RowLayout` "flat", set by `ListRowLayout`). An optional
  * decorative `icon` tile and `accent` stripe (an activity kind's colour) sit on the left; the words
- * always say what they mean. A row that opens something shows a chevron.
+ * always say what they mean. A row that opens something shows a chevron and answers a touch at
+ * once: the soft surface fill while pressed (and the platform ripple on Android), no animation.
+ * Colours follow the theme.
  */
 import { createContext, useContext, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { Icon } from './Icon';
 import { StatusBadge, type StatusBadgeProps } from './StatusBadge';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from './theme';
+import {
+  continuousCorners,
+  fonts,
+  makeStyles,
+  MIN_TOUCH_SIZE,
+  radius,
+  spacing,
+  type,
+  useTheme,
+} from './theme';
 
 export type RowLayout = 'card' | 'flat';
 
@@ -39,7 +50,7 @@ export interface ListRowProps {
   trailing?: ReactNode;
   /** Decorative Material Symbols name shown in a tinted tile. */
   icon?: string;
-  /** Tile colours: `[background, foreground]`. */
+  /** Tile colours: `[background, foreground]`; the soft surface with the text colour by default. */
   iconTone?: readonly [string, string];
   /** A stripe on the left edge, e.g. the activity kind's colour. */
   accent?: string;
@@ -57,12 +68,15 @@ export function ListRow({
   accessibilityHint,
   trailing,
   icon,
-  iconTone = [colors.surface, colors.text],
+  iconTone,
   accent,
   leading,
   testID,
 }: ListRowProps) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const layout = useContext(RowLayoutContext);
+  const [tileColor, tileIconColor] = iconTone ?? [colors.surface, colors.text];
   const label = [title, detail, status?.label, ...badges.map((b) => b.label)]
     .filter(Boolean)
     .join(', ');
@@ -71,8 +85,8 @@ export function ListRow({
       {accent ? <View style={[styles.accent, { backgroundColor: accent }]} /> : null}
       {leading}
       {icon ? (
-        <View style={[styles.tile, { backgroundColor: iconTone[0] }]}>
-          <Icon name={icon} size={20} color={iconTone[1]} />
+        <View style={[styles.tile, { backgroundColor: tileColor }]}>
+          <Icon name={icon} size={20} color={tileIconColor} />
         </View>
       ) : null}
       <View style={styles.text}>
@@ -95,6 +109,7 @@ export function ListRow({
         accessibilityLabel={label}
         accessibilityHint={accessibilityHint}
         onPress={onPress}
+        android_ripple={{ color: colors.surface }}
         style={({ pressed }) => [styles.row, frame, pressed && styles.pressed]}
         testID={testID}
       >
@@ -109,7 +124,7 @@ export function ListRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   row: {
     minHeight: MIN_TOUCH_SIZE,
     flexDirection: 'row',
@@ -123,7 +138,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     paddingVertical: spacing.md,
     paddingHorizontal: 14,
+    // A card row is a full touch target even with a one-line title.
+    minHeight: 56,
     borderRadius: radius.lg,
+    ...continuousCorners,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -138,10 +156,11 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: radius.sm,
+    ...continuousCorners,
     alignItems: 'center',
     justifyContent: 'center',
   },
   text: { flex: 1, gap: spacing.xs },
   title: { ...type.body, ...fonts.bold, color: colors.text },
   detail: { ...type.caption, color: colors.textMuted },
-});
+}));

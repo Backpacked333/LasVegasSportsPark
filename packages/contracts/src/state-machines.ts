@@ -325,9 +325,64 @@ export const InboxEventMachine = defineStateMachine<InboxEventState, InboxEventE
   },
 });
 
+// ---------------------------------------------------------------------------------------------
+// Scheduled message (communications, SPK-COMMS-009, proposed amendment PA-05): needs confirmation,
+// confirmed, skipped, sent, canceled. A message of a sequence is sent only from `confirmed`; a
+// confirmed message returns to `needs_confirmation` when its anchor date moves or the text staff
+// confirmed no longer stands (`reopen`); a skipped one can be restored. `sent` and `canceled` are
+// final. Migration 1013 lists the same states and guards the same moves.
+// ---------------------------------------------------------------------------------------------
+export type ScheduledMessageState =
+  'needs_confirmation' | 'confirmed' | 'skipped' | 'sent' | 'canceled';
+export type ScheduledMessageEvent = 'confirm' | 'reopen' | 'skip' | 'restore' | 'send' | 'cancel';
+export const ScheduledMessageMachine = defineStateMachine<
+  ScheduledMessageState,
+  ScheduledMessageEvent
+>({
+  name: 'ScheduledMessage',
+  initial: 'needs_confirmation',
+  states: ['needs_confirmation', 'confirmed', 'skipped', 'sent', 'canceled'],
+  terminal: ['sent', 'canceled'],
+  transitions: {
+    needs_confirmation: { confirm: 'confirmed', skip: 'skipped', cancel: 'canceled' },
+    confirmed: {
+      send: 'sent',
+      reopen: 'needs_confirmation',
+      skip: 'skipped',
+      cancel: 'canceled',
+    },
+    skipped: { restore: 'needs_confirmation', cancel: 'canceled' },
+    sent: {},
+    canceled: {},
+  },
+});
+
+// ---------------------------------------------------------------------------------------------
+// Uniform order (SPK-REG-012, proposed amendment PA-07): ordered, paid, handed over, canceled.
+// A uniform is ordered with a pending registration, paid when the registration is confirmed (a
+// uniform that is not charged is paid with nothing owed) and handed over by a staff command. A
+// hand-over is undone only by a recorded correction, which returns the order to paid. An order
+// ends as canceled with a registration that ended before the hand-over.
+// ---------------------------------------------------------------------------------------------
+export type UniformOrderState = 'ordered' | 'paid' | 'handed_over' | 'canceled';
+export type UniformOrderEvent = 'pay' | 'hand_over' | 'correct_hand_over' | 'cancel';
+export const UniformOrderMachine = defineStateMachine<UniformOrderState, UniformOrderEvent>({
+  name: 'UniformOrder',
+  initial: 'ordered',
+  states: ['ordered', 'paid', 'handed_over', 'canceled'],
+  terminal: ['canceled'],
+  transitions: {
+    ordered: { pay: 'paid', cancel: 'canceled' },
+    paid: { hand_over: 'handed_over', cancel: 'canceled' },
+    handed_over: { correct_hand_over: 'paid' },
+    canceled: {},
+  },
+});
+
 export const ALL_STATE_MACHINES = [
   ApplicationMachine,
   EnrollmentMachine,
+  UniformOrderMachine,
   PlacementMachine,
   HoldMachine,
   SessionBookingMachine,
@@ -338,4 +393,5 @@ export const ALL_STATE_MACHINES = [
   AssignmentMachine,
   OutboxEventMachine,
   InboxEventMachine,
+  ScheduledMessageMachine,
 ] as const;

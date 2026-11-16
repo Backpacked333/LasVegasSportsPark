@@ -441,3 +441,56 @@ Verified by `__tests__/timeline-commands.spec.ts`.
   (`__tests__/event-scheduling-port.spec.ts`).
 - A re-imported event with changed setup or cleanup minutes is not taken for the same import
   (`__tests__/event-import.spec.ts`, K-13); extended holds are stamped from the injected clock.
+
+## Public and lobby schedule (SPK-SCHED-010, proposed amendment PA-06) — 2026-11-14
+
+Status words follow §6.7. The requirement is **Proposed**
+(`docs/package-a/proposed-specification-amendments.md`); it is built behind the capability
+`public_schedule`, off unless an organization turns it on (DEC-016, DEC-100); ADR-005.
+
+**Verified** (implementation, by `__tests__/public-schedule.spec.ts`):
+
+- Migration `0305_scheduling_facility_public_views.sql`: `facility_public_views`, the switch and
+  the random public code of a facility's public schedule (one view per facility, one view per
+  code, a well-formed code, the disabled fact, never another organization's facility).
+- Staff (`public/public-schedule.controller.ts`): `GET /facilities/{id}/public-schedule-view`
+  (staff who read the schedule), `POST .../enable` (scheduler, general manager, system
+  administrator; refused while the capability is off; `newCode` issues a new code so earlier links
+  stop working), `POST .../disable` (never gated). The code is not written to the audit record.
+- Public read, no sign-in: `GET /public/{organization}/schedule/{code}?date=` answers a facility's
+  published events of one facility-local day by field and time, into `PublicDaySchedule`
+  (`packages/contracts/src/api/scheduling-public.ts`), a shape with no person, booker, contact or
+  internal id (asserted by exhaustive key inspection). A rental or a party reads "Reserved"; a
+  title stored on an event is never shown, because a person may have typed it: an event reads its
+  kind in words ("Class", "Practice", "League game", "Not available") unless the module that owns
+  its source vouches for a title through `PublicScheduleTitles` (competition does, for the games
+  of a public competition). Draft and canceled events are not part of the day.
+- **The public read answers for a window of days around today only** (security review L-3,
+  2026-11-14): from `SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK` days before today to
+  `SCHEDULING_PUBLIC_SCHEDULE_DAYS_AHEAD` days after it, where today is the facility-local day
+  (`facilities.timezone`, SPK-SCHED-008), so the window turns at the facility's midnight and not
+  at UTC's. A day outside the window answers the same "not available" as an unknown code; the
+  answer carries `window: { from, to }` so a page stops its day controls there. An anonymous
+  caller can no longer walk the facility's history or its whole forward booking state (the times
+  of private bookings included). The two values are technical settings of the module's settings
+  section (`scheduling.settings.ts`, K-15: read from the environment and validated at boot, a
+  malformed value refuses boot).
+- Every public read counts against the rate limit `public_views` per client address
+  (`kernel/http/rate-limit.ts`, 120 a minute by default, `RATE_LIMITS=public_views=<n>/<seconds>`);
+  a successful answer carries `Cache-Control: public, max-age=30` and `computedAt`; an unknown
+  organization, an unknown, malformed or disabled code, a day outside the window and the
+  capability turned off all answer the same `NOT_FOUND` "This view is not available." with
+  `no-store`.
+- Exported for other modules: `PublicScheduleTitles`, `resolvePublicOrganization`,
+  `publicViewNotAvailable`, `assertPublicAddress`, `allowPublicCache`, `newPublicCode`.
+
+**Proposed** (defaults this build assumes): the wording "Reserved" for private bookings; a public
+schedule exists only where staff enabled it; the cache lifetime and the rate limit are technical
+values; the window of days is yesterday to 14 days ahead
+(`SCHEDULING_PUBLIC_SCHEDULE_DAYS_BACK=1`, `SCHEDULING_PUBLIC_SCHEDULE_DAYS_AHEAD=14`).
+
+**Pending decision** (DEC-100): what is public, and for how many days back and ahead; the wording
+shown for private bookings; the number of lobby screens and what they show. A class reads "Class" unless catalog vouches for its name:
+catalog registers the contributor `catalog.public_sessions`, which answers the offering's name for
+a session of an offering that is in the public catalog (**Verified**:
+`catalog/__tests__/public-session-titles.spec.ts`).

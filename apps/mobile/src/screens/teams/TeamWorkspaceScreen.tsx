@@ -21,6 +21,10 @@
  * is DEC-012 (pending). A player's own contribution requests are listed by SCR-C-25
  * (`/team/contributions`, `GET /v1/me/contribution-requests`).
  *
+ * A waiting team (SPK-COMP-006, proposed amendment PA-10) shows its wait first: the division, the
+ * place in the order, an open offer the captain accepts or declines, and withdrawing from the list
+ * (features/teams/TeamWaiting.tsx).
+ *
  * Upcoming game times are in the facility's time zone (SPK-SCHED-008): each game's
  * `GET /v1/fixtures/{id}` (the read SCR-C-24 makes for the same games, so it is shared) gives
  * `venue.timezone`; while it loads or if it fails the device's zone is used, always named.
@@ -36,6 +40,7 @@
  * offline (cached with age, sending a request disabled); processing and success: the request to
  * the operating team (other commands live on the linked screens).
  */
+import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
@@ -52,6 +57,7 @@ import {
 } from '../../features/teams/status';
 import { ContactOperations, ContactThroughSupport } from '../../features/teams/ContactOperations';
 import { TeamFrame } from '../../features/teams/TeamFrame';
+import { TeamWaiting } from '../../features/teams/TeamWaiting';
 import { Body, ButtonRow, Detail, ReasonList, Section } from '../../features/teams/ui';
 import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -181,8 +187,11 @@ function ReducedRoster({ workspace, now }: { workspace: Workspace; now: Date }) 
 export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; viewer: Viewer }) {
   const router = useRouter();
   const now = useNow();
+  const queryClient = useQueryClient();
   const entryId = workspace.entry.id;
   const games = workspace.upcomingFixtures;
+  const reload = () =>
+    void queryClient.invalidateQueries({ queryKey: ['api', '/team-entries/{id}'] });
   return (
     <View>
       <Hero
@@ -193,6 +202,7 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
         <StatusBadge {...teamEntryStatus(workspace.entry)} testID="entry-status" />
         <FormGuide workspace={workspace} />
       </Hero>
+      <TeamWaiting workspace={workspace} onReload={reload} />
       <Section title="Season">
         <Detail
           label="Season"

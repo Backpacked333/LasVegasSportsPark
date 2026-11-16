@@ -47,7 +47,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type WaitlistEntry = Schema<'WaitlistEntry'>;
 
@@ -57,6 +57,7 @@ interface Failure {
 }
 
 function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () => void }) {
+  const styles = useStyles();
   const router = useRouter();
   const now = useNow();
   const { reachable } = useConnectivity();
@@ -252,11 +253,11 @@ export function WaitlistRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   offer: {
     paddingVertical: spacing.sm,
     gap: spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-});
+}));

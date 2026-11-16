@@ -145,7 +145,7 @@ describe('SCR-S-35 ObligationsScreen', () => {
     const contributions = await screen.findByRole('list', { name: 'Contributions' });
     expect(await within(contributions).findByText('Sam Rivera')).toBeInTheDocument();
     expect(within(contributions).getByText('paid')).toBeInTheDocument();
-    expect(await screen.findByText('Fulfillment recovery_required')).toBeInTheDocument();
+    expect(await screen.findByText('Fulfillment recovery required')).toBeInTheDocument();
     expect(screen.getByText(/Owner: finance\s+operator queue/)).toBeInTheDocument();
   });
 
@@ -237,7 +237,7 @@ describe('SCR-S-35 ObligationsScreen', () => {
     await user.click(await screen.findByRole('button', { name: 'Orders' }));
     expect(screen.getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-pressed', 'true');
     const list = await screen.findByRole('list', { name: 'Orders' });
-    expect(within(list).getByText('Fulfillment recovery_required')).toBeInTheDocument();
+    expect(within(list).getByText('Fulfillment recovery required')).toBeInTheDocument();
     expect(within(list).getByText('Payment paid')).toBeInTheDocument();
     expect(within(list).getByText(/Owner: finance operator\s+queue/)).toBeInTheDocument();
     expect(within(list).getByRole('link', { name: /^Order 0192f1a0: \$125\.00/ })).toHaveAttribute(

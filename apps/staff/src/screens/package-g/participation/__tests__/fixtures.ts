@@ -401,7 +401,18 @@ export function membershipOffering(
     name: 'Adult membership',
     entitlementDefinitionId: MEMBERSHIP_DEFINITION_ID,
     bookingTermsPolicyVersionId: null,
-    price: { priceRuleId: TERMS_ID, basePriceMinor: 12000, currency: 'USD', chargeLines: [] },
+    price: {
+      priceRuleId: TERMS_ID,
+      basePriceMinor: 12000,
+      currency: 'USD',
+      chargeLines: [],
+      pricingBasis: 'term',
+      remainingSessionCount: null,
+      remainingSessionsPriceMinor: null,
+      notQuotable: null,
+      memberPrice: null,
+      tiers: [],
+    },
     ...overrides,
   });
 }
@@ -457,6 +468,8 @@ export function enrollment(overrides: Partial<Schema<'Enrollment'>> = {}): Schem
     transferredAt: null,
     transferredToEnrollmentId: null,
     transferredFromEnrollmentId: null,
+    priceTierId: null,
+    selectedSessionIds: null,
     transferConsequence: null,
     completedAt: null,
     offering: {

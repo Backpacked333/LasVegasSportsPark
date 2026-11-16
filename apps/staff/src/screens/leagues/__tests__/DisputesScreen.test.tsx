@@ -178,7 +178,7 @@ describe('SCR-S-12 DisputesScreen (SPK-RESULT-005, CMP-05)', () => {
     render(app.at('/leagues/disputes'));
     const list = await screen.findByRole('list', { name: 'Disputes' });
     await user.click(within(list).getByRole('button', { name: 'Start review' }));
-    expect(await within(list).findByText('Dispute under_review')).toBeInTheDocument();
+    expect(await within(list).findByText('Dispute under review')).toBeInTheDocument();
     expect(app.fake.requests.find((r) => r.route === '/disputes/{id}/decide')?.body).toEqual({
       action: 'review',
       expectedRevision: 1,

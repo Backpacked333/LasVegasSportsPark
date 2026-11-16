@@ -122,6 +122,7 @@ process (**Verified**: `apps/api/src/dev-all.ts`, loops in `kernel/workers/inlin
 ```bash
 export NODE_ENV=development AUTH_LOCAL_SECRET=$(openssl rand -hex 32) PGLITE_DATA_DIR=.pglite
 pnpm dev:all -- --seed      # migrates, creates the development seed, serves :3000 with the worker loops
+pnpm dev:all -- --lan       # also answers other machines on the network (a phone running the customer app)
 ```
 
 To run them as separate processes, as production does, use one PostgreSQL database:
@@ -156,6 +157,70 @@ UTC) and six local accounts: `dev-admin` (system administrator), `dev-desk` (fro
 `PGLITE_DATA_DIR`, run the seed before the API starts, never while it runs, and never start a
 worker on the same directory (previous section); use `DATABASE_URL` for the seed, the API and the
 worker when follow-ups matter.
+
+### Real and demo modes
+
+The staff dashboard and the customer app run in one of two modes.
+
+- **Real mode** (default) is the software as it ships: the real sign-in and whatever data the API
+  holds. Use it for testing against a real or staging API. `pnpm --filter @sportspark/staff build`
+  and the mobile `export:*` scripts produce real-mode bundles only, and their release-bundle checks
+  fail if any demo code is present.
+- **Demo mode** is for walking people through the software. `pnpm demo` seeds a separate demo
+  database (`.pglite-demo/`), starts the API with its local identity provider and the worker's
+  loops in the same process, and starts the staff dashboard in demo mode at http://localhost:5173.
+  The sign-in screen becomes a role picker (front desk, league manager, administrator, general
+  manager, coach, referee). Each role signs in to the real screens, a banner says the data is sample
+  data, and a tour panel walks through that role's screens with Back and Next and things to try.
+  `pnpm demo --mobile` also starts the customer app's development server in demo mode, with a
+  parent sign-in and a family tour. `pnpm demo --fresh` starts from an empty demo database.
+  Mobile demo mode exists in development builds only.
+
+**What the demo contains.** The demo dataset (ADR-007, `apps/api/src/dev/seed-demo.ts`) is built by
+calling the modules' own services as the staff member or customer who would, never by writing
+their tables, and turns every capability on. Everything in it is synthetic (invented names,
+`example.test` addresses, 555-01xx numbers) and dated from the day it is seeded, in the
+facility's time zone (America/Los_Angeles):
+
+- **Spaces:** three fields (Field 1 rentable whole or by half), a court and a party room, opening
+  hours, one maintenance task and one planned closure.
+- **Programs:** a weekly class with a term price and a session today; a class priced per class,
+  three sessions into its term; a class with a member price and the membership that grants it; a
+  full class with a waitlist; a class that needs a coach's approval; a holiday camp sold by the
+  week or the day with three add-ons and a jersey; a field rental; one draft.
+- **People:** twelve families (the seeded parent's included) with registrations that are
+  confirmed, awaiting approval, waitlisted and canceled; two children hold the membership.
+- **Waivers:** an approved waiver required on the offerings; accepted digitally by most, entered
+  from paper for one child, missing for two.
+- **League:** a public competition with an active season, two divisions, eight teams with rosters,
+  24 generated fixtures, ten published results, two reported scores waiting, one dispute; a full
+  division with one team waiting and one open place offer; a second competition not yet set up.
+- **Rentals:** three bookings this week, one unpaid, one with a group roster (two members, one
+  without a waiver, two open invitations).
+- **Register:** products, an open session, two ordinary sales and three open-amount lines (below
+  the desk's limit, approved above it, waiting for approval).
+- **Messages:** four templates and a sequence for seasons; the season's schedule has one message
+  sent, one skipped and two waiting for confirmation.
+- **Money:** paid orders by card and cash, a declined card, a payment with an unknown outcome, a
+  cancellation waiting for finance and a refund still with the fake provider.
+- **Staff:** assignments this week for the coach and the official; three stored report runs.
+- **The seeded parent:** a child in a class today, a team, an amount owed, a waiver to accept,
+  notices in the inbox, a rental roster invitation and a register receipt.
+
+**Starting it.** `pnpm demo` (about a minute: it builds the API and seeds). It prints the address
+of the dashboard and three pages that need no sign-in: the lobby display, the public schedule of
+the day and the public standings. Ports 3000 (API) and 5173 (dashboard) must be free. The dataset
+is dated from the day it was seeded; after a few days start again with `--fresh`.
+
+| Item                                                                                       | Status                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Staff role picker, demo banner and tours; real builds contain no demo code                 | **Verified**: `apps/staff/src/demo/__tests__` (every tour step and every seeded link is a route of the dashboard), release-bundle check                                                                                                                                                                                                                           |
+| Mobile parent sign-in and family tour, development builds only                             | **Verified**: `apps/mobile/src/demo/__tests__` (every step is a route of the app), release-bundle check                                                                                                                                                                                                                                                           |
+| The demo dataset: built through services, idempotent, development with local identity only | **Verified**: `apps/api/src/dev/__tests__/seed-demo.spec.ts` on PGlite (a second run changes no table; each part read back through its module's read service or route; a run late in the evening). **Not verified** on PostgreSQL (`TEST_DATABASE_URL`)                                                                                                           |
+| `pnpm demo --fresh` seeds, starts the API with the worker loops and the dashboard          | **Verified** by running it once: each of the six staff roles and the parent signed in through `POST /v1/dev/tokens` and the main read of every tour step answered 200 with rows (88 reads); 24 checks of the tours' "try this" items were made through the API, including a published score moving the standings and a confirmed message being sent by the worker |
+| The screens themselves in a browser or on a phone, in either theme                         | **Not verified**: the run above checked the API reads behind each screen, not the rendered screens; `pnpm demo --mobile` was not started                                                                                                                                                                                                                          |
+| The values the sample data uses (prices, limits, waiver wording, message texts)            | **Pending decision**: they are sample values; the real ones are DEC-095 to DEC-104 and the policies the operator approves                                                                                                                                                                                                                                         |
+| A coach's uniform list; fee records for the official; passes; tournaments, parties         | **Proposed**: not in the dataset (see `.10x/decisions/sde/track-g.md` for each and why)                                                                                                                                                                                                                                                                           |
 
 ## Working in this repository
 

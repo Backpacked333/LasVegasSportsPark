@@ -3,7 +3,9 @@
  * POL-007; journey A1). Reads `GET /v1/offerings/{id}` (public, child-safe view) and its sessions:
  * name, description, activity type, format, location, dates, registration window, age band,
  * capacity units, price basis with approved taxes and fees, required forms and the cancellation
- * policy, then the entry point to registration (SCR-C-09).
+ * policy, then the entry point to registration (SCR-C-09). A price for each class is shown with
+ * the classes still to come and their product, and a member price with the membership it is for
+ * (SPK-PAY-013, SPK-PAY-015; proposed amendments PA-02 and PA-04), all as the API states them.
  *
  * Times are shown in the facility's time zone (`facility.timezone`, SPK-SCHED-008), with the
  * zone named. Signed in, "Who can take part" shows the read-only eligibility of each person the
@@ -40,6 +42,7 @@ import {
   useRegistrationOptions,
 } from '../../features/registration/options';
 import { useParticipants } from '../../features/registration/participants';
+import { listedPerSessionLine } from '../../features/registration/price-basis';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { offeringDates, registrationWindowStatus } from '../../features/registration/status';
@@ -70,15 +73,50 @@ function chargeText(charge: ChargeLine, currency: string): string {
 
 function PriceSection({ offering }: { offering: Offering }) {
   const price = offering.price;
+  const perSession = price?.pricingBasis === 'per_session';
+  const perSessionLine = price ? listedPerSessionLine(price) : null;
+  // SPK-PAY-013 (quality review M-6): where a quote of this price would be refused under the
+  // organization's switches, the reason is shown instead of a price the customer cannot get.
+  if (price?.notQuotable) {
+    return (
+      <Section title="Price">
+        <Body>{price.notQuotable.message}</Body>
+      </Section>
+    );
+  }
   return (
     <Section title="Price">
       {price ? (
         <>
           <Detail
-            label="Base price"
+            label={perSession ? 'Price per class' : 'Base price'}
             value={formatMoney(price.basePriceMinor, price.currency)}
             emphasis
           />
+          {/* SPK-PAY-013: the classes still to come at the per-class price, as the API counts. */}
+          {perSessionLine ? <Body>{perSessionLine}</Body> : null}
+          {perSession ? (
+            <Body muted>
+              You pay for the classes still to come. They are counted again when you ask for a
+              price.
+            </Body>
+          ) : null}
+          {/* SPK-PAY-015: the member price and the membership it is for. */}
+          {price.memberPrice ? (
+            <>
+              <Detail
+                label={`Member price (${price.memberPrice.entitlementName})`}
+                value={`${formatMoney(price.memberPrice.priceMinor, price.currency)}${
+                  perSession ? ' per class' : ''
+                }`}
+                testID="offering-member-price"
+              />
+              <Body muted>
+                The member price applies to a participant who holds this membership when the price
+                is made.
+              </Body>
+            </>
+          ) : null}
           {price.chargeLines.map((charge) => (
             <Detail
               key={charge.code}
@@ -274,6 +312,14 @@ function RegistrationAction({ offering }: { offering: Offering }) {
     return (
       <Section title="Registration">
         <Body>Registration is not open for this activity right now.</Body>
+      </Section>
+    );
+  }
+  // Quality review M-6: a price no quote would give is not registered for online.
+  if (offering.price?.notQuotable) {
+    return (
+      <Section title="Registration">
+        <Body>This activity is not open for online registration. Ask the front desk.</Body>
       </Section>
     );
   }

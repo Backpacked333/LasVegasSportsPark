@@ -27,6 +27,8 @@ export const POLICY_APPROVAL_ACTION: Record<PolicyKind, ActionDefinition> = {
   hold: CatalogActions.approveParticipationPolicy,
   approval: CatalogActions.approveParticipationPolicy,
   form: CatalogActions.approveParticipationPolicy,
+  // SPK-REG-011 (proposed, DEC-095): a waiver decides participation, as a form does.
+  waiver: CatalogActions.approveParticipationPolicy,
   cancellation: CatalogActions.approveFinancialPolicy,
   refund: CatalogActions.approveFinancialPolicy,
   discount: CatalogActions.approveFinancialPolicy,
@@ -37,6 +39,15 @@ export const POLICY_APPROVAL_ACTION: Record<PolicyKind, ActionDefinition> = {
   booking_terms: CatalogActions.approveFinancialPolicy,
   tax_fee: CatalogActions.approveFinancialPolicy,
 };
+
+/**
+ * SPK-PAY-002: how far before the server's clock a price rule's `effectiveFrom` may lie and
+ * still mean "from now". A caller's "now" is always a little behind the instant the command
+ * runs at (the request travels, the clock moves), so an instant within this tolerance is read as
+ * now and the rule is stored with the server's instant; anything earlier is a price for the past
+ * and is refused. A technical tolerance, not an operator decision; keep it small.
+ */
+export const PRICE_EFFECTIVE_NOW_TOLERANCE_MS = 60_000;
 
 /**
  * CAT-02, K-12 (§1.6, §6.5 Package G): the conditional capability an offering kind belongs to.

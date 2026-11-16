@@ -84,7 +84,48 @@ function fixturePolicyContent(kind: PolicyKind): Record<string, unknown> {
       rounding: 'half_up',
     };
   }
+  if (kind === 'waiver') return fixtureWaiverContent();
   return { text: `${kind} policy wording` };
+}
+
+/**
+ * A complete waiver rule (SPK-REG-011, proposed). The fixture values are the assumed defaults the
+ * design proposes for DEC-095 (warn, a new version does not require re-acceptance, no periodic
+ * renewal); they are test content of one version, never constants of the system.
+ */
+export function fixtureWaiverContent(
+  rule: {
+    reacceptOnNewVersion?: boolean;
+    renewEveryMonths?: number | null;
+    enforcement?: 'warn' | 'block';
+    overrideRoles?: string[];
+  } = {},
+): Record<string, unknown> {
+  return {
+    text: 'I accept the risks of taking part.',
+    renewal: {
+      reacceptOnNewVersion: rule.reacceptOnNewVersion ?? false,
+      renewEveryMonths: rule.renewEveryMonths ?? null,
+    },
+    enforcement: rule.enforcement ?? 'warn',
+    overrideRoles: rule.overrideRoles ?? [],
+  };
+}
+
+/** Requires a waiver family on an offering, written directly (fixtures are never gated). */
+export async function requireWaiverFixture(
+  ctx: CatalogFixtureContext,
+  input: { offeringId: string; policyKey: string; organizationId?: string },
+): Promise<void> {
+  await ctx.db
+    .insertInto('offering_required_waivers')
+    .values({
+      organization_id: input.organizationId ?? ctx.organizationId,
+      offering_id: input.offeringId,
+      policy_key: input.policyKey,
+      added_by: json(FIXTURE_ACTOR),
+    })
+    .execute();
 }
 
 export async function createPolicyVersionFixture(
@@ -379,6 +420,11 @@ export async function createPriceRuleFixture(
     effectiveTo?: Date | null;
     version?: number;
     organizationId?: string;
+    /** 0211 (SPK-PAY-013): default `term`. */
+    pricingBasis?: 'term' | 'per_session';
+    /** 0211 (SPK-PAY-015): a member price and the entitlement it requires, together. */
+    memberPriceMinor?: number | null;
+    memberEntitlementDefinitionId?: string | null;
   },
 ): Promise<string> {
   const id = newId();
@@ -401,6 +447,9 @@ export async function createPriceRuleFixture(
       base_price_minor: input.basePriceMinor,
       currency: input.currency ?? 'USD',
       charge_lines: json(input.chargeLines ?? []),
+      pricing_basis: input.pricingBasis ?? 'term',
+      member_price_minor: input.memberPriceMinor ?? null,
+      member_entitlement_definition_id: input.memberEntitlementDefinitionId ?? null,
       created_by: json(FIXTURE_ACTOR),
     })
     .execute();
@@ -526,6 +575,11 @@ export async function createAcknowledgmentFixture(
     recordedByPersonId?: string | null;
     status?: 'active' | 'withdrawn';
     organizationId?: string;
+    /** Defaults to the fixture clock. */
+    signedAt?: Date;
+    /** SPK-REG-011: `paper` needs a staff recorder and `paperDatedOn` (the database checks). */
+    method?: 'digital' | 'paper';
+    paperDatedOn?: string | null;
   },
 ): Promise<string> {
   const id = newId();
@@ -543,11 +597,135 @@ export async function createAcknowledgmentFixture(
       recorded_by_kind: input.recordedByKind ?? 'customer',
       recorded_by_person_id:
         input.recordedByPersonId === undefined ? input.signedByPersonId : input.recordedByPersonId,
-      signed_at: ctx.clock.now(),
+      signed_at: input.signedAt ?? ctx.clock.now(),
       evidence: json({ channel: 'fixture' }),
+      method: input.method ?? 'digital',
+      paper_dated_on: input.paperDatedOn ?? null,
       status,
       withdrawn_at: status === 'withdrawn' ? ctx.clock.now() : null,
       withdrawn_reason: status === 'withdrawn' ? 'fixture' : null,
+    })
+    .execute();
+  return id;
+}
+
+/** 0215 (SPK-PAY-014): a price tier of a price rule; `sequence` defaults to the next position. */
+export async function createPriceRuleTierFixture(
+  ctx: CatalogFixtureContext,
+  input: {
+    priceRuleId: string;
+    offeringId: string;
+    code: string;
+    name?: string;
+    attendance?: 'all_sessions' | 'chosen_sessions';
+    minSessions?: number | null;
+    maxSessions?: number | null;
+    priceMinor: number;
+    memberPriceMinor?: number | null;
+    availableUntil?: Date | null;
+    organizationId?: string;
+  },
+): Promise<string> {
+  const id = newId();
+  const organizationId = input.organizationId ?? ctx.organizationId;
+  const latest = await ctx.db
+    .selectFrom('price_rule_tiers')
+    .select((eb) => eb.fn.max('sequence').as('sequence'))
+    .where('organization_id', '=', organizationId)
+    .where('price_rule_id', '=', input.priceRuleId)
+    .executeTakeFirst();
+  const attendance = input.attendance ?? 'all_sessions';
+  await ctx.db
+    .insertInto('price_rule_tiers')
+    .values({
+      id,
+      organization_id: organizationId,
+      price_rule_id: input.priceRuleId,
+      offering_id: input.offeringId,
+      code: input.code,
+      name: input.name ?? input.code,
+      sequence: (latest?.sequence ?? 0) + 1,
+      attendance,
+      min_sessions: attendance === 'chosen_sessions' ? (input.minSessions ?? 1) : null,
+      max_sessions: attendance === 'chosen_sessions' ? (input.maxSessions ?? null) : null,
+      price_minor: input.priceMinor,
+      member_price_minor: input.memberPriceMinor ?? null,
+      available_until: input.availableUntil ?? null,
+    })
+    .execute();
+  return id;
+}
+
+/** 0216 (SPK-PAY-014): an add-on of an offering. */
+export async function createOfferingAddonFixture(
+  ctx: CatalogFixtureContext,
+  input: {
+    offeringId: string;
+    code?: string;
+    name?: string;
+    priceMinor: number;
+    currency?: string;
+    chargeLines?: ChargeLine[];
+    selection?: 'per_registration' | 'per_session';
+    capacity?: number | null;
+    organizationId?: string;
+  },
+): Promise<string> {
+  const id = newId();
+  const n = next();
+  await ctx.db
+    .insertInto('offering_addons')
+    .values({
+      id,
+      organization_id: input.organizationId ?? ctx.organizationId,
+      offering_id: input.offeringId,
+      code: input.code ?? `addon_${n}`,
+      name: input.name ?? `Add-on ${n}`,
+      description: null,
+      price_minor: input.priceMinor,
+      currency: input.currency ?? 'USD',
+      charge_lines: json(input.chargeLines ?? []),
+      selection: input.selection ?? 'per_registration',
+      capacity: input.capacity ?? null,
+      created_by: json(FIXTURE_ACTOR),
+    })
+    .execute();
+  return id;
+}
+
+/** 0217 (SPK-REG-012): the uniform of an offering. */
+export async function createOfferingUniformFixture(
+  ctx: CatalogFixtureContext,
+  input: {
+    offeringId: string;
+    itemKey?: string;
+    name?: string;
+    sizes?: string[];
+    requirement?: 'required' | 'optional';
+    priceMinor?: number | null;
+    currency?: string | null;
+    chargeLines?: ChargeLine[];
+    returningHolderFree?: boolean;
+    organizationId?: string;
+  },
+): Promise<string> {
+  const id = newId();
+  const priceMinor = input.priceMinor === undefined ? null : input.priceMinor;
+  await ctx.db
+    .insertInto('offering_uniforms')
+    .values({
+      id,
+      organization_id: input.organizationId ?? ctx.organizationId,
+      offering_id: input.offeringId,
+      item_key: input.itemKey ?? `kit-${next()}`,
+      name: input.name ?? 'Team kit',
+      sizes: json(input.sizes ?? ['YS', 'YM', 'YL']),
+      requirement: input.requirement ?? 'optional',
+      price_minor: priceMinor,
+      currency: priceMinor === null ? null : (input.currency ?? 'USD'),
+      charge_lines: json(input.chargeLines ?? []),
+      returning_holder_free: input.returningHolderFree ?? false,
+      created_by: json(FIXTURE_ACTOR),
     })
     .execute();
   return id;

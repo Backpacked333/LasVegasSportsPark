@@ -6,18 +6,21 @@
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { Text, TextInput, View } from 'react-native';
 import { useApiCommand } from '../api/useApiCommand';
 import { useApp } from '../providers/AppProviders';
 import { LiveText } from '../ui/announce';
 import { Button } from '../ui/Button';
+import { useInputChrome } from '../ui/input';
 import { Screen } from '../ui/Screen';
 import { StateView } from '../ui/StateView';
-import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, spacing, type } from '../ui/theme';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function DevSignInScreen() {
+  const styles = useStyles();
+  const input = useInputChrome();
   const { signIn } = useApp();
   const router = useRouter();
   const [accountId, setAccountId] = useState('');
@@ -48,6 +51,7 @@ export function DevSignInScreen() {
           Account id
         </Text>
         <TextInput
+          {...input.props}
           value={accountId}
           onChangeText={setAccountId}
           autoCapitalize="none"
@@ -55,7 +59,7 @@ export function DevSignInScreen() {
           accessibilityLabel="Account id"
           accessibilityLabelledBy="account-id-label"
           placeholder="00000000-0000-7000-8000-000000000000"
-          style={styles.input}
+          style={[styles.input, input.focusStyle]}
           testID="dev-account-id"
         />
         {accountId.length > 0 && !valid ? (
@@ -89,7 +93,7 @@ function DevSignInError({ error }: { error: ApiError }) {
   return <StateView variant="error" error={error} />;
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   form: { padding: spacing.lg, gap: spacing.md },
   title: { ...type.title, color: colors.text },
   body: { ...type.body, color: colors.text },
@@ -104,4 +108,4 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   error: { ...type.caption, color: colors.danger },
-});
+}));

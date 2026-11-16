@@ -18,7 +18,7 @@ import {
 } from '../../finance.shared';
 import { PosSaleMachine, PosTenderMachine } from '../../finance.state-machines';
 import { LedgerService, type PostingLine } from '../../ledger/ledger.service';
-import { liveLines } from './pos-views';
+import { linesAwaitingApproval, liveLines, revenueKeyOf } from './pos-views';
 
 export type PosSaleRow = Selectable<PosSalesTable>;
 
@@ -30,9 +30,10 @@ export type PosSaleRow = Selectable<PosSalesTable>;
  *
  * Journals (balanced, append-only; corrections are reversing journals, never edits):
  * - sale paid (`pos_sale` / `pos_sale_paid`): debit cash on hand (cash and external tenders) and
- *   the processor (card tenders); credit POS revenue per product kind, taxes payable and fees
- *   payable per charge code (kind and code in the memo); the processor fee of each card tender as
- *   processor fees against the processor;
+ *   the processor (card tenders); credit POS revenue per product kind, and per revenue category
+ *   for open-amount lines (SPK-PAY-016, proposed), taxes payable and fees payable per charge code
+ *   (kind or category and code in the memo); the processor fee of each card tender as processor
+ *   fees against the processor;
  * - return (`pos_return` / `pos_return`): the returned shares debited back from revenue, taxes and
  *   fees; credited to cash on hand (cash, external) or to refunds (card: the refund's own journal
  *   then moves refunds against the processor when it settles).
@@ -228,6 +229,11 @@ export class PosSaleFinalizer {
   ): Promise<boolean> {
     const sale = await this.lockSale(trx, organizationId, saleId);
     if (sale.status !== 'open' || sale.total_minor <= 0) return false;
+    // SPK-PAY-016 (proposed): a sale is not paid while an open-amount line above its ceiling waits
+    // for its second approval (the database refuses the transition too,
+    // pos_sales_open_amount_approved). No tender is taken in that state, so this is reached only
+    // when a card tender taken earlier settles after such a line was added: the sale stays open.
+    if ((await this.awaitingApproval(trx, organizationId, saleId)).length > 0) return false;
     const tenders = await trx
       .selectFrom('pos_tenders')
       .select(['kind', 'amount_minor', 'payment_attempt_id', 'status'])
@@ -265,6 +271,24 @@ export class PosSaleFinalizer {
     return true;
   }
 
+  /** SPK-PAY-016: the lines in effect of the sale that still wait for their second approval. */
+  async awaitingApproval(trx: Trx, organizationId: string, saleId: string) {
+    const lines = await trx
+      .selectFrom('pos_sale_lines')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where('sale_id', '=', saleId)
+      .execute();
+    if (!lines.some((l) => l.kind === 'open_amount' && l.approval_required === true)) return [];
+    const approvals = await trx
+      .selectFrom('pos_line_approvals')
+      .select('sale_line_id')
+      .where('organization_id', '=', organizationId)
+      .where('sale_id', '=', saleId)
+      .execute();
+    return linesAwaitingApproval(lines, approvals);
+  }
+
   private async postSalePaid(
     trx: Trx,
     sale: PosSaleRow,
@@ -280,7 +304,15 @@ export class PosSaleFinalizer {
     const lines = liveLines(
       await trx
         .selectFrom('pos_sale_lines')
-        .select(['id', 'quantity', 'supersedes_line_id', 'kind', 'base_minor', 'charges'])
+        .select([
+          'id',
+          'quantity',
+          'supersedes_line_id',
+          'kind',
+          'revenue_category',
+          'base_minor',
+          'charges',
+        ])
         .where('organization_id', '=', sale.organization_id)
         .where('sale_id', '=', sale.id)
         .orderBy('line_number')
@@ -310,7 +342,7 @@ export class PosSaleFinalizer {
       { account: 'cash_processor', debitMinor: processor, memo: 'card tenders' },
       ...revenueLines(
         lines.map((l) => ({
-          kind: l.kind,
+          revenue: revenueKeyOf(l),
           baseMinor: Number(l.base_minor),
           charges: l.charges as PosLineChargeRecord[],
         })),
@@ -338,7 +370,7 @@ export class PosSaleFinalizer {
     sale: PosSaleRow,
     returnId: string,
     returned: PosReturnLineRecord[],
-    lineKinds: Map<string, string>,
+    lineRevenue: Map<string, { key: string; memo: string }>,
     tenderKind: 'cash' | 'card' | 'external',
     actor: Principal,
     correlationId: string | null,
@@ -347,7 +379,10 @@ export class PosSaleFinalizer {
     const posting: PostingLine[] = [
       ...revenueLines(
         returned.map((l) => ({
-          kind: lineKinds.get(l.saleLineId) ?? 'merchandise',
+          revenue: lineRevenue.get(l.saleLineId) ?? {
+            key: 'product:merchandise',
+            memo: 'product kind merchandise',
+          },
           baseMinor: l.baseMinor,
           charges: l.charges,
         })),
@@ -430,19 +465,24 @@ export class PosSaleFinalizer {
   }
 }
 
-/** Revenue per product kind and charges per code, as debit or credit lines (memo names them). */
+/**
+ * Revenue per product kind, and per revenue category for open-amount lines (SPK-PAY-016), and
+ * charges per code, as debit or credit lines (the memo names them).
+ */
 function revenueLines(
   lines: Array<{
-    kind: string;
+    revenue: { key: string; memo: string };
     baseMinor: number;
     charges: Array<{ code: string; kind: 'tax' | 'fee'; amountMinor: number }>;
   }>,
   side: 'debit' | 'credit',
 ): PostingLine[] {
-  const revenue = new Map<string, number>();
+  const revenue = new Map<string, { memo: string; amount: number }>();
   const charges = new Map<string, { kind: 'tax' | 'fee'; code: string; amount: number }>();
   for (const line of lines) {
-    revenue.set(line.kind, (revenue.get(line.kind) ?? 0) + line.baseMinor);
+    const booked = revenue.get(line.revenue.key) ?? { memo: line.revenue.memo, amount: 0 };
+    booked.amount += line.baseMinor;
+    revenue.set(line.revenue.key, booked);
     for (const charge of line.charges) {
       const key = `${charge.kind}:${charge.code}`;
       const current = charges.get(key) ?? { kind: charge.kind, code: charge.code, amount: 0 };
@@ -453,10 +493,10 @@ function revenueLines(
   const amount = (value: number) =>
     side === 'debit' ? { debitMinor: value } : { creditMinor: value };
   return [
-    ...[...revenue].map(([kind, value]) => ({
+    ...[...revenue.values()].map((r) => ({
       account: 'pos_revenue' as const,
-      ...amount(value),
-      memo: `product kind ${kind}`,
+      ...amount(r.amount),
+      memo: r.memo,
     })),
     ...[...charges.values()].map((c) => ({
       account: c.kind === 'tax' ? ('taxes_payable' as const) : ('fees_payable' as const),

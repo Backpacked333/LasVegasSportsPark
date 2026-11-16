@@ -171,8 +171,13 @@ describe('SCR-C-07 DiscoverScreen', () => {
     const read = app.fake.requests.find((r) => r.route === '/offerings');
     expect(read?.query).toEqual({ limit: '50', organization: 'example-park' });
     expect(read?.headers.authorization).toBeUndefined();
-    // Signed out: no account lists are read.
-    expect(app.fake.requests.every((r) => r.route === '/offerings')).toBe(true);
+    // Signed out: no account lists are read. The only other read is the organization's public
+    // directory (SPK-SCHED-010), which needs no token either.
+    const others = app.fake.requests.filter((r) => r.route !== '/offerings');
+    expect(others.every((r) => r.path === '/public/example-park/directory')).toBe(true);
+    expect(others.every((r) => r.headers.authorization === undefined)).toBe(true);
+    // Nothing is public here, so no public link is offered.
+    expect(screen.queryByTestId('public-links')).toBeNull();
   });
 
   it('opens an offering from an accessible row that reads title, details and status', async () => {

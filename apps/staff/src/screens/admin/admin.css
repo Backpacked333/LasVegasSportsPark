@@ -88,8 +88,8 @@
   display: grid;
   place-items: center;
   font-size: 12px;
-  font-weight: 800;
-  color: #fff;
+  font-weight: 700;
+  color: var(--on-primary);
   background: var(--pitch);
 }
 .adm-avatar[data-tint='1'] {
@@ -103,6 +103,7 @@
 }
 .adm-avatar[data-tint='4'] {
   background: var(--night-3);
+  color: var(--night-ink);
 }
 .adm-roles {
   display: flex;

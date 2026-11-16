@@ -5,6 +5,7 @@ import {
   JoinRequestMachine,
   SeasonMachine,
   TeamEntryMachine,
+  TeamEntryPlaceOfferMachine,
   TeamInvitationMachine,
   TeamMachine,
   eventTo,
@@ -37,6 +38,21 @@ describe('competition state machines (§4.6)', () => {
     expect(TeamEntryMachine.can('approved', 'reject')).toBe(false);
     expect(TeamEntryMachine.eventsFrom('rejected')).toEqual([]);
     expect(TeamEntryMachine.eventsFrom('withdrawn')).toEqual([]);
+  });
+
+  it('SPK-COMP-006: applied → waiting; waiting → applied only by accepting a place, or out by withdrawal or rejection; a waiting entry is never approved directly', () => {
+    expect(TeamEntryMachine.next('applied', 'wait')).toBe('waiting');
+    expect(TeamEntryMachine.next('waiting', 'accept_place')).toBe('applied');
+    expect(TeamEntryMachine.next('waiting', 'withdraw')).toBe('withdrawn');
+    expect(TeamEntryMachine.next('waiting', 'reject')).toBe('rejected');
+    expect(TeamEntryMachine.can('waiting', 'approve')).toBe(false);
+    expect(TeamEntryMachine.can('approved', 'wait')).toBe(false);
+    expect(TeamEntryMachine.can('applied', 'accept_place')).toBe(false);
+    for (const event of ['accept', 'decline', 'expire', 'withdraw'] as const) {
+      const to = TeamEntryPlaceOfferMachine.next('offered', event);
+      expect(TeamEntryPlaceOfferMachine.isTerminal(to)).toBe(true);
+      expect(TeamEntryPlaceOfferMachine.eventsFrom(to)).toEqual([]);
+    }
   });
 
   it('Competition and Team lifecycles', () => {

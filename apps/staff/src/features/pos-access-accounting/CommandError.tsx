@@ -159,6 +159,45 @@ const EXPLAINED: Readonly<Record<string, (error: ApiError, ctx: Context) => Expl
       ),
     };
   },
+  // Open-amount lines (SPK-PAY-016, proposed amendment PA-08)
+  OPEN_AMOUNT_APPROVAL_REQUIRED: () => ({
+    title: 'A line waits for a second approval',
+    advice:
+      'An amount above the ceiling of the person who entered it is on this sale. A second person approves it, or the line is removed, before the sale takes a tender.',
+  }),
+  OPEN_AMOUNT_CATEGORY_UNKNOWN: () => ({
+    title: 'The reason category is not on the approved list',
+    advice: 'Reload the sale and choose one of the listed categories.',
+  }),
+  OPEN_AMOUNT_LINE_QUANTITY: () => ({
+    title: 'An other amount is one line',
+    advice: 'Remove the line and enter the amount again instead.',
+  }),
+  OPEN_AMOUNT_POLICY_INVALID: () => ({
+    title: 'The approved open-amount policy cannot be used',
+    advice:
+      'Its categories or ceilings are not in a usable form. Ask finance to approve a corrected version; no other amount is added until then.',
+  }),
+  OPEN_AMOUNT_POLICY_CURRENCY_MISMATCH: (e) => ({
+    title: 'The ceilings are in another currency',
+    advice: `The approved ceilings are stated in ${detailString(e, 'policyCurrency') ?? 'another currency'}; this sale is in ${detailString(e, 'saleCurrency') ?? 'its own'}. No other amount is added to it.`,
+  }),
+  SECOND_PERSON_REQUIRED: () => ({
+    title: 'Another person approves this line',
+    advice: 'You entered this line. Someone other than the person who entered it approves it.',
+  }),
+  APPROVAL_NOT_REQUIRED: () => ({
+    title: 'This line needs no second approval',
+    advice: 'It is within the ceiling of the person who entered it. Reload the sale.',
+  }),
+  LINE_ALREADY_APPROVED: () => ({
+    title: 'This line is already approved',
+    advice: 'Reload the sale to see who approved it.',
+  }),
+  LINE_ALREADY_CHANGED: () => ({
+    title: 'The line was changed or removed',
+    advice: 'Reload the sale to see its lines as they are now.',
+  }),
   RECEIPT_NOT_AVAILABLE: () => ({
     title: 'The sale is not paid',
     advice: 'A receipt exists once the sale is paid.',

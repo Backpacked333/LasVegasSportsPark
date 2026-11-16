@@ -9,7 +9,7 @@ import {
   runWithTransaction,
 } from '../../kernel';
 import { CatalogEvents, CatalogModule } from '../catalog';
-import { CompetitionModule, FORMS_CHECK_IMPL } from '../competition';
+import { CompetitionModule, FORMS_CHECK_IMPL, TEAM_PLAYER_COMMITMENTS_IMPL } from '../competition';
 import { CommunicationsModule, SESSION_AUDIENCE_IMPL } from '../communications';
 import { IdentityEvents, IdentityModule } from '../identity';
 import { FacilitiesModule } from '../facilities';
@@ -17,8 +17,10 @@ import { ClosureImpactContributors, EventChanged, SchedulingModule } from '../sc
 import { WorkforceEvents, WorkforceModule } from '../workforce';
 import { ApplicationsController } from './controllers/applications.controller';
 import { BasketsController } from './controllers/baskets.controller';
+import { BookingRostersController } from './controllers/booking-rosters.controller';
 import { BookingsController } from './controllers/bookings.controller';
 import { CapacityController } from './controllers/capacity.controller';
+import { UniformOrdersController } from './controllers/uniform-orders.controller';
 import { EnrollmentsController } from './controllers/enrollments.controller';
 import { MeRegistrationsController } from './controllers/me.controller';
 import { PackagesMembershipsController } from './controllers/packages-memberships.controller';
@@ -46,6 +48,8 @@ import {
   ENROLLMENT_PORT,
   FINANCE_POLICY_IMPL,
   FINANCE_POLICY_PORT,
+  MEMBERSHIP_PRICING_PORT,
+  SESSION_ROSTER_PORT,
   WAITLIST_PORT,
   noBookings,
   noFinancialConsequence,
@@ -55,6 +59,7 @@ import {
 import { enrollmentSystem } from './enrollment.shared';
 import { ApplicationsService } from './services/applications.service';
 import { BasketsService } from './services/baskets.service';
+import { BookingRostersService } from './services/booking-rosters.service';
 import { BookingsService } from './services/bookings.service';
 import { CapacityService } from './services/capacity.service';
 import { CatalogSessions } from './services/catalog-sessions';
@@ -64,6 +69,10 @@ import { EnrollmentJobs } from './services/enrollment-jobs';
 import { EnrollmentNotices } from './services/enrollment-notices';
 import { EnrollmentViews } from './services/enrollment-views';
 import { MembershipLedger } from './services/membership-ledger';
+import { MembershipPricing } from './services/membership-pricing';
+import { RegistrationExtras } from './services/registration-extras';
+import { SessionRoster } from './services/session-roster';
+import { UniformOrdersService } from './services/uniform-orders.service';
 import { MembershipsService } from './services/memberships.service';
 import { MergeFollowUp } from './services/merge-follow-up';
 import { MyRegistrationsService } from './services/my-registrations.service';
@@ -80,6 +89,7 @@ import { SessionBookingsService } from './services/session-bookings.service';
 import { SessionCanceledFollowUp } from './services/session-canceled-follow-up';
 import { SessionRetimedFollowUp } from './services/session-retimed-follow-up';
 import { SessionParticipants } from './services/session-participants';
+import { TeamPlayerCommitmentsReader } from './services/team-player-commitments';
 import { TrialsService } from './services/trials.service';
 import { WaitlistService } from './services/waitlist.service';
 import { YouthProgressionService } from './services/youth-progression.service';
@@ -111,10 +121,21 @@ const providers: Provider[] = [
   },
   RegistrationEvaluator,
   MembershipLedger,
+  // SPK-PAY-015 (PA-04): finance asks whether a participant holds a membership entitlement.
+  MembershipPricing,
+  { provide: MEMBERSHIP_PRICING_PORT, useExisting: MembershipPricing },
+  // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): tier, day, add-on and uniform choices of a line,
+  // the uniform orders that follow a registration, and who a session expects (for entry).
+  RegistrationExtras,
+  UniformOrdersService,
+  SessionRoster,
+  { provide: SESSION_ROSTER_PORT, useExisting: SessionRoster },
   PackageEntitlementsService,
   MembershipsService,
   BookingsService,
   { provide: BOOKING_QUERY_IMPL, useExisting: BookingsService },
+  // SPK-COND-005 (proposed): rental-group rosters beside the bookings they belong to.
+  BookingRostersService,
   YouthProgressionService,
   CatalogSessions,
   EnrollmentFacilityScope,
@@ -150,6 +171,9 @@ const providers: Provider[] = [
   // required forms, checked against catalog acknowledgments.
   CompetitionFormsCheck,
   { provide: FORMS_CHECK_IMPL, useExisting: CompetitionFormsCheck },
+  // SPK-COMP-006 (QA M-5): what the players of a team hold when the team is moved to waiting.
+  TeamPlayerCommitmentsReader,
+  { provide: TEAM_PLAYER_COMMITMENTS_IMPL, useExisting: TeamPlayerCommitmentsReader },
 ];
 
 /**
@@ -183,11 +207,13 @@ const providers: Provider[] = [
     SessionBookingsController,
     YouthController,
     CapacityController,
+    UniformOrdersController,
     MeRegistrationsController,
     RegistrationOptionsController,
     EnrollmentOverviewController,
     PackagesMembershipsController,
     BookingsController,
+    BookingRostersController,
     YouthProgressionController,
   ],
   exports: [
@@ -212,6 +238,8 @@ const providers: Provider[] = [
     BASKET_PORT,
     WAITLIST_PORT,
     BOOKING_QUERY_PORT,
+    MEMBERSHIP_PRICING_PORT,
+    SESSION_ROSTER_PORT,
   ],
 })
 export class EnrollmentModule implements OnModuleInit {

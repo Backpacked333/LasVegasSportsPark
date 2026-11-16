@@ -16,6 +16,8 @@
  * discounts and credits (the quote at checkout is binding, SPK-PAY-002), or that no price is set;
  * protected NOT_FOUND reads "not available".
  * Cancellation (`CancelBooking`) is never gated by the capability switch (DEC-016).
+ * A rental also shows its group roster (`BookingRosterSection`; SPK-COND-005, proposed) while the
+ * organization has turned rental rosters on.
  *
  * States: signed out (sign in, nothing read); loading; ready; error with the code and "Try
  * again"; not available (protected NOT_FOUND or ACCESS_DENIED); offline or stale (cached with its
@@ -25,7 +27,7 @@
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { Body, ButtonRow, Caption, Field, Section } from '../../features/money/ui';
 import {
@@ -49,8 +51,9 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing, type } from '../../ui/theme';
+import { makeStyles, spacing, type } from '../../ui/theme';
 import { NotFoundScreen } from '../not-found/NotFoundScreen';
+import { BookingRosterSection } from './BookingRosterSection';
 import { CancelBooking } from './CancelBooking';
 
 /**
@@ -208,6 +211,7 @@ function BookingPrice({ basketId }: { basketId: string }) {
 }
 
 function BookingView({ booking, reload }: { booking: Booking; reload: () => void }) {
+  const styles = useStyles();
   const zone = displayZone(booking.timezone);
   const status = bookingStatus(booking);
   const outstanding = outstandingText(booking.outstanding);
@@ -288,6 +292,7 @@ function BookingView({ booking, reload }: { booking: Booking; reload: () => void
         </Section>
       ) : null}
 
+      <BookingRosterSection booking={booking} />
       <CancelBooking booking={booking} onReload={reload} />
     </View>
   );
@@ -339,7 +344,7 @@ export function BookingDetailRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.sm },
   title: { ...type.title, color: colors.text },
-});
+}));

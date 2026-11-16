@@ -71,7 +71,7 @@ describe('SCR-S-14 ProgramScreen', () => {
       `/programs/offerings/${OFFERING_ID}`,
     );
     expect(within(items[0]!).getByText('draft')).toBeInTheDocument();
-    expect(within(items[1]!).getByText('registration_open')).toBeInTheDocument();
+    expect(within(items[1]!).getByText('registration open')).toBeInTheDocument();
     expect(within(items[0]!).getByText(/North Park 1/)).toBeInTheDocument();
   });
 

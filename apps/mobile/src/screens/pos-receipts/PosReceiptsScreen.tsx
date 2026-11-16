@@ -6,7 +6,8 @@
  * Reads `GET /v1/me/pos-receipts` (paid sales that name the signed-in person, newest first, cursor
  * pages with "Load more"). Each receipt shows the sale number, where and when it was paid (the
  * facility's name and time zone from `GET /v1/facilities/{id}`, SPK-SCHED-008), every line with
- * its quantity, unit price and amount before taxes, the subtotal, the approved taxes and fees it
+ * its quantity, unit price and amount before taxes (an open-amount line, SPK-PAY-016 proposed, by
+ * its description and reason category instead), the subtotal, the approved taxes and fees it
  * applied,
  * the total, the settled tenders and any returns. Amounts are the API's minor units and currency,
  * formatted for display only; nothing is added up here. A card return never reads as refunded:
@@ -20,11 +21,12 @@
  * again"; permission restriction (not available); offline or stale (cached with its age); turned
  * off (notice above the list).
  */
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
 import { formatMoney } from '../../features/money/format';
 import { Body, Caption, Field } from '../../features/money/ui';
 import {
+  receiptLineText,
   receiptStatus,
   returnText,
   TENDER_LABELS,
@@ -42,7 +44,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, radius, spacing, type } from '../../ui/theme';
+import { makeStyles, radius, spacing, type } from '../../ui/theme';
 
 export const RECEIPTS_STILL_AVAILABLE = 'Receipts of earlier purchases stay available here.';
 export const RECEIPTS_PAGE_SIZE = 20;
@@ -51,6 +53,7 @@ export const RECEIPTS_PAGE_SIZE = 20;
 const receiptKey = (r: PosReceipt) => r.saleId;
 
 function ReceiptCard({ receipt, facility }: { receipt: PosReceipt; facility: FacilityDisplay }) {
+  const styles = useStyles();
   const money = (minor: number) => formatMoney(minor, receipt.currency);
   const zone = facility.zone;
   const notice = receipt.paidAt ? zoneNotice(zone, receipt.paidAt) : null;
@@ -68,11 +71,7 @@ function ReceiptCard({ receipt, facility }: { receipt: PosReceipt; facility: Fac
       />
       <View accessibilityRole="list" accessibilityLabel="Items">
         {receipt.lines.map((line, index) => (
-          <Field
-            key={`${index}-${line.name}`}
-            label={`${line.quantity} × ${line.name}`}
-            value={`${money(line.baseMinor)} (${money(line.unitPriceMinor)} each)`}
-          />
+          <Field key={`${index}-${line.name}`} {...receiptLineText(line, money)} />
         ))}
       </View>
       <Field label="Subtotal" value={money(receipt.subtotalMinor)} />
@@ -114,6 +113,7 @@ function ReceiptCard({ receipt, facility }: { receipt: PosReceipt; facility: Fac
 }
 
 function ReceiptsList() {
+  const styles = useStyles();
   const receipts = useApiPages({
     path: '/me/pos-receipts',
     request: { query: { limit: RECEIPTS_PAGE_SIZE } },
@@ -150,6 +150,7 @@ function ReceiptsList() {
 }
 
 export function PosReceiptsScreen() {
+  const styles = useStyles();
   return (
     <Screen>
       <View testID="screen-pos-receipts">
@@ -177,7 +178,7 @@ export function PosReceiptsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.xs },
   title: { ...type.title, color: colors.text },
   list: { gap: spacing.sm, padding: spacing.lg },
@@ -191,4 +192,4 @@ const styles = StyleSheet.create({
   },
   cardTitle: { ...type.heading, color: colors.text },
   line: { gap: 2 },
-});
+}));

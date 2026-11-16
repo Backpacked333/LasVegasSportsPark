@@ -304,6 +304,16 @@ export const EnrollmentEvents = {
       convertedBasketId: z.uuid().nullable(),
     }),
   ),
+  /** SPK-REG-012 (PA-07): a uniform order was placed, paid, handed over, corrected or canceled. */
+  uniformOrderChanged: defineEvent(
+    'enrollment.uniform_order_changed',
+    z.object({
+      ...Ref,
+      uniformOrderId: z.uuid(),
+      enrollmentId: z.uuid(),
+      status: z.enum(['ordered', 'paid', 'handed_over', 'canceled']),
+    }),
+  ),
 };
 
 /**
@@ -361,6 +371,34 @@ export const EnrollmentPackageGEvents = {
   recommendationShared: defineEvent(
     'enrollment.recommendation_shared',
     z.object({ recommendationId: z.uuid(), participantPersonId: z.uuid() }),
+  ),
+};
+
+/**
+ * Rental-group roster events (SPK-COND-005, proposed amendment PA-09). Identifiers only. No
+ * module subscribes: being on a roster grants nothing, so nothing follows from these.
+ */
+export const EnrollmentRosterEvents = {
+  bookingRosterChanged: defineEvent(
+    'enrollment.booking_roster_changed',
+    z.object({
+      bookingId: z.uuid(),
+      memberId: z.uuid(),
+      personId: z.uuid().nullable(),
+      change: z.enum(['invited', 'joined', 'removed']),
+      revision: z.number().int().min(1),
+    }),
+  ),
+  bookingRosterInvitationCreated: defineEvent(
+    'enrollment.booking_roster_invitation_created',
+    z.object({
+      invitationId: z.uuid(),
+      bookingId: z.uuid(),
+      memberId: z.uuid(),
+      recipientPersonId: z.uuid().nullable(),
+      recipientContactKind: z.enum(['email', 'phone']).nullable(),
+      expiresAt: z.string(),
+    }),
   ),
 };
 

@@ -18,6 +18,7 @@ import { RefundScreen } from '../../screens/finance/RefundScreen';
 import { RefundsScreen } from '../../screens/finance/RefundsScreen';
 import { OfferingPublicationScreen } from '../../screens/programs/OfferingPublicationScreen';
 import { OfferingSetupScreen } from '../../screens/programs/OfferingSetupScreen';
+import { OfferingUniformsScreen } from '../../screens/programs/OfferingUniformsScreen';
 import { ProgramScreen } from '../../screens/programs/ProgramScreen';
 import { ProgramsScreen } from '../../screens/programs/ProgramsScreen';
 import { AssistedRegistrationScreen } from '../../screens/registrations/AssistedRegistrationScreen';
@@ -33,6 +34,7 @@ const ROUTES: readonly [path: string, element: ReactElement][] = [
   ['/programs/:programId', <ProgramScreen />],
   ['/programs/offerings/:offeringId', <OfferingSetupScreen />],
   ['/programs/offerings/:offeringId/publication', <OfferingPublicationScreen />],
+  ['/programs/offerings/:offeringId/uniforms', <OfferingUniformsScreen />],
   ['/registrations', <RegistrationsScreen />],
   ['/registrations/queue', <RegistrationQueueScreen />],
   ['/registrations/assisted', <AssistedRegistrationScreen />],

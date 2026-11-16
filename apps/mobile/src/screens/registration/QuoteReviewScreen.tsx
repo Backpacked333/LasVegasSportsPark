@@ -3,7 +3,10 @@
  * POL-013; journey A4). Reads `GET /v1/registration-quotes/{id}`: each participant and item, base
  * price, discounts with their explanation, approved taxes and fees, credits applied, due now,
  * future obligations, the server-owned expiry and the applicable policies. Every amount is the
- * API's integer minor units with its currency; the app never computes a price.
+ * API's integer minor units with its currency; the app never computes a price. A line priced per
+ * class or with a member price evaluated (SPK-PAY-013, SPK-PAY-015; proposed amendments PA-02 and
+ * PA-04) shows the basis the quote stored: the per-class price, the count and the product, and
+ * which price applied and why.
  *
  * A discount code or credits produce a new quote (`POST /v1/registration-quotes`, the body carries
  * no amounts). An expired quote reads "Price expired. Get a new price." (QUOTE_EXPIRED,
@@ -31,6 +34,7 @@ import {
   hasPassed,
 } from '../../features/registration/format';
 import { useMe, useParticipantNames } from '../../features/registration/participants';
+import { lineKindLabel, quoteLineBasisLines } from '../../features/registration/price-basis';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { quoteStatus } from '../../features/registration/status';
@@ -48,7 +52,7 @@ import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { colors, spacing } from '../../ui/theme';
+import { makeStyles, spacing } from '../../ui/theme';
 
 type Quote = Schema<'Quote'>;
 type QuoteLine = Schema<'QuoteLine'>;
@@ -89,14 +93,29 @@ export function discountCodeError(error: ApiError | null): string | undefined {
 }
 
 function LineDetail({ line, name }: { line: QuoteLine; name: string }) {
+  const styles = useStyles();
   const m = (v: number) => formatMoney(v, line.currency);
+  const kind = lineKindLabel(line);
   return (
     <View style={styles.line} testID={`quote-line-${line.id}`}>
-      <Body>{`${name}: ${line.description}`}</Body>
+      {/* SPK-PAY-014, SPK-REG-012: an add-on or uniform is its own line, named as such. */}
+      <Body>{`${name}: ${kind ? `${kind}: ` : ''}${line.description}`}</Body>
       <Detail
-        label={line.quantity > 1 ? `${line.quantity} × ${m(line.unitPriceMinor)}` : 'Base price'}
+        label={
+          line.quantity > 1
+            ? `${line.quantity} × ${m(line.unitPriceMinor)}`
+            : kind
+              ? 'Price'
+              : 'Base price'
+        }
         value={m(line.baseAmountMinor)}
       />
+      {/* SPK-PAY-013 to SPK-PAY-015, SPK-REG-012: the basis the quote stored for the line. */}
+      {quoteLineBasisLines(line).map((text) => (
+        <Body key={text} muted>
+          {text}
+        </Body>
+      ))}
       {line.discounts.map((d) => (
         <View key={d.discountDefinitionId}>
           <Detail label={d.code ? `${d.name} (${d.code})` : d.name} value={m(-d.amountMinor)} />
@@ -114,7 +133,11 @@ function LineDetail({ line, name }: { line: QuoteLine; name: string }) {
           value={m(c.amountMinor)}
         />
       ))}
-      <Detail label={`Total for ${name}`} value={m(line.totalMinor)} emphasis />
+      <Detail
+        label={kind ? `Total for this ${kind.toLowerCase()}` : `Total for ${name}`}
+        value={m(line.totalMinor)}
+        emphasis
+      />
     </View>
   );
 }
@@ -382,7 +405,7 @@ export function QuoteReviewRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   line: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
@@ -390,4 +413,4 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-});
+}));

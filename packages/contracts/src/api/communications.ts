@@ -35,6 +35,9 @@ export const NotificationKindSchema = z
     'activity_reminder',
     // SPK-RESULT-001: league staff remind captains of a missing result (migration 1012)
     'result_reminder',
+    // SPK-COMP-006: a place offered to a waiting team, and the team's waiting state (migration 1014)
+    'team_place_offer',
+    'team_waiting_list',
   ])
   .openapi('NotificationKind');
 export type NotificationKindValue = z.infer<typeof NotificationKindSchema>;
@@ -173,6 +176,12 @@ const RequestMeta = {
 function withRequestMeta<T extends z.ZodRawShape>(shape: T) {
   return withCommandMeta(shape).extend(RequestMeta);
 }
+
+/**
+ * The request-text checks above, for this module's other contract file
+ * (`communications-sequences.ts`, SPK-COMMS-009): one definition of what request text may hold.
+ */
+export const CommunicationsRequestText = { singleLine, multiLine, withRequestMeta };
 
 /** Practical details shown old/new on schedule notices (SPK-COMMS-005); shape owned by the source module. */
 export const PracticalDetailsSchema = z.record(z.string(), z.unknown()).openapi('PracticalDetails');

@@ -231,7 +231,7 @@ describe('SCR-S-11 ResultsReviewScreen (SPK-RESULT-001, SPK-RESULT-004)', () => 
     });
     render(app.at(`/leagues/fixtures/${ID.fixture}/results`));
     await user.click(await screen.findByRole('button', { name: 'Publish as official' }));
-    expect(await screen.findByText('recovery_required')).toBeInTheDocument();
+    expect(await screen.findByText('recovery required')).toBeInTheDocument();
     expect(screen.getByText(/A follow-up step was not recorded/)).toBeInTheDocument();
   });
 

@@ -8,6 +8,7 @@ import { readConfig, type StaffConfig } from '../config/config';
 import { browserConnectivity, type ConnectivitySource } from '../connectivity/sources';
 import { BrowserSessionStore } from '../session/browser-session-store';
 import { consoleCrashReporter, type CrashReporter } from './crash-report';
+import { browserPreferences, type PreferenceStore } from './preferences';
 
 export interface StaffServices {
   config: StaffConfig;
@@ -18,6 +19,8 @@ export interface StaffServices {
   now: () => Date;
   /** Where unexpected client failures are reported (console when absent). */
   crashReporter?: CrashReporter;
+  /** Display preferences of this browser (theme, sidebar); in memory when absent. */
+  preferences?: PreferenceStore;
 }
 
 export function createBrowserServices(): StaffServices {
@@ -28,5 +31,6 @@ export function createBrowserServices(): StaffServices {
     generateKey: defaultKeyGenerator,
     now: () => new Date(),
     crashReporter: consoleCrashReporter,
+    preferences: browserPreferences(),
   };
 }

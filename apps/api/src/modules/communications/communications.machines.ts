@@ -1,4 +1,5 @@
 import {
+  ScheduledMessageMachine,
   defineStateMachine,
   type DeliveryStatusValue,
   type NotificationStatusValue,
@@ -92,9 +93,17 @@ export const PushDeviceMachine = defineStateMachine<PushDeviceState, PushDeviceE
   },
 });
 
+/**
+ * Scheduled message of a sequence (SPK-COMMS-009, proposed amendment PA-05): declared with the
+ * canonical lifecycles in `packages/contracts/src/state-machines.ts`; migration 1013 lists the
+ * same states and guards the same moves.
+ */
+export { ScheduledMessageMachine };
+
 export const COMMUNICATIONS_STATE_MACHINES = [
   NotificationMachine,
   RecipientMachine,
   DeliveryAttemptMachine,
   PushDeviceMachine,
+  ScheduledMessageMachine,
 ] as const;

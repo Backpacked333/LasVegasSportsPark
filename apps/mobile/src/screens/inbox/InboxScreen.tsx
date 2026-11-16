@@ -56,7 +56,7 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { colors, fonts, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
 
 type InboxItem = Schema<'InboxItem'>;
@@ -90,6 +90,7 @@ function NoticeDetail({
   newer: InboxItem | null;
   onShowNewer: (attemptId: string) => void;
 }) {
+  const styles = useStyles();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { reachable } = useConnectivity();
@@ -225,6 +226,7 @@ function NoticeRow({
   onToggle: () => void;
   onShowNewer: (attemptId: string) => void;
 }) {
+  const styles = useStyles();
   const status = noticeStatus(item);
   const about = participantsLine(item, names);
   return (
@@ -253,6 +255,7 @@ function NoticeRow({
 }
 
 function InboxList({ openId }: { openId?: string }) {
+  const styles = useStyles();
   const { session } = useApp();
   const signedIn = session.status === 'signed_in';
   const first = useApiQuery({
@@ -366,7 +369,7 @@ export function InboxRoute() {
   return <InboxScreen openId={typeof open === 'string' ? open : undefined} />;
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   row: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
@@ -385,4 +388,4 @@ const styles = StyleSheet.create({
   detail: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, gap: spacing.sm },
   gap: { gap: spacing.sm },
   more: { padding: spacing.lg },
-});
+}));

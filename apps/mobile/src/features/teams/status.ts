@@ -19,13 +19,18 @@ type RosterMember = Schema<'RosterMember'>;
  */
 export type RsvpState = Exclude<Schema<'AvailabilityState'>, null>;
 
-/** TeamEntry `applied`, `approved`, `rejected`, `withdrawn` (SPK-COMP-004). */
+/**
+ * TeamEntry `applied`, `approved`, `rejected`, `withdrawn` (SPK-COMP-004) and `waiting`: on the
+ * waiting list of a full division or season (SPK-COMP-006, proposed amendment PA-10).
+ */
 export function teamEntryStatus(
   entry: Pick<TeamEntry, 'status' | 'rejectionReason'>,
 ): StatusBadgeProps {
   switch (entry.status) {
     case 'applied':
       return { tone: 'pending', label: 'Team entry awaiting approval' };
+    case 'waiting':
+      return { tone: 'pending', label: 'Team waiting for a place' };
     case 'approved':
       return { tone: 'success', label: 'Team entry approved' };
     case 'rejected':

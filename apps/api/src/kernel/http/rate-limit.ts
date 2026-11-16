@@ -101,10 +101,17 @@ export const DEFAULT_RATE_LIMITS = {
   dev_tokens: { limit: 10, windowSeconds: 60 },
   /** Claim token acceptance (token guessing, SPK-IAM-002). */
   claims: { limit: 20, windowSeconds: 600 },
-  /** Invitation acceptance, customer and staff (SPK-IAM-004). */
+  /** Invitation acceptance by token: account, staff, team and rental-roster invitations (SPK-IAM-004, SPK-CAP-001, SPK-COND-005). */
   invitations: { limit: 30, windowSeconds: 600 },
   /** Account relink, the staff-assisted recovery path (§4.14 rate-limited recovery). */
   account_recovery: { limit: 10, windowSeconds: 600 },
+  /**
+   * Public and lobby views read without sign-in (SPK-SCHED-010, proposed amendment PA-06): every
+   * read under `/v1/public` counts here per client address, against scraping and code guessing.
+   * A lobby display re-reads a few views a minute; the default leaves room for several displays
+   * behind one address.
+   */
+  public_views: { limit: 120, windowSeconds: 60 },
 } as const satisfies Record<string, RateLimitRule>;
 export type RateLimitName = keyof typeof DEFAULT_RATE_LIMITS;
 
@@ -116,7 +123,11 @@ export const RateLimited = (name: RateLimitName) => SetMetadata(RATE_LIMIT_KEY, 
 /**
  * Applies `@RateLimited` before authentication (§4.14), so an anonymous caller cannot guess
  * passcodes or tokens at speed. A refused request answers 429 RATE_LIMITED with `Retry-After`.
- * The client address is the one Express reports, which follows `TRUST_PROXY` behind a proxy.
+ * The client address is the one Express reports, which follows `TRUST_PROXY` behind a proxy: a
+ * hop count or the proxies' own addresses, so the address is the one the trusted proxy saw and
+ * never one a caller wrote into `X-Forwarded-For`. Production refuses to boot when `TRUST_PROXY`
+ * is unset (behind a proxy every visitor would share the proxy's address and one bucket) or
+ * believes every sender (a caller would choose its own key); see `ConfigSchema`.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {

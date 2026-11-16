@@ -147,6 +147,21 @@ export class RegistrationEvaluator {
         teamEligibility = { reasons: evaluation.reasons };
       }
     }
+    // SPK-REG-011 (proposed): the offering's required waivers, judged by the catalog rule. Empty
+    // while liability waivers are turned off, so nothing new is evaluated or shown then.
+    const waiverFindings =
+      snapshot.requiredWaiverKeys.length > 0
+        ? await this.policies.waiverFindings(
+            organizationId,
+            {
+              personIds: [person.id],
+              policyKeys: snapshot.requiredWaiverKeys,
+              at,
+              activities: [{ type: 'offering', id: snapshot.offering.id }],
+            },
+            trx,
+          )
+        : [];
     const result = evaluateRegistrationEligibility({
       intent: ctx.intent,
       at,
@@ -163,6 +178,14 @@ export class RegistrationEvaluator {
       eligibilityPolicy: snapshot.eligibilityPolicy,
       requiredForms: snapshot.requiredForms,
       acknowledgedFormIds: acknowledged,
+      waiverFindings: waiverFindings.map((finding) => ({
+        policyKey: finding.policyKey,
+        title: finding.title,
+        status: finding.status,
+        severity: finding.severity,
+        overridden: finding.override !== null,
+        policyVersionId: finding.waiver.currentVersion?.policyVersionId ?? null,
+      })),
       person: {
         id: person.id,
         kind: person.kind,

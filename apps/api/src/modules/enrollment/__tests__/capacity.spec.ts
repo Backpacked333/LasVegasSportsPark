@@ -747,6 +747,8 @@ describe('capacity, holds, waitlists and transfers (SPK-REG-005/006/008/010, SPK
       status: 'confirmed',
       offeringId: to.offeringId,
       transferredFromEnrollmentId: enrollmentId,
+      priceTierId: null,
+      selectedSessionIds: null,
     });
     expect(await pool(from.offeringId)).toEqual([expect.objectContaining({ committed: 0 })]);
     expect(await pool(to.offeringId)).toEqual([expect.objectContaining({ committed: 1 })]);

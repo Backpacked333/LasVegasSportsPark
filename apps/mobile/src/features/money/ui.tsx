@@ -5,10 +5,11 @@
  * Every interactive element has a role, a label and its state; text scales with the OS setting.
  */
 import { createContext, useContext, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { SectionCard } from '../../ui/Card';
 import { LiveText } from '../../ui/announce';
-import { colors, fonts, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { useInputChrome } from '../../ui/input';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import type { AccountPerson } from './people';
 
 /** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
@@ -30,6 +31,7 @@ export function Section({
 
 /** "Label: value" read by screen readers as one sentence. */
 export function Field({ label, value, testID }: { label: string; value: string; testID?: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.field} accessible accessibilityLabel={`${label}: ${value}`} testID={testID}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -39,18 +41,22 @@ export function Field({ label, value, testID }: { label: string; value: string; 
 }
 
 export function Body({ children }: { children: ReactNode }) {
+  const styles = useStyles();
   return <Text style={styles.body}>{children}</Text>;
 }
 
 export function Caption({ children }: { children: ReactNode }) {
+  const styles = useStyles();
   return <Text style={styles.caption}>{children}</Text>;
 }
 
 export function ButtonRow({ children }: { children: ReactNode }) {
+  const styles = useStyles();
   return <View style={styles.buttons}>{children}</View>;
 }
 
 function ChoiceMark({ checked, round }: { checked: boolean; round: boolean }) {
+  const styles = useStyles();
   return (
     <View
       style={[styles.mark, round && styles.round, checked && styles.markChecked]}
@@ -86,6 +92,7 @@ export function ChoiceGroup({
   layout?: 'list' | 'grid';
   testID?: string;
 }) {
+  const styles = useStyles();
   return (
     <View
       accessibilityRole={role}
@@ -127,6 +134,7 @@ export function ChoiceRow({
   shortLabel?: string;
   testID?: string;
 }) {
+  const styles = useStyles();
   const groupError = useContext(ChoiceErrorContext);
   if (tile) {
     return (
@@ -145,8 +153,12 @@ export function ChoiceRow({
         ]}
         testID={testID}
       >
-        <Text style={styles.tileLabel}>{`${checked ? '✓ ' : ''}${shortLabel ?? label}`}</Text>
-        {detail ? <Text style={styles.tileDetail}>{detail}</Text> : null}
+        <Text style={[styles.tileLabel, checked && styles.tileTextOn]}>
+          {`${checked ? '✓ ' : ''}${shortLabel ?? label}`}
+        </Text>
+        {detail ? (
+          <Text style={[styles.tileDetail, checked && styles.tileTextOn]}>{detail}</Text>
+        ) : null}
       </Pressable>
     );
   }
@@ -183,6 +195,7 @@ export function PersonPicker({
   /** What the choice is for, e.g. "Show enrollments for". */
   label: string;
 }) {
+  const styles = useStyles();
   if (people.length < 2) return null;
   return (
     <View style={styles.picker}>
@@ -225,12 +238,15 @@ export function TextField({
   editable?: boolean;
   testID?: string;
 }) {
+  const styles = useStyles();
+  const input = useInputChrome();
   const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
     <View style={styles.fieldBox}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {hint ? <Text style={styles.caption}>{hint}</Text> : null}
       <TextInput
+        {...input.props}
         accessibilityLabel={label}
         accessibilityHint={describedBy || undefined}
         accessibilityState={{ disabled: !editable }}
@@ -238,7 +254,12 @@ export function TextField({
         onChangeText={onChangeText}
         editable={editable}
         multiline={multiline}
-        style={[styles.input, multiline && styles.multiline, error ? styles.inputError : null]}
+        style={[
+          styles.input,
+          input.focusStyle,
+          multiline && styles.multiline,
+          error ? styles.inputError : null,
+        ]}
         testID={testID}
       />
       <FieldError error={error} />
@@ -251,6 +272,7 @@ export function TextField({
  * field error on the money, booking and enrollment screens goes through here.
  */
 export function FieldError({ error, testID }: { error?: string | null; testID?: string }) {
+  const styles = useStyles();
   if (!error) return null;
   return (
     <LiveText style={styles.error} announcement={error} accessibilityRole="alert" testID={testID}>
@@ -259,7 +281,7 @@ export function FieldError({ error, testID }: { error?: string | null; testID?: 
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   picker: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.xs },
   field: { gap: 2 },
   fieldBox: { gap: spacing.xs },
@@ -290,7 +312,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     gap: 2,
   },
-  tileOn: { backgroundColor: colors.floodlight, borderColor: colors.night },
+  tileOn: { backgroundColor: colors.floodlight, borderColor: colors.onFloodlight },
+  tileTextOn: { color: colors.onFloodlight },
   tileLabel: { ...type.body, ...fonts.extrabold, color: colors.text },
   tileDetail: { ...type.caption, fontSize: 12, lineHeight: 16, color: colors.textMuted },
   pressed: { opacity: 0.8 },
@@ -321,4 +344,4 @@ const styles = StyleSheet.create({
   multiline: { minHeight: 88, textAlignVertical: 'top' },
   inputError: { borderColor: colors.danger, borderWidth: 2 },
   error: { ...type.caption, color: colors.danger },
-});
+}));

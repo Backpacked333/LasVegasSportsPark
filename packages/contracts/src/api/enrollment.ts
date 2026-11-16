@@ -5,7 +5,13 @@ import { CurrencyCode } from '../money';
 import { ErrorResponseSchema, openApiRegistry } from '../openapi';
 import { PageRequestSchema, pageSchema } from '../pagination';
 import { Instant } from '../time';
-import { CapacityUnitKindSchema, ChargeLineSchema, OfferingKindSchema } from './catalog';
+import {
+  AddonSelectionSchema,
+  CapacityUnitKindSchema,
+  ChargeLineSchema,
+  OfferingKindSchema,
+  PricingBasisSchema,
+} from './catalog';
 import { EligibilitySeveritySchema } from './competition';
 
 /**
@@ -75,7 +81,7 @@ export const BasketLineOutcomeSchema = z
   .enum(['pending', 'held', 'confirmed', 'failed', 'released'])
   .openapi('BasketLineOutcome');
 export const CapacityPoolScopeTypeSchema = z
-  .enum(['offering', 'session', 'division', 'team_entry', 'camp_group', 'rental'])
+  .enum(['offering', 'session', 'division', 'team_entry', 'camp_group', 'rental', 'addon'])
   .openapi('CapacityPoolScopeType');
 export const CapacityConstraintKindSchema = z
   .enum(['commercial', 'staffing', 'space'])
@@ -174,9 +180,141 @@ export const PriceSnapshotSchema = z
     basePriceMinor: z.number().int(),
     currency: CurrencyCode,
     chargeLines: z.array(ChargeLineSchema),
+    /**
+     * Present when the line is not a plain term price (SPK-PAY-013 per session, SPK-PAY-014 a
+     * price tier, SPK-PAY-015 a member price): what the line is estimated to cost each, worked
+     * out from the same facts a quote uses (the tier, the participant's membership, the sessions
+     * still to attend) at `estimatedAt`. It is an estimate: the quote decides, at its own instant.
+     * Absent for a plain term price, where `basePriceMinor` is the price each, as before.
+     */
+    estimate: z
+      .object({
+        pricingBasis: PricingBasisSchema,
+        tier: z.object({ id: z.uuid(), code: z.string(), name: z.string() }).nullable(),
+        appliedPrice: z.enum(['standard', 'member']),
+        /** The price chosen before any multiplication (the tier's, the member's or the base). */
+        appliedPriceMinor: z.number().int(),
+        /** The sessions counted for a `per_session` price; null for a `term` price. */
+        sessionCount: z.number().int().nullable(),
+        unitPriceMinor: z.number().int(),
+        estimatedAt: Instant,
+      })
+      .optional(),
   })
   .openapi('PriceSnapshot');
 export type PriceSnapshot = z.infer<typeof PriceSnapshotSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Tier, day, add-on and uniform choices of a registration (proposed amendments PA-03, PA-07)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * An add-on selected for a basket line (SPK-PAY-014, PA-03): once for the registration
+ * (`sessionIds` empty) or for the listed sessions, each of which the participant attends.
+ * `priceMinor` is the add-on's price each, as catalog states it when the basket is read.
+ */
+export const BasketLineAddonSchema = z
+  .object({
+    addonId: z.uuid(),
+    code: z.string(),
+    name: z.string(),
+    selection: AddonSelectionSchema,
+    sessionIds: z.array(z.uuid()),
+    priceMinor: z.number().int(),
+    currency: CurrencyCode,
+    /** The number of times the price is charged: the sessions selected, or 1. */
+    quantity: z.number().int(),
+  })
+  .openapi('BasketLineAddon');
+export type BasketLineAddon = z.infer<typeof BasketLineAddonSchema>;
+
+/**
+ * The uniform chosen for a basket line (SPK-REG-012, PA-07). `heldUniformOrderId` names the
+ * handed-over uniform with the same item key the participant already holds, when there is one
+ * (the fact the returning-participant rule of the offering reads).
+ */
+export const BasketLineUniformSchema = z
+  .object({
+    offeringUniformId: z.uuid(),
+    itemKey: z.string(),
+    name: z.string(),
+    size: z.string(),
+    priceMinor: z.number().int().nullable(),
+    currency: CurrencyCode.nullable(),
+    returningHolderFree: z.boolean(),
+    heldUniformOrderId: z.uuid().nullable(),
+  })
+  .openapi('BasketLineUniform');
+export type BasketLineUniform = z.infer<typeof BasketLineUniformSchema>;
+
+export const AddBasketLineAddonSchema = z
+  .object({
+    addonId: z.uuid(),
+    /** The sessions the add-on is wanted for (an add-on selected per session); else omitted. */
+    sessionIds: z.array(z.uuid()).min(1).max(120).optional(),
+  })
+  .openapi('AddBasketLineAddon');
+
+export const AddBasketLineUniformSchema = z
+  .object({ offeringUniformId: z.uuid(), size: z.string().trim().min(1).max(30) })
+  .openapi('AddBasketLineUniform');
+
+/** The lifecycle of a uniform order (UniformOrderMachine, SPK-REG-012). */
+export const UniformOrderStatusSchema = z
+  .enum(['ordered', 'paid', 'handed_over', 'canceled'])
+  .openapi('UniformOrderStatus');
+export type UniformOrderStatus = z.infer<typeof UniformOrderStatusSchema>;
+
+/**
+ * A uniform ordered with a registration (SPK-REG-012, PA-07): what was chosen, whether it is
+ * paid, and whether it was handed over, by whom and when. `ordered` while the registration is
+ * pending, `paid` once it is confirmed (a uniform that is not charged is `paid` with nothing
+ * owed), `handed_over` by the hand-over command, `canceled` with a registration that ended before
+ * the hand-over.
+ */
+export const UniformOrderSchema = z
+  .object({
+    id: z.uuid(),
+    enrollmentId: z.uuid(),
+    offeringId: z.uuid(),
+    offeringUniformId: z.uuid(),
+    teamEntryId: z.uuid().nullable(),
+    participantPersonId: z.uuid(),
+    /** The participant's name, read after the list was authorized; null if identity lost them. */
+    participantDisplayName: z.string().nullable(),
+    itemKey: z.string(),
+    name: z.string(),
+    size: z.string(),
+    priceMinor: z.number().int().nullable(),
+    currency: CurrencyCode.nullable(),
+    status: UniformOrderStatusSchema,
+    orderedAt: Instant,
+    paidAt: Instant.nullable(),
+    handedOverAt: Instant.nullable(),
+    /** The staff member who handed it over (their name as recorded with the hand-over). */
+    handedOverBy: z.string().nullable(),
+    canceledAt: Instant.nullable(),
+    revision: Revision,
+  })
+  .openapi('UniformOrder');
+export type UniformOrder = z.infer<typeof UniformOrderSchema>;
+
+export const ListUniformOrdersQuery = z
+  .object({ offeringId: z.uuid().optional(), teamEntryId: z.uuid().optional() })
+  .refine((v) => v.offeringId !== undefined || v.teamEntryId !== undefined, {
+    message: 'name the offering or the team entry',
+    path: ['offeringId'],
+  });
+export type ListUniformOrdersQuery = z.infer<typeof ListUniformOrdersQuery>;
+
+export const HandOverUniformBody = withCommandMeta({}).openapi('HandOverUniformRequest');
+export type HandOverUniformInput = z.infer<typeof HandOverUniformBody>;
+
+/** Undoing a hand-over is a recorded correction with its reason (never a rewrite). */
+export const CorrectUniformHandOverBody = withCommandMeta({})
+  .extend({ reason: z.string().trim().min(3).max(500) })
+  .openapi('CorrectUniformHandOverRequest');
+export type CorrectUniformHandOverInput = z.infer<typeof CorrectUniformHandOverBody>;
 
 export const PolicyReferencesSchema = z
   .object({
@@ -391,6 +529,18 @@ export const BasketLineSchema = z
     enrollmentId: z.uuid().nullable(),
     outcome: BasketLineOutcomeSchema,
     outcomeReason: z.string().nullable(),
+    /** SPK-PAY-014 (PA-03): the price tier the line names; null when it names none. */
+    priceTierId: z.uuid().nullable(),
+    /**
+     * SPK-PAY-014 (PA-03): the sessions the participant attends, when the line's tier says which
+     * (all of them, or the ones the customer chose); null for a line without a tier, which
+     * attends the offering as before.
+     */
+    selectedSessionIds: z.array(z.uuid()).nullable(),
+    /** SPK-PAY-014 (PA-03): the add-ons selected for the line. */
+    addons: z.array(BasketLineAddonSchema),
+    /** SPK-REG-012 (PA-07): the uniform chosen for the participant; null when none. */
+    uniform: BasketLineUniformSchema.nullable(),
     revision: Revision,
   })
   .openapi('BasketLine');
@@ -409,7 +559,11 @@ export const BasketSchema = z
     status: BasketStatusSchema,
     holdExpiresAt: Instant.nullable(),
     currency: CurrencyCode.nullable(),
-    /** Sum of the line base prices (minor units); finance quotes taxes, fees and discounts. */
+    /**
+     * Sum of the line prices before taxes, fees and discounts (minor units): each line's base
+     * price, or its estimate where it has one, plus its add-ons and its priced uniform. Finance's
+     * quote is what is charged.
+     */
     subtotalMinor: z.number().int(),
     /** True when any line awaits human approval (SPK-REG-007: approval before payment capture). */
     approvalPending: z.boolean(),
@@ -446,7 +600,22 @@ export const AddBasketLineBody = withCommandMeta({
   sessionId: z.uuid().optional(),
   teamEntryId: z.uuid().optional(),
   quantity: Quantity.default(1),
-}).openapi('AddBasketLineRequest');
+  /**
+   * SPK-PAY-014 (PA-03; capability `price_tiers_addons`): the price tier, the sessions chosen
+   * where the tier lets the customer choose, and the add-ons. Refused (CAPABILITY_DISABLED) while
+   * the capability is off.
+   */
+  priceTierId: z.uuid().optional(),
+  selectedSessionIds: z.array(z.uuid()).min(1).max(366).optional(),
+  addons: z.array(AddBasketLineAddonSchema).max(20).optional(),
+  /** SPK-REG-012 (PA-07; capability `uniforms`): the uniform and the size chosen. */
+  uniform: AddBasketLineUniformSchema.optional(),
+})
+  .refine(
+    (v) => new Set((v.addons ?? []).map((addon) => addon.addonId)).size === (v.addons ?? []).length,
+    { message: 'An add-on is listed once, with every session it is wanted for.', path: ['addons'] },
+  )
+  .openapi('AddBasketLineRequest');
 export type AddBasketLineInput = z.infer<typeof AddBasketLineBody>;
 
 export const RemoveBasketLineBody = withCommandMeta({}).openapi('RemoveBasketLineRequest');
@@ -549,6 +718,15 @@ export const EnrollmentSchema = z
      */
     transferConsequence: FinancialConsequenceSchema.nullable(),
     completedAt: Instant.nullable(),
+    /** SPK-PAY-014 (PA-03): the price tier the place was bought under; null when it names none. */
+    priceTierId: z.uuid().nullable(),
+    /**
+     * SPK-PAY-014 (PA-03): the sessions this enrollment attends when the participant chose days;
+     * null means every session of the offering (every enrollment without a day selection). Every
+     * reader of "the sessions of an enrollment" (arrival, the family calendar, attendance,
+     * notices, session capacity) uses this one fact.
+     */
+    selectedSessionIds: z.array(z.uuid()).nullable(),
     /** ENR-02: the offering (also closed or archived) and its facility zone; null if unreadable. */
     offering: EnrollmentOfferingSchema.nullable(),
     /** ENR-02: what a pending enrollment waits for; null otherwise. */
@@ -608,13 +786,37 @@ export const TransferEnrollmentBody = withCommandMeta({
   acceptConsequence: z.boolean().default(false),
   /** ENR-03: the previewed consequence the customer accepted (required when it is not `none`). */
   acceptedConsequence: AcceptedConsequenceSchema.optional(),
+  /**
+   * SPK-PAY-014 (PA-03; capability `price_tiers_addons`): the price tier of the target offering,
+   * and the days where the tier lets the customer choose. Required when the target is sold by
+   * tier (VALIDATION_FAILED `TIER_REQUIRED` names the tiers); refused while the capability is off.
+   */
+  priceTierId: z.uuid().optional(),
+  selectedSessionIds: z.array(z.uuid()).min(1).max(366).optional(),
 })
   .extend({ expectedRevision: Revision })
   .openapi('TransferEnrollmentRequest');
 export type TransferEnrollmentInput = z.infer<typeof TransferEnrollmentBody>;
 
 /** ENR-03: the read-only transfer preview (same authorization as the transfer). */
-export const TransferPreviewQuery = z.object({ targetOfferingId: z.uuid() });
+export const TransferPreviewQuery = z.object({
+  targetOfferingId: z.uuid(),
+  /** SPK-PAY-014 (PA-03): the tier of the target, and the days of a tier of chosen days. */
+  priceTierId: z.uuid().optional(),
+  /** Comma-separated session ids. */
+  selectedSessionIds: z
+    .preprocess(
+      (value) =>
+        typeof value === 'string'
+          ? value
+              .split(',')
+              .map((v) => v.trim())
+              .filter((v) => v.length > 0)
+          : value,
+      z.array(z.uuid()).min(1).max(366),
+    )
+    .optional(),
+});
 export type TransferPreviewQuery = z.infer<typeof TransferPreviewQuery>;
 
 export const ParticipationSummarySchema = z
@@ -708,6 +910,11 @@ export const WaitlistOfferSchema = z
   .openapi('WaitlistOffer');
 export type WaitlistOffer = z.infer<typeof WaitlistOfferSchema>;
 
+/** An add-on a waitlist entry asked for: once, or for the listed sessions (SPK-PAY-014). */
+export const WaitlistEntryAddonSchema = z
+  .object({ addonId: z.uuid(), sessionIds: z.array(z.uuid()) })
+  .openapi('WaitlistEntryAddon');
+
 export const WaitlistEntrySchema = z
   .object({
     id: z.uuid(),
@@ -731,6 +938,15 @@ export const WaitlistEntrySchema = z
     acceptedEnrollmentId: z.uuid().nullable(),
     withdrawnAt: Instant.nullable(),
     removedAt: Instant.nullable(),
+    /**
+     * SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07): what the entry waits for beyond a place of the
+     * offering: the price tier, the days of a tier of chosen days (null: every session), the
+     * add-ons and the uniform asked for. An accepted offer opens a basket line with them.
+     */
+    priceTierId: z.uuid().nullable(),
+    selectedSessionIds: z.array(z.uuid()).nullable(),
+    addons: z.array(WaitlistEntryAddonSchema),
+    uniform: AddBasketLineUniformSchema.nullable(),
     revision: Revision,
     createdAt: Instant,
   })
@@ -747,7 +963,22 @@ export const JoinWaitlistBody = withCommandMeta({
   /** Staff only: priority basis and rank (customers always join by joined_at). */
   priorityBasis: WaitlistPriorityBasisSchema.optional(),
   priorityRank: z.number().int().min(0).max(10_000).optional(),
-}).openapi('JoinWaitlistRequest');
+  /**
+   * SPK-PAY-014 (PA-03; capability `price_tiers_addons`) and SPK-REG-012 (PA-07; capability
+   * `uniforms`): what is waited for, with the rules of a basket line. An offering sold by tier
+   * is waited for under a tier (and its days); the entry waits on the places that selection
+   * needs, and joining is refused (`CAPACITY_AVAILABLE`) only when all of them are free.
+   */
+  priceTierId: z.uuid().optional(),
+  selectedSessionIds: z.array(z.uuid()).min(1).max(366).optional(),
+  addons: z.array(AddBasketLineAddonSchema).max(20).optional(),
+  uniform: AddBasketLineUniformSchema.optional(),
+})
+  .refine(
+    (v) => new Set((v.addons ?? []).map((addon) => addon.addonId)).size === (v.addons ?? []).length,
+    { message: 'An add-on is listed once, with every session it is wanted for.', path: ['addons'] },
+  )
+  .openapi('JoinWaitlistRequest');
 export type JoinWaitlistInput = z.infer<typeof JoinWaitlistBody>;
 
 export const WithdrawWaitlistBody = withCommandMeta({}).openapi('WithdrawWaitlistRequest');
@@ -806,6 +1037,11 @@ export const AcceptWaitlistOfferBody = withCommandMeta({
   /** Household adult the follow-up basket belongs to; defaults to the acting customer (staff must name it). */
   ownerPersonId: z.uuid().optional(),
   payerPersonId: z.uuid().optional(),
+  /**
+   * SPK-REG-012 (PA-07): the uniform and size, for an entry that recorded none (it joined before
+   * the offering required one). An entry that recorded a uniform keeps it.
+   */
+  uniform: AddBasketLineUniformSchema.optional(),
 }).openapi('AcceptWaitlistOfferRequest');
 export type AcceptWaitlistOfferInput = z.infer<typeof AcceptWaitlistOfferBody>;
 
@@ -1183,8 +1419,21 @@ export const ConvertTrialBody = withCommandMeta({
   targetOfferingId: z.uuid(),
   intent: RegistrationIntentSchema.default('youth'),
   payerPersonId: z.uuid().optional(),
+  /**
+   * SPK-PAY-014 (PA-03) and SPK-REG-012 (PA-07): the tier, days, add-ons and uniform of the
+   * follow-up line, with the rules of a basket line. Required where the target offering is sold
+   * by tier or requires a uniform (VALIDATION_FAILED `TIER_REQUIRED`, `UNIFORM_REQUIRED`).
+   */
+  priceTierId: z.uuid().optional(),
+  selectedSessionIds: z.array(z.uuid()).min(1).max(366).optional(),
+  addons: z.array(AddBasketLineAddonSchema).max(20).optional(),
+  uniform: AddBasketLineUniformSchema.optional(),
 })
   .extend({ expectedRevision: Revision })
+  .refine(
+    (v) => new Set((v.addons ?? []).map((addon) => addon.addonId)).size === (v.addons ?? []).length,
+    { message: 'An add-on is listed once, with every session it is wanted for.', path: ['addons'] },
+  )
   .openapi('ConvertTrialRequest');
 export type ConvertTrialInput = z.infer<typeof ConvertTrialBody>;
 
@@ -1477,6 +1726,29 @@ command(
   'Complete a basket that owes nothing (paid baskets finish through the finance checkout)',
   CompleteBasketBody,
   BasketSchema,
+  200,
+);
+
+query(
+  '/uniform-orders',
+  'List the uniforms ordered for a class or a team: size, paid state and hand-over (staff; SPK-REG-012, proposed amendment PA-07)',
+  ListUniformOrdersQuery,
+  z.array(UniformOrderSchema),
+);
+command(
+  'post',
+  '/uniform-orders/{id}/hand-over',
+  'Record that a paid uniform was handed over, by whom and when (capability uniforms)',
+  HandOverUniformBody,
+  UniformOrderSchema,
+  200,
+);
+command(
+  'post',
+  '/uniform-orders/{id}/hand-over-corrections',
+  'Undo a hand-over by a recorded correction with its reason (capability uniforms)',
+  CorrectUniformHandOverBody,
+  UniformOrderSchema,
   200,
 );
 

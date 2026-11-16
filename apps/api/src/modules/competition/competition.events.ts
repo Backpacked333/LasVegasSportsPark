@@ -22,6 +22,15 @@ export const CompetitionEvents = {
     'competition.competition_updated',
     z.object({ competitionId: z.uuid(), status: z.string(), revision: z.number().int() }),
   ),
+  /** SPK-SCHED-010 (proposed amendment PA-06): a competition was made public or private. */
+  competitionPublicationChanged: defineEvent(
+    'competition.competition_publication_changed',
+    z.object({
+      competitionId: z.uuid(),
+      visibility: z.enum(['private', 'public']),
+      revision: z.number().int(),
+    }),
+  ),
   ruleSetCreated: defineEvent(
     'competition.rule_set_created',
     z.object({
@@ -85,6 +94,36 @@ export const CompetitionEvents = {
       previousStatus: TeamEntryStatusSchema,
       divisionId: z.uuid().nullable(),
       reason: z.string().nullable(),
+    }),
+  ),
+  /**
+   * SPK-COMP-006 (proposed amendment PA-10): a free division place was offered to a waiting entry.
+   * Identifiers and instants only; a notice to the captain reads the rest through the ports.
+   */
+  teamPlaceOffered: defineEvent(
+    'competition.team_place_offered',
+    z.object({
+      offerId: z.uuid(),
+      teamEntryId: z.uuid(),
+      seasonId: z.uuid(),
+      divisionId: z.uuid(),
+      positionAtOffer: z.number().int(),
+      expiresAt: z.string(),
+    }),
+  ),
+  /** Timer: enqueued with availableAt = expiresAt; handled by `competition.expire_team_place_offer`. */
+  teamPlaceOfferExpiryDue: defineEvent(
+    'competition.team_place_offer_expiry_due',
+    z.object({ offerId: z.uuid(), teamEntryId: z.uuid(), expiresAt: z.string() }),
+  ),
+  teamPlaceOfferResolved: defineEvent(
+    'competition.team_place_offer_resolved',
+    z.object({
+      offerId: z.uuid(),
+      teamEntryId: z.uuid(),
+      seasonId: z.uuid(),
+      divisionId: z.uuid(),
+      status: z.enum(['accepted', 'declined', 'expired', 'withdrawn']),
     }),
   ),
   /**

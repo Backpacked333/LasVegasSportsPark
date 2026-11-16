@@ -15,6 +15,7 @@ import {
   type FinancialConsequence,
   type Hold,
   type ListEnrollmentsQuery,
+  type OfferingSession,
   type Page,
   type PolicyReferences,
   type PriceSnapshot,
@@ -73,10 +74,12 @@ import {
   type Reader,
 } from '../enrollment.shared';
 import { missingAcknowledgments } from '../eligibility/registration-eligibility';
-import { CapacityService, type HoldRow } from './capacity.service';
+import { CapacityService, type HoldRow, type PoolRow } from './capacity.service';
 import { EnrollmentViews } from './enrollment-views';
 import { RegistrationEvaluator } from './registration-evaluator';
+import { RegistrationExtras } from './registration-extras';
 import { EnrollmentFacilityScope } from './facility-scope';
+import { UniformOrdersService } from './uniform-orders.service';
 
 export type EnrollmentRow = Selectable<EnrollmentsTable>;
 
@@ -101,6 +104,9 @@ export interface CreatePendingEnrollmentInput {
   trialParticipationId?: string | null;
   /** ENR-12: the membership a renewal line continues. */
   renewedFromEnrollmentId?: string | null;
+  /** SPK-PAY-014 (PA-03): the tier bought and the sessions attended (null = every session). */
+  priceTierId?: string | null;
+  selectedSessionIds?: string[] | null;
   priceSnapshot: PriceSnapshot | null;
   policyReferences: PolicyReferences;
   eligibilityResult: EligibilityResult | null;
@@ -130,6 +136,8 @@ export class EnrollmentsService implements EnrollmentPort {
     private readonly scope: EnrollmentFacilityScope,
     @Inject(ROSTER_PORT) private readonly rosters: RosterPort,
     private readonly views: EnrollmentViews,
+    private readonly uniforms: UniformOrdersService,
+    private readonly extras: RegistrationExtras,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -317,6 +325,15 @@ export class EnrollmentsService implements EnrollmentPort {
     organizationId: string,
     input: CreatePendingEnrollmentInput,
   ): Promise<EnrollmentRow> {
+    // SPK-PAY-014, SPK-REG-012 (quality review M-2, M-4): the one check of what a registration
+    // must have chosen, here because this is the one place an enrollment row is written. A
+    // basket hold, a waitlist acceptance, a trial conversion's line and a transfer all pass it.
+    await this.extras.assertComplete(trx, organizationId, {
+      offeringId: input.offeringId,
+      intent: input.intent,
+      priceTierId: input.priceTierId ?? null,
+      basketLineId: input.basketLineId ?? null,
+    });
     const id = newId();
     try {
       await trx
@@ -340,6 +357,8 @@ export class EnrollmentsService implements EnrollmentPort {
           placement_request_id: input.placementRequestId ?? null,
           trial_participation_id: input.trialParticipationId ?? null,
           renewed_from_enrollment_id: input.renewedFromEnrollmentId ?? null,
+          price_tier_id: input.priceTierId ?? null,
+          selected_session_ids: input.selectedSessionIds ?? null,
           order_ref: null,
           last_operation_id: null,
           price_snapshot: input.priceSnapshot ? json(input.priceSnapshot) : null,
@@ -492,14 +511,20 @@ export class EnrollmentsService implements EnrollmentPort {
     organizationId: string,
     scope: { offeringId: string; sessionId: string | null },
     participantPersonId: string,
+    /** The pools the place is re-acquired in; an offering queue counts who waits on one of them. */
+    poolIds?: readonly string[],
   ): Promise<void> {
     if (!this.evaluator.configuration.waitlistFirst) return;
-    const waiting = await this.capacity.othersWaiting(
-      trx,
-      organizationId,
-      scope,
-      participantPersonId,
-    );
+    const waiting =
+      poolIds && scope.sessionId === null
+        ? await this.extras.waitingAhead(
+            trx,
+            organizationId,
+            await this.evaluator.snapshot(trx, organizationId, scope.offeringId),
+            participantPersonId,
+            poolIds,
+          )
+        : await this.capacity.othersWaiting(trx, organizationId, scope, participantPersonId);
     if (waiting > 0) {
       throw errors.capacityUnavailable(
         'The place was released after the hold expired and is offered to the waitlist first.',
@@ -639,6 +664,7 @@ export class EnrollmentsService implements EnrollmentPort {
         organizationId,
         { offeringId: row.offering_id, sessionId: null },
         row.participant_person_id,
+        reacquire.map((r) => r.poolId),
       );
       await this.capacity.acquireCommitted(trx, organizationId, reacquire, { enrollmentId });
     }
@@ -671,6 +697,13 @@ export class EnrollmentsService implements EnrollmentPort {
         .where('id', '=', row.basket_line_id)
         .execute();
     }
+    // SPK-REG-012 (PA-07): the uniform ordered with the registration is paid with it.
+    await this.uniforms.onEnrollmentConfirmed(
+      trx,
+      organizationId,
+      enrollmentId,
+      options.correlationId ?? null,
+    );
     if (row.trial_participation_id) {
       // SPK-AT-019: the trial history stays; the paid entitlement is a separate record linked here.
       await trx
@@ -1167,6 +1200,8 @@ export class EnrollmentsService implements EnrollmentPort {
       .where('id', '=', row.id)
       .where('revision', '=', row.revision)
       .execute();
+    // SPK-REG-012 (PA-07): a uniform not yet handed over ends with its registration.
+    await this.uniforms.onEnrollmentCanceled(trx, organizationId, row.id, reason, correlationId);
     await this.audit.record(trx, {
       organizationId,
       actor,
@@ -1217,23 +1252,31 @@ export class EnrollmentsService implements EnrollmentPort {
   async transferPreview(
     principal: Principal,
     id: string,
-    targetOfferingId: string,
+    target: TransferChoice,
   ): Promise<TransferPreview> {
     const organizationId = organizationOf(principal);
     const row = await this.load(this.db, organizationId, id);
     if (!row) throw errors.protectedNotFound('enrollment');
-    await this.requireTransferAuthority(principal, organizationId, row, targetOfferingId);
-    const facts = await this.transferFacts(
-      this.db,
-      undefined,
+    await this.requireTransferAuthority(principal, organizationId, row, target.targetOfferingId);
+    const offeringSessions = await this.extras.sessionsBefore(
       organizationId,
-      principal,
-      row,
-      targetOfferingId,
-      this.clock.now(),
-      'read',
+      target.targetOfferingId,
     );
-    return facts.preview;
+    // A read: the price and the pools are worked out in a transaction that writes nothing, so
+    // the preview and the commit read the same facts through the same functions.
+    return this.uow.run(async ({ trx }) => {
+      const facts = await this.transferFacts(
+        trx,
+        organizationId,
+        principal,
+        row,
+        target,
+        offeringSessions,
+        this.clock.now(),
+        'read',
+      );
+      return facts.preview;
+    });
   }
 
   private async requireTransferAuthority(
@@ -1298,15 +1341,17 @@ export class EnrollmentsService implements EnrollmentPort {
    * consequence finance answers (DEC-009). `read` never writes; `commit` creates the target pools.
    */
   private async transferFacts(
-    db: Reader,
-    trx: Trx | undefined,
+    trx: Trx,
     organizationId: string,
     principal: Principal,
     row: EnrollmentRow,
-    targetOfferingId: string,
+    choice: TransferChoice,
+    offeringSessions: readonly OfferingSession[],
     now: Date,
     mode: 'read' | 'commit',
   ) {
+    const db: Reader = trx;
+    const targetOfferingId = choice.targetOfferingId;
     const source = await this.evaluator.snapshot(trx, organizationId, row.offering_id, now);
     const target = await this.evaluator.snapshot(trx, organizationId, targetOfferingId, now);
     const person = await this.evaluator.participant(trx, organizationId, row.participant_person_id);
@@ -1316,13 +1361,80 @@ export class EnrollmentsService implements EnrollmentPort {
       { snapshot: target, person, intent: row.intent },
       now,
     );
-    const targetPools =
-      mode === 'commit' && trx
-        ? this.capacity.poolsForIntent(
+    // SPK-PAY-014 (PA-03; quality review M-2, M-8): the tier and days of the target, with the
+    // rules of a basket line. An offering sold by tier is moved into under a tier (TIER_REQUIRED
+    // names them); the uniform is decided where the enrollment is created (`assertComplete`).
+    const selection = await this.extras.resolve(
+      trx,
+      organizationId,
+      {
+        offeringId: targetOfferingId,
+        priceTierId: choice.priceTierId,
+        selectedSessionIds: choice.selectedSessionIds,
+        quantity: 1,
+      },
+      offeringSessions,
+      { requireUniform: false, forTransfer: true },
+    );
+    const stored = {
+      id: null,
+      offering_id: target.offering.id,
+      price_tier_id: selection.tier?.id ?? null,
+      selected_session_ids: selection.selectedSessionIds,
+      addons: [],
+    };
+    let targetPools: Array<
+      Pick<PoolRow, 'unit' | 'constraint_kind' | 'capacity' | 'committed' | 'held'> & {
+        id: string | null;
+      }
+    >;
+    if (mode === 'commit') {
+      // Quality review M-3: the place moves onto every pool a basket line with the same choices
+      // would hold, the seat pool of each session attended included.
+      const extra = await this.extras.selectionPools(
+        trx,
+        organizationId,
+        stored,
+        target,
+        offeringSessions,
+        principal,
+      );
+      const offeringPools = extra.replacesOfferingPools
+        ? []
+        : this.capacity.poolsForIntent(
             await this.capacity.ensurePoolsForOffering(trx, organizationId, target, principal),
             row.intent,
+          );
+      const extraPools: PoolRow[] = [];
+      for (const poolId of extra.extraPoolIds) {
+        const pool = await this.capacity.loadPool(trx, organizationId, poolId);
+        if (pool) extraPools.push(pool);
+      }
+      targetPools = [...offeringPools, ...extraPools];
+    } else {
+      const requested = await this.extras.poolsOfRequest(db, organizationId, target, {
+        offering_id: target.offering.id,
+        intent: row.intent,
+        price_tier_id: stored.price_tier_id,
+        selected_session_ids: stored.selected_session_ids,
+        requested_extras: null,
+      });
+      const offeringWide = new Set(
+        this.capacity
+          .poolsForIntent(
+            await this.capacity.poolRowsForOffering(db, organizationId, target.offering.id),
+            row.intent,
           )
-        : await this.capacity.previewPoolsForIntent(db, organizationId, target, row.intent);
+          .map((p) => p.id),
+      );
+      const virtual =
+        stored.selected_session_ids && requested.pools.every((p) => !offeringWide.has(p.id))
+          ? []
+          : (
+              await this.capacity.previewPoolsForIntent(db, organizationId, target, row.intent)
+            ).filter((p) => p.id === null);
+      targetPools = [...requested.pools, ...virtual];
+    }
     const released = await db
       .selectFrom('allocations')
       .innerJoin('capacity_pools', (join) =>
@@ -1339,10 +1451,20 @@ export class EnrollmentsService implements EnrollmentPort {
       .where('allocations.enrollment_id', '=', row.id)
       .where('allocations.status', '=', 'active')
       .execute();
-    const targetPrice = await this.evaluator.priceSnapshot(
+    // SPK-PAY-013, SPK-PAY-014, SPK-PAY-015 (quality review M-8): the target's price from the
+    // facts a quote uses (the tier named, the participant's membership, the sessions still to
+    // attend), never the rule's base price where the place is not a plain term price. It is
+    // stored on the new enrollment, so a later cancellation is worked out on it.
+    const targetPrice = await this.extras.priceSnapshot(
       trx,
       organizationId,
-      target.offering.id,
+      {
+        offering_id: target.offering.id,
+        participant_person_id: row.participant_person_id,
+        session_id: null,
+        price_tier_id: stored.price_tier_id,
+        selected_session_ids: stored.selected_session_ids,
+      },
       now,
     );
     const fromPrice = this.priceOf(row);
@@ -1354,9 +1476,7 @@ export class EnrollmentsService implements EnrollmentPort {
         fromOfferingId: row.offering_id,
         toOfferingId: target.offering.id,
         fromPrice,
-        toPrice: targetPrice
-          ? { amountMinor: targetPrice.basePriceMinor, currency: targetPrice.currency }
-          : null,
+        toPrice: priceOfSnapshot(targetPrice),
         at: now,
       },
       trx,
@@ -1369,11 +1489,12 @@ export class EnrollmentsService implements EnrollmentPort {
     }));
     // DEC-006 (proposed `waitlistFirst`): a transfer does not skip people waiting for the target.
     const waitlistAhead = this.evaluator.configuration.waitlistFirst
-      ? await this.capacity.othersWaiting(
+      ? await this.extras.waitingAhead(
           db,
           organizationId,
-          { offeringId: target.offering.id, sessionId: null },
+          target,
           row.participant_person_id,
+          targetPools.flatMap((p) => (p.id ? [p.id] : [])),
         )
       : 0;
     const preview: TransferPreview = {
@@ -1403,7 +1524,16 @@ export class EnrollmentsService implements EnrollmentPort {
       newEnrollment: null,
       previousEnrollment: null,
     };
-    return { preview, target, evaluation, targetPools, targetPrice, consequence, waitlistAhead };
+    return {
+      preview,
+      target,
+      evaluation,
+      targetPools,
+      targetPrice,
+      consequence,
+      waitlistAhead,
+      selection,
+    };
   }
 
   /**
@@ -1443,6 +1573,12 @@ export class EnrollmentsService implements EnrollmentPort {
   ): Promise<TransferPreview> {
     const organizationId = organizationOf(principal);
     const now = this.clock.now();
+    // SPK-PAY-014: the target's sessions, for a day selection; read before the transaction and
+    // only while `price_tiers_addons` is on.
+    const offeringSessions = await this.extras.sessionsBefore(
+      organizationId,
+      input.targetOfferingId,
+    );
     return this.uow.run(async ({ trx }) => {
       const row = await this.load(trx, organizationId, id, input.commit);
       if (!row) throw errors.protectedNotFound('enrollment');
@@ -1456,15 +1592,16 @@ export class EnrollmentsService implements EnrollmentPort {
       assertExpectedRevision(input.expectedRevision, row.revision);
       const facts = await this.transferFacts(
         trx,
-        trx,
         organizationId,
         principal,
         row,
-        input.targetOfferingId,
+        input,
+        offeringSessions,
         now,
         input.commit ? 'commit' : 'read',
       );
-      const { preview, target, evaluation, targetPrice, consequence, waitlistAhead } = facts;
+      const { preview, target, evaluation, targetPrice, consequence, waitlistAhead, selection } =
+        facts;
       // Deprecated (ENR-03): `commit: false` still previews; GET .../transfer-preview is read-only.
       if (!input.commit) return preview;
       const targetPools = facts.targetPools.filter(
@@ -1550,6 +1687,9 @@ export class EnrollmentsService implements EnrollmentPort {
         actor: principal,
         actingAsStaff: staffTransfer,
         sourceApplicationId: row.source_application_id,
+        // The tier and days named for the target: what the place attends and was priced under.
+        priceTierId: selection.tier?.id ?? null,
+        selectedSessionIds: selection.selectedSessionIds,
         priceSnapshot: targetPrice,
         policyReferences: this.evaluator.policyReferences(target, evaluation.approvalPolicy),
         eligibilityResult: evaluation.result,
@@ -1639,7 +1779,21 @@ export class EnrollmentsService implements EnrollmentPort {
         afterRevision: created.revision + 1,
         correlationId,
         operationId,
-        details: { fromEnrollmentId: id, fromOfferingId: row.offering_id },
+        details: {
+          fromEnrollmentId: id,
+          fromOfferingId: row.offering_id,
+          // Quality review M-8: the price the place was moved in at, stored on the enrollment.
+          priceBasis: targetPrice
+            ? {
+                priceRuleId: targetPrice.priceRuleId,
+                unitPriceMinor: priceOfSnapshot(targetPrice)?.amountMinor ?? null,
+                currency: targetPrice.currency,
+                priceTierId: selection.tier?.id ?? null,
+                selectedSessionIds: selection.selectedSessionIds,
+                estimate: targetPrice.estimate ?? null,
+              }
+            : null,
+        },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.enrollmentTransferred, {
         organizationId,
@@ -1728,8 +1882,30 @@ export class EnrollmentsService implements EnrollmentPort {
   }
 
   private priceOf(row: EnrollmentRow): { amountMinor: number; currency: string } | null {
-    const snapshot = row.price_snapshot as { basePriceMinor?: number; currency?: string } | null;
-    if (!snapshot || typeof snapshot.basePriceMinor !== 'number' || !snapshot.currency) return null;
-    return { amountMinor: snapshot.basePriceMinor, currency: snapshot.currency };
+    return priceOfSnapshot(row.price_snapshot as unknown as PriceSnapshot | null);
   }
+}
+
+/** A transfer's target: the offering, and the tier and days where it is sold by tier. */
+export type TransferChoice = Pick<
+  TransferEnrollmentInput,
+  'targetOfferingId' | 'priceTierId' | 'selectedSessionIds'
+>;
+
+/**
+ * What a place costs, from the price snapshot its enrollment stores (SPK-PAY-013, SPK-PAY-014,
+ * SPK-PAY-015): where the place is not a plain term price, the unit price worked out from the
+ * tier, the member price and the sessions counted (recorded at the hold, or at the transfer that
+ * created the enrollment), not the rule's base price. Finance still prefers what its own order
+ * line charged.
+ */
+export function priceOfSnapshot(
+  snapshot: PriceSnapshot | null,
+): { amountMinor: number; currency: string } | null {
+  if (!snapshot || typeof snapshot.basePriceMinor !== 'number' || !snapshot.currency) return null;
+  const amountMinor =
+    typeof snapshot.estimate?.unitPriceMinor === 'number'
+      ? snapshot.estimate.unitPriceMinor
+      : snapshot.basePriceMinor;
+  return { amountMinor, currency: snapshot.currency };
 }

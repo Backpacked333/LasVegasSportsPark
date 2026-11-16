@@ -25,7 +25,7 @@ import {
   type WaitlistEntriesTable,
   type WaitlistOffersTable,
 } from '@sportspark/db';
-import type { Selectable } from 'kysely';
+import { sql, type Selectable, type SqlBool } from 'kysely';
 import {
   AuditWriter,
   AuthorizationService,
@@ -71,6 +71,12 @@ import { CapacityService, type HoldRow, type PoolRow } from './capacity.service'
 import { CatalogSessions } from './catalog-sessions';
 import { EnrollmentsService } from './enrollments.service';
 import { RegistrationEvaluator } from './registration-evaluator';
+import {
+  EMPTY_SELECTION,
+  RegistrationExtras,
+  hasRequest,
+  type ResolvedSelection,
+} from './registration-extras';
 import { SessionBookingsService } from './session-bookings.service';
 import { EnrollmentFacilityScope } from './facility-scope';
 
@@ -87,7 +93,13 @@ export type WaitlistRetirementReason =
   | 'booking_required'
   | 'makeup_redemption_required'
   | 'session_payment_unavailable'
-  | 'session_canceled';
+  | 'session_canceled'
+  // SPK-PAY-014 (quality review M-2): the offering is sold by tier and the entry names none, or
+  // what the entry asked for can no longer be bought (the tier's deadline passed or the price
+  // changed, a chosen day started or was canceled, an add-on was retired). The family joins
+  // again with a choice that can be bought.
+  | 'tier_required'
+  | 'selection_not_available';
 
 /**
  * Refusals of `assertObtainable` that end an entry instead of holding its queue: no later change of
@@ -128,6 +140,7 @@ export class WaitlistService implements WaitlistPort {
     private readonly sessions: CatalogSessions,
     private readonly scope: EnrollmentFacilityScope,
     private readonly capabilities: CapabilityService,
+    private readonly extras: RegistrationExtras,
   ) {}
 
   // -------------------------------------------------------------------------------------------
@@ -358,6 +371,25 @@ export class WaitlistService implements WaitlistPort {
     const session = sessionScoped
       ? await this.sessions.get(organizationId, input.offeringId, input.sessionId as string)
       : undefined;
+    const choices = {
+      offeringId: input.offeringId,
+      priceTierId: input.priceTierId,
+      selectedSessionIds: input.selectedSessionIds,
+      addons: input.addons,
+      uniform: input.uniform,
+      quantity: 1,
+    };
+    if (sessionScoped && (this.extras.namesTierOrAddons(choices) || input.uniform)) {
+      throw errors.validation(
+        `A ${input.intent} waitlist is for one session: it names no tier, days, add-ons or uniform.`,
+        { path: 'priceTierId' },
+      );
+    }
+    // SPK-PAY-014: the offering's sessions, for a day selection; read before the transaction and
+    // only while `price_tiers_addons` is on.
+    const offeringSessions = sessionScoped
+      ? []
+      : await this.extras.sessionsBefore(organizationId, input.offeringId);
     return this.uow.run(async ({ trx }) => {
       const now = this.clock.now();
       const person = await this.evaluator.participant(
@@ -429,26 +461,114 @@ export class WaitlistService implements WaitlistPort {
           },
         );
       }
-      const pools = session
-        ? await this.capacity.ensureSessionPool(trx, organizationId, snapshot, session, principal)
-        : this.capacity.poolsForIntent(
-            await this.capacity.ensurePoolsForOffering(trx, organizationId, snapshot, principal),
-            input.intent,
-          );
+      // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07), quality review M-2: what is waited for, with
+      // the rules of a basket line. An offering sold by tier is waited for under a tier
+      // (TIER_REQUIRED), a required uniform is chosen now (UNIFORM_REQUIRED), and each field is
+      // refused while its capability is off.
+      const selection: ResolvedSelection = sessionScoped
+        ? EMPTY_SELECTION
+        : await this.extras.resolve(trx, organizationId, choices, offeringSessions);
+      const requested = selection.tier || selection.addons.length > 0 || selection.uniform;
+      let pools: PoolRow[];
+      if (session) {
+        await this.capacity.ensureSessionPool(trx, organizationId, snapshot, session, principal);
+        // Quality review M-3: where a day can be bought by itself, the session's seats count
+        // everyone who attends it before they are read.
+        await this.extras.reconcileSessionSeats(trx, organizationId, snapshot, correlationId);
+        pools = await this.requiredPools(trx, organizationId, {
+          offering_id: snapshot.offering.id,
+          session_id: session.id,
+          intent: input.intent,
+          price_tier_id: null,
+          selected_session_ids: null,
+          requested_extras: null,
+        });
+      } else {
+        // The pools the selection takes a place in: the seat pool of each session attended where
+        // days can be chosen, the offering-wide pools unless days were chosen, and the pool of
+        // each limited add-on, created where missing (as a basket hold creates them). The entry
+        // waits on those, not on the offering-wide count: Monday can be full while the week is not.
+        const selectionPools = await this.extras.selectionPools(
+          trx,
+          organizationId,
+          {
+            id: null,
+            offering_id: snapshot.offering.id,
+            price_tier_id: selection.tier?.id ?? null,
+            selected_session_ids: selection.selectedSessionIds,
+            addons: selection.addons.flatMap(({ addon, sessionIds }) =>
+              (sessionIds.length > 0 ? sessionIds : [null]).map((sessionId) => ({
+                addon_id: addon.id,
+                session_id: sessionId,
+              })),
+            ),
+          },
+          snapshot,
+          offeringSessions,
+          principal,
+        );
+        const offeringWide = selectionPools.replacesOfferingPools
+          ? []
+          : this.capacity.poolsForIntent(
+              await this.capacity.ensurePoolsForOffering(trx, organizationId, snapshot, principal),
+              input.intent,
+            );
+        pools = [...offeringWide];
+        for (const poolId of selectionPools.extraPoolIds) {
+          const pool = await this.capacity.loadPool(trx, organizationId, poolId);
+          if (pool) pools.push(pool);
+        }
+      }
       const active = pools.filter((p) => p.status === 'active');
-      const primary = active.find((p) => p.constraint_kind === 'commercial') ?? active[0];
+      const free = (p: PoolRow) => p.capacity - p.committed - p.held;
+      // The pool the entry is listed under: the first one that is full (what it actually waits
+      // for), a commercial one before a staffing one; with a free place everywhere, as before.
+      const primary =
+        (requested
+          ? (active.find((p) => free(p) < 1 && p.constraint_kind === 'commercial') ??
+            active.find((p) => free(p) < 1))
+          : undefined) ??
+        active.find((p) => p.constraint_kind === 'commercial') ??
+        active[0];
       if (!primary) throw errors.validation('This offering has no capacity to wait for.');
-      const waiting = await this.capacity.othersWaiting(
-        trx,
-        organizationId,
-        { offeringId: snapshot.offering.id, sessionId: session?.id ?? null },
-        person.id,
-      );
-      if (waiting === 0 && active.every((p) => p.capacity - p.committed - p.held >= 1)) {
+      const waiting = session
+        ? await this.capacity.othersWaiting(
+            trx,
+            organizationId,
+            { offeringId: snapshot.offering.id, sessionId: session.id },
+            person.id,
+          )
+        : await this.extras.waitingAhead(
+            trx,
+            organizationId,
+            snapshot,
+            person.id,
+            active.map((p) => p.id),
+          );
+      // Refused only when what was asked for is available: every pool the selection needs has a
+      // free place and nobody waits for one of them.
+      if (waiting === 0 && active.every((p) => free(p) >= 1)) {
         throw errors.resourceConflict('A place is available now; register instead of waiting.', {
           code: 'CAPACITY_AVAILABLE',
           offeringId: snapshot.offering.id,
         });
+      }
+      if (!session) {
+        // One live entry per participant in an offering's queue, whatever each one asked for.
+        const live = await trx
+          .selectFrom('waitlist_entries')
+          .select('id')
+          .where('organization_id', '=', organizationId)
+          .where('offering_id', '=', snapshot.offering.id)
+          .where('session_id', 'is', null)
+          .where('participant_person_id', '=', person.id)
+          .where('status', 'in', ['waiting', 'offered'])
+          .executeTakeFirst();
+        if (live) {
+          throw errors.resourceConflict('The participant is already on this waitlist.', {
+            code: 'ALREADY_WAITLISTED',
+          });
+        }
       }
       const id = newId();
       try {
@@ -478,6 +598,23 @@ export class WaitlistService implements WaitlistPort {
             withdrawn_at: null,
             removed_at: null,
             removal_reason: null,
+            price_tier_id: selection.tier?.id ?? null,
+            selected_session_ids: selection.selectedSessionIds,
+            requested_extras:
+              selection.addons.length > 0 || selection.uniform
+                ? json({
+                    addons: selection.addons.map(({ addon, sessionIds }) => ({
+                      addonId: addon.id,
+                      sessionIds: [...sessionIds].sort(),
+                    })),
+                    uniform: selection.uniform
+                      ? {
+                          offeringUniformId: selection.uniform.uniform.id,
+                          size: selection.uniform.size,
+                        }
+                      : null,
+                  })
+                : null,
           })
           .execute();
       } catch (error) {
@@ -502,6 +639,22 @@ export class WaitlistService implements WaitlistPort {
           poolId: primary.id,
           priorityBasis: input.priorityBasis ?? 'joined_at',
           assistedByStaff: staff,
+          ...(requested
+            ? {
+                priceTierId: selection.tier?.id ?? null,
+                selectedSessionIds: selection.selectedSessionIds,
+                addons: selection.addons.map(({ addon, sessionIds }) => ({
+                  addonId: addon.id,
+                  sessionIds,
+                })),
+                uniform: selection.uniform
+                  ? {
+                      offeringUniformId: selection.uniform.uniform.id,
+                      size: selection.uniform.size,
+                    }
+                  : null,
+              }
+            : {}),
         },
       });
       await this.outbox.enqueue(trx, EnrollmentEvents.waitlistJoined, {
@@ -555,8 +708,11 @@ export class WaitlistService implements WaitlistPort {
 
   async list(principal: Principal, query: ListWaitlistQuery): Promise<WaitlistEntry[]> {
     const organizationId = organizationOf(principal);
-    // §4.3, §4.14: the queue of an offering is read at the offering's facility.
-    await this.authorization.require(principal, EnrollmentActions.manageWaitlist, {
+    // §4.3, §4.14: the queue of an offering is read at the offering's facility. Reading it is
+    // `read_waitlist` (the front desk answers families about their place, SPK-REG-008); the
+    // commands on it keep `manage_waitlist`. The target names no subject person, so a customer's
+    // own authority never lists a whole queue (their entries are `GET /me/waitlist-entries`).
+    await this.authorization.require(principal, EnrollmentActions.readWaitlist, {
       type: 'waitlist_entry',
       organizationId,
       facilityId: await this.scope.facilityOf(organizationId, query.offeringId),
@@ -760,28 +916,133 @@ export class WaitlistService implements WaitlistPort {
     correlationId: string | null,
   ): Promise<WaitlistOffer[]> {
     const released = await this.capacity.loadPool(trx, organizationId, poolId);
-    if (!released || !released.offering_id) return [];
+    if (!released) return [];
+    if (!released.offering_id) {
+      // SPK-PAY-014 (quality review M-2): an add-on's own pool names no offering. A place that
+      // came back to it is offered to the entries that asked for that add-on, in their
+      // offering's queue order.
+      if (released.scope_type !== 'addon') return [];
+      const made: WaitlistOffer[] = [];
+      for (const offeringId of await this.offeringsWaitingForAddon(
+        trx,
+        organizationId,
+        released.scope_id,
+      )) {
+        await this.capacity.lockOfferingPools(trx, organizationId, offeringId);
+        made.push(
+          ...(await this.offerInQueue(trx, organizationId, offeringId, null, correlationId, made)),
+        );
+      }
+      return made;
+    }
     // Lock every pool of the offering in id order — the order every hold acquires them in — so
     // concurrent generators serialize and never deadlock against a basket holding the same pools.
-    await trx
-      .selectFrom('capacity_pools')
-      .select('id')
-      .where('organization_id', '=', organizationId)
-      .where('offering_id', '=', released.offering_id)
-      .orderBy('id')
-      .forUpdate()
-      .execute();
+    await this.capacity.lockOfferingPools(trx, organizationId, released.offering_id);
     const pool = await this.capacity.loadPool(trx, organizationId, poolId);
     if (!pool || !pool.offering_id || pool.status !== 'active') return [];
     const sessionId = pool.scope_type === 'session' ? pool.scope_id : null;
-    const entries = await this.waitingQuery(trx, organizationId, pool.offering_id, sessionId)
+    // Quality review M-3: where a day can be bought by itself, everyone who attends a session
+    // is on its pool before a freed place is offered. Nothing happens for any other offering.
+    await this.extras.reconcileSessionSeats(
+      trx,
+      organizationId,
+      await this.evaluator.snapshot(trx, organizationId, pool.offering_id),
+      correlationId,
+    );
+    const made = await this.offerInQueue(
+      trx,
+      organizationId,
+      pool.offering_id,
+      sessionId,
+      correlationId,
+      [],
+    );
+    if (sessionId && (await this.queueHasRequests(trx, organizationId, pool.offering_id))) {
+      // SPK-PAY-014 (quality review M-2): a session's freed seat is also what an entry of the
+      // offering's queue waits for when it chose that day (or the whole week). Only where such
+      // entries exist; a queue nobody asked a tier in is offered from its own pools, as before.
+      made.push(
+        ...(await this.offerInQueue(
+          trx,
+          organizationId,
+          pool.offering_id,
+          null,
+          correlationId,
+          made,
+        )),
+      );
+    }
+    return made;
+  }
+
+  /** Whether a waiting entry of the offering's queue asked for a tier, days, add-ons or a uniform. */
+  private async queueHasRequests(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+  ): Promise<boolean> {
+    const row = await trx
+      .selectFrom('waitlist_entries')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .where('offering_id', '=', offeringId)
+      .where('session_id', 'is', null)
+      .where('status', '=', 'waiting')
+      .where((eb) =>
+        eb.or([eb('price_tier_id', 'is not', null), eb('requested_extras', 'is not', null)]),
+      )
+      .limit(1)
+      .executeTakeFirst();
+    return !!row;
+  }
+
+  /** The offerings whose waiting entries asked for an add-on (its pool names no offering). */
+  private async offeringsWaitingForAddon(
+    trx: Trx,
+    organizationId: string,
+    addonId: string,
+  ): Promise<string[]> {
+    const rows = await trx
+      .selectFrom('waitlist_entries')
+      .select('offering_id')
+      .distinct()
+      .where('organization_id', '=', organizationId)
+      .where('status', '=', 'waiting')
+      .where('session_id', 'is', null)
+      .where(sql<SqlBool>`requested_extras @> ${JSON.stringify({ addons: [{ addonId }] })}::jsonb`)
+      .orderBy('offering_id')
+      .execute();
+    return rows.map((row) => row.offering_id);
+  }
+
+  /**
+   * Offers the free places of one queue (an offering's, or one of its sessions') in its order,
+   * under the offering's pool locks its caller took.
+   *
+   * An entry that asked for nothing beyond a place keeps the strict order: generation stops at
+   * the first one that cannot be served, so a lower-priority entry is never offered first. An
+   * entry that asked for a tier, days or add-ons waits on the pools of that selection: one that
+   * cannot be served is passed over, and the pools it waits on are kept for it, so an entry
+   * behind it is offered a place only where it takes none of them (Tuesday's waiter is served
+   * while Monday's still waits; nobody behind Monday's waiter gets Monday's next seat).
+   */
+  private async offerInQueue(
+    trx: Trx,
+    organizationId: string,
+    offeringId: string,
+    sessionId: string | null,
+    correlationId: string | null,
+    alreadyMade: readonly WaitlistOffer[],
+  ): Promise<WaitlistOffer[]> {
+    const entries = await this.waitingQuery(trx, organizationId, offeringId, sessionId)
       .forUpdate()
       .execute();
     const made: WaitlistOffer[] = [];
     const system = enrollmentSystem(organizationId, 'enrollment.offer_waitlist');
     let snapshot: OfferingSnapshot | undefined;
     const snapshotOf = async () =>
-      (snapshot ??= await this.evaluator.snapshot(trx, organizationId, pool.offering_id as string));
+      (snapshot ??= await this.evaluator.snapshot(trx, organizationId, offeringId));
+    const keptFor = new Set<string>();
     for (const entry of entries) {
       // SPK-REG-008: a participant who already holds what this queue waits for (registered
       // directly, or in an equivalent offering) leaves it instead of being offered a place they
@@ -806,23 +1067,78 @@ export class WaitlistService implements WaitlistPort {
         );
         continue;
       }
-      const required = await this.requiredPools(trx, organizationId, entry);
+      const request = entry.session_id
+        ? null
+        : await this.extras.poolsOfRequest(trx, organizationId, await snapshotOf(), entry);
+      if (request?.refusal === 'capability_off') continue;
+      if (request?.refusal) {
+        // It could never be accepted as it stands: it leaves the queue with a notice and may
+        // join again with a choice that can be bought.
+        await this.retireEntry(
+          trx,
+          organizationId,
+          entry,
+          system,
+          correlationId,
+          false,
+          request.refusal,
+        );
+        continue;
+      }
+      const required = request
+        ? request.pools
+        : await this.requiredPools(trx, organizationId, entry);
       if (required.length === 0) continue;
-      if (required.some((p) => p.capacity - p.committed - p.held < 1)) break;
+      const strict = !hasRequest(entry);
+      const waits = () => {
+        for (const p of required) keptFor.add(p.id);
+      };
+      if (required.some((p) => keptFor.has(p.id))) {
+        waits();
+        continue;
+      }
+      // Pools are re-read: an offer made earlier in this loop took a place.
+      const current = await this.currentPools(trx, organizationId, required);
+      if (current.some((p) => p.capacity - p.committed - p.held < 1)) {
+        if (strict) break;
+        waits();
+        continue;
+      }
       try {
         made.push(
-          await this.makeOffer(trx, organizationId, entry, required, system, correlationId, {
-            savepoint: `offer_${made.length}`,
+          await this.makeOffer(trx, organizationId, entry, current, system, correlationId, {
+            savepoint: `offer_${alreadyMade.length + made.length}`,
             reason: null,
           }),
         );
       } catch (error) {
         // Another constraint filled up concurrently: stop here, keeping the queue order.
-        if (DomainError.is(error) && error.code === 'CAPACITY_UNAVAILABLE') break;
-        throw error;
+        if (!DomainError.is(error) || error.code !== 'CAPACITY_UNAVAILABLE') throw error;
+        if (strict) break;
+        waits();
       }
     }
     return made;
+  }
+
+  /** The pools as they are now, in id order. */
+  private async currentPools(
+    trx: Trx,
+    organizationId: string,
+    pools: readonly PoolRow[],
+  ): Promise<PoolRow[]> {
+    if (pools.length === 0) return [];
+    return trx
+      .selectFrom('capacity_pools')
+      .selectAll()
+      .where('organization_id', '=', organizationId)
+      .where(
+        'id',
+        'in',
+        pools.map((p) => p.id),
+      )
+      .orderBy('id')
+      .execute();
   }
 
   /**
@@ -961,14 +1277,15 @@ export class WaitlistService implements WaitlistPort {
         ),
       });
       // Pools first in id order (as holds and offer generation take them), then the entries.
-      await trx
-        .selectFrom('capacity_pools')
-        .select('id')
-        .where('organization_id', '=', organizationId)
-        .where('offering_id', '=', before.offering_id)
-        .orderBy('id')
-        .forUpdate()
-        .execute();
+      await this.capacity.lockOfferingPools(trx, organizationId, before.offering_id);
+      // Quality review M-3: where a day can be bought by itself, everyone who attends a session
+      // is on its pool before a place is offered.
+      await this.extras.reconcileSessionSeats(
+        trx,
+        organizationId,
+        await this.evaluator.snapshot(trx, organizationId, before.offering_id),
+        correlationId,
+      );
       const entry = await this.loadEntry(trx, organizationId, id, true);
       if (!entry) throw errors.protectedNotFound('waitlist_entry');
       assertExpectedRevision(input.expectedRevision, entry.revision);
@@ -991,11 +1308,52 @@ export class WaitlistService implements WaitlistPort {
       const snapshotOf = async () =>
         (snapshot ??= await this.evaluator.snapshot(trx, organizationId, entry.offering_id));
       let next: { entry: WaitlistEntryRow; required: PoolRow[] } | null = null;
+      // SPK-PAY-014 (quality review M-2): the same order as offer generation. An entry that
+      // asked for a tier, days or add-ons and cannot be served is passed over and keeps the
+      // pools it waits on; the entry staff chose is next unless an entry ahead of it waits on
+      // one of its pools.
+      const keptFor = new Map<string, string>();
       for (const candidate of queue) {
         if (this.intentRefusal(candidate.intent)) continue;
         if (await this.entitlementOf(trx, organizationId, candidate, snapshotOf)) continue;
-        const required = await this.requiredPools(trx, organizationId, candidate);
+        const request = candidate.session_id
+          ? null
+          : await this.extras.poolsOfRequest(trx, organizationId, await snapshotOf(), candidate);
+        if (request?.refusal) {
+          if (candidate.id !== entry.id) continue;
+          throw errors.resourceConflict(
+            request.refusal === 'capability_off'
+              ? 'What this entry waits for is turned off for the organization.'
+              : request.refusal === 'tier_required'
+                ? 'This offering is sold by tier and the entry names none; the family joins again under a tier.'
+                : 'What this entry waits for can no longer be bought; the family joins again.',
+            { code: request.refusal.toUpperCase(), waitlistEntryId: entry.id },
+          );
+        }
+        const required = request
+          ? request.pools
+          : await this.requiredPools(trx, organizationId, candidate);
         if (required.length === 0) continue;
+        if (candidate.id === entry.id) {
+          const ahead = required.map((p) => keptFor.get(p.id)).find((id) => id !== undefined);
+          next = ahead ? null : { entry: candidate, required };
+          if (ahead) {
+            throw errors.validation('Another waiting entry is offered the next place first.', {
+              code: 'NOT_NEXT_IN_QUEUE',
+              waitlistEntryId: entry.id,
+              nextWaitlistEntryId: ahead,
+            });
+          }
+          break;
+        }
+        if (
+          hasRequest(candidate) &&
+          (required.some((p) => keptFor.has(p.id)) ||
+            required.some((p) => p.capacity - p.committed - p.held < 1))
+        ) {
+          for (const p of required) if (!keptFor.has(p.id)) keptFor.set(p.id, candidate.id);
+          continue;
+        }
         next = { entry: candidate, required };
         break;
       }
@@ -1264,7 +1622,15 @@ export class WaitlistService implements WaitlistPort {
   private async requiredPools(
     trx: Trx,
     organizationId: string,
-    entry: WaitlistEntryRow,
+    entry: Pick<
+      WaitlistEntryRow,
+      | 'offering_id'
+      | 'session_id'
+      | 'intent'
+      | 'price_tier_id'
+      | 'selected_session_ids'
+      | 'requested_extras'
+    >,
   ): Promise<PoolRow[]> {
     if (entry.session_id) {
       return trx
@@ -1302,6 +1668,11 @@ export class WaitlistService implements WaitlistPort {
     if (preEntry.session_id) {
       session = await this.sessions.get(organizationId, preEntry.offering_id, preEntry.session_id);
     }
+    // SPK-PAY-014: the offering's sessions, for the entry's day selection and its pools; read
+    // before the transaction and only while `price_tiers_addons` is on.
+    const offeringSessions = preEntry.session_id
+      ? []
+      : await this.extras.sessionsBefore(organizationId, preEntry.offering_id);
     return this.uow.run(async ({ trx }) => {
       const now = this.clock.now();
       const offer = await this.loadOffer(trx, organizationId, offerId, true);
@@ -1479,6 +1850,28 @@ export class WaitlistService implements WaitlistPort {
             correlationId,
           });
         }
+        // SPK-PAY-014 (PA-03), SPK-REG-012 (PA-07), quality review M-2 and M-4: the line opens
+        // with what the entry waited for (the tier, the days, the add-ons, the uniform), checked
+        // again now with the rules of a basket line, so its quote prices the tier and the place
+        // the offer held can be paid. An entry that recorded no uniform takes the one named
+        // with the acceptance; a required one that is still missing is refused
+        // (UNIFORM_REQUIRED, with the sizes) and the offer stays open.
+        const selection = await this.extras.resolve(
+          trx,
+          organizationId,
+          {
+            offeringId: entry.offering_id,
+            priceTierId: entry.price_tier_id ?? undefined,
+            selectedSessionIds: entry.selected_session_ids ?? undefined,
+            addons: (entry.requested_extras?.addons ?? []).map((addon) => ({
+              addonId: addon.addonId,
+              ...(addon.sessionIds.length > 0 ? { sessionIds: addon.sessionIds } : {}),
+            })),
+            uniform: entry.requested_extras?.uniform ?? input.uniform,
+            quantity: 1,
+          },
+          offeringSessions,
+        );
         const opened = await this.baskets.openForLine(trx, organizationId, {
           owner,
           payerPersonId,
@@ -1490,6 +1883,7 @@ export class WaitlistService implements WaitlistPort {
           sessionId: null,
           evaluation,
           applicationId: application.id,
+          selection,
           correlationId,
         });
         const held = await this.baskets.holdOpenedBasket(
@@ -1502,6 +1896,7 @@ export class WaitlistService implements WaitlistPort {
           holds.map((h) => h.id),
           minutesFrom(now, this.evaluator.configuration.holdMinutes),
           correlationId,
+          offeringSessions,
         );
         basketId = held.basket.id;
         enrollmentId = held.enrollmentId;
