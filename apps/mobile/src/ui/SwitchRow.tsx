@@ -7,7 +7,12 @@
  */
 import { Pressable, Switch, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSelectionHaptic } from './ChoiceList';
-import { fonts, makeStyles, MIN_TOUCH_SIZE, spacing, type, useTheme } from './theme';
+import { fonts, makeStyles, MIN_TOUCH_SIZE, spacing, type, useTheme, type Theme } from './theme';
+
+/** The switch's thumb: the light surface of the theme (white on classic, the light text on Legends). */
+export function switchThumbColor(theme: Theme): string {
+  return theme.dark ? theme.colors.text : theme.colors.background;
+}
 
 export interface SwitchRowProps {
   label: string;
@@ -36,7 +41,8 @@ export function SwitchRow({
   testID,
 }: SwitchRowProps) {
   const styles = useStyles();
-  const { colors } = useTheme();
+  const theme = useTheme();
+  const { colors } = theme;
   const haptic = useSelectionHaptic();
   const toggle = (next: boolean) => {
     if (disabled) return;
@@ -73,6 +79,9 @@ export function SwitchRow({
           onValueChange={toggle}
           disabled={disabled}
           trackColor={{ false: colors.control, true: colors.primary }}
+          // A light thumb in both themes (the platform's own default is teal on the web and
+          // Android, which clashed with the gold track in Legends mode).
+          thumbColor={switchThumbColor(theme)}
           ios_backgroundColor={colors.control}
         />
       </View>

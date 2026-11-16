@@ -295,7 +295,9 @@ function TeamCard({
                 />
               ) : null}
             </View>
+            {/* One row: who is on the team, then the standing as plain words (no card in a card). */}
             <StatTile
+              plain
               label="Standing"
               value={standing.value}
               sublabel={standing.sublabel}
@@ -639,7 +641,7 @@ const useStyles = makeStyles(() => ({
   extras: { flex: 1, gap: spacing.md },
   facts: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   members: { flex: 1 },
-  tile: { minWidth: 120 },
+  tile: { alignItems: 'flex-end' },
   item: { gap: spacing.sm, paddingVertical: spacing.xs },
   answers: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   confirm: { gap: spacing.sm },

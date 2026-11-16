@@ -102,6 +102,9 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
     expect(
       screen.getByTestId('outcome-success-art', { includeHiddenElements: true }),
     ).toBeOnTheScreen();
+    // ADR-008: a headline under the picture says what happened.
+    expect(screen.getByRole('header', { name: "You're registered" })).toBeOnTheScreen();
+    expect(screen.getByText("You'll find it in Calendar and under You.")).toBeOnTheScreen();
     await waitFor(() => expect(app.haptics.events).toEqual(['success']));
     // Re-reads of the same completed checkout never play it again.
     await act(async () => {
@@ -128,6 +131,7 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
       'Payment processing',
     );
     expect(screen.queryByTestId('outcome-success-art', { includeHiddenElements: true })).toBeNull();
+    expect(screen.queryByRole('header', { name: "You're registered" })).toBeNull();
     expect(screen.queryByRole('button', { name: 'See it in Calendar' })).toBeNull();
     expect(app.haptics.events).not.toContain('success');
     await app.settle();

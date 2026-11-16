@@ -76,6 +76,15 @@ export function Avatar({ name, id, size = 'md', decorative = false, style, testI
   );
 }
 
+/**
+ * How far each avatar in a stack slides over the one before it: a sixth of its width, so the next
+ * circle (with its ring) stops short of the initials of the one before (two bold initials reach
+ * about 78% of the way across the circle). It was a third, which cut the second letter.
+ */
+export function stackOverlap(side: number): number {
+  return Math.round(side / 6);
+}
+
 /** The words of a stack: every name, in order ("Ava Lee, Ben Ortiz and Cara Diaz"). */
 export function avatarStackLabel(people: readonly AvatarPerson[]): string {
   const names = people.map((p) => p.name);
@@ -119,7 +128,7 @@ export function AvatarStack({
           id={person.id}
           size={size}
           decorative
-          style={[styles.ring, index > 0 && { marginLeft: -side / 3 }]}
+          style={[styles.ring, index > 0 && { marginLeft: -stackOverlap(side) }]}
         />
       ))}
       {more > 0 ? (
@@ -128,7 +137,7 @@ export function AvatarStack({
             styles.avatar,
             styles.ring,
             styles.more,
-            { width: side, height: side, marginLeft: -side / 3 },
+            { width: side, height: side, marginLeft: -stackOverlap(side) },
           ]}
         >
           <Text style={[styles.moreText, { fontSize: side * 0.36 }]} maxFontSizeMultiplier={1}>

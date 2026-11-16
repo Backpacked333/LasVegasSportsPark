@@ -4,7 +4,7 @@
  */
 import { screen } from '@testing-library/react-native';
 import { renderSurface } from '../../testing/ui-surfaces';
-import { Avatar, AvatarStack, avatarStackLabel, initialsFor } from '../Avatar';
+import { Avatar, AvatarStack, avatarStackLabel, initialsFor, stackOverlap } from '../Avatar';
 import { MotionProvider } from '../motion';
 import { avatarToneFor, classicTheme, legendsTheme } from '../theme';
 
@@ -22,6 +22,13 @@ describe('Avatar (ADR-008)', () => {
     expect(initialsFor('  maria  de la cruz ')).toBe('MC');
     expect(initialsFor('Ben')).toBe('B');
     expect(initialsFor('')).toBe('?');
+  });
+
+  it('ADR-008: a stack overlaps little enough that the next avatar never covers the initials', () => {
+    // Two bold initials reach about 78% of the way across: the next circle starts after that.
+    for (const side of [28, 40, 56]) {
+      expect(side - stackOverlap(side)).toBeGreaterThanOrEqual(side * 0.78);
+    }
   });
 
   it('SPK-UX-009: initials ignore brackets and punctuation; a bracketed name is the person', () => {

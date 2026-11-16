@@ -12,7 +12,7 @@ import {
   THEME_NAMES,
 } from '../../testing/ui-actions';
 import { SwitchRow } from '../SwitchRow';
-import { MIN_TOUCH_SIZE } from '../theme';
+import { classicTheme, legendsTheme, MIN_TOUCH_SIZE } from '../theme';
 
 function Reminders({ disabled = false }: { disabled?: boolean }) {
   const [on, setOn] = useState(false);
@@ -82,6 +82,10 @@ describe('SwitchRow (ADR-008)', () => {
       false: theme.colors.control,
       true: theme.colors.primary,
     });
+    // ADR-008: a light thumb, never the platform's teal (which sat on gold in Legends mode).
+    expect(screen.UNSAFE_getByType(Switch).props.thumbColor).toBe(
+      name === 'legends' ? legendsTheme.colors.text : classicTheme.colors.background,
+    );
   });
 
   it('toggles at once with motion on', async () => {

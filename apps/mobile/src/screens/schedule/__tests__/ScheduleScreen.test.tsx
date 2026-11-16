@@ -127,6 +127,10 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
         name: 'Adult Pickup Night, 6:00 PM to 7:30 PM PDT. For: You. Pickup session, Booking pending',
       }),
     ).toBeOnTheScreen();
+    // ADR-008: the start is drawn large on the left, so the line under the title says the end only
+    // (the screen reader still hears the whole range, above).
+    expect(within(day).getByText('Until 11:00 AM PDT. For: Sam')).toBeOnTheScreen();
+    expect(within(day).queryByText('10:00 AM to 11:00 AM PDT. For: Sam')).toBeNull();
     // Every item states its facility's zone (ENR-02): no device-clock caveat anywhere.
     expect(screen.queryByTestId('zone-notice')).toBeNull();
     const request = app.fake.requests.find((r) => r.route === '/me/family-calendar');

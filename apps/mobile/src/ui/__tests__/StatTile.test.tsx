@@ -53,4 +53,11 @@ describe('StatTile (ADR-008)', () => {
     );
     expect(screen.getByLabelText('Wins, 5').props.style).toEqual(still);
   });
+
+  it('ADR-008: a plain tile has no card of its own (inside another card) and reads the same', async () => {
+    await renderSurface(<StatTile plain label="Standing" value="1st" sublabel="of 4 teams" />);
+    const tile = screen.getByLabelText('Standing, 1st, of 4 teams');
+    expect(tile).not.toHaveStyle({ flex: 1 });
+    expect(tile).not.toHaveStyle({ borderRadius: expect.any(Number) });
+  });
 });

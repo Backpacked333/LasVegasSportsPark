@@ -246,13 +246,22 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
   return (
     <View>
       {completed ? (
-        <Artwork
-          source={illustrations.success}
-          aspectRatio={1}
-          contentFit="contain"
-          style={styles.art}
-          testID="outcome-success-art"
-        />
+        <View style={styles.success}>
+          <Artwork
+            source={illustrations.success}
+            aspectRatio={1}
+            contentFit="contain"
+            style={styles.art}
+            testID="outcome-success-art"
+          />
+          {/* ADR-008: the picture has a headline under it that says what happened. */}
+          <Text variant="title1" heading style={styles.centered}>
+            You&apos;re registered
+          </Text>
+          <Text variant="body" tone="muted" style={styles.centered}>
+            You&apos;ll find it in Calendar and under You.
+          </Text>
+        </View>
       ) : null}
       <Section title="Registration and payment">
         {/* SPK-UX-009, NA-A01: every change of the checkout's status (re-read while it runs) is
@@ -504,6 +513,8 @@ const useStyles = makeStyles(({ colors }) => ({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  success: { alignItems: 'center', gap: spacing.xs, paddingHorizontal: layout.gutter },
+  centered: { textAlign: 'center' },
   art: {
     alignSelf: 'center',
     width: '50%',

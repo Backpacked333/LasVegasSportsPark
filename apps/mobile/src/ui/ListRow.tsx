@@ -4,7 +4,8 @@
  *
  * Look: on a screen, each row is its own white card with a line border (`RowLayout` "card", the
  * default); inside a card that already frames its content (the feature `Section` cards), rows are
- * flat with a divider between them (`RowLayout` "flat", set by `ListRowLayout`). An optional
+ * flat with a divider between them (`RowLayout` "flat", set by `ListRowLayout`), and none above
+ * the first row of a group (the row at the top of its parent, found from its layout). An optional
  * decorative `icon` tile and `accent` stripe (an activity kind's colour) sit on the left; the words
  * always say what they mean. A row that opens something shows a chevron and answers a touch at
  * once: the soft surface fill while pressed (and the platform ripple on Android), no animation.
@@ -16,8 +17,8 @@
  * `chevron` to show or hide the chevron explicitly. The label reads title, subtitle, value,
  * status, badges, count.
  */
-import { createContext, useContext, type ReactNode } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { createContext, useContext, useState, type ReactNode } from 'react';
+import { Pressable, Text, View, type LayoutChangeEvent } from 'react-native';
 import { Avatar, type AvatarPerson } from './Avatar';
 import { CountBadge } from './CountBadge';
 import { Icon } from './Icon';
@@ -54,6 +55,11 @@ export interface ListRowProps {
   subtitle?: string;
   /** Alias of `subtitle` (kept for existing rows); `subtitle` wins when both are given. */
   detail?: string;
+  /**
+   * What screen readers hear in place of the line under the title, when the screen shows part of
+   * it elsewhere in the row (a calendar row's start time drawn large on the left). Default: the line.
+   */
+  spokenDetail?: string;
   /** A short value on the right ("$40.00", "6:30 pm"), in tabular figures. */
   value?: string;
   /** A count on the right (unread, waiting); nothing for 0. */
@@ -85,6 +91,7 @@ export function ListRow({
   title,
   subtitle,
   detail: detailAlias,
+  spokenDetail,
   value,
   badge,
   badgeLabel,
@@ -104,12 +111,13 @@ export function ListRow({
   const { colors } = useTheme();
   const styles = useStyles();
   const layout = useContext(RowLayoutContext);
+  const [firstInGroup, setFirstInGroup] = useState(false);
   const [tileColor, tileIconColor] = iconTone ?? [colors.surface, colors.text];
   const detail = subtitle ?? detailAlias;
   const count = badge !== undefined && badge > 0 ? badge : null;
   const label = [
     title,
-    detail,
+    spokenDetail ?? detail,
     value,
     status?.label,
     ...badges.map((b) => b.label),
@@ -143,6 +151,13 @@ export function ListRow({
     </>
   );
   const frame = layout === 'card' ? styles.card : styles.flat;
+  // A flat row draws the divider above it, except the first row of its group: the card's own
+  // edge is already there, so no line is drawn above the first row (ADR-008).
+  const noDivider = layout === 'flat' && firstInGroup ? styles.firstFlat : null;
+  const onLayout =
+    layout === 'flat'
+      ? (event: LayoutChangeEvent) => setFirstInGroup(event.nativeEvent.layout.y < 1)
+      : undefined;
   if (onPress) {
     return (
       <Pressable
@@ -151,7 +166,8 @@ export function ListRow({
         accessibilityHint={accessibilityHint}
         onPress={onPress}
         android_ripple={{ color: colors.surface }}
-        style={({ pressed }) => [styles.row, frame, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.row, frame, noDivider, pressed && styles.pressed]}
+        onLayout={onLayout}
         testID={testID}
       >
         {content}
@@ -159,7 +175,13 @@ export function ListRow({
     );
   }
   return (
-    <View style={[styles.row, frame]} accessible accessibilityLabel={label} testID={testID}>
+    <View
+      style={[styles.row, frame, noDivider]}
+      onLayout={onLayout}
+      accessible
+      accessibilityLabel={label}
+      testID={testID}
+    >
       {content}
     </View>
   );
@@ -191,6 +213,7 @@ const useStyles = makeStyles(({ colors }) => ({
     borderTopWidth: 1,
     borderTopColor: colors.divider,
   },
+  firstFlat: { borderTopWidth: 0 },
   pressed: { backgroundColor: colors.surface },
   accent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
   tile: {

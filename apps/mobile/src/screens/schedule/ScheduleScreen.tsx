@@ -285,6 +285,9 @@ function EntryRow({
   const { kindColors } = useTheme();
   const z = entry.zone.zone;
   const time = `${formatTime(entry.start, z)} to ${formatTime(entry.end, z)} ${zoneAbbreviation(entry.start, z)}`;
+  // The start is drawn large on the left (`StartTime`), so the line under the title says only
+  // when it ends; screen readers still hear the whole range.
+  const until = `Until ${formatTime(entry.end, z)} ${zoneAbbreviation(entry.start, z)}`;
   const badges: StatusBadgeProps[] = [
     ...(next ? [{ tone: 'info' as const, label: 'Next up' }] : []),
     ...(overlap ? [{ tone: 'warning' as const, label: overlap }] : []),
@@ -296,7 +299,10 @@ function EntryRow({
     return (
       <ListRow
         title={item.title}
-        detail={[`${time}. For: ${nameOf(names, item.personId)}`, pickup]
+        detail={[`${until}. For: ${nameOf(names, item.personId)}`, pickup]
+          .filter(Boolean)
+          .join('. ')}
+        spokenDetail={[`${time}. For: ${nameOf(names, item.personId)}`, pickup]
           .filter(Boolean)
           .join('. ')}
         status={calendarItemStatus(item)}
@@ -317,7 +323,16 @@ function EntryRow({
     <View style={styles.game}>
       <ListRow
         title={title}
-        detail={[`${time}. For: ${card.participant}`, card.location ? `At: ${card.location}` : null]
+        detail={[
+          `${until}. For: ${card.participant}`,
+          card.location ? `At: ${card.location}` : null,
+        ]
+          .filter(Boolean)
+          .join('. ')}
+        spokenDetail={[
+          `${time}. For: ${card.participant}`,
+          card.location ? `At: ${card.location}` : null,
+        ]
           .filter(Boolean)
           .join('. ')}
         status={fixtureStatus(fixture.status)}
