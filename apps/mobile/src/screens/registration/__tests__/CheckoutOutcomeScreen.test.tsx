@@ -92,8 +92,45 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
     expect(screen.getByLabelText('Received: $226.00')).toBeOnTheScreen();
     // The API has this checkout: the device forgets the request it remembered for its quote.
     await waitFor(() => expect(app.progressStore.snapshot().pendingCheckoutQuoteId).toBeNull());
-    fireEvent.press(screen.getByRole('button', { name: 'See your schedule' }));
+    fireEvent.press(screen.getByRole('button', { name: 'See it in Calendar' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/schedule');
+  });
+
+  it('PA-11 ADR-008: a completed registration shows the success illustration, the exact status, "See it in Calendar" and plays one success haptic', async () => {
+    const app = renderOutcome({ routes: routes() });
+    expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
+    expect(
+      screen.getByTestId('outcome-success-art', { includeHiddenElements: true }),
+    ).toBeOnTheScreen();
+    await waitFor(() => expect(app.haptics.events).toEqual(['success']));
+    // Re-reads of the same completed checkout never play it again.
+    await act(async () => {
+      await app.queryClient.invalidateQueries();
+    });
+    await app.settle();
+    expect(app.haptics.events).toEqual(['success']);
+    fireEvent.press(screen.getByRole('button', { name: 'See it in Calendar' }));
+    expect(mockRouter.push).toHaveBeenCalledWith('/schedule');
+    expect(screen.getByRole('button', { name: 'Explore more activities' })).toBeOnTheScreen();
+  });
+
+  it('PA-11 ADR-008: before the API reports it complete there is no success illustration, haptic or calendar link', async () => {
+    const app = renderOutcome({
+      routes: routes({
+        'GET /registration-checkouts/{id}': {
+          status: 200,
+          body: checkout({ status: 'finalizing', enrollmentIds: [] }),
+        },
+      }),
+    });
+    expect(await screen.findByTestId('outcome-status')).toHaveProp(
+      'accessibilityLabel',
+      'Payment processing',
+    );
+    expect(screen.queryByTestId('outcome-success-art', { includeHiddenElements: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'See it in Calendar' })).toBeNull();
+    expect(app.haptics.events).not.toContain('success');
+    await app.settle();
   });
 
   it('SPK-UX-001: "Payment processing" never reads as confirmed, and returning to the app shows the new state', async () => {

@@ -105,12 +105,6 @@
 
   "src/screens/payments/PaymentsScreen.tsx :: obligation :: Payments and obligations",
 
-  "src/screens/registration/CheckoutScreen.tsx :: basket :: Back to your basket",
-  "src/screens/registration/CheckoutScreen.tsx :: basket :: …d. Go back to your basket to start again or join a waitlis…",
-  "src/screens/registration/CheckoutScreen.tsx :: quote :: Your quote has nothing due now.",
-
-  "src/screens/registration/WaitlistScreen.tsx :: basket :: Holds the place in a basket so you can pay",
-
   "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: A session package holds sessions to book. It is not money a…",
   "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: No session packages",
   "src/screens/session-packages/MySessionPackagesScreen.tsx :: session package :: Session package",

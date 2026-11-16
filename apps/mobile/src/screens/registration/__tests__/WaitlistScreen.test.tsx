@@ -237,7 +237,7 @@ describe('SCR-C-16 WaitlistsScreen', () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<WaitlistsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No waitlists' })).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Discover activities' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/discover');
   });
 

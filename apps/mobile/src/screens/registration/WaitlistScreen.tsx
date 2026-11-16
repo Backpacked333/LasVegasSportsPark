@@ -39,15 +39,17 @@ import {
   waitlistEntryStatus,
   waitlistOfferStatus,
 } from '../../features/registration/status';
-import { Body, ButtonRow, Detail, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
+import { FieldValue } from '../../ui/Field';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { Section } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { makeStyles, spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
 type WaitlistEntry = Schema<'WaitlistEntry'>;
 
@@ -126,12 +128,16 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
   return (
     <View>
       <Section title={name === 'You' ? 'Your place on the waitlist' : `Waitlist for ${name}`}>
-        <Body>{offeringName}</Body>
+        <Text variant="headline">{offeringName}</Text>
         <StatusBadge
           {...waitlistEntryStatus(entry, offeringName, now, timeZone)}
           testID="waitlist-status"
         />
-        <Detail label="Joined" value={formatInstant(entry.joinedAt, timeZone)} />
+        <FieldValue
+          layout="inline"
+          label="Joined"
+          value={formatInstant(entry.joinedAt, timeZone)}
+        />
       </Section>
 
       {offer ? (
@@ -149,16 +155,16 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
               subject={switchedOff.label}
               decisions={switchedOff.decisions}
               owner={switchedOff.owner}
-              stillAvailable="The place stays held until the offer expires; declining and leaving the waitlist stay available."
+              stillAvailable="The spot stays saved for you until the offer expires; declining and leaving the waitlist stay available."
             />
           ) : null}
-          <ButtonRow>
+          <View style={styles.buttons}>
             <Button
               label="Accept the place"
               onPress={() => void acceptOffer()}
               busy={accept.isProcessing}
               disabled={offline || switchedOff !== null}
-              accessibilityHint="Holds the place in a basket so you can pay"
+              accessibilityHint="Saves the spot in your cart so you can pay"
             />
             <Button
               label="Decline the offer"
@@ -167,8 +173,12 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
               busy={decline.isProcessing}
               disabled={offline}
             />
-            {offline ? <Body muted>Accepting needs a connection.</Body> : null}
-          </ButtonRow>
+            {offline ? (
+              <Text variant="caption" tone="muted">
+                Accepting needs a connection.
+              </Text>
+            ) : null}
+          </View>
         </Section>
       ) : null}
 
@@ -196,7 +206,7 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
                 accessible
                 accessibilityLabel={`Offered ${formatInstant(o.offeredAt, timeZone)}. ${waitlistOfferStatus(o, now, timeZone).label}`}
               >
-                <Body>{`Offered ${formatInstant(o.offeredAt, timeZone)}`}</Body>
+                <Text variant="body">{`Offered ${formatInstant(o.offeredAt, timeZone)}`}</Text>
                 <StatusBadge {...waitlistOfferStatus(o, now, timeZone)} />
               </View>
             ))}
@@ -205,7 +215,7 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
       ) : null}
 
       {active ? (
-        <ButtonRow>
+        <View style={styles.actions}>
           <Button
             label="Leave the waitlist"
             variant="secondary"
@@ -213,7 +223,7 @@ function EntryContent({ entry, refetch }: { entry: WaitlistEntry; refetch: () =>
             busy={withdraw.isProcessing}
             disabled={offline}
           />
-        </ButtonRow>
+        </View>
       ) : null}
     </View>
   );
@@ -260,4 +270,6 @@ const useStyles = makeStyles(({ colors }) => ({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  buttons: { gap: spacing.sm },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
 }));

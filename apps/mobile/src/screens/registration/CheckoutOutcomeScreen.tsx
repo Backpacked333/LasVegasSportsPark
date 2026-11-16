@@ -19,6 +19,11 @@
  * the screen stays "Checking your new payment" and shows "Check not run" with the API's message:
  * the earlier payment may still have gone through (R4-CLIENTS-A11Y-COPY-01).
  *
+ * Once the API reports the checkout completed (PA-11, ADR-008): the success illustration above the
+ * exact status phrase ("Registration complete"), "See it in Calendar" (/schedule), and a success
+ * haptic, played once; the screen and the announced status say the same, so the haptic is never
+ * the only feedback (SPK-UX-009).
+ *
  * A checkout of another account is answered NOT_FOUND and reads "not available". Offline, the last
  * known status is shown with its age. The checkout's status and the payment's are announced to
  * screen readers when they appear and whenever a re-read changes them (`ui/announce`, SPK-UX-009).
@@ -26,8 +31,10 @@
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
+import { pendingMessage } from '../../copy/pending';
 import {
   mayHaveTakenEffect,
   refusedAfterNoAnswer,
@@ -50,17 +57,21 @@ import {
   operationLabel,
   paymentStatus,
 } from '../../features/registration/status';
-import { Body, ButtonRow, Detail, Section } from '../../features/registration/ui';
 import { useApp, useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
+import { Artwork } from '../../ui/Artwork';
 import { Button } from '../../ui/Button';
+import { FieldValue } from '../../ui/Field';
+import { useHaptics } from '../../ui/PressableScale';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { RefusedBeforeRunning } from '../../ui/RefusedBeforeRunning';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
+import { Section } from '../../ui/Section';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { makeStyles, spacing } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles, spacing } from '../../ui/theme';
 
 type Checkout = Schema<'Checkout'>;
 
@@ -79,6 +90,7 @@ function RetryPayment({
   confirming: boolean;
   onUnknown: () => void;
 }) {
+  const styles = useStyles();
   const { reachable } = useConnectivity();
   const [token, setToken] = useState<string | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
@@ -106,7 +118,7 @@ function RetryPayment({
   if (confirming) {
     return (
       <View>
-        <ButtonRow>
+        <View style={styles.actions}>
           <Button
             label="Check again"
             variant="secondary"
@@ -115,7 +127,7 @@ function RetryPayment({
             busy={retry.isProcessing}
             accessibilityHint="Asks about the same payment again; it is never charged twice"
           />
-        </ButtonRow>
+        </View>
         {/* SPK-AT-028: the check did not run; the earlier payment may still go through. */}
         {failure && refusedAfterNoAnswer(failure) ? (
           <RefusedBeforeRunning error={failure} priorUnknown payment testID="retry-check-refused" />
@@ -128,6 +140,7 @@ function RetryPayment({
       <StateView
         variant="pending-decision"
         subject="Paying again in the app"
+        message={pendingMessage('DEC-019')}
         decisions={['DEC-019']}
         owner="Technical lead/account owners"
       />
@@ -136,14 +149,14 @@ function RetryPayment({
   return (
     <View>
       <DevPaymentMethodPicker value={token} onChange={setToken} />
-      <ButtonRow>
+      <View style={styles.actions}>
         <Button
           label="Try this payment method"
           onPress={() => void submit()}
           disabled={!token || reachable === false}
           busy={retry.isProcessing}
         />
-      </ButtonRow>
+      </View>
       <CommandError error={failure} onRetry={() => void submit()} />
     </View>
   );
@@ -190,6 +203,15 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
     .filter((id): id is string => typeof id === 'string');
   const placements = useApiRecords('/placement-requests/{id}', placementIds, completed);
   const terminal = TERMINAL.includes(checkout.status);
+  // PA-11, ADR-008: a success haptic once the API reports the registration complete (once per
+  // checkout); the screen shows it and the status is announced, so it is never the only sign.
+  const haptics = useHaptics();
+  const celebrated = useRef<string | null>(null);
+  useEffect(() => {
+    if (!completed || celebrated.current === checkout.id) return;
+    celebrated.current = checkout.id;
+    haptics.success();
+  }, [completed, checkout.id, haptics]);
 
   // The API has this checkout, so its list finds it from now on: the device no longer needs to
   // remember the request for its quote. Only this checkout's quote is forgotten, never another
@@ -221,6 +243,15 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
         : null;
   return (
     <View>
+      {completed ? (
+        <Artwork
+          source={illustrations.success}
+          aspectRatio={1}
+          contentFit="contain"
+          style={styles.art}
+          testID="outcome-success-art"
+        />
+      ) : null}
       <Section title="Registration and payment">
         {/* SPK-UX-009, NA-A01: every change of the checkout's status (re-read while it runs) is
             announced, and so is the payment's below. */}
@@ -232,7 +263,9 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
             accessible
             accessibilityLabel={`Request status: ${operationLabel(operation.data).label}`}
           >
-            <Body muted>Request status</Body>
+            <Text variant="caption" tone="muted">
+              Request status
+            </Text>
             <StatusBadge {...operationLabel(operation.data)} />
           </View>
         ) : null}
@@ -242,19 +275,24 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
         <Section title="Payment">
           <LiveRegion announcement={sentences(paymentBadge.label, paymentExplanation)}>
             <StatusBadge {...paymentBadge} testID="outcome-payment" />
-            <Detail label="Amount" value={formatMoney(payment.amountMinor, payment.currency)} />
-            {paymentExplanation ? <Body>{paymentExplanation}</Body> : null}
+            <FieldValue
+              layout="inline"
+              label="Amount"
+              value={formatMoney(payment.amountMinor, payment.currency)}
+            />
+            {paymentExplanation ? <Text variant="body">{paymentExplanation}</Text> : null}
           </LiveRegion>
           {payment.status === 'action_required' ? (
             DevPaymentMethodPicker ? (
-              <Body>
+              <Text variant="body">
                 The development payment provider finishes this step by itself; this screen updates
                 when it does.
-              </Body>
+              </Text>
             ) : (
               <StateView
                 variant="pending-decision"
                 subject="Completing the payment provider's step in the app"
+                message={pendingMessage('DEC-019')}
                 decisions={['DEC-019']}
                 owner="Technical lead/account owners"
               />
@@ -263,17 +301,17 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
         </Section>
       ) : checkout.paymentKind === 'none' ? (
         <Section title="Payment">
-          <Body>Nothing was due, so no payment was taken.</Body>
+          <Text variant="body">Nothing was due, so no payment was taken.</Text>
         </Section>
       ) : null}
 
       {checkout.nextAction === 'retry_payment' && payment && payment.status !== 'succeeded' ? (
         <Section title={retryUnknown ? 'Checking your new payment' : 'Pay with another method'}>
-          <Body>
+          <Text variant="body">
             {retryUnknown
               ? 'No answer came back for your new payment. It may still go through, so do not pay again: this screen checks it.'
-              : 'The payment did not go through. Your places stay held only until the hold ends.'}
-          </Body>
+              : 'The payment did not go through. Your spots stay saved only for a short time.'}
+          </Text>
           <RetryPayment
             checkout={checkout}
             confirming={retryUnknown}
@@ -284,13 +322,19 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
 
       {checkout.receipt ? (
         <Section title="Receipt">
-          <Detail
+          <FieldValue
+            layout="inline"
             label="Received"
             value={formatMoney(checkout.receipt.amountMinor, checkout.receipt.currency)}
           />
-          <Detail label="On" value={formatInstant(checkout.receipt.receivedAt)} />
+          <FieldValue
+            layout="inline"
+            label="On"
+            value={formatInstant(checkout.receipt.receivedAt)}
+          />
           {checkout.receipt.excessMinor > 0 ? (
-            <Detail
+            <FieldValue
+              layout="inline"
               label="More than was owed"
               value={formatMoney(checkout.receipt.excessMinor, checkout.receipt.currency)}
             />
@@ -300,20 +344,24 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
 
       {checkout.status === 'recovery_required' ? (
         <Section title="What happens next">
-          <Body>
+          <Text variant="body">
             Your payment was received but your registration is not finished yet. Staff are
             completing it. Do not pay again.
-          </Body>
-          {checkout.recovery ? <Body muted>{checkout.recovery.message}</Body> : null}
+          </Text>
+          {checkout.recovery ? (
+            <Text variant="caption" tone="muted">
+              {checkout.recovery.message}
+            </Text>
+          ) : null}
         </Section>
       ) : null}
       {checkout.status === 'compensated' ? (
         <Section title="What happens next">
-          <Body>
+          <Text variant="body">
             {checkout.recovery?.plan === 'credit'
               ? 'Your payment was returned to you as a credit on your account.'
               : 'Your payment is being returned to you.'}
-          </Body>
+          </Text>
         </Section>
       ) : null}
 
@@ -343,18 +391,20 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
                 ].join('. ')}
                 testID={`outcome-line-${line.id}`}
               >
-                <Body>{`${name}: ${offeringName}`}</Body>
+                <Text variant="headline">{`${name}: ${offeringName}`}</Text>
                 <StatusBadge {...lineStatus} />
                 {/* SPK-PAY-014, SPK-REG-012: what was bought with the place. */}
                 {line.addons.map((addon) => (
-                  <Body key={addon.addonId} muted>
+                  <Text key={addon.addonId} variant="caption" tone="muted">
                     {addon.selection === 'per_session'
                       ? `${addon.name} × ${addon.quantity === 1 ? '1 day' : `${addon.quantity} days`}`
                       : addon.name}
-                  </Body>
+                  </Text>
                 ))}
                 {line.uniform ? (
-                  <Body muted>{`${line.uniform.name}, size ${line.uniform.size}`}</Body>
+                  <Text variant="caption" tone="muted">
+                    {`${line.uniform.name}, size ${line.uniform.size}`}
+                  </Text>
                 ) : null}
               </View>
             );
@@ -362,18 +412,24 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
         </View>
       </Section>
 
-      <ButtonRow>
+      <View style={styles.actions}>
         {completed ? (
-          <Button label="See your schedule" onPress={() => router.push('/schedule')} />
+          <Button
+            label="See it in Calendar"
+            onPress={() => router.push('/schedule')}
+            icon="calendar_today"
+            size="lg"
+            block
+          />
         ) : null}
         {terminal ? (
           <Button
-            label="Discover more activities"
+            label="Explore more activities"
             variant="secondary"
             onPress={() => router.push(registrationRoutes.discover())}
           />
         ) : null}
-      </ButtonRow>
+      </View>
     </View>
   );
 }
@@ -446,4 +502,12 @@ const useStyles = makeStyles(({ colors }) => ({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  art: {
+    alignSelf: 'center',
+    width: '50%',
+    maxWidth: 200,
+    marginTop: spacing.lg,
+    backgroundColor: 'transparent',
+  },
+  actions: { gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
 }));

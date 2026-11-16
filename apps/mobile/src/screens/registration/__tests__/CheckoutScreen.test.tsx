@@ -83,7 +83,7 @@ describe('SCR-C-14 CheckoutScreen', () => {
     });
     expect(await screen.findByLabelText('Due now: $226.00')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Pay $226.00' })).toBeNull();
-    const hold = screen.getByRole('button', { name: 'Hold my places' });
+    const hold = screen.getByRole('button', { name: 'Save my spots' });
     await act(async () => {
       fireEvent.press(hold);
     });
@@ -501,7 +501,7 @@ describe('SCR-C-14 CheckoutScreen', () => {
           ),
       }),
     });
-    const hold = await screen.findByRole('button', { name: 'Hold my places' });
+    const hold = await screen.findByRole('button', { name: 'Save my spots' });
     await act(async () => {
       fireEvent.press(hold);
     });
@@ -526,7 +526,7 @@ describe('SCR-C-14 CheckoutScreen', () => {
           ),
       }),
     });
-    const hold = await screen.findByRole('button', { name: 'Hold my places' });
+    const hold = await screen.findByRole('button', { name: 'Save my spots' });
     await act(async () => {
       fireEvent.press(hold);
     });
@@ -550,13 +550,13 @@ describe('SCR-C-14 CheckoutScreen', () => {
         },
       }),
     });
-    const hold = await screen.findByRole('button', { name: 'Hold my places' });
+    const hold = await screen.findByRole('button', { name: 'Save my spots' });
     await act(async () => {
       fireEvent.press(hold);
     });
     await screen.findByRole('button', { name: 'Complete required forms' });
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Hold my places' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Save my spots' }));
     });
     const keys = app.fake.requests
       .filter((r) => r.route === '/baskets/{id}/hold')
@@ -662,7 +662,7 @@ describe('SCR-C-14 CheckoutScreen', () => {
       }),
     });
     expect((await screen.findAllByLabelText('Awaiting approval')).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Hold my places' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save my spots' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Pay / })).toBeNull();
   });
 
