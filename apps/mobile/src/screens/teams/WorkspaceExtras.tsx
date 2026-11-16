@@ -11,7 +11,8 @@
  *   reads are not answered, never a guess.
  * - `MiniStandings`: the official table (`GET /v1/seasons/{id}/standings`) around the team, with
  *   the playoff line (`playoffLine.cutPosition`, SPK-RESULT-003) written out as a row, and the
- *   team's own row named "your team" (not colour alone, SPK-UX-009).
+ *   team's own row named "your team" and highlighted (not colour alone, SPK-UX-009), every figure
+ *   in tabular digits (ADR-008).
  * - `RsvpProgress`: for the management view, how many of the roster said they are available for
  *   the next game, from the counts the workspace already gives (`availability`, SPK-CAP-003: an
  *   answer is neither attendance nor eligibility). A minimum-players warning is not shown: the
@@ -40,6 +41,7 @@ import {
   makeStyles,
   radius,
   spacing,
+  tabular,
   type,
   useTheme,
   type ThemeColors,
@@ -389,11 +391,17 @@ const useStyles = makeStyles(({ colors }) => ({
     borderTopWidth: 1,
     borderTopColor: colors.divider,
   },
-  ownRow: { backgroundColor: colors.surface },
-  ownText: { ...fonts.bold },
-  cellPos: { ...type.body, width: 28, color: colors.text },
+  // The own row: a tonal fill and an accent bar (and "You" in words, never colour alone).
+  ownRow: {
+    backgroundColor: colors.tonal,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
+    paddingLeft: spacing.xs,
+  },
+  ownText: { ...fonts.bold, color: colors.onTonal },
+  cellPos: { ...tabular(type.body), width: 28, color: colors.text },
   cellTeam: { ...type.body, flex: 1, color: colors.text },
-  cellNum: { ...type.body, width: 44, textAlign: 'right', color: colors.text },
+  cellNum: { ...tabular(type.body), width: 44, textAlign: 'right', color: colors.text },
   playoffLine: {
     borderTopWidth: 2,
     borderTopColor: colors.primary,

@@ -4,7 +4,8 @@
  * `teamEntryId`); the API checks that the caller captains the entry and routes the request by
  * category. The answer is the request's status only, never notes, owner or queue (§4.14); its
  * progress is on Support (SCR-C-38). How quickly the operating team answers is DEC-015 (pending),
- * so no response time is promised here. The form is shown only when the workspace says the viewer
+ * so no response time is promised here: the form says what to do instead (`pendingMessage`), with
+ * the decision in "Details for support" (PA-11). The form is shown only when the workspace says the viewer
  * acts as captain (`viewer.actingAsCaptain`, the API's team role `captain`); a roster player, and a
  * co-captain the rule set does not let act as captain, are pointed to Support, where a request is
  * about themselves.
@@ -19,10 +20,12 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useApiCommand } from '../../api/useApiCommand';
+import { pendingMessage } from '../../copy/pending';
 import { useConnectivity } from '../../providers/AppProviders';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
+import { SupportDetails } from '../../ui/SupportDetails';
 import { spacing } from '../../ui/theme';
 import { formatInstant } from './format';
 import type { Workspace } from './queries';
@@ -136,10 +139,10 @@ export function ContactOperations({ workspace }: { workspace: Workspace }) {
         disabled={offline}
         busy={send.isProcessing}
       />
-      <Body muted>
-        How quickly requests are answered is still being decided (DEC-015), so no response time is
-        given.
-      </Body>
+      <Body
+        muted
+      >{`The operating team answers through Support. ${pendingMessage('DEC-015')}`}</Body>
+      <SupportDetails decisions={['DEC-015']} />
       {send.error ? (
         <CommandFailure
           error={send.error}

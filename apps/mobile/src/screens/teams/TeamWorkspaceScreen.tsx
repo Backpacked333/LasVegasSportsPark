@@ -12,14 +12,19 @@
  * see features/teams/queries.ts), and each captain tool is offered only when its action is in
  * `viewer.availableActions`; the API still authorizes every command behind them.
  *
+ * Layout (ADR-008, PA-11): a glass hero (`Hero`, liquid glass where the device offers it) with the
+ * team, its league, its status and its form, over summary cards: Games, Table, Roster,
+ * Availability and Money, then the season and contacting the operating team. Each card leads to
+ * its own screen. Pull to refresh reads everything again (`TeamFrame`).
+ *
  * The captain contacts the operating team about the team with `POST /v1/me/support-requests`
  * (features/teams/ContactOperations.tsx, SPK-SUPPORT-002). The API allows that to the captain only
  * (team role `captain`, which a co-captain holds only when the rule set lets co-captains act as
  * captain), so the form follows `viewer.actingAsCaptain`; everyone else, a co-captain who may not
- * act as captain included, is pointed to Support. A forms-outstanding indicator is not built:
- * stage 3 left it pending DEC-002 and DEC-028. What captains may see beyond the API's indicators
- * is DEC-012 (pending). A player's own contribution requests are listed by SCR-C-25
- * (`/team/contributions`, `GET /v1/me/contribution-requests`).
+ * act as captain included, is pointed to Support. A forms-outstanding indicator is not built and
+ * not mentioned on screen: stage 3 left it pending DEC-002 and DEC-028. What captains may see
+ * beyond the API's indicators is DEC-012 (pending). A player's own shares ("Your share") are
+ * listed by SCR-C-25 (`/team/contributions`, `GET /v1/me/contribution-requests`).
  *
  * A waiting team (SPK-COMP-006, proposed amendment PA-10) shows its wait first: the division, the
  * place in the order, an open offer the captain accepts or declines, and withdrawing from the list
@@ -41,7 +46,7 @@
  * the operating team (other commands live on the linked screens).
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDateRange, ordinal, plural } from '../../features/teams/format';
@@ -58,12 +63,17 @@ import {
 import { ContactOperations, ContactThroughSupport } from '../../features/teams/ContactOperations';
 import { TeamFrame } from '../../features/teams/TeamFrame';
 import { TeamWaiting } from '../../features/teams/TeamWaiting';
-import { Body, ButtonRow, Detail, ReasonList, Section } from '../../features/teams/ui';
 import { useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
+import { FieldValue } from '../../ui/Field';
 import { Hero } from '../../ui/Hero';
 import { ListRow } from '../../ui/ListRow';
+import { ReasonList } from '../../ui/ReasonList';
+import { Section } from '../../ui/Section';
+import { StatTile } from '../../ui/StatTile';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { Text } from '../../ui/Text';
+import { makeStyles, spacing } from '../../ui/theme';
 import {
   FormGuide,
   MatchCheckIn,
@@ -112,32 +122,42 @@ function UpcomingGameRow({
       detail={upcomingDetail(game, viewer)}
       status={fixtureStatus(game.fixture, detail.data?.venue?.timezone)}
       onPress={onPress}
-      accessibilityHint="Opens availability for this team's games"
+      accessibilityHint="Opens the game"
       testID={`upcoming-${game.fixture.id}`}
     />
   );
 }
 
-function StandingSummary({ workspace }: { workspace: Workspace }) {
+/** The standing as a stat tile (tabular figures): loading, failed and empty differ (SPK-UX-008). */
+function StandingTile({ workspace }: { workspace: Workspace }) {
   const standings = useStandings(workspace);
   const data = standings.data;
   const row = data?.rows.find((r) => r.teamEntryId === workspace.entry.id);
-  let text: string;
+  let value: string;
+  let sublabel: string;
   if (data === undefined) {
-    text = standings.error ? 'The standing could not be loaded.' : 'Loading the standing…';
+    [value, sublabel] = standings.error
+      ? ['Not shown', 'The standing could not be loaded.']
+      : ['…', 'Loading the standing'];
   } else if (!data || !row || data.sourceResultIds.length === 0) {
-    text = 'No official results yet.';
+    [value, sublabel] = ['Not yet', 'No official results yet.'];
   } else {
-    text = `${ordinal(row.position)} of ${data.rows.length}, ${plural(row.points, 'point')}`;
+    value = ordinal(row.position);
+    sublabel = `of ${plural(data.rows.length, 'team')}, ${plural(row.points, 'point')}`;
   }
-  return <Detail label="Standing" value={text} testID="workspace-standing" />;
+  return (
+    <StatTile label="Standing" value={value} sublabel={sublabel} testID="workspace-standing" />
+  );
 }
 
+/** The captain's roster readiness: actionable indicators, kept apart (SPK-COMP-004). */
 function CaptainReadiness({ workspace }: { workspace: Workspace }) {
+  const styles = useStyles();
   const r = workspace.readiness;
   return (
-    <Section title="Roster readiness" testID="captain-readiness">
-      <Detail
+    <View style={styles.group} testID="captain-readiness">
+      <FieldValue
+        layout="inline"
         label="On the roster"
         value={`${r.rosterCount} (minimum ${r.rosterMin}, maximum ${r.rosterMax})`}
       />
@@ -145,53 +165,58 @@ function CaptainReadiness({ workspace }: { workspace: Workspace }) {
         tone={r.rosterComplete ? 'success' : 'warning'}
         label={r.rosterComplete ? 'Roster complete' : 'Roster not complete'}
       />
-      <Detail label="Eligible players" value={`${r.eligiblePlayers} of ${r.rosterCount}`} />
-      <Detail label="Invitations waiting" value={String(r.pendingInvitations)} />
-      <Detail label="Join requests waiting" value={String(r.pendingJoinRequests)} />
-      <Detail
-        label="Team payment"
-        value={
-          r.financialStatusRef ? 'Recorded: see Team contributions' : 'No obligation recorded yet'
-        }
+      <FieldValue
+        layout="inline"
+        label="Eligible players"
+        value={`${r.eligiblePlayers} of ${r.rosterCount}`}
       />
-      <Detail
-        label="Forms outstanding"
-        value="Not shown: waiting on a decision (DEC-002, DEC-028)"
+      <FieldValue
+        layout="inline"
+        label="Invitations waiting"
+        value={String(r.pendingInvitations)}
+      />
+      <FieldValue
+        layout="inline"
+        label="Join requests waiting"
+        value={String(r.pendingJoinRequests)}
       />
       {r.issues.length > 0 ? (
         <ReasonList reasons={r.issues} testID="readiness-issues" />
       ) : (
-        <Body>Nothing needs your attention.</Body>
+        <Text variant="body">Nothing needs your attention.</Text>
       )}
-    </Section>
+    </View>
   );
 }
 
 function ReducedRoster({ workspace, now }: { workspace: Workspace; now: Date }) {
   const players = workspace.roster.filter((m) => isCurrentPlayer(m, now));
   return (
-    <Section title="Teammates" testID="reduced-roster">
+    <View testID="reduced-roster">
       {players.length === 0 ? (
-        <Body>No players on the roster yet.</Body>
+        <Text variant="body">No players on the roster yet.</Text>
       ) : (
-        <View accessibilityRole="list">
+        <View accessibilityRole="list" accessibilityLabel="Teammates">
           {players.map((m) => (
             <ListRow key={m.id} title={m.displayName} status={rosterMemberStatus(m, now)} />
           ))}
         </View>
       )}
-    </Section>
+    </View>
   );
 }
 
 export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; viewer: Viewer }) {
   const router = useRouter();
+  const styles = useStyles();
   const now = useNow();
   const queryClient = useQueryClient();
   const entryId = workspace.entry.id;
   const games = workspace.upcomingFixtures;
+  const next = games[0];
   const reload = () =>
     void queryClient.invalidateQueries({ queryKey: ['api', '/team-entries/{id}'] });
+  const toAvailability = () => router.push(teamRoutes.availability(entryId));
   return (
     <View>
       <Hero
@@ -203,121 +228,142 @@ export function WorkspaceContent({ workspace, viewer }: { workspace: Workspace; 
         <FormGuide workspace={workspace} />
       </Hero>
       <TeamWaiting workspace={workspace} onReload={reload} />
-      <Section title="Season">
-        <Detail
-          label="Season"
-          value={`${workspace.season.name}, ${formatDateRange(workspace.season.startsOn, workspace.season.endsOn)}`}
-        />
-        <Detail
-          label="Division"
-          value={workspace.division?.name ?? 'Not placed in a division yet'}
-        />
-        <Detail
-          label="Rule set"
-          value={`${workspace.ruleSet.name}, version ${workspace.ruleSet.version}`}
-        />
-        <Body muted>
-          Approval, team payment, roster completion and eligibility are tracked separately: an
-          approved entry is not necessarily paid or complete.
-        </Body>
+
+      <Section title="Games" testID="workspace-games">
+        {games.length === 0 ? (
+          <Text variant="body">
+            No games yet. They appear here once the league publishes the schedule.
+          </Text>
+        ) : (
+          <View accessibilityRole="list">
+            {games.map((game) => (
+              <UpcomingGameRow
+                key={game.fixture.id}
+                game={game}
+                viewer={viewer}
+                onPress={() => router.push(`/fixtures/${game.fixture.id}` as Href)}
+              />
+            ))}
+          </View>
+        )}
+        {viewer.actingAsCaptain && next?.fixture.status === 'scheduled' ? (
+          <View style={styles.group} testID="check-in-section">
+            <Text variant="headline" heading>
+              Match sheet check-in
+            </Text>
+            <Text variant="caption" tone="muted">{`Next game: ${upcomingTitle(next)}`}</Text>
+            <MatchCheckIn workspace={workspace} viewer={viewer} game={next} />
+          </View>
+        ) : null}
       </Section>
 
-      <Section title="Upcoming games">
-        {games.length === 0 ? (
-          <Body>No games yet. They appear here once the league publishes the schedule.</Body>
-        ) : (
+      <Section
+        title="Table"
+        action={{
+          label: 'See all',
+          accessibilityLabel: 'Standings and results',
+          onPress: () => router.push(teamRoutes.standings(entryId)),
+        }}
+        testID="workspace-table"
+      >
+        <StandingTile workspace={workspace} />
+        <MiniStandings workspace={workspace} />
+      </Section>
+
+      <Section title="Roster" testID="workspace-roster">
+        {viewer.captainView ? (
           <>
-            {viewer.captainView && games[0] ? <RsvpProgress game={games[0]} /> : null}
-            <View accessibilityRole="list">
-              {games.map((game) => (
-                <UpcomingGameRow
-                  key={game.fixture.id}
-                  game={game}
-                  viewer={viewer}
-                  onPress={() => router.push(teamRoutes.availability(entryId))}
+            <CaptainReadiness workspace={workspace} />
+            <View style={styles.buttons}>
+              <Button
+                label="Roster and invitations"
+                onPress={() => router.push(teamRoutes.roster(entryId))}
+                variant="secondary"
+                accessibilityHint="Invitations, join requests, the roster and the captain role"
+              />
+              {viewer.can(TEAM_ACTIONS.manageRoster) ? (
+                <Button
+                  label="Roster change or substitute"
+                  onPress={() => router.push(teamRoutes.rosterChange(entryId))}
+                  variant="secondary"
                 />
-              ))}
+              ) : null}
             </View>
           </>
+        ) : (
+          <ReducedRoster workspace={workspace} now={now} />
         )}
       </Section>
 
-      {viewer.actingAsCaptain && games[0]?.fixture.status === 'scheduled' ? (
-        <Section title="Match sheet check-in" testID="check-in-section">
-          <Body muted>{`Next game: ${upcomingTitle(games[0])}`}</Body>
-          <MatchCheckIn workspace={workspace} viewer={viewer} game={games[0]} />
-        </Section>
-      ) : null}
-
-      <Section title="Standings">
-        <StandingSummary workspace={workspace} />
-        <MiniStandings workspace={workspace} />
+      <Section title="Availability" testID="workspace-availability">
+        {viewer.captainView && next ? <RsvpProgress game={next} /> : null}
         <Button
-          label="Standings and results"
-          onPress={() => router.push(teamRoutes.standings(entryId))}
+          label={viewer.captainView ? 'Availability' : 'Answer availability'}
+          onPress={toAvailability}
           variant="secondary"
+          accessibilityHint="Opens the answers for this team's games"
         />
       </Section>
 
-      {viewer.captainView ? <CaptainReadiness workspace={workspace} /> : null}
-
-      {viewer.captainView ? (
-        <Section title="Captain tools">
-          <ButtonRow>
-            <Button
-              label="Roster and invitations"
-              onPress={() => router.push(teamRoutes.roster(entryId))}
-              variant="secondary"
-              accessibilityHint="Invitations, join requests, the roster and the captain role"
-            />
-            <Button
-              label="Availability"
-              onPress={() => router.push(teamRoutes.availability(entryId))}
-              variant="secondary"
+      <Section title="Money" testID="workspace-money">
+        {viewer.captainView ? (
+          <>
+            <FieldValue
+              layout="inline"
+              label="Team payment"
+              value={
+                workspace.readiness.financialStatusRef
+                  ? 'Recorded: see Team contributions'
+                  : 'Nothing recorded yet'
+              }
             />
             <Button
               label="Team contributions"
               onPress={() => router.push(teamRoutes.contributions(entryId))}
               variant="secondary"
+              accessibilityHint="The team's totals and the shares asked of players"
             />
-            {viewer.can(TEAM_ACTIONS.manageRoster) ? (
-              <Button
-                label="Roster change or substitute"
-                onPress={() => router.push(teamRoutes.rosterChange(entryId))}
-                variant="secondary"
-              />
-            ) : null}
-            {viewer.can(TEAM_ACTIONS.renew) ? (
-              <Button
-                label="Renew for a new season"
-                onPress={() => router.push(teamRoutes.renewEntry(entryId))}
-                variant="secondary"
-                accessibilityHint="Starts a new season entry; this season's records stay as they are"
-              />
-            ) : null}
-          </ButtonRow>
-        </Section>
-      ) : (
-        <>
-          <Section title="Your team">
-            <ButtonRow>
-              <Button
-                label="Answer availability"
-                onPress={() => router.push(teamRoutes.availability(entryId))}
-                variant="secondary"
-              />
-              {/* SCR-C-25: the player's own contribution requests (GET /v1/me/contribution-requests). */}
-              <Button
-                label="Your contributions"
-                onPress={() => router.push(teamRoutes.myContributions())}
-                variant="secondary"
-                accessibilityHint="Lists the team contributions asked of you, with your own payments only"
-              />
-            </ButtonRow>
-          </Section>
-          <ReducedRoster workspace={workspace} now={now} />
-        </>
-      )}
+          </>
+        ) : (
+          // SCR-C-25: the player's own shares (GET /v1/me/contribution-requests).
+          <Button
+            label="Your share"
+            onPress={() => router.push(teamRoutes.myContributions())}
+            variant="secondary"
+            accessibilityHint="Lists what you were asked to pay for the team, with your own payments only"
+          />
+        )}
+      </Section>
+
+      <Section title="Season" testID="workspace-season">
+        <FieldValue
+          layout="inline"
+          label="Season"
+          value={`${workspace.season.name}, ${formatDateRange(workspace.season.startsOn, workspace.season.endsOn)}`}
+        />
+        <FieldValue
+          layout="inline"
+          label="Division"
+          value={workspace.division?.name ?? 'Not placed in a division yet'}
+        />
+        <FieldValue
+          layout="inline"
+          label="Rule set"
+          value={`${workspace.ruleSet.name}, version ${workspace.ruleSet.version}`}
+        />
+        <Text variant="caption" tone="muted">
+          Approval, team payment, roster completion and eligibility are tracked separately: an
+          approved team is not necessarily paid or complete.
+        </Text>
+        {viewer.captainView && viewer.can(TEAM_ACTIONS.renew) ? (
+          <Button
+            label="Renew for a new season"
+            onPress={() => router.push(teamRoutes.renewEntry(entryId))}
+            variant="secondary"
+            accessibilityHint="Starts a new season entry; this season's records stay as they are"
+          />
+        ) : null}
+      </Section>
 
       <Section title="Contact the operating team">
         {/* SUP-01: the API allows a team request to the captain only (see the header). */}
@@ -353,3 +399,8 @@ export function TeamWorkspaceRoute() {
     </>
   );
 }
+
+const useStyles = makeStyles(() => ({
+  group: { gap: spacing.sm },
+  buttons: { gap: spacing.sm, paddingTop: spacing.xs },
+}));

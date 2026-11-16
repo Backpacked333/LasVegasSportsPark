@@ -2,7 +2,8 @@
  * Frame shared by the screens of one team entry (SCR-C-22 to SCR-C-29): the screen and session
  * frame, the workspace read (`GET /v1/team-entries/{id}`) with its SPK-UX-008 states, and the
  * signed-in person's view of the team (captain tools or the reduced player view, see queries.ts).
- * A malformed route id or a team the person may not see is "not available" (§4.10).
+ * A malformed route id or a team the person may not see is "not available" (§4.10). Pull to
+ * refresh reads every read on the screen again (ADR-008).
  */
 import type { ReactNode } from 'react';
 import { useNow } from '../../providers/AppProviders';
@@ -11,6 +12,7 @@ import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { useViewerPerson, useWorkspace, viewerOf, type Viewer, type Workspace } from './queries';
+import { usePullToRefresh } from './refresh';
 
 export function TeamFrame({
   entryId,
@@ -28,8 +30,9 @@ export function TeamFrame({
   const workspace = useWorkspace(entryId);
   const person = useViewerPerson();
   const now = useNow();
+  const refresh = usePullToRefresh();
   return (
-    <Screen>
+    <Screen onRefresh={refresh.onRefresh} refreshing={refresh.refreshing}>
       <RequireSession what={what}>
         {entryId === null ? (
           <StateView variant="unavailable" />
