@@ -70,7 +70,8 @@ describe('Session packages (SCR-C-35, Package G)', () => {
       within(card).getByLabelText('Can be used for: 1 eligible activity or program'),
     ).toBeOnTheScreen();
     expect(within(card).queryByText(/device's time zone/)).toBeNull();
-    expect(screen.getByRole('header', { name: 'Your class packs' })).toBeOnTheScreen();
+    // ADR-008: the title bar says "Class packs"; the page has no second heading saying it.
+    expect(screen.queryByRole('header', { name: 'Your class packs' })).toBeNull();
   });
 
   it('SPK-COND-002: the redemption history lists bookings and reversals with their reason, newest first', async () => {
@@ -153,7 +154,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
     expect(
       screen
         .UNSAFE_getAllByType(Artwork)
-        .filter((a) => a.props.source === illustrations['empty-payments']),
+        .filter((a) => a.props.source === illustrations['empty-cart']),
     ).toHaveLength(1);
     expect(
       screen.getByText(

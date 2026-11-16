@@ -20,7 +20,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, mePermissions } from '../../../testing/test-app';
 import { formatDateOnly, scaleText, YouthFeedbackScreen } from '../YouthFeedbackScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, illustrationsOnScreen } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -111,6 +111,8 @@ describe('SCR-C-37 YouthFeedbackScreen', () => {
   it('shows the empty state when nothing has been shared yet', async () => {
     renderScreen({ 'GET /me/youth-feedback': ok({ assessments: [], recommendations: [] }) });
     expect(await screen.findByRole('header', { name: 'No feedback yet' })).toBeOnTheScreen();
+    // ADR-008: an illustrated empty state.
+    expect(illustrationsOnScreen(screen)).toEqual(['empty-inbox']);
   });
 
   it('shows the API error code with "Try again", and NOT_FOUND as not available', async () => {

@@ -73,6 +73,7 @@ import {
   type RecoveryIndex,
 } from './recovery';
 import { RegistrationCard, registrationArt } from './RegistrationCard';
+import { illustrations } from '../../artwork/manifest';
 
 type Offering = Schema<'Offering'>;
 
@@ -243,6 +244,7 @@ function EnrollmentList({ person }: { person: AccountPerson }) {
           description: `${person.self ? 'Your' : `${person.displayName}’s`} registrations, placements and completed seasons will appear here. Leagues, programs and camps are in Explore.`,
           actionLabel: 'Explore activities',
           onAction: () => router.push('/discover'),
+          source: illustrations['empty-family'],
         }}
         unavailableOffline={['canceling a registration', 'transferring a registration']}
       >

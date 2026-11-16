@@ -45,6 +45,7 @@ import {
   type SectionListProps,
 } from 'react-native';
 import { ConnectivityBanner } from '../connectivity/ConnectivityBanner';
+import { OfflineBannerContext } from './offline-banner';
 import { AppHeader } from './AppHeader';
 import { useMotion } from './motion';
 import { makeStyles, spacing, useTheme } from './theme';
@@ -205,13 +206,15 @@ export function Screen<ItemT = unknown, SectionT = DefaultSectionT>({
   }
 
   return (
-    <View style={styles.root}>
-      <ConnectivityBanner />
-      {footer ? <View style={styles.root}>{body}</View> : body}
-      {footer ? (
-        <View style={bottomBar > 0 ? { paddingBottom: bottomBar } : null}>{footer}</View>
-      ) : null}
-    </View>
+    <OfflineBannerContext.Provider value>
+      <View style={styles.root}>
+        <ConnectivityBanner />
+        {footer ? <View style={styles.root}>{body}</View> : body}
+        {footer ? (
+          <View style={bottomBar > 0 ? { paddingBottom: bottomBar } : null}>{footer}</View>
+        ) : null}
+      </View>
+    </OfflineBannerContext.Provider>
   );
 }
 

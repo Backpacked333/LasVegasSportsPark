@@ -449,7 +449,7 @@ describe('Package G MyMembershipsScreen (SPK-COND-001)', () => {
     expect(
       screen
         .UNSAFE_getAllByType(Artwork)
-        .filter((a) => a.props.source === illustrations['empty-payments']),
+        .filter((a) => a.props.source === illustrations['empty-calendar']),
     ).toHaveLength(1);
     fireEvent.press(screen.getByRole('button', { name: 'Open Explore' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/discover');

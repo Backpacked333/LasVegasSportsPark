@@ -110,9 +110,13 @@ describe('SCR-C-06 InboxScreen', () => {
 
     now = new Date('2026-10-24T12:20:00.000Z');
     act(() => app.sources.setReachable(false));
-    // The screen notice and the SCR-C-40 banner both state the age of what is shown.
-    expect(screen.getAllByLabelText('You are offline')).toHaveLength(2);
-    expect(screen.getByText('Showing information from 20 minutes ago.')).toBeOnTheScreen();
+    // ADR-008: one offline notice, the SCR-C-40 banner; the list says its own age on one quiet line.
+    expect(screen.getAllByLabelText('You are offline')).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'Showing information from 20 minutes ago. Needs a connection: marking notices as read, acknowledging notices.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.getByText('Kickoff moved')).toBeOnTheScreen();
   });
 

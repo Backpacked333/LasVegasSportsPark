@@ -505,8 +505,12 @@ describe('SCR-C-07 DiscoverScreen', () => {
     expect(await screen.findByText('Autumn Youth Program')).toBeOnTheScreen();
     now = new Date('2026-10-24T12:15:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText('Showing information from 15 minutes ago.')).toBeOnTheScreen();
-    expect(screen.getByText('Needs a connection: Registration.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText(
+        'Showing information from 15 minutes ago. Needs a connection: Registration.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.getByText('Autumn Youth Program')).toBeOnTheScreen();
   });
 
@@ -642,6 +646,20 @@ describe('SCR-C-07 DiscoverScreen', () => {
     expect(within(empty).UNSAFE_getByType(Artwork).props.source).toBe(
       illustrations['empty-search'],
     );
+    // ADR-008: the answer comes right under the search, before the filter rows, so it is on the
+    // first screen of a small phone.
+    const order: string[] = [];
+    const walk = (node: unknown) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) return node.forEach(walk);
+      const { props, children } = node as { props?: { testID?: string }; children?: unknown };
+      if (props?.testID === 'discover-empty' || props?.testID === 'discover-categories') {
+        order.push(props.testID);
+      }
+      walk(children);
+    };
+    walk(screen.toJSON());
+    expect(order).toEqual(['discover-empty', 'discover-categories']);
     expect(
       within(empty).getByText(
         'Nothing matching this filter is published right now. Show all activities to see everything.',

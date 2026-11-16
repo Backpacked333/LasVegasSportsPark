@@ -414,13 +414,20 @@ function FormsContent({ source }: { source: FormsSource }) {
     ) : (
       (whenNone ?? null)
     );
+  // From a cart, Forms is step 3 of 5 whichever forms or waivers it holds.
+  const steps = source.basketId ? <RegistrationSteps step="Forms" /> : null;
   if (groups.length === 0) {
-    return requiredWaivers(
-      <StateView
-        variant="empty"
-        title="No forms required"
-        description="Nothing needs to be signed for this registration."
-      />,
+    return (
+      <View>
+        {steps}
+        {requiredWaivers(
+          <StateView
+            variant="empty"
+            title="No forms required"
+            description="Nothing needs to be signed for this registration."
+          />,
+        )}
+      </View>
     );
   }
   const signed = status.total - status.outstanding;
@@ -430,8 +437,9 @@ function FormsContent({ source }: { source: FormsSource }) {
 
   return (
     <View>
-      {source.basketId ? <RegistrationSteps step="Forms" /> : null}
-      <Section title="Required forms">
+      {steps}
+      {/* The screen's title is "Required forms": this section says how far signing has got. */}
+      <Section title="Signing progress">
         <StatusBadge
           tone={status.outstanding === 0 && !status.loading ? 'success' : 'pending'}
           label={

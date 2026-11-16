@@ -215,7 +215,7 @@ function CreditsSection({ person }: { person: AccountPerson }) {
           title: 'No credits',
           description:
             'Money credits from the facility appear here, with what they can be used for and when they expire.',
-          source: illustrations['empty-payments'],
+          source: illustrations['empty-home'],
           testID: 'credits-empty',
         }}
       >
@@ -262,6 +262,7 @@ function MakeupsSection({ person }: { person: AccountPerson }) {
           title: 'No makeup sessions',
           description:
             'When a session is canceled or missed and the program offers a makeup, it appears here to book.',
+          source: illustrations['empty-calendar'],
         }}
         unavailableOffline={['booking a makeup session']}
       >

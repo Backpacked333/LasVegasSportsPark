@@ -17,7 +17,9 @@
 import { act, fireEvent, render, type screen as rntlScreen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import { RefreshControl, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { ILLUSTRATION_NAMES, illustrations, type IllustrationName } from '../artwork/manifest';
 import { BANNED_CUSTOMER_CODES } from '../copy/vocabulary';
+import { Artwork } from '../ui/Artwork';
 import { SUPPORT_DETAILS_TITLE } from '../ui/SupportDetails';
 import type { ThemeName } from '../ui/theme';
 import { createTestApp, type TestAppOptions } from './test-app';
@@ -108,4 +110,20 @@ export function codesOutsideSupport(scope: Pick<typeof rntlScreen, 'toJSON'>): s
   };
   walk(scope.toJSON() as JsonChild | JsonChild[] | null);
   return found;
+}
+
+/**
+ * ADR-008: the names of the illustrations (`src/artwork/manifest.ts`) drawn on the screen, in
+ * order, so an empty state's test can say which picture it shows.
+ */
+export function illustrationsOnScreen(
+  scope: Pick<typeof rntlScreen, 'UNSAFE_queryAllByType'>,
+): IllustrationName[] {
+  const bySource = new Map<unknown, IllustrationName>(
+    ILLUSTRATION_NAMES.map((name) => [illustrations[name], name]),
+  );
+  return scope
+    .UNSAFE_queryAllByType(Artwork)
+    .map((a) => bySource.get((a.props as { source?: unknown }).source))
+    .filter((name): name is IllustrationName => name !== undefined);
 }

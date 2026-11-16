@@ -233,8 +233,12 @@ describe('SCR-C-34 PaymentsScreen', () => {
     expect(await screen.findByRole('header', { name: "What's due" })).toBeOnTheScreen();
     now = new Date('2026-10-24T13:00:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText('Showing information from 1 hour ago.')).toBeOnTheScreen();
-    expect(screen.getByText('Needs a connection: paying a balance.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText(
+        'Showing information from 1 hour ago. Needs a connection: paying a balance.',
+      ),
+    ).toBeOnTheScreen();
   });
   it('offers the views as "Show" chips with their selected state, what is due first', async () => {
     const app = createTestApp({ routes: routes() });

@@ -37,6 +37,8 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
 import { Section } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
+import { EmptyState } from '../../ui/EmptyState';
+import { illustrations } from '../../artwork/manifest';
 import { Text } from '../../ui/Text';
 import { layout, spacing } from '../../ui/theme';
 import { listPermissions, useMe } from '../account/components/account-data';
@@ -120,15 +122,19 @@ function OpenInvitations() {
   const openFamily = family.data?.filter(isOpen);
   const openTeam = team.data?.filter(isOpen);
   const bothEmpty = openFamily?.length === 0 && openTeam?.length === 0;
+  if (bothEmpty) {
+    // One empty state for the page, not an empty card per list (ADR-008).
+    return (
+      <EmptyState
+        source={illustrations['empty-inbox']}
+        title="No open invitations"
+        message="When someone invites you to hold permissions for a family member, or to join a team, it appears here. You can also open the link you received."
+        testID="invitations-empty"
+      />
+    );
+  }
   return (
     <View>
-      {bothEmpty ? (
-        <StateView
-          variant="empty"
-          title="No open invitations"
-          description="When someone invites you to hold permissions for a family member, or to join a team, it appears here. You can also open the link you received."
-        />
-      ) : null}
       <Section title="Family access" variant="plain" testID="invitations-family">
         <QueryBoundary
           query={{ ...family, data: openFamily }}

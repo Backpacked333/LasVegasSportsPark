@@ -54,6 +54,7 @@ import { StatusBadge } from '../../ui/StatusBadge';
 import { SupportDetails } from '../../ui/SupportDetails';
 import { Text } from '../../ui/Text';
 import { spacing } from '../../ui/theme';
+import { illustrations } from '../../artwork/manifest';
 
 type YouthFeedback = Schema<'YouthFeedback'>;
 type Assessment = YouthFeedback['assessments'][number];
@@ -266,6 +267,7 @@ function YouthFeedbackContent() {
           title: 'No feedback yet',
           description:
             'Feedback a coach shares about a child you are authorized to see, after it is reviewed, will appear here, with any recommendation for a next group or program.',
+          source: illustrations['empty-inbox'],
         }}
       >
         {(f) => <FeedbackRecord feedback={f} />}

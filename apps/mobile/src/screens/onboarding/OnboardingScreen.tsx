@@ -69,10 +69,8 @@ export function OnboardingScreen({ claimToken = null }: { claimToken?: string | 
   const styles = useStyles();
   return (
     <Screen>
+      {/* The title bar says "Account setup": the page does not repeat it as a heading. */}
       <View style={styles.intro}>
-        <Text variant="title1" heading>
-          Set up your account
-        </Text>
         <Text variant="callout" tone="muted">
           Each step is saved as you finish it. If you stop, you carry on here next time.
         </Text>

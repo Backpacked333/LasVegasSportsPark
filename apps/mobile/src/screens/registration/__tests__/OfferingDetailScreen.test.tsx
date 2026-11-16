@@ -350,7 +350,10 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
     act(() => app.sources.setReachable(false));
     expect(screen.getByRole('button', { name: 'Register' })).toBeDisabled();
     expect(screen.getByText('Registration needs a connection.')).toBeOnTheScreen();
-    expect(screen.getByText('Showing information from just now.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText('Showing information from just now. Needs a connection: Registration.'),
+    ).toBeOnTheScreen();
   });
 
   it('Activity page: the key facts are tags under the name, with the picture above', async () => {

@@ -430,7 +430,12 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
     expect(await screen.findByRole('header', { name: 'Desert Foxes' })).toBeOnTheScreen();
     now = new Date('2026-10-24T12:30:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText('Showing information from 30 minutes ago.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText(
+        'Showing information from 30 minutes ago. Needs a connection: availability answers, invitations, roster changes.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Desert Foxes' })).toBeOnTheScreen();
   });
 });

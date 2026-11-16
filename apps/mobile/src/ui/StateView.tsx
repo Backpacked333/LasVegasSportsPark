@@ -32,6 +32,14 @@
  * which VoiceOver hears once for the app (ConnectivityAnnouncer); a read that got no answer while
  * the device is online is announced here. Loading (exposed as a busy progress indicator) and
  * pending-decision (fixed wording that answers nothing) are not announced on iOS.
+ *
+ * One offline notice at a time (ADR-008): inside a `Screen`, whose connectivity banner already
+ * says "You are offline" with the age of what is shown, the offline-stale state of a section
+ * (while the device is offline) is not a second card. It is one quiet line with what is its own:
+ * the age of its own data ("Showing information from 5 minutes ago.", or "Not loaded yet." when it
+ * has nothing cached) and what in it needs a connection; a small "Try again" only when nothing is
+ * cached (with cached data the reads run again by themselves when the connection is back). Out of date while
+ * online, or outside a `Screen`, it is the full card as before.
  */
 import {
   capabilityCustomerLabel,
@@ -45,6 +53,7 @@ import type { ReactNode } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
+import { useOfflineBannerShown } from './offline-banner';
 import { Button } from './Button';
 import { Icon } from './Icon';
 import { InfoCard } from './InfoCard';
@@ -110,10 +119,46 @@ export type StateViewProps =
       error?: ApiError;
     };
 
+/**
+ * The quiet line a section shows under the app's offline banner, or null for nothing: the age of
+ * its own data ("Showing information from 5 minutes ago.") or "Not loaded yet.", then what in it
+ * needs a connection.
+ */
+export function offlineQuietLine(
+  updatedAt: Date | null,
+  now: Date,
+  unavailableActions: readonly string[] = [],
+): string | null {
+  return (
+    sentences(
+      updatedAt === null
+        ? 'Not loaded yet'
+        : `Showing information from ${formatAge(updatedAt, now)}`,
+      unavailableActions.length > 0 ? `Needs a connection: ${unavailableActions.join(', ')}` : null,
+    ) || null
+  );
+}
+
 export function StateView(props: StateViewProps) {
   const { colors, toneBackgrounds } = useTheme();
   const styles = useStyles();
   const { reachable } = useConnectivity();
+  const bannerShown = useOfflineBannerShown();
+  // Inside a card frame (a feature Section) the state is drawn flat, without a card of its own.
+  const flat = useRowLayout() === 'flat';
+  if (props.variant === 'offline-stale' && props.offline && reachable === false && bannerShown) {
+    const line = offlineQuietLine(props.updatedAt, props.now, props.unavailableActions);
+    // With nothing cached the section keeps a small "Try again" (the device may be wrong about
+    // its connection); with cached data the reads run again by themselves when it is back.
+    const retry = props.updatedAt === null ? props.onRetry : undefined;
+    if (!line) return null;
+    return (
+      <View style={[styles.quietRow, flat && styles.flatLoading]} testID="state-offline-quiet">
+        <Text style={styles.quiet}>{line}</Text>
+        {retry ? <Button label="Try again" onPress={retry} variant="secondary" /> : null}
+      </View>
+    );
+  }
   // A command refused because its capability is turned off is not a failure (K-12, DEC-016).
   const turnedOff = props.variant === 'error' ? turnedOffFromError(props.error) : null;
   const shown: StateViewProps =
@@ -130,8 +175,6 @@ export function StateView(props: StateViewProps) {
         }
       : props;
   const tile = VARIANT_TILES[shown.variant];
-  // Inside a card frame (a feature Section) the state is drawn flat, without a card of its own.
-  const flat = useRowLayout() === 'flat';
   return (
     <LiveRegion
       style={
@@ -404,4 +447,12 @@ const useStyles = makeStyles(({ colors }) => ({
   title: { ...type.title, fontSize: 22, lineHeight: 24, color: colors.text },
   body: { ...type.body, color: colors.text },
   caption: { ...type.caption, color: colors.textMuted },
+  // Inset like the loading line; flat inside a card frame.
+  quietRow: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    gap: spacing.xs,
+    alignItems: 'flex-start',
+  },
+  quiet: { ...type.caption, color: colors.textMuted },
 }));

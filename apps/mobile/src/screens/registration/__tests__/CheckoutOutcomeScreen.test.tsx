@@ -441,7 +441,10 @@ describe('SCR-C-15 CheckoutOutcomeScreen', () => {
     expect(await screen.findByLabelText('Registration complete')).toBeOnTheScreen();
     now = new Date('2026-10-24T12:05:00.000Z');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByText('Showing information from 5 minutes ago.')).toBeOnTheScreen();
+    // ADR-008: under the app's offline banner the section says its own age and needs on one quiet line.
+    expect(
+      screen.getByText('Showing information from 5 minutes ago. Needs a connection: Paying again.'),
+    ).toBeOnTheScreen();
     expect(screen.getByLabelText('Registration complete')).toBeOnTheScreen();
   });
 });

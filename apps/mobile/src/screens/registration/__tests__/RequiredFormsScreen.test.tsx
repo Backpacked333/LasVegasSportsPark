@@ -258,6 +258,8 @@ describe('SCR-C-13 RequiredFormsScreen', () => {
     });
     render(<RequiredFormsScreen basketId={IDS.basket} />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No forms required' })).toBeOnTheScreen();
+    // ADR-008: reached from a cart, it is still step 3 of 5 with nothing (or only waivers) to sign.
+    expect(screen.getByLabelText('Step 3 of 5, Forms')).toBeOnTheScreen();
   });
 
   it('offline: the answer is kept and signing is disabled', async () => {

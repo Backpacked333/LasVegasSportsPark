@@ -29,7 +29,7 @@ import { createRegistrationTestApp } from '../../../features/registration/testin
 import { mePermissions } from '../../../testing/test-app';
 import { WaitlistScreen } from '../WaitlistScreen';
 import { WaitlistsScreen } from '../WaitlistsScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, illustrationsOnScreen } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -237,6 +237,8 @@ describe('SCR-C-16 WaitlistsScreen', () => {
     const app = createRegistrationTestApp({ routes: routes() });
     render(<WaitlistsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No waitlists' })).toBeOnTheScreen();
+    // ADR-008: an illustrated empty state.
+    expect(illustrationsOnScreen(screen)).toEqual(['empty-search']);
     fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/discover');
   });

@@ -155,7 +155,7 @@ export function SessionPackagesList() {
           title: 'No class packs',
           description:
             'Class packs you or your family buy appear here, with sessions left and when they expire.',
-          source: illustrations['empty-payments'],
+          source: illustrations['empty-cart'],
           testID: 'packages-empty',
         }}
         unavailableOffline={['loading more class packs']}
@@ -185,7 +185,8 @@ export function SessionPackagesSection({
   title = PACKAGES_TITLE,
   onlyWhenRelevant = false,
 }: {
-  title?: string;
+  /** The section's heading; null on the class packs screen, whose title already says it. */
+  title?: string | null;
   onlyWhenRelevant?: boolean;
 }) {
   const switchOff = usePermissions().isCapabilityEnabled('session_packages') === false;
@@ -196,7 +197,7 @@ export function SessionPackagesSection({
   });
   if (onlyWhenRelevant && switchOff && packages.data?.length === 0) return null;
   return (
-    <Section title={title} testID="packages-section">
+    <Section title={title ?? undefined} testID="packages-section">
       <Text variant="caption" tone="muted">
         A class pack holds sessions to book. It is not money and is never added to credits.
       </Text>
@@ -218,7 +219,7 @@ export function MySessionPackagesScreen() {
     <Screen onRefresh={onRefresh} refreshing={refreshing}>
       <View testID="screen-my-session-packages">
         <RequireSession what="your class packs">
-          <SessionPackagesSection title="Your class packs" />
+          <SessionPackagesSection title={null} />
         </RequireSession>
       </View>
     </Screen>

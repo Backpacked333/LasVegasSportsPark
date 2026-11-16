@@ -215,7 +215,7 @@ function MembershipsList() {
             'Memberships you or your family hold appear here, with what each one includes. Find one in Explore.',
           actionLabel: 'Open Explore',
           onAction: () => router.push('/discover'),
-          source: illustrations['empty-payments'],
+          source: illustrations['empty-calendar'],
           testID: 'memberships-empty',
         }}
         unavailableOffline={['Renewing']}
@@ -246,10 +246,8 @@ export function MyMembershipsScreen() {
     <Screen onRefresh={onRefresh} refreshing={refreshing}>
       <View testID="screen-my-memberships">
         <RequireSession what="your memberships">
+          {/* The title bar says "Memberships": the page does not say it again. */}
           <View style={styles.header}>
-            <Text variant="title2" accessibilityRole="header">
-              Memberships
-            </Text>
             <Text variant="caption" tone="muted">
               A membership includes only what its terms say. Each one below lists the sessions it
               includes.

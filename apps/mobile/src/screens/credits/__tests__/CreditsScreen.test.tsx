@@ -28,7 +28,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { CreditsScreen } from '../CreditsScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, illustrationsOnScreen } from '../../../testing/ui-surfaces';
 import { Artwork } from '../../../ui/Artwork';
 
 /** The API's money summary for the person (`creditsAvailable` is the credit balance). */
@@ -140,6 +140,8 @@ describe('SCR-C-35 CreditsScreen', () => {
     });
     expect(await screen.findByRole('header', { name: 'No credits' })).toBeOnTheScreen();
     expect(await screen.findByRole('header', { name: 'No makeup sessions' })).toBeOnTheScreen();
+    // ADR-008: two illustrated empty states, each with its own picture (neither the success one).
+    expect(illustrationsOnScreen(screen)).toEqual(['empty-home', 'empty-calendar']);
   });
 
   it('permission restriction: credits read "not available" on their own while makeups still show', async () => {
@@ -269,12 +271,12 @@ describe('SCR-C-35 CreditsScreen', () => {
     expect(card.getByText('Owner: Finance')).toBeOnTheScreen();
   });
 
-  it('ADR-008 SPK-UX-008: no credits shows the payments illustration, announced with what would appear', async () => {
+  it('ADR-008 SPK-UX-008: no credits shows its illustration (not the success one), announced with what would appear', async () => {
     renderCredits({ 'GET /credits': page([]) });
     expect(await screen.findByRole('header', { name: 'No credits' })).toBeOnTheScreen();
     const art = screen
       .UNSAFE_getAllByType(Artwork)
-      .filter((a) => a.props.source === illustrations['empty-payments']);
+      .filter((a) => a.props.source === illustrations['empty-home']);
     expect(art).toHaveLength(1);
     expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
       'No credits. Money credits from the facility appear here, with what they can be used for and when they expire.',

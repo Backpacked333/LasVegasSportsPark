@@ -25,7 +25,7 @@
  * Filtering by age waits on DEC-003; no age filter is offered and each card shows its age band.
  *
  * States: loading; empty (nothing published for the filter, with the search illustration and
- * "Show all activities"); ready; validation failure (search or a filter sheet); offline (cached
+ * "Show all activities", shown right under the search so it is on the first screen); ready; validation failure (search or a filter sheet); offline (cached
  * list with its age); unavailable (catalog not reachable, retry, the code in "Details for
  * support"); paged with "Load more activities"; pull to refresh. A signed-out visitor browses the
  * organization configured for this build (deployment setting), and is also offered today's
@@ -455,7 +455,6 @@ export function DiscoverScreen() {
         data: items,
         keyExtractor: (offering) => offering.id,
         renderItem: ({ item }) => <ActivityCard offering={item} />,
-        ListEmptyComponent: empty,
         ListFooterComponent: <LoadMore pages={pages} label="activities" />,
       }}
     >
@@ -474,6 +473,11 @@ export function DiscoverScreen() {
         />
         <FieldError error={searchError} />
       </View>
+      {/*
+        No results: the answer comes straight under the search, above the filter rows, so it is on
+        the first screen even on a small phone (375 x 667); the filters stay below to change.
+      */}
+      {items.length === 0 ? empty : null}
       <View style={styles.chips}>
         <ChipRow
           mode="single"

@@ -72,7 +72,7 @@ describe('registration routes (SCR-C-07 to SCR-C-16)', () => {
     [`/registration/start/${IDS.offering}`, "Who's going?"],
     [`/registration/basket/${IDS.basket}`, 'Your cart'],
     [`/registration/quote/${IDS.quote}`, 'Price summary'],
-    [`/registration/forms?basketId=${IDS.basket}`, 'Required forms'],
+    [`/registration/forms?basketId=${IDS.basket}`, 'Signing progress'],
     [`/registration/checkout/${IDS.quote}`, 'Save your spots'],
     [`/registration/outcome/${IDS.checkout}`, 'Registration and payment'],
     [`/registration/waitlist/${IDS.entry}`, 'Waitlist for Ada'],

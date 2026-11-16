@@ -14,7 +14,11 @@ import {
 import { booking, G, ok, page, switchesOn } from '../../../features/package-g/__tests__/fixtures';
 import { MyBookingsScreen } from '../MyBookingsScreen';
 import { activityArtwork } from '../../../artwork/manifest';
-import { openSupportDetails, pullToRefresh } from '../../../testing/ui-surfaces';
+import {
+  openSupportDetails,
+  pullToRefresh,
+  illustrationsOnScreen,
+} from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -65,7 +69,8 @@ describe('Package G MyBookingsScreen (SPK-COND-003)', () => {
     expect(await screen.findByRole('button', { name: HELD_ROW })).toBeOnTheScreen();
     // SPK-COND-003: paid but not staffed reads differently from confirmed.
     expect(screen.getByRole('button', { name: PARTY_ROW })).toBeOnTheScreen();
-    expect(screen.getByRole('header', { name: 'Rentals and parties' })).toBeOnTheScreen();
+    // ADR-008: the title bar says "Rentals and parties"; the page does not repeat it.
+    expect(screen.queryByRole('header', { name: 'Rentals and parties' })).toBeNull();
     expect(screen.getByLabelText('Your rentals and parties')).toBeOnTheScreen();
     expect(screen.queryByTestId('state-turned-off')).toBeNull();
     fireEvent.press(screen.getByRole('button', { name: HELD_ROW }));
@@ -171,6 +176,8 @@ describe('Package G MyBookingsScreen (SPK-COND-003)', () => {
     expect(
       await screen.findByRole('header', { name: 'No rentals or parties yet' }),
     ).toBeOnTheScreen();
+    // ADR-008: an illustrated empty state.
+    expect(illustrationsOnScreen(screen)).toEqual(['empty-calendar']);
     fireEvent.press(screen.getByRole('button', { name: 'Explore activities' }));
     expect(mockRouter.push).toHaveBeenCalledWith('/discover');
   });

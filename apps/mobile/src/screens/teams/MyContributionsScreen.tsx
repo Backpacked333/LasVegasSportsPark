@@ -39,6 +39,7 @@ import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { illustrations } from '../../artwork/manifest';
 
 type ContributionRequest = Schema<'ContributionRequest'>;
 type LivePayments = ReturnType<typeof useLivePayments>;
@@ -107,14 +108,17 @@ function ContributionRows({ items }: { items: readonly ContributionRequest[] }) 
   );
 }
 
-/** The list itself, also shown by Payments (SCR-C-34 "Your share"). */
-export function MyContributionsList() {
+/**
+ * The list itself, also shown by Payments (SCR-C-34 "Your share"). On its own screen the title
+ * bar already says "Your share", so the section is untitled there (`titled={false}`).
+ */
+export function MyContributionsList({ titled = true }: { titled?: boolean }) {
   const requests = useApiPages({
     path: '/me/contribution-requests',
     request: { query: { limit: 20 } },
   });
   return (
-    <Section title="Your share" testID="my-contributions">
+    <Section title={titled ? 'Your share' : undefined} testID="my-contributions">
       <QueryBoundary
         query={requests}
         label="your share"
@@ -123,6 +127,7 @@ export function MyContributionsList() {
           title: 'No shares asked of you',
           description:
             'When a team captain asks you, or someone you pay for, to pay part of a team fee, it appears here to pay.',
+          source: illustrations['empty-teams'],
         }}
         unavailableOffline={['paying a contribution']}
       >
@@ -137,7 +142,7 @@ export function MyContributionsScreen() {
   return (
     <Screen>
       <RequireSession what="your share">
-        <MyContributionsList />
+        <MyContributionsList titled={false} />
       </RequireSession>
     </Screen>
   );

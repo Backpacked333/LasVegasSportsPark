@@ -8,7 +8,14 @@ import { fireEvent, screen, within } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import { openSupportDetails, renderSurface } from '../../testing/ui-surfaces';
 import { MotionProvider } from '../motion';
-import { announcementFor, StateView, TURNED_OFF_MESSAGE, type StateViewProps } from '../StateView';
+import {
+  announcementFor,
+  offlineQuietLine,
+  StateView,
+  TURNED_OFF_MESSAGE,
+  type StateViewProps,
+} from '../StateView';
+import { Screen } from '../Screen';
 import { classicTheme, legendsTheme } from '../theme';
 import { pendingMessage } from '../../copy/pending';
 
@@ -232,5 +239,61 @@ describe('StateView controls and looks (SPK-UX-009)', () => {
     rerender(<MotionProvider reduced={false}>{view}</MotionProvider>);
     await openSupportDetails(screen);
     expect(screen.getByText('Error code: TIMEOUT')).toBeOnTheScreen();
+  });
+});
+
+describe('one offline notice at a time (ADR-008, SPK-UX-008)', () => {
+  const NOW = new Date('2026-10-24T12:20:00.000Z');
+  const CACHED = new Date('2026-10-24T12:00:00.000Z');
+
+  it('§4.15: under the screen banner, a section with cached data says its age and needs on one quiet line', async () => {
+    await renderSurface(
+      <Screen>
+        <StateView
+          variant="offline-stale"
+          offline
+          updatedAt={CACHED}
+          now={NOW}
+          unavailableActions={['paying a balance']}
+          onRetry={jest.fn()}
+        />
+      </Screen>,
+      { reachable: false },
+    );
+    // The banner is the one "You are offline"; the section adds no card and no "Try again".
+    expect(screen.getAllByLabelText('You are offline')).toHaveLength(1);
+    expect(screen.getByTestId('connectivity-banner')).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'Showing information from 20 minutes ago. Needs a connection: paying a balance.',
+      ),
+    ).toBeOnTheScreen();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.queryByTestId('state-offline-stale')).toBeNull();
+  });
+
+  it('§4.15: with nothing cached the quiet line says so and keeps a "Try again"', async () => {
+    const retry = jest.fn();
+    await renderSurface(
+      <Screen>
+        <StateView variant="offline-stale" offline updatedAt={null} now={NOW} onRetry={retry} />
+      </Screen>,
+      { reachable: false },
+    );
+    expect(screen.getByText('Not loaded yet.')).toBeOnTheScreen();
+    fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside a screen, or out of date while online, it is the full card', async () => {
+    await renderSurface(
+      <StateView variant="offline-stale" offline updatedAt={CACHED} now={NOW} />,
+      { reachable: false },
+    );
+    expect(screen.getByTestId('state-offline-stale')).toBeOnTheScreen();
+    expect(offlineQuietLine(CACHED, NOW, [])).toBe('Showing information from 20 minutes ago.');
+    expect(offlineQuietLine(null, NOW, ['Booking'])).toBe(
+      'Not loaded yet. Needs a connection: Booking.',
+    );
   });
 });

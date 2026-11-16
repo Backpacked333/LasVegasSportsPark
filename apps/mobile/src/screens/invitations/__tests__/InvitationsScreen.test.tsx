@@ -23,7 +23,7 @@ import {
   person,
 } from '../../account/__tests__/fixtures';
 import { InvitationsScreen } from '../InvitationsScreen';
-import { openSupportDetails } from '../../../testing/ui-surfaces';
+import { openSupportDetails, illustrationsOnScreen } from '../../../testing/ui-surfaces';
 
 const FAMILY_ID = '0192f1a0-0000-7000-8000-00000000c001';
 const FAMILY_TWO = '0192f1a0-0000-7000-8000-00000000c002';
@@ -139,6 +139,11 @@ describe('SCR-C-17 InvitationsScreen', () => {
     });
     render(<InvitationsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No open invitations' })).toBeOnTheScreen();
+    // ADR-008: one empty state for the page, not an empty card for each list as well.
+    // ADR-008: an illustrated empty state.
+    expect(illustrationsOnScreen(screen)).toEqual(['empty-inbox']);
+    expect(screen.queryByRole('header', { name: 'No family access invitations' })).toBeNull();
+    expect(screen.queryByRole('header', { name: 'No team invitations' })).toBeNull();
   });
 
   it('loads older invitations with "Load more", sending the API cursor', async () => {
@@ -184,7 +189,8 @@ describe('SCR-C-17 InvitationsScreen', () => {
     });
     render(<InvitationsScreen />, { wrapper: app.wrapper });
     expect(await screen.findByRole('header', { name: 'No open invitations' })).toBeOnTheScreen();
-    expect(screen.getByRole('header', { name: 'No team invitations' })).toBeOnTheScreen();
+    // The one empty state stands for both lists (no "No team invitations" card beside it).
+    expect(screen.queryByRole('header', { name: 'No team invitations' })).toBeNull();
     expect(screen.queryByTestId(`invitation-team-${TEAM_ID}`)).toBeNull();
     expect(screen.queryByLabelText(/Expired/)).toBeNull();
   });

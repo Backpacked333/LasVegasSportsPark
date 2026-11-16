@@ -232,9 +232,13 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     await chooseRentalHour();
     act(() => app.sources.setReachable(false));
     const when = screen.getByTestId('booking-when');
-    expect(await within(when).findByLabelText('You are offline')).toBeOnTheScreen();
-    expect(within(when).getByText(/^Showing information from /)).toBeOnTheScreen();
-    expect(within(when).getByText('Needs a connection: Booking.')).toBeOnTheScreen();
+    // ADR-008: the app's banner says "You are offline"; the times say their age on one quiet line.
+    expect(screen.getByLabelText('You are offline')).toBeOnTheScreen();
+    expect(
+      await within(when).findByText(
+        'Showing information from just now. Needs a connection: Booking.',
+      ),
+    ).toBeOnTheScreen();
     expect(within(when).getByRole('radio', { name: TEN_AM })).toBeOnTheScreen();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Book now' })).toBeDisabled());
     expect(screen.getByText('Booking needs a connection.')).toBeOnTheScreen();

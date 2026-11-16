@@ -28,6 +28,7 @@ import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { illustrations } from '../../artwork/manifest';
 
 type MyWaitlistEntry = Schema<'MyWaitlistEntry'>;
 
@@ -96,6 +97,7 @@ function WaitlistList() {
             'When you join a waitlist, it appears here. When a place is offered, you can accept it before the offer ends.',
           actionLabel: 'Explore activities',
           onAction: () => router.push(registrationRoutes.discover()),
+          source: illustrations['empty-search'],
         }}
         unavailableOffline={['Accepting an offer', 'Leaving a waitlist']}
       >

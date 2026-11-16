@@ -39,6 +39,7 @@ import { Screen } from '../../ui/Screen';
 import { Text } from '../../ui/Text';
 import { makeStyles, spacing } from '../../ui/theme';
 import { RegistrationCard } from '../enrollments/RegistrationCard';
+import { illustrations } from '../../artwork/manifest';
 
 export const BOOKINGS_STILL_AVAILABLE = 'Bookings you already made stay available here.';
 export const BOOKINGS_PAGE_SIZE = 20;
@@ -108,6 +109,7 @@ function BookingsList() {
             'Rentals and parties you book or request appear here with their status. Find one to book in Explore.',
           actionLabel: 'Explore activities',
           onAction: () => router.push('/discover'),
+          source: illustrations['empty-calendar'],
         }}
         unavailableOffline={['Canceling a booking', 'Booking']}
       >
@@ -169,10 +171,8 @@ export function MyBookingsScreen() {
     <Screen onRefresh={refresh} refreshing={refreshing}>
       <View testID="screen-my-bookings">
         <RequireSession what="your bookings">
+          {/* The title bar says "Rentals and parties": the page does not say it again. */}
           <View style={styles.header}>
-            <Text variant="title2" heading>
-              Rentals and parties
-            </Text>
             <Text variant="caption" tone="muted">
               A booking is complete only when everything it needs is reserved: the space, any
               equipment and the staff.
