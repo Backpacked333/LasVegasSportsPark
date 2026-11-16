@@ -1,32 +1,29 @@
 /**
- * Form controls for the account screens (SCR-C-01, SCR-C-17, SCR-C-31, SCR-C-36), SPK-UX-009:
- * every control has a role, an accessible name and its state (checked, selected, disabled) exposed
- * to VoiceOver and TalkBack; selection is shown with a glyph and words, never colour alone; text
- * scales with the OS setting; touch targets are at least 44 pt. Field errors keep the input
- * (SPK-UX-008 "Recoverable failures must preserve valid user input").
+ * Form controls for the account screens (SCR-C-01, SCR-C-17, SCR-C-31, SCR-C-36): a thin adapter
+ * over the visual system v2 in `src/ui` (ADR-008, Phase 3), kept so existing imports compile while
+ * screens move to `src/ui` directly. Every export keeps its props and its accessible output: role,
+ * name, state and visible words. SPK-UX-009: every control has a role, an accessible name and its
+ * state (checked, selected, disabled) exposed to VoiceOver and TalkBack; selection is shown with a
+ * glyph and words, never colour alone; text scales with the OS setting; touch targets are at least
+ * 44 pt. Field errors keep the input (SPK-UX-008 "Recoverable failures must preserve valid user
+ * input").
  */
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { LiveText, sentences } from '../../../ui/announce';
-import { useInputChrome } from '../../../ui/input';
-import {
-  fonts,
-  makeStyles,
-  MIN_TOUCH_SIZE,
-  radius,
-  spacing,
-  type,
-  useTheme,
-} from '../../../ui/theme';
+import { StyleSheet, Switch, View } from 'react-native';
+import { sentences } from '../../../ui/announce';
+import { ChoiceCard } from '../../../ui/ChoiceList';
+import { Field, FieldErrorText, FieldInput, useFieldStyles } from '../../../ui/Field';
+import { Text } from '../../../ui/Text';
+import { layout, makeStyles, MIN_TOUCH_SIZE, spacing, useTheme } from '../../../ui/theme';
 
 export function SectionHeader({ title, detail }: { title: string; detail?: string }) {
   const styles = useStyles();
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle} accessibilityRole="header">
+      <Text variant="title3" heading>
         {title}
       </Text>
-      {detail ? <Text style={styles.body}>{detail}</Text> : null}
+      {detail ? <Text variant="body">{detail}</Text> : null}
     </View>
   );
 }
@@ -43,7 +40,7 @@ export function Paragraph({
 }) {
   const styles = useStyles();
   return (
-    <Text style={[styles.paragraph, !inset && styles.flush, muted && styles.muted]}>
+    <Text variant="body" tone={muted ? 'muted' : 'default'} style={inset && styles.inset}>
       {children}
     </Text>
   );
@@ -62,6 +59,7 @@ export interface TextFieldProps {
   testID?: string;
 }
 
+/** A labelled text field (`ui/Field`); its error is announced and read with the input. */
 export function TextField({
   label,
   value,
@@ -74,14 +72,10 @@ export function TextField({
   testID,
 }: TextFieldProps) {
   const styles = useStyles();
-  const input = useInputChrome();
   const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      {hint ? <Text style={styles.caption}>{hint}</Text> : null}
-      <TextInput
-        {...input.props}
+    <Field label={label} hint={hint} style={styles.inset}>
+      <FieldInput
         value={value}
         onChangeText={onChangeText}
         editable={editable}
@@ -92,20 +86,11 @@ export function TextField({
         accessibilityLabel={label}
         accessibilityHint={describedBy || undefined}
         accessibilityState={{ disabled: !editable }}
-        style={[
-          styles.input,
-          input.focusStyle,
-          error ? styles.inputError : null,
-          !editable && styles.disabled,
-        ]}
+        invalid={!!error}
         testID={testID}
       />
-      {error ? (
-        <LiveText style={styles.error} announcement={error} accessibilityRole="alert">
-          ✕ {error}
-        </LiveText>
-      ) : null}
-    </View>
+      <FieldErrorText error={error} glyph="✕" />
+    </Field>
   );
 }
 
@@ -119,14 +104,20 @@ export interface ChoiceOption<V extends string> {
 /** A labelled radio group; its rows are `RadioRow`s (or `ChoiceGroup` for plain options). */
 export function RadioGroup({ label, children }: { label: string; children: ReactNode }) {
   const styles = useStyles();
+  const field = useFieldStyles();
   return (
-    <View style={styles.field} accessibilityRole="radiogroup" accessibilityLabel={label}>
-      <Text style={styles.label}>{label}</Text>
+    <View
+      style={[styles.group, styles.inset]}
+      accessibilityRole="radiogroup"
+      accessibilityLabel={label}
+    >
+      <Text style={field.label}>{label}</Text>
       {children}
     </View>
   );
 }
 
+/** One radio row (`ui/ChoiceList` `ChoiceCard`), named "Label, Detail". */
 export function RadioRow({
   label,
   detail,
@@ -140,28 +131,14 @@ export function RadioRow({
   onPress: () => void;
   disabled?: boolean;
 }) {
-  const styles = useStyles();
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={detail ? `${label}, ${detail}` : label}
-      accessibilityState={{ checked, disabled }}
+    <ChoiceCard
+      option={{ value: label, label, description: detail }}
+      mode="single"
+      checked={checked}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.choice, pressed && styles.pressed]}
-    >
-      <Text
-        style={styles.glyph}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-      >
-        {checked ? '◉' : '○'}
-      </Text>
-      <View style={styles.choiceText}>
-        <Text style={[styles.body, disabled && styles.muted]}>{label}</Text>
-        {detail ? <Text style={styles.caption}>{detail}</Text> : null}
-      </View>
-    </Pressable>
+    />
   );
 }
 
@@ -196,9 +173,10 @@ export function ChoiceGroup<V extends string>({
 }
 
 /**
- * One independent yes/no choice (checkbox); no choice implies another (SPK-IAM-003). `error` is the
- * error of a required choice among the rows ("Choose at least one permission to pass on."): it is
- * read with each row, after its detail (SPK-UX-009).
+ * One independent yes/no choice (checkbox, `ChoiceCard`); no choice implies another
+ * (SPK-IAM-003). Its name is the label and its detail is its hint. `error` is the error of a
+ * required choice among the rows ("Choose at least one permission to pass on."): it is read with
+ * each row, after its detail (SPK-UX-009).
  */
 export function CheckboxRow({
   label,
@@ -217,34 +195,28 @@ export function CheckboxRow({
   error?: string | null;
   testID?: string;
 }) {
-  const styles = useStyles();
   return (
-    <Pressable
-      accessibilityRole="checkbox"
+    <ChoiceCard
+      option={{ value: label, label, description: detail }}
+      mode="multiple"
+      checked={checked}
+      disabled={disabled}
+      error={error}
+      onPress={() => onChange(!checked)}
       accessibilityLabel={label}
       accessibilityHint={error ? sentences(detail, `Error: ${error}`) : detail}
-      accessibilityState={{ checked, disabled }}
-      disabled={disabled}
-      onPress={() => onChange(!checked)}
-      style={({ pressed }) => [styles.choice, pressed && styles.pressed]}
       testID={testID}
-    >
-      <Text
-        style={styles.glyph}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-      >
-        {checked ? '☑' : '☐'}
-      </Text>
-      <View style={styles.choiceText}>
-        <Text style={[styles.body, disabled && styles.muted]}>{label}</Text>
-        {detail ? <Text style={styles.caption}>{detail}</Text> : null}
-      </View>
-    </Pressable>
+    />
   );
 }
 
-/** An on/off setting: the switch plus the words "On" or "Off" (never the switch colour alone). */
+/**
+ * An on/off setting: the switch plus the words "On" or "Off" (never the switch colour alone).
+ *
+ * Unlike `ui/SwitchRow`, where the whole row is the switch, the switch itself stays the control
+ * that screen readers reach (role, name, checked state and hint), as it always was here; the row
+ * draws with the v2 text styles.
+ */
 export function SwitchRow({
   label,
   accessibilityLabel,
@@ -265,11 +237,12 @@ export function SwitchRow({
 }) {
   const { colors } = useTheme();
   const styles = useStyles();
+  const field = useFieldStyles();
   return (
     <View style={styles.switchRow}>
-      <View style={styles.choiceText}>
-        <Text style={styles.body}>{label}</Text>
-        <Text style={styles.caption}>
+      <View style={styles.switchText}>
+        <Text style={field.label}>{label}</Text>
+        <Text variant="footnote" tone="muted">
           {value ? 'On' : 'Off'}
           {detail ? `. ${detail}` : ''}
         </Text>
@@ -291,44 +264,16 @@ export function SwitchRow({
 }
 
 const useStyles = makeStyles(({ colors }) => ({
-  section: { paddingHorizontal: spacing.lg, paddingTop: spacing.xl, gap: spacing.xs },
-  sectionTitle: { ...type.heading, color: colors.text },
-  paragraph: { ...type.body, color: colors.text, paddingHorizontal: spacing.lg },
-  flush: { paddingHorizontal: 0 },
-  body: { ...type.body, color: colors.text },
-  muted: { color: colors.textMuted },
-  caption: { ...type.caption, color: colors.textMuted },
-  field: { gap: spacing.xs, paddingHorizontal: spacing.lg },
-  label: { ...type.body, ...fonts.semibold, color: colors.text },
-  input: {
-    ...type.body,
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: colors.control,
-    borderRadius: radius.md,
-    paddingHorizontal: 14,
-    color: colors.text,
-    backgroundColor: colors.background,
-  },
-  inputError: { borderColor: colors.danger, borderWidth: 2 },
-  disabled: { backgroundColor: colors.surface },
-  error: { ...type.caption, color: colors.danger },
-  choice: {
-    minHeight: MIN_TOUCH_SIZE,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  choiceText: { flex: 1, gap: 2 },
-  glyph: { ...type.heading, color: colors.primary, width: 24, textAlign: 'center' },
-  pressed: { opacity: 0.7 },
+  section: { paddingHorizontal: layout.gutter, paddingTop: spacing.xl, gap: spacing.xs },
+  inset: { paddingHorizontal: layout.gutter },
+  group: { gap: spacing.sm },
+  switchText: { flex: 1, gap: spacing.xxs },
   switchRow: {
     minHeight: MIN_TOUCH_SIZE,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: layout.gutter,
     paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,

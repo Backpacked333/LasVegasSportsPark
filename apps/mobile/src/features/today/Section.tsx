@@ -4,13 +4,17 @@
  * read never hides the others: loading, error with the API's code and recovery, offline with
  * nothing cached, and a protected NOT_FOUND or a denial as "not available" without implying a
  * record exists (§4.10). The page shows the age of what it displays once, not per section.
+ *
+ * `Section` and `Caption` are thin adapters over the visual system v2 in `src/ui` (ADR-008,
+ * Phase 3), keeping their props and accessible output while screens move to `src/ui` directly.
  */
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
-import { Text, View } from 'react-native';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
+import { Section as UiSection } from '../../ui/Section';
 import { StateView } from '../../ui/StateView';
-import { makeStyles, spacing, type } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import { layout, makeStyles } from '../../ui/theme';
 
 export function Section({
   title,
@@ -21,14 +25,12 @@ export function Section({
   children: ReactNode;
   testID?: string;
 }) {
-  const styles = useStyles();
+  // Edge to edge (`ui/Section` without its card): the rows and state cards inside keep their own
+  // gutter, as they did on the plain page.
   return (
-    <View style={styles.section} testID={testID}>
-      <Text style={styles.title} accessibilityRole="header">
-        {title}
-      </Text>
+    <UiSection title={title} variant="carousel" testID={testID}>
       {children}
-    </View>
+    </UiSection>
   );
 }
 
@@ -89,14 +91,12 @@ export function oldestUpdate(dates: readonly (Date | null)[]): Date | null {
 export function Caption({ children, testID }: { children: ReactNode; testID?: string }) {
   const styles = useStyles();
   return (
-    <Text style={styles.caption} testID={testID}>
+    <Text variant="caption" tone="muted" style={styles.caption} testID={testID}>
       {children}
     </Text>
   );
 }
 
-const useStyles = makeStyles(({ colors }) => ({
-  section: { gap: spacing.sm, paddingTop: spacing.lg, paddingBottom: spacing.xs },
-  title: { ...type.eyebrow, color: colors.textMuted, paddingHorizontal: spacing.lg + 2 },
-  caption: { ...type.caption, color: colors.textMuted, paddingHorizontal: spacing.lg },
+const useStyles = makeStyles(() => ({
+  caption: { paddingHorizontal: layout.gutter },
 }));

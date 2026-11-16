@@ -32,6 +32,7 @@ import {
 } from '../../../features/package-g/__tests__/fixtures';
 import { mePermissions, TEST_NOW } from '../../../testing/test-app';
 import { BookingFlowScreen } from '../BookingFlowScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -267,6 +268,7 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(await screen.findByLabelText('Length: 120 minutes')).toBeOnTheScreen();
     expect(screen.getByLabelText('Host responsibilities: An adult host stays.')).toBeOnTheScreen();
     const pending = screen.getByTestId('state-pending-decision');
+    await openSupportDetails(within(pending));
     expect(within(pending).getByText(/DEC-029, DEC-030/)).toBeOnTheScreen();
     // A party's length is the package's: the read names no duration.
     expect(availabilityReads(app)[0]?.query).toEqual({
@@ -411,6 +413,7 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(
       await screen.findByText('▲ Not free: Sat, Nov 7, 10:00 AM PST, Court 2'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: RESOURCE_CONFLICT/)).toBeOnTheScreen();
     expect(posts(app)[0]?.body).toMatchObject({ recurrence: { count: 4 } });
     await waitFor(() => expect(availabilityReads(app).length).toBeGreaterThanOrEqual(2));
@@ -452,6 +455,7 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     expect(sign).toBeDisabled();
     await chooseRentalHour();
     await press('Book now');
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: MISSING_ACKNOWLEDGMENT/)).toBeOnTheScreen();
     fireEvent.press(
       within(forms).getByRole('checkbox', { name: 'I have read and agree to Court waiver' }),
@@ -495,6 +499,7 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     const partiesOnly = renderFlow(rentalRoutes(switchesOn('parties')));
     const state = await screen.findByTestId('state-turned-off');
     expect(within(state).getByLabelText('Rentals turned off')).toBeOnTheScreen();
+    await openSupportDetails(within(state));
     expect(within(state).getByText(/DEC-076/)).toBeOnTheScreen();
     expect(
       partiesOnly.fake.requests.filter((r) => r.route === '/policy-versions/{id}'),
@@ -513,6 +518,7 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
     await chooseRentalHour();
     await press('Book now');
     expect(await screen.findByLabelText('Rentals turned off')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: ACCESS_DENIED \(CAPABILITY_DISABLED\)/)).toBeOnTheScreen();
     expect(screen.queryByTestId('state-unavailable')).toBeNull();
     // The customer's choices are kept.
@@ -560,9 +566,9 @@ describe('Package G BookingFlowScreen (SPK-COND-003)', () => {
         },
       }),
     );
-    expect(
-      await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: c-t/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: c-t')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByLabelText('How long, in minutes')).toBeOnTheScreen();
   });

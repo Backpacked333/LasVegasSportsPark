@@ -18,6 +18,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { OfferingDetailScreen } from '../OfferingDetailScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -228,6 +229,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
       }),
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('header', { name: 'Autumn Youth Program' })).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Register' })).toBeOnTheScreen();
@@ -318,6 +320,7 @@ describe('SCR-C-08 OfferingDetailScreen', () => {
       }),
     });
     render(<OfferingDetailScreen offeringId={IDS.offering} />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

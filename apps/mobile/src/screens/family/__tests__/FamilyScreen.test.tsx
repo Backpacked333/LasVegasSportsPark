@@ -24,6 +24,7 @@ import {
 } from '../../account/__tests__/fixtures';
 import { FamilyScreen } from '../FamilyScreen';
 import { SHARE_MESSAGE, WITHHELD_REVOKE_REASON } from '../InviteAdultForm';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const SAM = person(CHILD, 'Sam', 'Morgan', 'child');
 const INVITATION = '0192f1a0-0000-7000-8000-00000000c001';
@@ -191,23 +192,28 @@ describe('SCR-C-31 FamilyScreen', () => {
     const app = familyApp();
     render(<FamilyScreen />, { wrapper: app.wrapper });
     expect(
-      await screen.findByText(
-        /Adding a child from the app is not available yet: it depends on DEC-004/,
+      await screen.findByLabelText(
+        "Adding a child from the app. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Supervised pickup arrangements is not available yet: it depends on DEC-075, DEC-005/,
+      screen.getByLabelText("Supervised pickup arrangements. This isn't available in the app yet."),
+    ).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText(
+        "Seeing the permissions other adults hold over the people you manage. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Seeing the permissions other adults hold over the people you manage is not available yet: it depends on DEC-004/,
+      screen.getByLabelText(
+        "Ending another adult's permissions over you or the people you manage. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Ending another adult's permissions .* it depends on DEC-089, DEC-004/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    // Adding a child and seeing other adults' permissions both wait on DEC-004.
+    expect(screen.getAllByText('Decision: DEC-004')).toHaveLength(2);
+    expect(screen.getByText('Decisions: DEC-075, DEC-005')).toBeOnTheScreen();
+    expect(screen.getByText('Decisions: DEC-089, DEC-004')).toBeOnTheScreen();
   });
 
   it('permission restriction: a permission the parent does not hold cannot be passed on', async () => {
@@ -288,15 +294,17 @@ describe('SCR-C-31 FamilyScreen', () => {
     expect(within(form).getByRole('radio', { name: /^Delegate/ })).toBeOnTheScreen();
     expect(within(form).queryByText(/supervised sessions \(pickup\)/)).toBeNull();
     expect(
-      within(form).getByText(
-        /Supervised pickup is not available yet: it depends on DEC-075, DEC-005/,
-      ),
+      within(form).getByLabelText("Supervised pickup. This isn't available in the app yet."),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(form));
+    expect(within(form).getByText('Decisions: DEC-075, DEC-005')).toBeOnTheScreen();
     expect(
-      within(form).getByText(
-        /Choosing how long an invitation stays open is not available yet: it depends on POL-044/,
+      within(form).getByLabelText(
+        "Choosing how long an invitation stays open. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(form));
+    expect(within(form).getByText('Decision: POL-044')).toBeOnTheScreen();
     expect(within(form).queryByText(/invitation policy sets how long/)).toBeNull();
   });
 
@@ -659,6 +667,7 @@ describe('SCR-C-31 permissions as the grants state them (GET /me/access-grants)'
     });
     render(<FamilyScreen />, { wrapper: app.wrapper });
     const failure = await screen.findByTestId('grants-error');
+    await openSupportDetails(within(failure));
     expect(within(failure).getByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(failure).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(
@@ -800,6 +809,8 @@ describe('SCR-C-31 giving up a permission (SPK-IAM-006)', () => {
     const form = screen.getByTestId('give-up-form');
     fireEvent.changeText(within(form).getByLabelText('Reason'), 'Mistake');
     fireEvent.press(within(form).getByRole('button', { name: 'Give up permission' }));
+    expect(await screen.findByRole('button', { name: 'Reload' })).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     const heldReads = () =>
       app.fake.requests.filter(

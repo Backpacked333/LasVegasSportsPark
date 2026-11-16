@@ -28,6 +28,7 @@ import { createTestApp, dropAnswers } from '../../../testing/test-app';
 import { SupportCaseScreen } from '../SupportCaseScreen';
 import { SupportScreen } from '../SupportScreen';
 import { draftErrors, EMPTY_DRAFT, relatedFromParams, requestBody } from '../support-model';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -536,6 +537,7 @@ describe('SCR-C-38 SupportScreen: case history (GET /v1/me/cases)', () => {
   it('shows a failed list with its code and "Try again"; not available without the code', async () => {
     renderSupport({ 'GET /me/cases': fail(500, 'INTERNAL_ERROR') });
     const history = await screen.findByTestId('support-history');
+    await openSupportDetails(within(history));
     expect(await within(history).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(history).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
 
@@ -552,10 +554,12 @@ describe('SCR-C-38 SupportScreen: contact and changes', () => {
     renderSupport();
     expect(await screen.findByText('Ask at the front desk.')).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /The facility’s support phone, email and hours is not available yet: it depends on DEC-015/,
+      screen.getByLabelText(
+        "The facility’s support phone, email and hours. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-015')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Call the facility' })).toBeNull();
   });
 
@@ -823,6 +827,7 @@ describe('SCR-C-38 SupportCaseScreen (GET /v1/me/cases/{id})', () => {
       routes: { 'GET /me/cases/{id}': fail(503, 'INTEGRATION_UNAVAILABLE') },
     });
     render(<SupportCaseScreen caseId={CASE_ID} />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

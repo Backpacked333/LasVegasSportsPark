@@ -1,33 +1,49 @@
 /**
- * The five primary destinations as native tabs (SPK-UX-002). Every destination's header carries
- * quick access to the facility pass and the inbox. Tab labels are always shown; the icon is
- * decorative and hidden from screen readers (SPK-UX-009). The selected tab is marked by a
- * floodlight pill behind its icon and by its label colour, and screen readers hear it as selected.
+ * The five primary destinations as native tabs (SPK-UX-002; labels Home, Explore, Calendar, Teams
+ * and You are PA-11, **Proposed**). Tab labels are always shown; the icon is decorative and hidden
+ * from screen readers, and each tab button has a full accessible name (SPK-UX-009). The selected
+ * tab is marked by a floodlight pill behind its icon and by its label colour, and screen readers
+ * hear it as selected. Changing tab plays the selection haptic (ADR-008); the new destination on
+ * screen is the feedback a haptic never replaces.
  *
- * Headers are in the page colour with the destination's name as a condensed uppercase title; Home
- * shows no title in the header because its greeting opens the page (SCR-C-03). Bar, labels and
- * pill follow the theme in use (classic or Legends mode).
+ * Each destination draws its own large title (`AppHeader`, a header for screen readers) with the
+ * header actions beside it (`HeaderActions`: the cart while one is in progress, the facility pass,
+ * the inbox). Home shows no title, because its greeting opens the page (SCR-C-03), but keeps the
+ * actions. Header, bar, labels and pill follow the theme in use (classic or Legends mode).
  *
  * Where the device offers glass (`useGlassMode`: iOS), the bar floats over the page as one glass
  * surface and the content scrolls beneath it; screens leave room for it through
  * `BottomBarInsetContext`. Everywhere else the bar is the solid bar in the layout it always was.
  */
 import { Tabs } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppHeader } from '../ui/AppHeader';
 import { GlassSurface, useGlassMode } from '../ui/GlassSurface';
 import { Icon } from '../ui/Icon';
+import { useHaptics } from '../ui/PressableScale';
 import { BottomBarInsetContext } from '../ui/Screen';
-import { fonts, makeStyles, radius, type, useTheme } from '../ui/theme';
+import { fonts, layout, makeStyles, radius, spacing, useTheme } from '../ui/theme';
 import { DESTINATIONS } from './destinations';
-import { QuickAccess } from './QuickAccess';
+import { HeaderActions } from './HeaderActions';
 
-export function HeaderTitle({ children }: { children: string }) {
+/**
+ * The top of a destination: its large title and the header actions, below the status bar. Without
+ * a title (Home) only the actions, on the right.
+ */
+export function TabHeader({ title }: { title?: string }) {
   const styles = useStyles();
+  const insets = useSafeAreaInsets();
   return (
-    <Text style={styles.headerTitle} accessibilityRole="header" numberOfLines={1}>
-      {children}
-    </Text>
+    <View style={[styles.header, { paddingTop: insets.top }]}>
+      {title ? (
+        <AppHeader title={title} actions={<HeaderActions />} />
+      ) : (
+        <View style={styles.actionsOnly}>
+          <HeaderActions />
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -39,15 +55,17 @@ export function TabsNavigator() {
   const styles = useStyles();
   const floating = useGlassMode() !== 'solid';
   const insets = useSafeAreaInsets();
+  const haptics = useHaptics();
   return (
     <BottomBarInsetContext.Provider value={floating ? TAB_ROW_HEIGHT + insets.bottom : 0}>
       <Tabs
+        // A press on another tab than the one shown: the selection tick (ADR-008).
+        screenListeners={({ navigation }) => ({
+          tabPress: () => {
+            if (!navigation.isFocused()) haptics.selection();
+          },
+        })}
         screenOptions={{
-          headerRight: () => <QuickAccess />,
-          headerTitleAlign: 'left',
-          headerTitle: ({ children }) => <HeaderTitle>{children}</HeaderTitle>,
-          headerStyle: { backgroundColor: colors.page },
-          headerShadowVisible: false,
           tabBarActiveTintColor: colors.tabActive,
           tabBarInactiveTintColor: colors.textMuted,
           tabBarShowLabel: true,
@@ -69,7 +87,7 @@ export function TabsNavigator() {
             name={d.name}
             options={{
               title: d.title,
-              ...(d.name === 'index' ? { headerTitle: () => null } : {}),
+              header: () => <TabHeader title={d.name === 'index' ? undefined : d.title} />,
               tabBarAccessibilityLabel: d.accessibilityLabel,
               tabBarButtonTestID: `tab-${d.name}`,
               tabBarIcon: ({ color, focused }) => (
@@ -86,7 +104,13 @@ export function TabsNavigator() {
 }
 
 const useStyles = makeStyles(({ colors }) => ({
-  headerTitle: { ...type.display, fontSize: 30, lineHeight: 34, color: colors.text },
+  header: { backgroundColor: colors.page },
+  actionsOnly: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: layout.gutter,
+    paddingTop: spacing.sm,
+  },
   tabBar: {
     backgroundColor: colors.background,
     borderTopColor: colors.border,

@@ -23,6 +23,7 @@ import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-a
 import { mePermissions } from '../../../testing/test-app';
 import { FixtureResultsScreen } from '../FixtureResultsScreen';
 import { StandingsScreen, standingsRowLabel } from '../StandingsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -201,6 +202,7 @@ describe('SCR-C-28 StandingsScreen', () => {
       }),
     });
     render(<StandingsScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: RATE_LIMITED/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

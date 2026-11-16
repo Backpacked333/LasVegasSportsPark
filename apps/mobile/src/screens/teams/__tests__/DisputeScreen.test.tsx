@@ -20,6 +20,7 @@ import {
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { DisputeScreen } from '../DisputeScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 function routes(overrides: Record<string, FakeHandler> = {}) {
   return baseRoutes({
@@ -116,6 +117,7 @@ describe('SCR-C-29 DisputeScreen', () => {
           apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
         ),
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.queryByText('No disputes for this game yet.')).toBeNull();
   });
@@ -199,8 +201,13 @@ describe('SCR-C-29 DisputeScreen', () => {
     expect(await screen.findByLabelText('Dispute not upheld')).toBeOnTheScreen();
     expect(screen.getByText('The result stands')).toBeOnTheScreen();
     expect(screen.getByText('Decision: The goal was before the whistle.')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Waiting on a decision')).toBeOnTheScreen();
-    expect(screen.getByText(/depends on DEC-010/)).toBeOnTheScreen();
+    expect(
+      screen.getByLabelText(
+        "How appeals of a dispute decision work. This isn't available in the app yet.",
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-010')).toBeOnTheScreen();
   });
 
   it('offline: the draft is kept and submitting is disabled', async () => {

@@ -6,7 +6,7 @@
  * seeds on top of it (apps/api/src/dev/seed-demo.ts, ADR-007). Staff roles are demonstrated in
  * the staff dashboard.
  *
- * A step opens a screen of the app by its route. The class and camp steps open Discover and say
+ * A step opens a screen of the app by its route. The class and camp steps open Explore and say
  * which offering to open, because an offering's route carries an id that differs per database.
  */
 export interface TourStep {
@@ -26,7 +26,7 @@ export const FAMILY_TOUR: readonly TourStep[] = [
   },
   {
     path: '/discover',
-    title: 'Discover',
+    title: 'Explore',
     body: 'Programs, camps and leagues the family can join, with places left and the price before any commitment.',
   },
   {
@@ -46,13 +46,13 @@ export const FAMILY_TOUR: readonly TourStep[] = [
   },
   {
     path: '/schedule',
-    title: 'Family schedule',
-    body: 'Everyone in the household on one calendar, with moved or canceled sessions marked.',
+    title: 'Family calendar',
+    body: 'Everyone in the family on one calendar, with moved or canceled sessions marked.',
   },
   {
     path: '/teams',
     title: 'Teams',
-    body: 'Team fixtures, standings and availability. Captains also see roster tools here.',
+    body: 'Team games, standings and availability. Captains also see roster tools here.',
   },
   {
     path: '/booking-roster-invitations',
@@ -62,7 +62,7 @@ export const FAMILY_TOUR: readonly TourStep[] = [
   {
     path: '/public/schedule',
     title: 'Public schedule and standings',
-    body: "Today's schedule by field, as anyone sees it without signing in. The signed-out Discover screen links to it and to the public league standings.",
+    body: "Today's schedule by field, as anyone sees it without signing in. The signed-out Explore screen links to it and to the public league standings.",
   },
   {
     path: '/pass',
@@ -77,11 +77,11 @@ export const FAMILY_TOUR: readonly TourStep[] = [
   {
     path: '/family',
     title: 'Family and permissions',
-    body: 'Who is in the household and who may register, pay or pick up each child.',
+    body: 'Who is in the family and who may register, pay or pick up each child.',
   },
   {
     path: '/account',
-    title: 'Account',
-    body: 'Enrollments, credits, forms, support and preferences live here.',
+    title: 'You',
+    body: 'Registrations, payments, credits, forms, settings and support, grouped by topic.',
   },
 ];

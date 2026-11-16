@@ -10,6 +10,7 @@ import { IDS, baseRoutes, pool, poolStandings } from '../../../features/teams/te
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { mePermissions } from '../../../testing/test-app';
 import { PoolStandingsScreen, poolProgressText } from '../PoolStandingsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 function routes(overrides: Record<string, FakeHandler> = {}) {
   return baseRoutes({
@@ -74,6 +75,7 @@ describe('SCR-C-28 PoolStandingsScreen', () => {
   it('DEC-016: with tournaments off the turned-off notice sits above what stays readable', async () => {
     renderPool({ 'GET /me/permissions': mePermissions() });
     expect(await screen.findByText(/Tournaments/)).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/DEC-078/)).toBeOnTheScreen();
     expect(screen.getByText('Pool tables already published stay readable here.')).toBeOnTheScreen();
     expect(await screen.findByRole('header', { name: 'Pool A: Fall 2026' })).toBeOnTheScreen();
@@ -95,7 +97,7 @@ describe('SCR-C-28 PoolStandingsScreen', () => {
     await waitFor(() => expect(app.requestsTo('GET', '/me/permissions').length).toBeGreaterThan(0));
     await app.settle();
     expect(screen.queryByText(/INTERNAL_ERROR/)).toBeNull();
-    expect(screen.queryByText(/DEC-078/)).toBeNull();
+    expect(screen.queryByLabelText('Tournaments turned off')).toBeNull();
     expect(screen.queryByText('Pool tables already published stay readable here.')).toBeNull();
   });
 
@@ -103,7 +105,7 @@ describe('SCR-C-28 PoolStandingsScreen', () => {
     const app = renderPool();
     expect(await screen.findByRole('header', { name: 'Pool A: Fall 2026' })).toBeOnTheScreen();
     await app.settle();
-    expect(screen.queryByText(/DEC-078/)).toBeNull();
+    expect(screen.queryByLabelText('Tournaments turned off')).toBeNull();
   });
 
   it('§4.10: a pool the person may not see is "not available"', async () => {
@@ -128,6 +130,7 @@ describe('SCR-C-28 PoolStandingsScreen', () => {
           : fakeResponse(200, poolStandings());
       },
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(

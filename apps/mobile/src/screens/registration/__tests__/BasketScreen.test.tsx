@@ -26,6 +26,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { BasketScreen, RELEASE_REASON } from '../BasketScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -243,6 +244,7 @@ describe('SCR-C-11 BasketScreen', () => {
     const sent = app.fake.requests.find((r) => r.route === '/baskets/{id}/lines/{lineId}/remove');
     expect(sent?.params).toEqual({ id: IDS.basket, lineId: IDS.lineA });
     expect(sent?.body).toEqual({ expectedRevision: 3 });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     const reads = app.fake.requests.filter((r) => r.route === '/baskets/{id}').length;
     await act(async () => {
@@ -394,6 +396,7 @@ describe('SCR-C-11 BasketScreen', () => {
     expect(
       await screen.findByText('The payment for this basket could not be looked up.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'See your payment' })).toBeNull();
     fail = false;

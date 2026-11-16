@@ -6,6 +6,8 @@ Status of this document: every requirement text below is **Proposed**. None is p
 
 The facility's current system was reviewed read-only. Ten things the facility depends on are absent from the master specification or only implied by it. Seven are ordinary features of the current system (PA-01 to PA-07). Three exist today only as workarounds, where staff bend a feature to a purpose it was not built for (PA-08 to PA-10); for those the amendment specifies the purpose, not the workaround.
 
+PA-11 has a different origin: the product owner asked for it on 2026-11-16, in the redesign of the customer app, after finding the app hard to navigate and its wording internal. It changes the wording of SPK-UX-002 and adds a customer-language requirement; it does not come from the legacy review and has no questionnaire row.
+
 "Observed" below means seen in the facility's current system during that review and recorded in the third column of the questionnaire. It is evidence of how the facility works today, not of what it wants; the facility confirms or corrects it by answering.
 
 ## 2. How to accept one
@@ -18,18 +20,19 @@ The facility's current system was reviewed read-only. Ten things the facility de
 
 ## 3. Summary
 
-| Id    | Proposed requirement | Section | Need                                        | Today (**Verified**)                                                   | Questionnaire rows | Decision |
-| ----- | -------------------- | ------- | ------------------------------------------- | ---------------------------------------------------------------------- | ------------------ | -------- |
-| PA-01 | SPK-REG-011          | §3.3    | Liability waiver                            | Versioned forms and acknowledgements; no waiver, no paper date         | J1 to J5           | DEC-095  |
-| PA-02 | SPK-PAY-013          | §3.15   | Class price by sessions remaining           | Full term price always (`facility-class.spec.ts`)                      | G2                 | DEC-096  |
-| PA-03 | SPK-PAY-014          | §3.15   | Camp price tiers and add-ons                | Absent                                                                 | G3                 | DEC-097  |
-| PA-04 | SPK-PAY-015          | §3.15   | Member and non-member price on one offering | Absent                                                                 | G3, G8             | DEC-098  |
-| PA-05 | SPK-COMMS-009        | §3.18   | Season email templates and sequences        | Staff-composed messages only; no template, no sequence                 | K1 to K3           | DEC-099  |
-| PA-06 | SPK-SCHED-010        | §3.7    | Lobby and public schedule views             | Absent; standings refuse anonymous readers (`facility-league.spec.ts`) | N1 to N4, F14      | DEC-100  |
-| PA-07 | SPK-REG-012          | §3.3    | Uniform purchase during registration        | Jersey numbers on rosters only                                         | H5, H6             | DEC-101  |
-| PA-08 | SPK-PAY-016          | §3.16   | Open-amount register line                   | Refused (`facility-register.spec.ts`)                                  | H2, H9, G12        | DEC-102  |
-| PA-09 | SPK-COND-005         | §3.16   | Rental-group rosters with waivers           | Absent                                                                 | D18, J1, I2        | DEC-103  |
-| PA-10 | SPK-COMP-006         | §3.4    | Team waiting list                           | Absent; a full division refuses the team (`facility-league.spec.ts`)   | D10                | DEC-104  |
+| Id    | Proposed requirement   | Section    | Need                                           | Today (**Verified**)                                                                                | Questionnaire rows   | Decision |
+| ----- | ---------------------- | ---------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------- | -------- |
+| PA-01 | SPK-REG-011            | §3.3       | Liability waiver                               | Versioned forms and acknowledgements; no waiver, no paper date                                      | J1 to J5             | DEC-095  |
+| PA-02 | SPK-PAY-013            | §3.15      | Class price by sessions remaining              | Full term price always (`facility-class.spec.ts`)                                                   | G2                   | DEC-096  |
+| PA-03 | SPK-PAY-014            | §3.15      | Camp price tiers and add-ons                   | Absent                                                                                              | G3                   | DEC-097  |
+| PA-04 | SPK-PAY-015            | §3.15      | Member and non-member price on one offering    | Absent                                                                                              | G3, G8               | DEC-098  |
+| PA-05 | SPK-COMMS-009          | §3.18      | Season email templates and sequences           | Staff-composed messages only; no template, no sequence                                              | K1 to K3             | DEC-099  |
+| PA-06 | SPK-SCHED-010          | §3.7       | Lobby and public schedule views                | Absent; standings refuse anonymous readers (`facility-league.spec.ts`)                              | N1 to N4, F14        | DEC-100  |
+| PA-07 | SPK-REG-012            | §3.3       | Uniform purchase during registration           | Jersey numbers on rosters only                                                                      | H5, H6               | DEC-101  |
+| PA-08 | SPK-PAY-016            | §3.16      | Open-amount register line                      | Refused (`facility-register.spec.ts`)                                                               | H2, H9, G12          | DEC-102  |
+| PA-09 | SPK-COND-005           | §3.16      | Rental-group rosters with waivers              | Absent                                                                                              | D18, J1, I2          | DEC-103  |
+| PA-10 | SPK-COMP-006           | §3.4       | Team waiting list                              | Absent; a full division refuses the team (`facility-league.spec.ts`)                                | D10                  | DEC-104  |
+| PA-11 | SPK-UX-002, SPK-UX-011 | §2.2, §2.5 | Customer destinations and plain pending states | Tabs Home, Discover, Schedule, Teams, Account; pending panels name decision codes (`StateView.tsx`) | none (owner request) | DEC-107  |
 
 ## 4. Amendments
 
@@ -169,6 +172,40 @@ Observed: a season named for open play "plus waiting list teams" is created each
 Open values (**Pending decision**, DEC-104): whether this is in fact how waiting teams are tracked (D10); whether offers follow strict order; how long an offer stands; whether waiting carries over to the next season.
 
 Today (**Verified**, `facility-league.spec.ts`): approving a team into a full division is refused with the capacity and the number occupied; the entry stays "applied" with no order and no offer. Individual waiting lists with timed offers exist for registrations (SPK-REG-008) and are not reused for teams.
+
+### PA-11. Customer destinations and plain pending states
+
+Requested by the product owner on 2026-11-16 (customer app redesign). **Proposed**; nothing in this section is accepted, and the redesign may ship ahead of acceptance only where the current requirement text is still met (see "Before acceptance" below).
+
+**SPK-UX-002** (amended wording, **Proposed**)
+
+Use five main destinations:
+
+| Destination | Contents                                                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Home        | Next activity, required actions, urgent changes, quick access to pass                                                      |
+| Explore     | Leagues, programs, camps, trials, pickup, available rentals                                                                |
+| Calendar    | Personal and authorized family activities, one week at a time, with a filter per person (absorbs SCR-C-19 Family calendar) |
+| Teams       | Team workspaces, fixtures, availability, standings                                                                         |
+| You         | Family, registrations, payments, credits, forms, preferences, support, grouped by topic (regroups SCR-C-30 Account)        |
+
+The facility pass and notification inbox must remain easily accessible without requiring a permanent navigation tab. A registration in progress (an open cart) must be reachable from every destination until it is checked out or abandoned.
+
+The contents are the same as today's SPK-UX-002; only the labels change (Discover becomes Explore, Schedule becomes Calendar, Account becomes You), the family calendar becomes a filter of Calendar, and the cart gains a persistent way back.
+
+**SPK-UX-011** (new, **Proposed**): plain customer language and features that are not available
+
+The customer app must:
+
+- Speak to customers in plain words. A screen or value that waits on an operator decision says what the customer can do instead (for example "Pay at the front desk for now"), never only that a decision is pending. Decision identifiers (`DEC-###`), requirement and screen identifiers (`SPK-*`, `SCR-*`, `POL-*`, `PA-*`), section references, error codes and correlation references appear only inside a collapsed "Details for support" area that the customer opens on purpose.
+- Show no entry point (tab, row, button, chip) to a conditional capability whose switch is off for the organization (K-12, DEC-016). Records the customer already holds under that capability stay readable, and cancelling one is never gated (as today, `apps/mobile/README.md` "Package G customer flows").
+- Use one customer vocabulary across the app, maintained in one list in the app source: basket is "cart", quote is "review" or "price summary", obligation is "amount due", payment attempt is "payment", enrollment is "registration", entitlement is "makeups available", session package is "class pack", offering is "activity", fixture is "game", contribution request is "your share", acknowledgment is "form" or "waiver", household is "family". The status phrases of `journeys.md` section 3 (for example "Payment outcome being confirmed. Do not pay again.") stay word for word, as SPK-UX-004 and SPK-UX-010 require.
+
+Before acceptance: renaming tab labels and moving codes into a support fold change no behaviour the specification governs except the SPK-UX-002 labels. Until the product owner accepts PA-11, the labels Discover, Schedule and Account are what the specification says; the redesign plan keeps route names, links and every behaviour assertion unchanged so that either outcome can be shipped.
+
+Open values (**Pending decision**, DEC-107): accept, edit or reject the new labels; whether the family calendar may stop being a separate screen (SCR-C-19); the vocabulary list; whether error codes and correlation references may move into the support fold or must stay visible (§4.10 requires them to be available, not prominent).
+
+Today (**Verified** by inspection, 2026-11-16): the tab titles are Home, Discover, Schedule, Teams and Account (`apps/mobile/src/navigation/destinations.ts`); the pending-decision state of `apps/mobile/src/ui/StateView.tsx` reads "… is not available yet: it depends on DEC-…, which has not been decided (owner: …)", and 30 places in `apps/mobile/src` render it outside tests; the turned-off state names DEC-016 and the capability's own record; the open cart is reachable from Discover only.
 
 ## 5. Found in the same review, not drafted
 

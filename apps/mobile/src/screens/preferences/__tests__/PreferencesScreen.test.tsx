@@ -19,6 +19,7 @@ import {
 import { FEED_REVOKED_TEXT, feedUrl, WITHHELD_REVOKE_REASON } from '../CalendarFeedsSection';
 import { PreferencesScreen } from '../PreferencesScreen';
 import { PushPermissionProvider } from '../push-permission';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 type Pref = {
   channel: 'in_app' | 'push' | 'email' | 'sms';
@@ -118,10 +119,12 @@ describe('SCR-C-36 PreferencesScreen', () => {
     const app = prefsApp();
     render(<PreferencesScreen />, { wrapper: app.wrapper });
     expect(
-      await screen.findByText(
-        /The choice of channels the facility uses is not available yet: it depends on DEC-062/,
+      await screen.findByLabelText(
+        "The choice of channels the facility uses. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-062')).toBeOnTheScreen();
   });
 
   it('saves only the changed preferences with an idempotency key and says "Preferences saved"', async () => {
@@ -310,6 +313,7 @@ describe('SCR-C-36 calendar feeds (SPK-COMMS-008)', () => {
     fireEvent.press(await screen.findByRole('button', { name: 'Revoke Family' }));
     fireEvent.press(screen.getByRole('button', { name: 'Revoke now' }));
     const reload = await screen.findByRole('button', { name: 'Reload' });
+    await openSupportDetails(screen);
     fireEvent.press(reload);
     expect(
       await screen.findByLabelText(
@@ -503,10 +507,12 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
     const app = prefsApp();
     render(<PreferencesScreen />, { wrapper: app.wrapper });
     expect(
-      await screen.findByText(
-        /Registering this device for push notifications is not available yet: it depends on DEC-061, DEC-020/,
+      await screen.findByLabelText(
+        "Registering this device for push notifications. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-061, DEC-020')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Register this device' })).toBeNull();
     expect(
       app.fake.requests.some((r) => r.route === '/me/push-devices' && r.method === 'POST'),
@@ -664,7 +670,11 @@ describe('SCR-C-36 push devices (SPK-UX-001 push registration, SPK-IAM-006; DEC-
       appVersion: '0.1.0',
     });
     expect(post?.headers['idempotency-key']).toBe('key-00000001');
-    expect(screen.queryByText(/DEC-061, DEC-020/)).toBeNull();
+    expect(
+      screen.queryByLabelText(
+        "Registering this device for push notifications. This isn't available in the app yet.",
+      ),
+    ).toBeNull();
   });
 
   it('offline: stopping push is disabled and nothing is queued', async () => {

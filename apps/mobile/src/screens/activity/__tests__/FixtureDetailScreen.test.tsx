@@ -27,6 +27,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, dropAnswers, waitForAbsent } from '../../../testing/test-app';
 import { FixtureDetailScreen } from '../FixtureDetailScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -104,10 +105,12 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       screen.getByText(/Lions: 5 available, 1 unavailable, 0 tentative, 4 no response/),
     ).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Arrival guidance for this activity is not available yet: it depends on POL-046/,
+      screen.getByLabelText(
+        "Arrival guidance for this activity. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: POL-046')).toBeOnTheScreen();
   });
 
   it('SPK-READY-002 / SPK-CAP-002: readiness as an assessment with responsible role and action, counts only', async () => {
@@ -387,6 +390,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     });
     fireEvent.press(await screen.findByRole('radio', { name: 'Available' }));
     const reload = await screen.findByRole('button', { name: 'Reload' });
+    await openSupportDetails(screen);
     const before = reads;
     fireEvent.press(reload);
     // The mutation reset and the refetch notify through TanStack Query's batched (timer-based)
@@ -498,8 +502,9 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     });
     expect(await screen.findByTestId('rsvp-current')).toHaveProp('accessibilityLabel', 'Available');
     fireEvent.press(screen.getByRole('radio', { name: 'Unavailable' }));
+    expect(await screen.findByRole('button', { name: 'Reload' })).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
-    expect(screen.getByRole('button', { name: 'Reload' })).toBeOnTheScreen();
     expect(app.fake.requests.find((r) => r.route === '/fixtures/{id}/availability')?.body).toEqual({
       state: 'unavailable',
       expectedRevision: 4,
@@ -588,9 +593,11 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       'GET /me': fail(503, 'INTEGRATION_UNAVAILABLE', 'Accounts are unavailable.'),
     });
     const failed = await screen.findByTestId('fixture-family-answers');
+    await openSupportDetails(within(failed));
     expect(
-      await within(failed).findByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-1/),
+      await within(failed).findByText('Error code: INTEGRATION_UNAVAILABLE'),
     ).toBeOnTheScreen();
+    expect(await within(failed).findByText('Reference: corr-1')).toBeOnTheScreen();
     expect(within(failed).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.queryByLabelText(/^Family member: /)).toBeNull();
   });

@@ -4,14 +4,24 @@
  *
  * - loading: data requested, not yet received.
  * - empty: request succeeded with nothing in scope; says what would appear and how to create it.
- * - error: the API's error code, safe message, correlation reference and the recovery action.
+ * - error: the API's safe message and the recovery action; its error code and correlation
+ *   reference are in the "Details for support" fold.
  * - offline-stale: no connection or old data; shows the age of what is shown and what is unavailable.
  * - unavailable: protected NOT_FOUND or a permission restriction; never implies the record exists.
  * - pending-decision: the screen or value waits on an operator decision (DEC-###); nothing invented.
- * - turned-off: a conditional capability the organization has switched off (K-12): names the
- *   decisions that may turn it on (DEC-016 and its own record). An `error` that is the API's
- *   ACCESS_DENIED `CAPABILITY_DISABLED` answer renders this state too, so every screen shows it
- *   the same way, never as "not available" or a failure.
+ *   It says in plain words what the customer can do instead (`message`, e.g. "Pay at the front
+ *   desk for now."), with an optional `action`; without a message it says only "This isn't
+ *   available in the app yet." The decisions and their owner are in the support fold.
+ * - turned-off: a conditional capability the organization has switched off (K-12): "This isn't
+ *   available right now.", with the decisions that may turn it on (DEC-016 and its own record) and
+ *   the refused command's code in the support fold. An `error` that is the API's ACCESS_DENIED
+ *   `CAPABILITY_DISABLED` answer renders this state too, so every screen shows it the same way,
+ *   never as "not available" or a failure.
+ *
+ * Codes live only in the fold (PA-11, SPK-UX-011 **Proposed**; §4.10 requires them to be
+ * available, not prominent): decision identifiers, owners, error codes and correlation references
+ * are in a collapsed "Details for support" area (`SupportDetails`) that the customer opens on
+ * purpose, never in the visible sentence.
  *
  * Every variant carries text, never colour alone. On Android the view is a polite live region, so
  * TalkBack reads each variant as it appears or changes. iOS has no live regions, so the variants
@@ -28,7 +38,6 @@ import {
   recoveryActionFor,
   turnedOffFromError,
   turnedOffLabel,
-  turnedOffMessage,
   type ApiError,
 } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
@@ -37,8 +46,10 @@ import { useConnectivity } from '../providers/AppProviders';
 import { LiveRegion, sentences } from './announce';
 import { Button } from './Button';
 import { Icon } from './Icon';
+import { InfoCard } from './InfoCard';
 import { useRowLayout } from './ListRow';
 import { StatusBadge } from './StatusBadge';
+import { SupportDetails } from './SupportDetails';
 import { continuousCorners, makeStyles, radius, spacing, type, useTheme } from './theme';
 
 interface ActionProps {
@@ -71,6 +82,13 @@ export type StateViewProps =
       decisions: string[];
       /** Owner wording from the decision register, when known. */
       owner?: string;
+      /**
+       * What the customer can do instead, in plain words ("Pay at the front desk for now.").
+       * Optional for now; without it the state says "This isn't available in the app yet."
+       */
+      message?: string;
+      /** A way forward the app can offer ("Call the front desk"). */
+      action?: { label: string; onPress: () => void };
     }
   | {
       variant: 'turned-off';
@@ -109,7 +127,10 @@ export function StateView(props: StateViewProps) {
       style={
         shown.variant === 'loading'
           ? [styles.loading, flat && styles.flatLoading]
-          : [styles.container, flat && styles.flat]
+          : shown.variant === 'pending-decision'
+            ? // The InfoCard is the frame: no card around it.
+              [styles.pendingFrame, flat && styles.flatPending]
+            : [styles.container, flat && styles.flat]
       }
       announcement={announcementFor(shown, reachable === false)}
       occurrence={shown.variant === 'error' || shown.variant === 'turned-off' ? shown.error : null}
@@ -168,9 +189,16 @@ const VARIANT_TILES: Record<StateViewProps['variant'], { icon: string; tone: Til
   error: { icon: 'error', tone: 'danger' },
   'offline-stale': { icon: 'cloud_off', tone: 'warning' },
   unavailable: { icon: 'lock', tone: 'neutral' },
-  'pending-decision': { icon: 'schedule', tone: 'pending' },
+  // The InfoCard draws its own icon.
+  'pending-decision': null,
   'turned-off': { icon: 'toggle_off', tone: 'neutral' },
 };
+
+/** Pending decision without a `message`: plain words, no codes (PA-11). */
+export const PENDING_DECISION_FALLBACK = "This isn't available in the app yet.";
+
+/** What a turned-off capability says (PA-11): the decisions are in the support fold. */
+export const TURNED_OFF_MESSAGE = "This isn't available right now.";
 
 const DEFAULT_UNAVAILABLE =
   'This is not available. Check the link, or contact the front desk if you expected to see something here.';
@@ -219,11 +247,7 @@ export function announcementFor(props: StateViewProps, deviceOffline = false): s
         props.actionLabel && props.onAction ? props.actionLabel : null,
       );
     case 'turned-off':
-      return sentences(
-        turnedOffLabel(props.subject),
-        turnedOffMessage(props.decisions, props.owner),
-        props.stillAvailable,
-      );
+      return sentences(turnedOffLabel(props.subject), TURNED_OFF_MESSAGE, props.stillAvailable);
   }
 }
 
@@ -263,15 +287,12 @@ function StateBody({ state: props }: { state: StateViewProps }): ReactNode {
         <>
           <StatusBadge tone="danger" label="Something went wrong" />
           <Text style={styles.body}>{props.error.message}</Text>
-          <Text style={styles.caption} selectable>
-            Error code: {props.error.code}
-            {props.error.correlationId ? `. Reference: ${props.error.correlationId}` : ''}
-          </Text>
           {onPress ? (
             <Button label={recovery.label} onPress={onPress} />
           ) : (
             <Text style={styles.body}>{recovery.label}</Text>
           )}
+          <SupportDetails errorCode={props.error.code} reference={props.error.correlationId} />
         </>
       );
     }
@@ -308,28 +329,29 @@ function StateBody({ state: props }: { state: StateViewProps }): ReactNode {
       );
     case 'pending-decision':
       return (
-        <>
-          <StatusBadge tone="pending" label="Waiting on a decision" />
-          <Text style={styles.body}>
-            {props.subject} is not available yet: it depends on {props.decisions.join(', ')}, which
-            {props.decisions.length === 1 ? ' has' : ' have'} not been decided
-            {props.owner ? ` (owner: ${props.owner})` : ''}.
-          </Text>
-        </>
+        <InfoCard
+          tone="info"
+          icon="schedule"
+          title={props.subject}
+          message={props.message ?? PENDING_DECISION_FALLBACK}
+          action={props.action}
+          style={styles.pending}
+        >
+          <SupportDetails decisions={props.decisions} owner={props.owner} />
+        </InfoCard>
       );
     case 'turned-off':
       return (
         <>
           <StatusBadge tone="neutral" label={turnedOffLabel(props.subject)} />
-          <Text style={styles.body}>{turnedOffMessage(props.decisions, props.owner)}</Text>
+          <Text style={styles.body}>{TURNED_OFF_MESSAGE}</Text>
           {props.stillAvailable ? <Text style={styles.body}>{props.stillAvailable}</Text> : null}
-          {props.error ? (
-            <Text style={styles.caption} selectable>
-              {`Error code: ${props.error.code} (CAPABILITY_DISABLED)${
-                props.error.correlationId ? `. Reference: ${props.error.correlationId}` : ''
-              }`}
-            </Text>
-          ) : null}
+          <SupportDetails
+            decisions={props.decisions}
+            owner={props.owner}
+            errorCode={props.error ? `${props.error.code} (CAPABILITY_DISABLED)` : undefined}
+            reference={props.error?.correlationId}
+          />
         </>
       );
   }
@@ -354,10 +376,13 @@ const useStyles = makeStyles(({ colors }) => ({
     backgroundColor: 'transparent',
     borderWidth: 0,
   },
+  pendingFrame: { marginHorizontal: spacing.lg, marginVertical: spacing.sm },
+  flatPending: { marginHorizontal: 0 },
+  pending: { alignSelf: 'stretch' },
   loading: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.md },
   flatLoading: { paddingHorizontal: 0 },
   outline: { gap: spacing.sm },
-  outlineBar: { height: 14, borderRadius: radius.pill, backgroundColor: colors.surface },
+  outlineBar: { height: 14, borderRadius: radius.pill, backgroundColor: colors.skeleton },
   outlineBarWide: { width: '72%' },
   outlineBarShort: { width: '44%' },
   tile: {

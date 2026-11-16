@@ -20,6 +20,7 @@ import {
   TOKEN,
 } from '../../account/__tests__/fixtures';
 import { InvitationScreen, invitationStateLabel } from '../InvitationScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const INVITATION = '0192f1a0-0000-7000-8000-00000000c001';
 const TEAM_ENTRY = '0192f1a0-0000-7000-8000-00000000e100';
@@ -264,6 +265,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     render(<InvitationScreen invitationId={INVITATION} type="family" token={TOKEN} />, {
       wrapper: app.wrapper,
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Accept invitation' })).toBeNull();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
@@ -495,6 +497,7 @@ describe('SCR-C-17 InvitationScreen (family access)', () => {
     });
     fireEvent.press(await screen.findByRole('button', { name: 'Decline' }));
     fireEvent.press(screen.getByRole('button', { name: 'Confirm decline' }));
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: STALE_REVISION/)).toBeOnTheScreen();
     expect(posts(app)[0]?.body).toEqual({ token: TOKEN, expectedRevision: 1 });
     fireEvent.press(screen.getByRole('button', { name: 'Reload' }));

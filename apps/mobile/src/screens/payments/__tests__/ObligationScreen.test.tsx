@@ -31,6 +31,7 @@ import {
 } from '../../../features/money/testing/money-test-app';
 import { waitForAbsent } from '../../../testing/test-app';
 import { ObligationScreen } from '../ObligationScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -256,6 +257,7 @@ describe('SCR-C-34 ObligationScreen', () => {
           apiErrorBody('INTERNAL_ERROR', { nextAction: 'retry_or_contact_support' }),
         ),
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
   });
 
@@ -520,6 +522,7 @@ describe('SCR-C-34 ObligationScreen', () => {
     });
     await pay();
     expect(await screen.findByText('The payment exceeds the remaining balance.')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
   });
 
@@ -615,7 +618,11 @@ describe('SCR-C-34 ObligationScreen', () => {
       'accessibilityLabel',
       'Payment processing',
     );
-    expect(screen.queryByText(/depends on DEC-019/)).toBeNull();
+    expect(
+      screen.queryByLabelText(
+        "Completing the payment provider’s step in the app. This isn't available in the app yet.",
+      ),
+    ).toBeNull();
   });
 
   it('SPK-UX-004: a live payment still processing reads "Payment processing", not received', async () => {

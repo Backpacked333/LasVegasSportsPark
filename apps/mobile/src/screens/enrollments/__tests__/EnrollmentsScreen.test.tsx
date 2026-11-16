@@ -19,6 +19,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { EnrollmentsScreen } from '../EnrollmentsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -73,6 +74,7 @@ describe('SCR-C-32 EnrollmentsScreen', () => {
     render(<EnrollmentsScreen />, { wrapper: app.wrapper });
     const group = await screen.findByLabelText('Show enrollments for');
     expect(await within(group).findByRole('radio', { name: 'Family member' })).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
   });
 
@@ -158,9 +160,9 @@ describe('SCR-C-32 EnrollmentsScreen', () => {
     expect(
       await screen.findByText('Enrollment records are currently unavailable.'),
     ).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-32/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-32')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });
 

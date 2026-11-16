@@ -57,7 +57,9 @@ function liquidGlassOffered(): boolean {
 export function GlassProvider({ mode, children }: { mode?: GlassMode; children: ReactNode }) {
   const [detected, setDetected] = useState<GlassMode>('solid');
   useEffect(() => {
-    if (mode) return undefined;
+    // Off iOS the answer is always solid (glassModeFor), so the device is not asked: the web has
+    // no reduce-transparency setting to ask about.
+    if (mode || Platform.OS !== 'ios') return undefined;
     let live = true;
     const apply = (reduceTransparency: boolean) => {
       if (!live) return;

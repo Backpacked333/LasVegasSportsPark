@@ -14,6 +14,7 @@ import {
   person,
 } from '../../account/__tests__/fixtures';
 import { AccountRecoveryScreen } from '../AccountRecoveryScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 describe('SCR-C-02 AccountRecoveryScreen', () => {
   it('signed out: states the recovery rule, shows self-service recovery as pending DEC-018 and offers sign-in', async () => {
@@ -25,10 +26,12 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
       ),
     ).toBeOnTheScreen();
     expect(
-      screen.getByText(
-        /Recovering your account from the app is not available yet: it depends on DEC-018/,
+      screen.getByLabelText(
+        "Recovering your account from the app. This isn't available in the app yet.",
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-018')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeOnTheScreen();
     expect(app.fake.requests).toHaveLength(0);
   });
@@ -85,6 +88,7 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
     expect(
       await screen.findByText('Too many attempts. Wait before trying again.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: RATE_LIMITED/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });
@@ -100,6 +104,7 @@ describe('SCR-C-02 AccountRecoveryScreen', () => {
       },
     });
     render(<AccountRecoveryScreen />, { wrapper: app.wrapper });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });

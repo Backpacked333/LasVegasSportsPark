@@ -1,11 +1,14 @@
 /**
  * Test harness for screens and components: real providers with deterministic services (memory
  * session store, manual connectivity, fake fetch from @sportspark/api-client/testing, fixed clock,
- * memory theme store).
+ * memory theme store, recorded haptics), inside the gesture-handler root and the bottom-sheet
+ * provider the app's root layout has. No `MotionProvider`: motion counts as reduced in every test
+ * (src/ui/motion.tsx).
  *
  *   const app = createTestApp({ routes: { 'GET /me/inbox': { status: 200, body: page } } });
  *   render(<InboxScreen />, { wrapper: app.wrapper });
  */
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import type { Session } from '@sportspark/api-client';
 import { MemorySessionStore } from '@sportspark/api-client';
 import {
@@ -18,9 +21,11 @@ import {
 import { QueryClient, focusManager, onlineManager } from '@tanstack/react-query';
 import { act, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import type { AppConfig } from '../config/app-config';
 import { createManualSources, type Reachability } from '../connectivity/sources';
 import { AppProviders, MUTATION_DEFAULTS } from '../providers/AppProviders';
+import { RecordingHaptics } from '../providers/haptics';
 import type { AppServices } from '../providers/services';
 import type { ThemeName } from '../ui/theme';
 import { MemoryThemeStore } from '../ui/theme-preference';
@@ -66,6 +71,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     options.session === undefined ? TEST_SESSION : options.session,
   );
   const themeStore = new MemoryThemeStore(options.theme ?? null);
+  const haptics = new RecordingHaptics();
   const services: AppServices = {
     config: {
       apiBaseUrl: 'http://api.test/v1',
@@ -81,6 +87,7 @@ export function createTestApp(options: TestAppOptions = {}) {
     generateKey: sequentialKeys(),
     now: options.now ?? (() => TEST_NOW),
     themeStore,
+    haptics,
   };
   // No retries and no cache time in tests: each assertion sees the API's first answer.
   const queryClient = new QueryClient({
@@ -91,12 +98,14 @@ export function createTestApp(options: TestAppOptions = {}) {
   });
   function wrapper({ children }: { children: ReactNode }) {
     return (
-      <AppProviders services={services} queryClient={queryClient}>
-        {children}
-      </AppProviders>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <AppProviders services={services} queryClient={queryClient}>
+          <BottomSheetModalProvider>{children}</BottomSheetModalProvider>
+        </AppProviders>
+      </GestureHandlerRootView>
     );
   }
-  return { services, fake, sources, sessionStore, themeStore, queryClient, wrapper };
+  return { services, fake, sources, sessionStore, themeStore, haptics, queryClient, wrapper };
 }
 
 /**

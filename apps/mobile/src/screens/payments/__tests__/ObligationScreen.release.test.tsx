@@ -16,6 +16,7 @@ import {
   settleApps,
 } from '../../../features/money/testing/money-test-app';
 import { ObligationScreen } from '../ObligationScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 // Release bundles drop the development module (`__DEV__` is false); stand in for that here.
 jest.mock('../../../features/money/dev', () => ({ DevPaymentMethodPicker: null }));
@@ -33,14 +34,15 @@ describe('SCR-C-34 ObligationScreen (release build)', () => {
       },
     });
     render(<ObligationScreen obligationId={IDS.obligation} />, { wrapper: app.wrapper });
-    expect(await screen.findByLabelText('Waiting on a decision')).toBeOnTheScreen();
+    expect(
+      await screen.findByLabelText("Paying in the app. This isn't available in the app yet."),
+    ).toBeOnTheScreen();
     // The rest of the balance still loads: order lines and installments are not payment methods.
     expect(await screen.findByLabelText('Order total: $120.00')).toBeOnTheScreen();
     expect(await screen.findByTestId('installments')).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Paying in the app is not available yet: it depends on DEC-019/),
-    ).toBeOnTheScreen();
-    expect(screen.getByText(/owner: Technical lead\/account owners/)).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-019')).toBeOnTheScreen();
+    expect(screen.getByText('Owner: Technical lead/account owners')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: /^Pay / })).toBeNull();
     expect(screen.queryByTestId('dev-payment-method')).toBeNull();
   });

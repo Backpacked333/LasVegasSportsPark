@@ -18,6 +18,7 @@ import {
 } from '../../../features/money/testing/money-test-app';
 import { amountsText } from '../MoneySummary';
 import { PaymentsScreen } from '../PaymentsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -103,6 +104,7 @@ describe('SCR-C-34 money summary', () => {
     });
     render(<PaymentsScreen />, { wrapper: app.wrapper });
     const card = await screen.findByTestId('money-summary');
+    await openSupportDetails(within(card));
     expect(await within(card).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(card).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(amountsText([], 'Nothing owed')).toBe('Nothing owed');

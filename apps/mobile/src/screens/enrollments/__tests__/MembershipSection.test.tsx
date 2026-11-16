@@ -28,6 +28,7 @@ import {
 import { mePermissions } from '../../../testing/test-app';
 import { EnrollmentDetailScreen } from '../EnrollmentDetailScreen';
 import { PIDS, enrollmentOffering, membership } from './participation-fixtures';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -107,6 +108,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
   it('DEC-016: while memberships are turned off the renewal reads turned off and nothing is sent', async () => {
     const app = renderMembership();
     expect(await screen.findByLabelText('Membership renewal turned off')).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/DEC-016, DEC-072/)).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Add the renewal to your basket' })).toBeNull();
     expect(renewals(app)).toHaveLength(0);
@@ -172,6 +174,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
     });
     fireEvent.press(await screen.findByRole('radio', { name: /^Family membership 2027/ }));
     const failed = await screen.findByTestId('renewal-baskets-error');
+    await openSupportDetails(within(failed));
     expect(within(failed).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Add the renewal to your basket' })).toBeDisabled();
     expect(renewals(app)).toHaveLength(0);
@@ -205,6 +208,7 @@ describe('SCR-C-32 membership (Package G memberships)', () => {
       wrapper: failing.wrapper,
     });
     const section = await screen.findByTestId('membership');
+    await openSupportDetails(within(section));
     expect(
       await within(section).findByText(/Error code: INTEGRATION_UNAVAILABLE/),
     ).toBeOnTheScreen();

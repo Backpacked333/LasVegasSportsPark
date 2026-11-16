@@ -1,0 +1,74 @@
+/**
+ * Test mechanics of the surface components (ADR-008), in one place so screen tests say what the
+ * person does, not how a component is built:
+ *
+ * - `openSupportDetails(scope)`: opens every closed "Details for support" fold in `scope` (the
+ *   screen, or `within(element)`), where decision identifiers, owners, error codes and references
+ *   live (PA-11, SPK-UX-011 **Proposed**). Waits for the fold to appear, as `findBy*` does.
+ * - `pullToRefresh(screen)`: pulls the screen's content down, as a person does to refresh.
+ * - `pressedStyle(screen, name)`: the flattened style a pressable with that accessible label has
+ *   while pressed (press feedback cannot be held down in a test).
+ * - `renderSurface(ui, { theme })`: renders a component inside the test app (`createTestApp`) in
+ *   the classic or the Legends theme, once its providers have settled. No `MotionProvider`, so
+ *   motion is reduced unless the test adds one.
+ */
+import { act, fireEvent, render, type screen as rntlScreen } from '@testing-library/react-native';
+import type { ReactElement } from 'react';
+import { RefreshControl, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { SUPPORT_DETAILS_TITLE } from '../ui/SupportDetails';
+import type { ThemeName } from '../ui/theme';
+import { createTestApp, type TestAppOptions } from './test-app';
+
+export async function renderSurface(
+  ui: ReactElement,
+  { theme = 'classic', ...options }: TestAppOptions & { theme?: ThemeName } = {},
+) {
+  const app = createTestApp({ ...options, theme });
+  const view = render(ui, { wrapper: app.wrapper });
+  // The providers read the session and the connectivity once; let those answers land.
+  await act(async () => undefined);
+  return { ...view, app };
+}
+
+type Queries = Pick<typeof rntlScreen, 'findAllByRole'>;
+
+export async function openSupportDetails(scope: Queries): Promise<void> {
+  const folds = await scope.findAllByRole('button', { name: SUPPORT_DETAILS_TITLE });
+  for (const fold of folds) {
+    const state = fold.props.accessibilityState as { expanded?: boolean } | undefined;
+    if (state?.expanded !== true) fireEvent.press(fold);
+  }
+}
+
+/**
+ * Calls the refresh handler of the screen's pull-to-refresh control. Fails when the screen has
+ * none, or more than one (say which by rendering less).
+ */
+export async function pullToRefresh(
+  scope: Pick<typeof rntlScreen, 'UNSAFE_getAllByType'>,
+): Promise<void> {
+  const controls = scope.UNSAFE_getAllByType(RefreshControl);
+  if (controls.length !== 1) {
+    throw new Error(`Expected one pull-to-refresh control, found ${controls.length}.`);
+  }
+  const onRefresh = (controls[0]?.props as { onRefresh?: () => void }).onRefresh;
+  if (!onRefresh) throw new Error('The pull-to-refresh control has no refresh handler.');
+  await act(async () => {
+    onRefresh();
+  });
+}
+
+type PressableStyle = (state: { pressed: boolean }) => StyleProp<ViewStyle>;
+
+/** The style of the pressable labelled `name` while pressed (`pressed: true`), flattened. */
+export function pressedStyle(
+  scope: Pick<typeof rntlScreen, 'UNSAFE_getAllByProps'>,
+  name: string,
+  pressed = true,
+): ViewStyle {
+  const pressable = scope
+    .UNSAFE_getAllByProps({ accessibilityLabel: name })
+    .find((instance) => typeof instance.props.style === 'function');
+  if (!pressable) throw new Error(`No pressable named "${name}" with a pressed style.`);
+  return StyleSheet.flatten((pressable.props.style as PressableStyle)({ pressed })) ?? {};
+}

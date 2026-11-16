@@ -60,7 +60,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     version: APP_VERSION,
     scheme: 'sportspark',
     userInterfaceStyle: 'automatic',
-    plugins: ['expo-router'],
+    // expo-image and the date picker add their native configuration at prebuild (ADR-008).
+    plugins: ['expo-router', 'expo-image', '@react-native-community/datetimepicker'],
+    // The web build is a development preview for screenshots (`pnpm demo --web`,
+    // scripts/screenshots.mjs), never a product surface: the customer app is native (§2.2). One
+    // page, no static rendering, so routes resolve in the browser as they do in the app.
+    web: { bundler: 'metro', output: 'single' },
     // Over-the-air updates, when added (expo-updates, DEC-061 update behavior), apply only to
     // builds of the same app version.
     runtimeVersion: { policy: 'appVersion' },

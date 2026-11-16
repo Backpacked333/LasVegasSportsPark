@@ -1,18 +1,30 @@
 /**
- * Layout pieces for SCR-C-32 to SCR-C-38 (SPK-UX-009, SPK-UX-010): a section with a header, a
- * labelled value read as one element, a radio group to choose whose records are shown, a
- * checkbox to acknowledge a money consequence, and a labelled text field with its own error.
- * Every interactive element has a role, a label and its state; text scales with the OS setting.
+ * Layout pieces for SCR-C-32 to SCR-C-38 (SPK-UX-009, SPK-UX-010): a thin adapter over the visual
+ * system v2 in `src/ui` (ADR-008, Phase 3), kept so existing imports compile while screens move to
+ * `src/ui` directly. Every export keeps its props and its accessible output: role, name, state and
+ * visible words. A section with a header, a labelled value read as one element, a radio group to
+ * choose whose records are shown, a checkbox to acknowledge a money consequence, and a labelled
+ * text field with its own error. Every interactive element has a role, a label and its state; text
+ * scales with the OS setting.
  */
 import { createContext, useContext, type ReactNode } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
-import { SectionCard } from '../../ui/Card';
-import { LiveText } from '../../ui/announce';
-import { useInputChrome } from '../../ui/input';
-import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
+import { Pressable, View } from 'react-native';
+import { ChoiceCard } from '../../ui/ChoiceList';
+import { Field as UiField, FieldErrorText, FieldInput, FieldValue } from '../../ui/Field';
+import { Section as UiSection } from '../../ui/Section';
+import { Text } from '../../ui/Text';
+import {
+  continuousCorners,
+  fonts,
+  makeStyles,
+  layout,
+  radius,
+  spacing,
+  type,
+} from '../../ui/theme';
 import type { AccountPerson } from './people';
 
-/** A titled card (`ui/Card` `SectionCard`): uppercase title announced as a header. */
+/** A titled card (`ui/Section`): the title is announced as a header. */
 export function Section({
   title,
   children,
@@ -23,49 +35,32 @@ export function Section({
   testID?: string;
 }) {
   return (
-    <SectionCard title={title} testID={testID}>
+    <UiSection title={title} testID={testID}>
       {children}
-    </SectionCard>
+    </UiSection>
   );
 }
 
-/** "Label: value" read by screen readers as one sentence. */
+/** "Label: value" read by screen readers as one sentence (`ui/Field` `FieldValue`). */
 export function Field({ label, value, testID }: { label: string; value: string; testID?: string }) {
-  const styles = useStyles();
-  return (
-    <View style={styles.field} accessible accessibilityLabel={`${label}: ${value}`} testID={testID}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <Text style={styles.fieldValue}>{value}</Text>
-    </View>
-  );
+  return <FieldValue label={label} value={value} testID={testID} />;
 }
 
 export function Body({ children }: { children: ReactNode }) {
-  const styles = useStyles();
-  return <Text style={styles.body}>{children}</Text>;
+  return <Text variant="body">{children}</Text>;
 }
 
 export function Caption({ children }: { children: ReactNode }) {
-  const styles = useStyles();
-  return <Text style={styles.caption}>{children}</Text>;
+  return (
+    <Text variant="caption" tone="muted">
+      {children}
+    </Text>
+  );
 }
 
 export function ButtonRow({ children }: { children: ReactNode }) {
   const styles = useStyles();
   return <View style={styles.buttons}>{children}</View>;
-}
-
-function ChoiceMark({ checked, round }: { checked: boolean; round: boolean }) {
-  const styles = useStyles();
-  return (
-    <View
-      style={[styles.mark, round && styles.round, checked && styles.markChecked]}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-    >
-      {checked ? <Text style={styles.markGlyph}>✓</Text> : null}
-    </View>
-  );
 }
 
 /** The error of the choice a `ChoiceRow` belongs to (`ChoiceGroup error`), read with each row. */
@@ -81,7 +76,7 @@ export function ChoiceGroup({
   role = 'radiogroup',
   error,
   children,
-  layout = 'list',
+  layout: arrangement = 'list',
   testID,
 }: {
   label: string;
@@ -98,7 +93,7 @@ export function ChoiceGroup({
       accessibilityRole={role}
       accessibilityLabel={label}
       accessibilityHint={error ? `Error: ${error}` : undefined}
-      style={layout === 'grid' ? styles.grid : null}
+      style={arrangement === 'grid' ? styles.grid : styles.list}
       testID={testID}
     >
       <ChoiceErrorContext.Provider value={error ?? null}>{children}</ChoiceErrorContext.Provider>
@@ -107,8 +102,9 @@ export function ChoiceGroup({
 }
 
 /**
- * One radio or checkbox row; the label is the whole row and the state is announced. While its
- * `ChoiceGroup` shows an error, the error is the row's hint.
+ * One radio or checkbox row (`ui/ChoiceList` `ChoiceCard`); the label is the whole row and the
+ * state is announced. Its name is "Label, Detail". While its `ChoiceGroup` shows an error, the
+ * error is the row's hint.
  *
  * `tile` draws it as a time tile (Book a space): `shortLabel` is shown, the full `label` is read;
  * a chosen tile is floodlight with "✓" before its text, so the choice never rests on colour.
@@ -148,37 +144,33 @@ export function ChoiceRow({
         style={({ pressed }) => [
           styles.tile,
           checked && styles.tileOn,
+          groupError ? styles.tileInvalid : null,
           pressed && styles.pressed,
           disabled && styles.dim,
         ]}
         testID={testID}
       >
-        <Text style={[styles.tileLabel, checked && styles.tileTextOn]}>
+        <Text variant="body" style={[styles.tileLabel, checked && styles.tileTextOn]}>
           {`${checked ? '✓ ' : ''}${shortLabel ?? label}`}
         </Text>
         {detail ? (
-          <Text style={[styles.tileDetail, checked && styles.tileTextOn]}>{detail}</Text>
+          <Text variant="footnote" tone="muted" style={checked && styles.tileTextOn}>
+            {detail}
+          </Text>
         ) : null}
       </Pressable>
     );
   }
   return (
-    <Pressable
-      accessibilityRole={mode}
-      accessibilityLabel={detail ? `${label}, ${detail}` : label}
-      accessibilityHint={groupError ? `Error: ${groupError}` : undefined}
-      accessibilityState={{ checked, disabled }}
+    <ChoiceCard
+      option={{ value: label, label, description: detail }}
+      mode={mode === 'radio' ? 'single' : 'multiple'}
+      checked={checked}
       disabled={disabled}
+      error={groupError}
       onPress={onPress}
-      style={({ pressed }) => [styles.choice, pressed && styles.pressed, disabled && styles.dim]}
       testID={testID}
-    >
-      <ChoiceMark checked={checked} round={mode === 'radio'} />
-      <View style={styles.choiceText}>
-        <Text style={styles.body}>{label}</Text>
-        {detail ? <Text style={styles.caption}>{detail}</Text> : null}
-      </View>
-    </Pressable>
+    />
   );
 }
 
@@ -199,8 +191,8 @@ export function PersonPicker({
   if (people.length < 2) return null;
   return (
     <View style={styles.picker}>
-      <Text style={styles.caption}>{label}</Text>
-      <View accessibilityRole="radiogroup" accessibilityLabel={label}>
+      <Caption>{label}</Caption>
+      <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.list}>
         {people.map((person) => (
           <ChoiceRow
             key={person.personId}
@@ -216,8 +208,9 @@ export function PersonPicker({
 }
 
 /**
- * A labelled text field; the error is kept next to the field, announced when it appears
- * (`ui/announce`) and part of the input's hint, so it is read with the field (SPK-UX-008, SPK-UX-009).
+ * A labelled text field (`ui/Field`); the error is kept next to the field, announced when it
+ * appears (`ui/announce`) and part of the input's hint, so it is read with the field (SPK-UX-008,
+ * SPK-UX-009).
  */
 export function TextField({
   label,
@@ -238,15 +231,10 @@ export function TextField({
   editable?: boolean;
   testID?: string;
 }) {
-  const styles = useStyles();
-  const input = useInputChrome();
   const describedBy = [hint, error ? `Error: ${error}` : null].filter(Boolean).join('. ');
   return (
-    <View style={styles.fieldBox}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      {hint ? <Text style={styles.caption}>{hint}</Text> : null}
-      <TextInput
-        {...input.props}
+    <UiField label={label} hint={hint}>
+      <FieldInput
         accessibilityLabel={label}
         accessibilityHint={describedBy || undefined}
         accessibilityState={{ disabled: !editable }}
@@ -254,16 +242,11 @@ export function TextField({
         onChangeText={onChangeText}
         editable={editable}
         multiline={multiline}
-        style={[
-          styles.input,
-          input.focusStyle,
-          multiline && styles.multiline,
-          error ? styles.inputError : null,
-        ]}
+        invalid={!!error}
         testID={testID}
       />
       <FieldError error={error} />
-    </View>
+    </UiField>
   );
 }
 
@@ -272,32 +255,13 @@ export function TextField({
  * field error on the money, booking and enrollment screens goes through here.
  */
 export function FieldError({ error, testID }: { error?: string | null; testID?: string }) {
-  const styles = useStyles();
-  if (!error) return null;
-  return (
-    <LiveText style={styles.error} announcement={error} accessibilityRole="alert" testID={testID}>
-      ▲ {error}
-    </LiveText>
-  );
+  return <FieldErrorText error={error} glyph="▲" testID={testID} />;
 }
 
 const useStyles = makeStyles(({ colors }) => ({
-  picker: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.xs },
-  field: { gap: 2 },
-  fieldBox: { gap: spacing.xs },
-  fieldLabel: { ...type.caption, color: colors.textMuted },
-  fieldValue: { ...type.body, color: colors.text },
-  body: { ...type.body, color: colors.text },
-  caption: { ...type.caption, color: colors.textMuted },
+  picker: { paddingHorizontal: layout.gutter, paddingVertical: spacing.sm, gap: spacing.xs },
   buttons: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  choice: {
-    minHeight: MIN_TOUCH_SIZE,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  choiceText: { flex: 1, gap: 2 },
+  list: { gap: spacing.sm },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.xs },
   tile: {
     flexGrow: 1,
@@ -306,42 +270,17 @@ const useStyles = makeStyles(({ colors }) => ({
     justifyContent: 'center',
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
-    borderRadius: radius.sm + 2,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.background,
-    gap: 2,
-  },
-  tileOn: { backgroundColor: colors.floodlight, borderColor: colors.onFloodlight },
-  tileTextOn: { color: colors.onFloodlight },
-  tileLabel: { ...type.body, ...fonts.extrabold, color: colors.text },
-  tileDetail: { ...type.caption, fontSize: 12, lineHeight: 16, color: colors.textMuted },
-  pressed: { opacity: 0.8 },
-  dim: { opacity: 0.55 },
-  mark: {
-    width: 24,
-    height: 24,
-    borderWidth: 2,
-    borderColor: colors.primary,
-    borderRadius: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  round: { borderRadius: 12 },
-  markChecked: { backgroundColor: colors.primary },
-  markGlyph: { color: colors.primaryText, ...fonts.bold },
-  input: {
-    ...type.body,
-    color: colors.text,
-    minHeight: 48,
+    borderRadius: radius.md,
+    ...continuousCorners,
     borderWidth: 1,
     borderColor: colors.control,
-    borderRadius: radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: spacing.sm,
     backgroundColor: colors.background,
+    gap: spacing.xxs,
   },
-  multiline: { minHeight: 88, textAlignVertical: 'top' },
-  inputError: { borderColor: colors.danger, borderWidth: 2 },
-  error: { ...type.caption, color: colors.danger },
+  tileOn: { backgroundColor: colors.floodlight, borderColor: colors.onFloodlight, borderWidth: 2 },
+  tileInvalid: { borderColor: colors.danger },
+  tileTextOn: { color: colors.onFloodlight },
+  tileLabel: { ...type.body, ...fonts.extrabold },
+  pressed: { opacity: 0.8 },
+  dim: { opacity: 0.55 },
 }));

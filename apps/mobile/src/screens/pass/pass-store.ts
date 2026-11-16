@@ -11,8 +11,8 @@
  * household, no child detail (SPK-ENTRY-002, §4.14). Device lifecycle (reinstall, restore) needs
  * physical devices to verify (§6.2); after a reinstall the person gets a new pass.
  */
-import * as SecureStore from 'expo-secure-store';
 import { createContext, useContext } from 'react';
+import { passSecureStorage } from './pass-secure-storage';
 
 export interface StoredPass {
   passId: string;
@@ -33,10 +33,6 @@ export interface PassStore {
 }
 
 export const PASS_STORAGE_PREFIX = 'sportspark.pass.';
-
-const OPTIONS: SecureStore.SecureStoreOptions = {
-  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-};
 
 /** Secure-store keys allow letters, digits, ".", "-" and "_" only. */
 export function passStorageKey(accountKey: string): string {
@@ -76,17 +72,18 @@ export function parseStoredPass(raw: string | null): StoredPass | null {
   }
 }
 
+/** The pass in the platform secure store (`pass-secure-storage.ts`; a browser stand-in on the web). */
 export class SecurePassStore implements PassStore {
   async load(accountKey: string): Promise<StoredPass | null> {
-    return parseStoredPass(await SecureStore.getItemAsync(passStorageKey(accountKey), OPTIONS));
+    return parseStoredPass(await passSecureStorage.getItem(passStorageKey(accountKey)));
   }
 
   async save(accountKey: string, pass: StoredPass): Promise<void> {
-    await SecureStore.setItemAsync(passStorageKey(accountKey), JSON.stringify(pass), OPTIONS);
+    await passSecureStorage.setItem(passStorageKey(accountKey), JSON.stringify(pass));
   }
 
   async clear(accountKey: string): Promise<void> {
-    await SecureStore.deleteItemAsync(passStorageKey(accountKey), OPTIONS);
+    await passSecureStorage.removeItem(passStorageKey(accountKey));
   }
 }
 

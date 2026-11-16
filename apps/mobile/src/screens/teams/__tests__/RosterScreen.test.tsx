@@ -26,6 +26,7 @@ import {
   withholdAnswers,
 } from '../../../features/teams/testing/teams-test-app';
 import { REVOKE_REASON, RosterScreen } from '../RosterScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -588,6 +589,7 @@ describe('SCR-C-23 RosterScreen', () => {
           ),
       }),
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(screen.queryByText(/Your captain manages it/)).toBeNull();

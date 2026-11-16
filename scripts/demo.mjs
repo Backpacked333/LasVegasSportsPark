@@ -13,7 +13,9 @@
 //      standings after a result, notices, a confirmed message being sent.
 //   3. Starts the staff dashboard in demo mode with the seeded accounts and the screens the tours
 //      open, so its role picker can sign in as each role. `--mobile` also starts the mobile app
-//      (Expo) in demo mode.
+//      (Expo) in demo mode. `--web` starts the mobile app's browser preview instead (Expo web on
+//      http://localhost:8081, development only), allows that origin on the demo API
+//      (`CORS_ALLOWED_ORIGINS`) and is what `apps/mobile/scripts/screenshots.mjs` runs against.
 //
 // The demo database is separate from the one `pnpm --filter @sportspark/api dev` uses. Delete
 // .pglite-demo/ (or pass --fresh) to start the demo from an empty database again; without it the
@@ -31,12 +33,19 @@ const args = new Set(process.argv.slice(2));
 const dataDir = path.join(root, '.pglite-demo');
 const STAFF_URL = 'http://localhost:5173';
 const API_URL = 'http://localhost:3000';
+const MOBILE_WEB_URL = 'http://localhost:8081';
+const mobile = args.has('--mobile');
+const web = args.has('--web');
 
 if (args.has('--help')) {
   console.log(
-    'pnpm demo [--fresh] [--mobile]\n  --fresh   start from an empty demo database\n  --mobile  also start the mobile app in demo mode',
+    'pnpm demo [--fresh] [--mobile | --web]\n  --fresh   start from an empty demo database\n  --mobile  also start the mobile app in demo mode\n  --web     also start the mobile app in demo mode in a browser (development preview, port 8081)',
   );
   process.exit(0);
+}
+if (mobile && web) {
+  console.error('Pass --mobile or --web, not both: each starts the mobile development server.');
+  process.exit(1);
 }
 if (args.has('--fresh')) rmSync(dataDir, { recursive: true, force: true });
 
@@ -46,6 +55,8 @@ const apiEnv = {
   AUTH_MODE: 'local',
   AUTH_LOCAL_SECRET: randomBytes(32).toString('hex'),
   PGLITE_DATA_DIR: dataDir,
+  // The browser preview of the mobile app is served from another origin than the API.
+  ...(web ? { CORS_ALLOWED_ORIGINS: MOBILE_WEB_URL } : {}),
 };
 delete apiEnv.DATABASE_URL;
 
@@ -110,7 +121,7 @@ process.on('SIGTERM', stopAll);
 // The demo API signs anyone in as a seeded account, so it answers this machine only. A phone
 // running the customer app needs it on the local network: `--mobile` opens it there.
 const apiArgs = ['--filter', '@sportspark/api', 'exec', 'node', 'dist/dev-all.js'];
-if (args.has('--mobile')) {
+if (mobile) {
   apiArgs.push('--lan');
   console.log(
     'The demo API is reachable from this network while --mobile runs (it has no real sign-in).',
@@ -122,15 +133,38 @@ start('Staff dashboard', ['--filter', '@sportspark/staff', 'dev:demo'], {
   VITE_DEMO_ACCOUNTS: JSON.stringify(accounts),
   VITE_DEMO_LINKS: JSON.stringify(tourLinks),
 });
-if (args.has('--mobile')) {
+// The mobile app's demo environment, the same for the device (--mobile) and the browser (--web).
+const mobileEnv = {
+  ...process.env,
+  SPORTSPARK_APP_MODE: 'demo',
+  SPORTSPARK_DEMO_ACCOUNTS: JSON.stringify(accounts),
+  // Discover and the public schedule start from the organization's public slug.
+  SPORTSPARK_ORGANIZATION_SLUG: summary.organization.slug,
+  SPORTSPARK_API_BASE_URL: process.env.SPORTSPARK_API_BASE_URL ?? `${API_URL}/v1`,
+};
+if (mobile) {
   // Development server only: demo mode is not in release builds of the app.
-  start('Mobile app', ['--filter', '@sportspark/mobile', 'start'], {
-    ...process.env,
-    SPORTSPARK_APP_MODE: 'demo',
-    SPORTSPARK_DEMO_ACCOUNTS: JSON.stringify(accounts),
-    // Discover and the public schedule start from the organization's public slug.
-    SPORTSPARK_ORGANIZATION_SLUG: summary.organization.slug,
-  });
+  start('Mobile app', ['--filter', '@sportspark/mobile', 'start'], mobileEnv);
+}
+if (web) {
+  // Browser preview (development only): one page, served by Metro, no reloads (CI mode).
+  // `--clear`: the web bundle embeds the app config, so a bundle cached from a run without the
+  // demo environment would start in real mode.
+  start(
+    'Mobile app (web)',
+    [
+      '--filter',
+      '@sportspark/mobile',
+      'exec',
+      'expo',
+      'start',
+      '--web',
+      '--port',
+      '8081',
+      '--clear',
+    ],
+    { ...mobileEnv, CI: '1' },
+  );
 }
 
 /** Waits until the API answers its readiness check, so the banner is the last thing printed. */
@@ -157,7 +191,9 @@ ${ready ? 'Demo running' : 'Demo starting (the API has not answered yet)'} with 
   Public schedule:  ${link('publicSchedule')}  (no sign-in)
   Public standings: ${link('publicStandings')}  (no sign-in)
   API:              ${API_URL}
-${args.has('--mobile') ? '  Mobile app:       see the Expo output above; sign in as the parent\n' : ''}${
+${mobile ? '  Mobile app:       see the Expo output above; sign in as the parent\n' : ''}${
+  web ? `  Mobile app (web): ${MOBILE_WEB_URL}  (development preview; sign in as the parent)\n` : ''
+}${
   missing.length > 0
     ? `  Not created:      ${missing.map((m) => `${m.what} (${m.why})`).join('; ')}\n`
     : ''

@@ -17,6 +17,7 @@ import {
 } from '../../../features/today/__tests__/fixtures';
 import { createTestApp, dropAnswers, waitForAbsent } from '../../../testing/test-app';
 import { InboxScreen, inboxStatus } from '../InboxScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 jest.mock('../../../features/today/device-time-zone', () => ({
   deviceTimeZone: () => 'America/Los_Angeles',
@@ -87,9 +88,9 @@ describe('SCR-C-06 InboxScreen', () => {
     });
     render(<InboxScreen />, { wrapper: app.wrapper });
     expect(await screen.findByText('Messaging is currently unavailable.')).toBeOnTheScreen();
-    expect(
-      screen.getByText(/Error code: INTEGRATION_UNAVAILABLE\. Reference: corr-9/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTEGRATION_UNAVAILABLE')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-9')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });
 
@@ -454,9 +455,9 @@ describe('SCR-C-06 InboxScreen: reading, acknowledging, revocation and replaced 
     render(<InboxScreen />, { wrapper: app.wrapper });
     fireEvent.press(await screen.findByRole('button', { name: 'Gate change, Read' }));
     fireEvent.press(await screen.findByRole('button', { name: 'Acknowledge' }));
-    expect(
-      await screen.findByText(/Error code: STALE_REVISION\. Reference: corr-s/),
-    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(await screen.findByText('Error code: STALE_REVISION')).toBeOnTheScreen();
+    expect(await screen.findByText('Reference: corr-s')).toBeOnTheScreen();
     const reads = app.fake.requests.filter((r) => r.route === '/me/inbox').length;
     fireEvent.press(screen.getByRole('button', { name: 'Reload' }));
     await waitFor(() =>

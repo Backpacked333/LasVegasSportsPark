@@ -1,7 +1,12 @@
 /**
  * The five primary destinations (SPK-UX-002) in tab order. The facility pass and the notification
  * inbox are deliberately not tabs: they are reachable from Home and from the header of every
- * destination (QuickAccess).
+ * destination (HeaderActions), and so is a cart in progress.
+ *
+ * Labels Home, Explore, Calendar, Teams and You are PA-11 (DEC-107, **Proposed**): the amended
+ * SPK-UX-002 wording. Only the labels change; the route names stay (`discover`, `schedule`,
+ * `account`), so links, the demo tour and every pathname keep working whichever way PA-11 is
+ * decided.
  */
 export interface Destination {
   /** Route file name under app/(tabs)/. */
@@ -25,30 +30,30 @@ export const DESTINATIONS: readonly Destination[] = [
   },
   {
     name: 'discover',
-    title: 'Discover',
+    title: 'Explore',
     screenId: 'SCR-C-07',
-    accessibilityLabel: 'Discover: leagues, programs, camps and other activities',
+    accessibilityLabel: 'Explore: leagues, programs, camps and other activities',
     icon: 'explore',
   },
   {
     name: 'schedule',
-    title: 'Schedule',
+    title: 'Calendar',
     screenId: 'SCR-C-18',
-    accessibilityLabel: 'Schedule: your and your family’s activities',
+    accessibilityLabel: 'Calendar: your and your family’s activities, week by week',
     icon: 'calendar_month',
   },
   {
     name: 'teams',
     title: 'Teams',
     screenId: 'SCR-C-21',
-    accessibilityLabel: 'Teams: team workspaces, fixtures and standings',
-    icon: 'shield',
+    accessibilityLabel: 'Teams: your teams, games and standings',
+    icon: 'groups',
   },
   {
     name: 'account',
-    title: 'Account',
+    title: 'You',
     screenId: 'SCR-C-30',
-    accessibilityLabel: 'Account: family, enrollments, payments and preferences',
-    icon: 'person',
+    accessibilityLabel: 'You: family, registrations, payments, forms and settings',
+    icon: 'account_circle',
   },
 ];

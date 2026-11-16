@@ -1,6 +1,7 @@
 // Release-bundle smoke check (§6.2: a successful export is not native acceptance). Verifies that
-// `expo export` produced a bundle and that the development sign-in, the demo mode and the
-// development payment method (fake provider tokens) are not in it (§5.2). Bundles may be Hermes bytecode, so files are
+// `expo export` produced a bundle and that the development sign-in, the demo mode, the
+// development payment method (fake provider tokens), the browser-preview storage stand-ins and the
+// design system gallery are not in it (§5.2). Bundles may be Hermes bytecode, so files are
 // searched as bytes.
 import { Buffer } from 'node:buffer';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -16,6 +17,10 @@ const MARKERS = [
   // Demo mode (src/demo) is development-server only.
   'Sign in as the parent',
   'Family tour',
+  // The web build's storage stand-ins (`*.web.ts`): a native bundle must use the secure store.
+  'Browser preview storage',
+  // The development gallery of the visual system (ADR-008).
+  'Design system gallery',
 ];
 
 function files(root) {
@@ -41,5 +46,5 @@ if (offending.length > 0) {
   process.exit(1);
 }
 console.log(
-  `Release bundle clean: ${bundles.length} bundle(s) checked, no development sign-in or payment method.`,
+  `Release bundle clean: ${bundles.length} bundle(s) checked, no development sign-in, payment method, browser-preview storage or gallery.`,
 );

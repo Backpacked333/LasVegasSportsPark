@@ -15,6 +15,7 @@ import {
 } from '../../../features/teams/testing/fixtures';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { TeamsScreen, memberRoleWords, membersText, readinessStatus } from '../TeamsScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -147,6 +148,7 @@ describe('SCR-C-21 TeamsScreen', () => {
           : fakeResponse(200, [myTeamEntry()]);
       },
     });
+    await openSupportDetails(screen);
     expect(await screen.findByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: /^Desert Foxes, / })).toBeOnTheScreen();

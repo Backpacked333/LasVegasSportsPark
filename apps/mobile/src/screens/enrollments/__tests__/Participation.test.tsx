@@ -27,6 +27,7 @@ import {
   sessionBooking,
   trial,
 } from './participation-fixtures';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = createRouterMock();
 jest.mock('expo-router', () => ({
@@ -236,6 +237,7 @@ describe('SCR-C-32 participation records (stage-3 reads)', () => {
         'Whether the payment was received for a pending registration could not be checked.',
       ),
     ).toBeOnTheScreen();
+    await openSupportDetails(within(section));
     expect(within(section).getByText(/Error code: INTEGRATION_UNAVAILABLE/)).toBeOnTheScreen();
     expect(
       screen.getByLabelText('Registration pending: payment status not known yet'),
@@ -277,6 +279,7 @@ describe('SCR-C-32 participation records (stage-3 reads)', () => {
         fakeResponse(503, apiErrorBody('INTEGRATION_UNAVAILABLE', { nextAction: 'retry_later' })),
     });
     const section = await screen.findByTestId('enrollments-recovery-unknown');
+    await openSupportDetails(within(section));
     expect(await within(section).findByText(/Error code: INTERNAL_ERROR/)).toBeOnTheScreen();
     expect(within(section).getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
     expect(
@@ -388,6 +391,7 @@ describe('SCR-C-32 participation records (stage-3 reads)', () => {
       'GET /me/trial-participations': () => fakeResponse(404, apiErrorBody('NOT_FOUND')),
     });
     const section = await screen.findByTestId('applications');
+    await openSupportDetails(within(section));
     expect(
       await within(section).findByText(/Error code: INTEGRATION_UNAVAILABLE/),
     ).toBeOnTheScreen();

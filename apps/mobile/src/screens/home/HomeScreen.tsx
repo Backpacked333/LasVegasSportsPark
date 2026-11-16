@@ -34,6 +34,8 @@
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useRouter, type Href } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
+import { UNREAD_COUNT_KEY } from '../../api/inbox-unread';
+import { useApiCommand } from '../../api/useApiCommand';
 import { calendarWindowQuery } from '../../features/today/calendar';
 import {
   entryPersonIds,
@@ -48,6 +50,7 @@ import {
   viewerOnRoster,
 } from '../../features/today/fixture-model';
 import { NextActivityCard } from '../../features/today/NextActivityCard';
+import { noticeTarget } from '../../features/today/notice-target';
 import {
   availabilityRequestOf,
   latestChangeForEvent,
@@ -74,7 +77,7 @@ import { sessionHref, useSessionActivity } from '../../features/today/session-ac
 import { enrollmentStatus, noticeStatus, RECOVERY_PHRASE } from '../../features/today/status';
 import { displayZone, formatDay, formatTime, zoneNotice } from '../../features/today/time';
 import { useApiPages } from '../../api/useApiPages';
-import { useNow } from '../../providers/AppProviders';
+import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Button } from '../../ui/Button';
 import { LastUpdated } from '../../ui/LastUpdated';
@@ -177,8 +180,27 @@ function UnreadBadge() {
   return <StatusBadge tone="info" label={`${count}${more} unread`} testID="home-unread" />;
 }
 
-function openNotice(router: ReturnType<typeof useRouter>, item: InboxItem) {
-  router.push({ pathname: '/inbox', params: { open: item.attemptId } } as Href);
+/**
+ * Opening a notice row (PA-11, SPK-UX-003): the record it is about (`noticeTarget`), else the
+ * notice in the inbox, as before. Opened on its record, an unread notice is marked read with the
+ * same request the inbox sends on opening it (`POST /v1/me/inbox/{id}/read` with the revision
+ * known); the inbox does that itself when it opens the notice. Not while offline, as in the inbox.
+ */
+function useOpenNotice() {
+  const router = useRouter();
+  const { reachable } = useConnectivity();
+  const read = useApiCommand('post', '/me/inbox/{id}/read', {
+    invalidate: [['api', '/me/inbox'], UNREAD_COUNT_KEY],
+  });
+  return (item: InboxItem) => {
+    const target = noticeTarget(item);
+    router.push(target.href as Href);
+    if (target.kind !== 'subject' || item.readAt || item.acknowledgedAt || reachable === false) {
+      return;
+    }
+    const body = typeof item.revision === 'number' ? { expectedRevision: item.revision } : {};
+    read.submit({ path: { id: item.attemptId }, body }).catch(() => undefined);
+  };
 }
 
 /** "For: Sam. " ahead of a notice's text: whom it concerns (SPK-UX-003, `subjectPersonIds`). */
@@ -197,7 +219,7 @@ function NoticeRows({
   names: Map<string, string>;
   section: NoticeSection;
 }) {
-  const router = useRouter();
+  const openNotice = useOpenNotice();
   const { colors, toneBackgrounds } = useTheme();
   const [icon, tone] = SECTION_ICONS[section];
   return (
@@ -210,8 +232,12 @@ function NoticeRows({
           status={noticeStatus(item)}
           icon={icon}
           iconTone={[toneBackgrounds[tone], colors[tone]]}
-          onPress={() => openNotice(router, item)}
-          accessibilityHint="Opens the notice in your notifications"
+          onPress={() => openNotice(item)}
+          accessibilityHint={
+            noticeTarget(item).kind === 'subject'
+              ? 'Opens what this notice is about'
+              : 'Opens the notice in your notifications'
+          }
           testID={`home-notice-${item.attemptId}`}
         />
       ))}

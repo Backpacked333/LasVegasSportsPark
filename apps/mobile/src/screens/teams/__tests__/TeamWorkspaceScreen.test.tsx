@@ -21,6 +21,7 @@ import {
 } from '../../../features/teams/testing/fixtures';
 import { createTestApp } from '../../../testing/test-app';
 import { TeamWorkspaceScreen } from '../TeamWorkspaceScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -379,7 +380,9 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
     });
     render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
     expect(await screen.findByText('Something failed on our side.')).toBeOnTheScreen();
-    expect(screen.getByText(/Error code: INTERNAL_ERROR\. Reference: corr-22/)).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Error code: INTERNAL_ERROR')).toBeOnTheScreen();
+    expect(screen.getByText('Reference: corr-22')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeOnTheScreen();
   });
 

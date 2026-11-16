@@ -15,6 +15,7 @@ import {
 } from '../../../features/registration/testing/fixtures';
 import { createRegistrationTestApp } from '../../../features/registration/testing/registration-test-app';
 import { QuoteReviewScreen } from '../QuoteReviewScreen';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -229,6 +230,7 @@ describe('SCR-C-12 QuoteReviewScreen', () => {
     expect(
       await screen.findByText('✕ This code is not recognized or is no longer active.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
     expect(screen.getByText(/Error code: VALIDATION_FAILED/)).toBeOnTheScreen();
     expect(screen.getByLabelText('Discount code')).toHaveProp('value', 'SPRING');
   });
