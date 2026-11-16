@@ -563,10 +563,8 @@ describe('SCR-C-19 family calendar in Calendar (PA-11)', () => {
     const app = createTestApp({ routes: familyRoutes() });
     render(<ScheduleScreen />, { wrapper: app.wrapper });
     const saturday = await screen.findByTestId('day-2026-10-24');
-    expect(await within(saturday).findByRole('button', { name: /^Junior Skills/ })).toHaveProp(
-      'accessibilityLabel',
-      SKILLS_ROW,
-    );
+    // Participant names come from their own read: wait for the row's final label (no race).
+    expect(await within(saturday).findByRole('button', { name: SKILLS_ROW })).toBeOnTheScreen();
     expect(within(saturday).getByRole('button', { name: PICKUP_ROW })).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
