@@ -65,7 +65,8 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../ui/CommandError';
 import { DevPaymentMethodPicker } from '../../features/money/dev';
-import { formatDay, formatInstant, formatMoney } from '../../features/money/format';
+import { formatInstant, formatMoney } from '../../features/money/format';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import {
   liveAttemptStatus,
   liveAttemptText,
@@ -122,8 +123,9 @@ const UNREADABLE_ANSWER_BODY =
 function Tiles({ obligation }: { obligation: Obligation }) {
   const styles = useStyles();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
   const t = obligation.totals;
-  const status = obligationStatus(obligation, now);
+  const status = obligationStatus(obligation, now, zone);
   return (
     <View style={styles.tiles} testID="obligation-tiles">
       <StatTile
@@ -143,16 +145,17 @@ function Tiles({ obligation }: { obligation: Obligation }) {
   );
 }
 
+/**
+ * The rest of the figures the API states. "Left to pay", the due date and the state are in the
+ * tiles above, so they are not repeated here.
+ */
 function Totals({ obligation }: { obligation: Obligation }) {
-  const now = useNow();
   const t = obligation.totals;
   return (
     <Section title={obligation.description}>
-      <StatusBadge {...obligationStatus(obligation, now)} testID="obligation-status" />
       <Field label="Amount" value={formatMoney(t.amountMinor, t.currency)} />
       <Field label="Received" value={formatMoney(t.receivedMinor, t.currency)} />
       <Field label="Applied to this balance" value={formatMoney(t.allocatedMinor, t.currency)} />
-      <Field label="Left to pay" value={formatMoney(t.remainingMinor, t.currency)} />
       {t.excessMinor > 0 ? (
         <>
           <Field label="Paid beyond the balance" value={formatMoney(t.excessMinor, t.currency)} />
@@ -161,17 +164,17 @@ function Totals({ obligation }: { obligation: Obligation }) {
           </Text>
         </>
       ) : null}
-      <Field label="Due" value={formatDay(obligation.dueAt)} />
     </Section>
   );
 }
 
 function ReceiptView({ receipt }: { receipt: Receipt }) {
+  const zone = useKnownFacilityZone().zone;
   return (
     <View testID="receipt">
       <Field
         label="Receipt"
-        value={`${formatMoney(receipt.amountMinor, receipt.currency)} received ${formatInstant(receipt.receivedAt)}`}
+        value={`${formatMoney(receipt.amountMinor, receipt.currency)} received ${formatInstant(receipt.receivedAt, zone)}`}
       />
       <Field
         label="Applied to this balance"

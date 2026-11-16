@@ -52,13 +52,14 @@ export function permissionState(
   permission: GrantPermission,
   allowed: boolean,
   grants: readonly GrantView[] | undefined,
+  zone?: string,
 ): PermissionState {
   const mine = (grants ?? []).filter((g) => g.permission === permission);
   if (allowed) {
     const effective = mine.find((g) => g.status === 'effective');
     const note = effective
-      ? `Since ${formatDateTime(effective.effectiveFrom)}${
-          effective.effectiveTo ? `, until ${formatDateTime(effective.effectiveTo)}` : ''
+      ? `Since ${formatDateTime(effective.effectiveFrom, zone)}${
+          effective.effectiveTo ? `, until ${formatDateTime(effective.effectiveTo, zone)}` : ''
         }, ${sourceText(effective.source)}`
       : null;
     return { label: 'Allowed', tone: 'success', glyph: '✓', note };
@@ -79,7 +80,7 @@ export function permissionState(
     .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom))[0];
   if (scheduled) {
     return {
-      label: `Starts ${formatDateTime(scheduled.effectiveFrom)}`,
+      label: `Starts ${formatDateTime(scheduled.effectiveFrom, zone)}`,
       tone: 'info',
       glyph: 'ℹ',
       note: null,
@@ -89,13 +90,16 @@ export function permissionState(
 }
 
 /** journeys.md-style words for a grant's status, for lists of grants (who can act for you). */
-export function grantStatusLabel(grant: GrantView): { tone: StatusTone; label: string } {
+export function grantStatusLabel(
+  grant: GrantView,
+  zone?: string,
+): { tone: StatusTone; label: string } {
   if (grant.underReview) return { tone: 'pending', label: 'Under review' };
   switch (grant.status) {
     case 'effective':
       return { tone: 'success', label: 'Allowed' };
     case 'scheduled':
-      return { tone: 'info', label: `Starts ${formatDateTime(grant.effectiveFrom)}` };
+      return { tone: 'info', label: `Starts ${formatDateTime(grant.effectiveFrom, zone)}` };
     case 'suspended':
       return { tone: 'pending', label: 'Suspended' };
     case 'revoked':

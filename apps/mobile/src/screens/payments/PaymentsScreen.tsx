@@ -49,6 +49,7 @@ import { Screen } from '../../ui/Screen';
 import { Section } from '../../ui/Section';
 import { makeStyles, spacing } from '../../ui/theme';
 import { MyContributionsList } from '../teams/MyContributionsScreen';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { MoneySummary } from './MoneySummary';
 import { MyOrdersList, MyPaymentsList, MyReceiptsList, NeedsAttention } from './MoneyLists';
 
@@ -57,6 +58,7 @@ export { obligationAmounts };
 function ObligationRows({ items }: { items: readonly Obligation[] }) {
   const router = useRouter();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
   return (
     <View accessibilityRole="list">
       {items.map((obligation) => {
@@ -67,7 +69,7 @@ function ObligationRows({ items }: { items: readonly Obligation[] }) {
             title={obligation.description}
             detail={obligationAmounts(obligation)}
             // A payment on its way is the status that matters: "do not pay again" (SPK-PAY-007).
-            status={live ? liveAttemptStatus(live) : obligationStatus(obligation, now)}
+            status={live ? liveAttemptStatus(live) : obligationStatus(obligation, now, zone)}
             onPress={() => router.push(moneyRoutes.obligation(obligation.id))}
             accessibilityHint="Opens the amount due, its order, installments and payment"
             testID={`obligation-${obligation.id}`}

@@ -48,7 +48,11 @@ describe('SCR-C-14 CheckoutScreen (release build)', () => {
     expect(screen.getByLabelText(PAY_AT_DESK)).toBeOnTheScreen();
     expect(screen.queryByTestId('dev-payment-method')).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Pay $226.00' })).toBeDisabled();
+    // Nothing can be paid in the app, so no Pay button is drawn disabled under the message.
+    expect(screen.queryByRole('button', { name: 'Pay $226.00' })).toBeNull();
+    // The held time is said once by the hold notice (and in the message), not by a second badge.
+    expect(screen.getAllByLabelText(/^Place held until /)).toHaveLength(1);
+    expect(screen.queryByTestId('checkout-basket-status')).toBeNull();
     await app.settle();
   });
 

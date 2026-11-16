@@ -73,13 +73,13 @@ describe('SCR-C-32 to SCR-C-38 routes', () => {
 
   it('opens a balance by opaque id', async () => {
     renderAt(`/payments/${IDS.obligation}`);
-    expect(await screen.findByLabelText('Left to pay: $40.00')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Amount: $40.00')).toBeOnTheScreen();
   });
 
   it('§4.10: a well-formed balance id the API does not know reads "Not available", not "Link not available"', async () => {
     renderAt('/payments/0192f1a0-0000-7000-8000-00000000dead');
     expect(await screen.findByLabelText('Not available')).toBeOnTheScreen();
-    expect(screen.queryByLabelText('Left to pay: $40.00')).toBeNull();
+    expect(screen.queryByLabelText('Amount: $40.00')).toBeNull();
   });
 
   it('SCR-C-39: a malformed id is "Link not available" and sends no request', async () => {

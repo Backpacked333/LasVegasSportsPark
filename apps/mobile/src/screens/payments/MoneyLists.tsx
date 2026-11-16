@@ -54,6 +54,7 @@ import { LoadMore } from '../../ui/LoadMore';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 
 const PAGE = 20;
 
@@ -103,6 +104,7 @@ export function MyPaymentsList() {
 
 export function MyReceiptsList() {
   const router = useRouter();
+  const zone = useKnownFacilityZone().zone;
   const receipts = useApiPages({ path: '/me/receipts', request: { query: { limit: PAGE } } });
   return (
     <Section title="Receipts" testID="my-receipts">
@@ -126,7 +128,7 @@ export function MyReceiptsList() {
                 <ListRow
                   key={receipt.id}
                   title={`Received ${formatMoney(receipt.amountMinor, receipt.currency)}`}
-                  detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt)}. ${receiptAmounts(receipt)}`}
+                  detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt, zone)}. ${receiptAmounts(receipt)}`}
                   onPress={
                     paymentId ? () => router.push(moneyRoutes.payment(paymentId)) : undefined
                   }

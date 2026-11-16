@@ -12,6 +12,7 @@ import {
 } from '@sportspark/api-client';
 import { useQueries } from '@tanstack/react-query';
 import { useApi } from '../../providers/AppProviders';
+import { sharedZone } from '../today/time';
 
 type GetPath = PathsWithMethod<'get'>;
 
@@ -70,4 +71,14 @@ export function useOfferingTimeZones(
 ): (offeringId: string) => string | undefined {
   const offerings = useApiRecords('/offerings/{id}', offeringIds, enabled);
   return (offeringId) => offerings[offeringId]?.data?.facility.timezone;
+}
+
+/**
+ * The facility zone the activities in `offeringIds` state when they share one (SPK-SCHED-008),
+ * else null. Reads each activity (`GET /v1/offerings/{id}`, cached and shared with the detail and
+ * the cart), so a price's expiry and held spots show on the facility's clock.
+ */
+export function useOfferingsZone(offeringIds: readonly string[]): string | null {
+  const offerings = useApiRecords('/offerings/{id}', offeringIds);
+  return sharedZone(offeringIds.map((id) => offerings[id]?.data?.facility?.timezone));
 }

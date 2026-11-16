@@ -45,6 +45,7 @@ import { useApiQuery } from '../../api/useApiQuery';
 import { CommandError } from '../../ui/CommandError';
 import { DevPaymentMethodPicker } from '../../features/registration/dev';
 import { formatInstant, formatMoney } from '../../features/registration/format';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { useParticipantNames } from '../../features/registration/participants';
 import { MY_BASKETS_KEY, MY_CHECKOUTS_KEY } from '../../features/registration/in-progress';
 import { useRegistrationProgress } from '../../features/registration/progress';
@@ -163,6 +164,7 @@ function RetryPayment({
 }
 
 function OutcomeContent({ checkout }: { checkout: Checkout }) {
+  const zone = useKnownFacilityZone().zone;
   const styles = useStyles();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -330,7 +332,7 @@ function OutcomeContent({ checkout }: { checkout: Checkout }) {
           <FieldValue
             layout="inline"
             label="On"
-            value={formatInstant(checkout.receipt.receivedAt)}
+            value={formatInstant(checkout.receipt.receivedAt, zone)}
           />
           {checkout.receipt.excessMinor > 0 ? (
             <FieldValue

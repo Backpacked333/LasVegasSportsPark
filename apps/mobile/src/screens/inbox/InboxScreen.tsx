@@ -61,7 +61,8 @@ import {
 } from '../../features/today/queries';
 import { SectionQueryState } from '../../features/today/read-state';
 import { noticeStatus } from '../../features/today/status';
-import { displayZone, formatTime, formatWhen } from '../../features/today/time';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
+import { formatTime, formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
@@ -187,11 +188,12 @@ function NoticeDetail({
     acknowledge.reset();
     void queryClient.invalidateQueries({ queryKey: INBOX_KEY });
   };
+  const change = scheduleChangeOf(item);
+  // The notice's own facility zone, else the one the app knows, else the device's (SPK-SCHED-008).
+  const zone = useKnownFacilityZone(change?.after?.timezone ?? change?.before?.timezone ?? null);
 
   if (withdrawn) return <NoticeWithdrawn />;
 
-  const change = scheduleChangeOf(item);
-  const zone = displayZone(change?.after?.timezone ?? change?.before?.timezone ?? null);
   const target = noticeTarget(item);
   const canAcknowledge = !item.acknowledgedAt && !item.supersededByNotificationId;
 
@@ -357,6 +359,7 @@ const EMPTY_TEXT = 'Schedule changes, results and messages from the facility wil
 function InboxList({ openId }: { openId?: string }) {
   const styles = useStyles();
   const now = useNow();
+  const knownZone = useKnownFacilityZone();
   const { session } = useApp();
   const signedIn = session.status === 'signed_in';
   const first = useApiQuery({
@@ -409,7 +412,7 @@ function InboxList({ openId }: { openId?: string }) {
     }
   };
 
-  const zone = displayZone(null).zone;
+  const zone = knownZone.zone;
   // Cached notices are not listed once the API answers that the list is not available (§4.10).
   const listed =
     first.data !== undefined &&

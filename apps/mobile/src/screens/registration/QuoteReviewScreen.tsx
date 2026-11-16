@@ -42,9 +42,10 @@ import {
   policyDefaultSupportLines,
 } from '../../features/registration/policy-words';
 import { lineKindLabel, quoteLineBasisLines } from '../../features/registration/price-basis';
-import { useApiRecords } from '../../features/registration/queries';
+import { useApiRecords, useOfferingsZone } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { quoteStatus } from '../../features/registration/status';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { Avatar } from '../../ui/Avatar';
@@ -218,6 +219,7 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
   const styles = useStyles();
   const router = useRouter();
   const now = useNow();
+  const zone = useKnownFacilityZone(useOfferingsZone(quote.lines.map((l) => l.offeringId))).zone;
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const names = useParticipantNames(quote.lines.map((l) => l.participantPersonId));
@@ -263,7 +265,7 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
     <View>
       <RegistrationSteps step="Review" />
       <Section title="Price summary">
-        <StatusBadge {...quoteStatus(quote, now)} testID="quote-status" />
+        <StatusBadge {...quoteStatus(quote, now, zone)} testID="quote-status" />
         <Text variant="caption" tone="muted">
           This price does not save your spots. Your spots are saved when you check out.
         </Text>
@@ -324,7 +326,7 @@ function QuoteContent({ quote, refetch }: { quote: Quote; refetch: () => void })
           <FieldValue
             layout="inline"
             key={f.sequence}
-            label={`Payment ${f.sequence} due ${formatInstant(f.dueAt)}`}
+            label={`Payment ${f.sequence} due ${formatInstant(f.dueAt, zone)}`}
             value={m(f.amountMinor)}
           />
         ))}

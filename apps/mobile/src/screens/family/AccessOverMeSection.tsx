@@ -21,6 +21,7 @@ import { spacing } from '../../ui/theme';
 import { formatDateTime, permissionLabel } from '../account/components/account-data';
 import { PersonHeading } from '../account/components/PersonHeading';
 import { grantKey, grantStatusLabel, isCurrentGrant, sourceText, type GrantView } from './grants';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 
 /** Current grants grouped by the adult who holds them, in the order the API listed them. */
 export function groupByActor(
@@ -79,6 +80,7 @@ export function AccessOverMeSection() {
 
 /** One adult's card: their avatar and name, then each permission they hold over you. */
 function ActorCard({ grants }: { grants: GrantView[] }) {
+  const zone = useKnownFacilityZone().zone;
   const name = grants[0]?.actorDisplayName || 'Name not available to you';
   return (
     <Card>
@@ -88,10 +90,10 @@ function ActorCard({ grants }: { grants: GrantView[] }) {
           <ListRow
             key={grant.grantId}
             title={permissionLabel(grant.permission)}
-            detail={`Since ${formatDateTime(grant.effectiveFrom)}${
-              grant.effectiveTo ? `, until ${formatDateTime(grant.effectiveTo)}` : ''
+            detail={`Since ${formatDateTime(grant.effectiveFrom, zone)}${
+              grant.effectiveTo ? `, until ${formatDateTime(grant.effectiveTo, zone)}` : ''
             }, ${sourceText(grant.source)}`}
-            status={grantStatusLabel(grant)}
+            status={grantStatusLabel(grant, zone)}
           />
         ))}
       </View>

@@ -66,7 +66,8 @@ import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery, type ApiQueryResult } from '../../api/useApiQuery';
 import { useMe } from '../../features/today/queries';
 import { SectionQueryState } from '../../features/today/read-state';
-import { displayZone, formatWhen } from '../../features/today/time';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
+import { formatWhen } from '../../features/today/time';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
@@ -152,6 +153,8 @@ function PassContent() {
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const now = useNow();
+  // The pass carries no facility: the facility clock the app knows, else the device's (SPK-SCHED-008).
+  const knownZone = useKnownFacilityZone();
   const store = usePassStore();
   const me = useMe();
   // The pass is kept under the account the API names (or the session's), never under a shared
@@ -314,7 +317,7 @@ function PassContent() {
   }
 
   const pass = stored.pass;
-  const zone = displayZone(null);
+  const zone = knownZone;
   const unlinked = me.data !== undefined && !personId;
   const canAct = me.data !== undefined && !unlinked;
   const revoked = pass !== null && held.kind === 'revoked';

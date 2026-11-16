@@ -22,6 +22,7 @@ import {
   type Authority,
 } from './account-data';
 import { PersonHeading } from './PersonHeading';
+import { useKnownFacilityZone } from '../../../features/today/known-zone';
 
 export function PersonAccessCard({
   authority,
@@ -40,6 +41,7 @@ export function PersonAccessCard({
 }) {
   const { colors } = useTheme();
   const styles = useStyles();
+  const zone = useKnownFacilityZone().zone;
   const read = personNameText(usePersonName(givenName ? '' : authority.subjectPersonId));
   const name = givenName ?? read;
   return (
@@ -51,6 +53,7 @@ export function PersonAccessCard({
             g.permission,
             authority.permissions.includes(g.permission),
             grants,
+            zone,
           );
           const detail = state.note ? `${g.detail}. ${state.note}` : g.detail;
           return (

@@ -192,12 +192,13 @@ export function sameConsequence(a: FinancialConsequence, b: FinancialConsequence
   return a.kind === b.kind && a.amountMinor === b.amountMinor && a.currency === b.currency;
 }
 
-export function obligationStatus(obligation: Obligation, now: Date): Status {
+/** The state of an amount due; dates on the facility's clock when `zone` is known (SPK-SCHED-008). */
+export function obligationStatus(obligation: Obligation, now: Date, zone?: string): Status {
   switch (obligation.status) {
     case 'open':
       return hasPassed(obligation.dueAt, now)
-        ? { tone: 'warning', label: `Payment due since ${formatDay(obligation.dueAt)}` }
-        : { tone: 'pending', label: `Due ${formatDay(obligation.dueAt)}` };
+        ? { tone: 'warning', label: `Payment due since ${formatDay(obligation.dueAt, zone)}` }
+        : { tone: 'pending', label: `Due ${formatDay(obligation.dueAt, zone)}` };
     case 'settled':
       return { tone: 'success', label: 'Paid' };
     case 'written_off':

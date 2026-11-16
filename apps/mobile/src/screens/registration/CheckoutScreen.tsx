@@ -71,10 +71,13 @@ import { useRegistrationProgress } from '../../features/registration/progress';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { basketStatus, holdStatus, quoteStatus } from '../../features/registration/status';
 import { RegistrationSteps } from '../../features/registration/steps';
+import { useOfferingsZone } from '../../features/registration/queries';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
 import { ChoiceCard } from '../../ui/ChoiceList';
 import { FieldValue } from '../../ui/Field';
 import { InfoCard } from '../../ui/InfoCard';
@@ -96,11 +99,11 @@ const UNREADABLE_OUTCOME_BODY =
   'The service answered about this payment, but its answer could not be read. Do not pay again. When the app is back online or opened again, it asks with the same request, which can never charge you twice.';
 
 /** DEC-019: what a release build says instead of a payment form (PA-11, `src/copy/pending.ts`). */
-export function payAtDeskMessage(holdExpiresAt: string | null): string {
+export function payAtDeskMessage(holdExpiresAt: string | null, zone?: string): string {
   return [
     "Paying in the app isn't available yet.",
     pendingMessage('DEC-019'),
-    holdExpiresAt ? `Your spots are held until ${formatInstant(holdExpiresAt)}.` : null,
+    holdExpiresAt ? `Your spots are held until ${formatInstant(holdExpiresAt, zone)}.` : null,
   ]
     .filter(Boolean)
     .join(' ');
@@ -169,6 +172,7 @@ function CheckoutContent({
 }) {
   const styles = useStyles();
   const router = useRouter();
+  const zone = useKnownFacilityZone(useOfferingsZone(quote.lines.map((l) => l.offeringId))).zone;
   const now = useNow();
   const { reachable } = useConnectivity();
   const offline = reachable === false;
@@ -306,6 +310,33 @@ function CheckoutContent({
     (dueNow === 0 || token !== null) &&
     (!installments || authorized);
 
+  // How this step is paid, right under the amount so the pay-at-desk message is on the first
+  // screen even on a small phone (375 x 667).
+  const payBlock =
+    usable && held && !basket.approvalPending && unknownOutcome === null ? (
+      dueNow === 0 ? (
+        <Section title="Nothing to pay now">
+          <Text variant="body">Nothing is due now.</Text>
+        </Section>
+      ) : DevPaymentMethodPicker ? (
+        <DevPaymentMethodPicker value={token} onChange={setToken} />
+      ) : (
+        // DEC-019 (PA-11): what to do instead, in words; the decision is in the fold.
+        <InfoCard
+          tone="info"
+          icon="storefront"
+          message={payAtDeskMessage(basket.holdExpiresAt, zone)}
+          style={styles.card}
+          testID="checkout-pay-at-desk"
+        >
+          <SupportDetails decisions={['DEC-019']} owner="Technical lead/account owners" />
+        </InfoCard>
+      )
+    ) : null;
+  // Without a way to pay in the app (a release build, DEC-019) there is no Pay button to show
+  // disabled: the pay-at-desk message is the answer.
+  const payInApp = dueNow === 0 || DevPaymentMethodPicker !== null;
+
   if (started) {
     return (
       <View>
@@ -334,7 +365,8 @@ function CheckoutContent({
   return (
     <View>
       <RegistrationSteps step="Pay" />
-      <Section title="Checkout">
+      {/* The screen's title already says "Checkout": the amount card has no heading of its own. */}
+      <Card style={styles.card}>
         <FieldValue
           layout="inline"
           label="Due now"
@@ -350,13 +382,17 @@ function CheckoutContent({
             value={m(f.amountMinor)}
           />
         ))}
-        <StatusBadge {...quoteStatus(quote, now)} />
-        <StatusBadge {...basketStatus(basket, now)} testID="checkout-basket-status" />
-      </Section>
+        <StatusBadge {...quoteStatus(quote, now, zone)} />
+        {held ? null : (
+          // Held spots are said once, by the hold notice below, with its countdown.
+          <StatusBadge {...basketStatus(basket, now, zone)} testID="checkout-basket-status" />
+        )}
+      </Card>
+      {payBlock}
       {held && basket.holdExpiresAt ? (
         <ExpiryNotice
           expiresAt={basket.holdExpiresAt}
-          status={holdStatus(basket.holdExpiresAt, now)}
+          status={holdStatus(basket.holdExpiresAt, now, zone)}
           explanation="The facility's system lets your saved spots go at this time; the countdown is a guide. If a payment finishes after that, its outcome is still recorded and confirmed or returned."
           onLapsed={refetch}
           testID="checkout-hold"
@@ -447,27 +483,6 @@ function CheckoutContent({
         </Section>
       ) : null}
 
-      {usable && held && !basket.approvalPending && unknownOutcome === null ? (
-        dueNow === 0 ? (
-          <Section title="Nothing to pay now">
-            <Text variant="body">Nothing is due now.</Text>
-          </Section>
-        ) : DevPaymentMethodPicker ? (
-          <DevPaymentMethodPicker value={token} onChange={setToken} />
-        ) : (
-          // DEC-019 (PA-11): what to do instead, in words; the decision is in the fold.
-          <InfoCard
-            tone="info"
-            icon="storefront"
-            message={payAtDeskMessage(basket.holdExpiresAt)}
-            style={styles.card}
-            testID="checkout-pay-at-desk"
-          >
-            <SupportDetails decisions={['DEC-019']} owner="Technical lead/account owners" />
-          </InfoCard>
-        )
-      ) : null}
-
       {installments && usable && held ? (
         <Section title="Future payments">
           <ChoiceCard
@@ -514,7 +529,7 @@ function CheckoutContent({
         </Section>
       ) : null}
 
-      {usable && held && unknownOutcome === null && !outcomeLost ? (
+      {usable && held && unknownOutcome === null && !outcomeLost && payInApp ? (
         <View style={styles.actions}>
           <Button
             label={dueNow === 0 ? 'Confirm registration' : `Pay ${m(dueNow)}`}

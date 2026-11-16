@@ -51,6 +51,7 @@ import { useRegistrationProgress } from '../../features/registration/progress';
 import { useApiRecords } from '../../features/registration/queries';
 import { param, registrationRoutes } from '../../features/registration/routes';
 import { basketLineStatus, basketStatus, holdStatus } from '../../features/registration/status';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { illustrations } from '../../artwork/manifest';
@@ -283,6 +284,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
   const styles = useStyles();
   const router = useRouter();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
   const { reachable } = useConnectivity();
   const offline = reachable === false;
   const { progress } = useRegistrationProgress();
@@ -305,7 +307,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
     invalidate: [['api', '/baskets/{id}'], MY_BASKETS_KEY],
   });
 
-  const status = basketStatus(basket, now);
+  const status = basketStatus(basket, now, zone);
   const ended = basket.status === 'expired' || basket.status === 'released';
   const capacityFailed = failure?.error.code === 'CAPACITY_UNAVAILABLE';
   const waitlistFirst =
@@ -370,7 +372,7 @@ function BasketContent({ basket, refetch }: { basket: Basket; refetch: () => voi
       {basket.status === 'held' && basket.holdExpiresAt ? (
         <ExpiryNotice
           expiresAt={basket.holdExpiresAt}
-          status={holdStatus(basket.holdExpiresAt, now)}
+          status={holdStatus(basket.holdExpiresAt, now, zone)}
           explanation="The facility's system lets your saved spots go at this time; the countdown is a guide."
           onLapsed={refetch}
           testID="basket-hold"

@@ -43,10 +43,12 @@ import { InstallmentsSection, OrderSection } from './OrderSections';
 import { Text } from '../../ui/Text';
 import { Section } from '../../ui/Section';
 import { Actions, usePullToRefresh } from '../../features/money/surfaces';
+import { useKnownFacilityZone } from '../../features/today/known-zone';
 
 function OrderBalances({ order }: { order: Order }) {
   const router = useRouter();
   const now = useNow();
+  const zone = useKnownFacilityZone().zone;
   const records = useApiRecords('/obligations/{id}', order.obligationIds);
   if (order.obligationIds.length === 0) return null;
   return (
@@ -69,7 +71,7 @@ function OrderBalances({ order }: { order: Order }) {
               key={id}
               title={obligation.description}
               detail={obligationAmounts(obligation)}
-              status={live ? liveAttemptStatus(live) : obligationStatus(obligation, now)}
+              status={live ? liveAttemptStatus(live) : obligationStatus(obligation, now, zone)}
               onPress={() => router.push(moneyRoutes.obligation(id))}
               accessibilityHint="Opens the amount due and its payment"
               testID={`order-balance-${id}`}
