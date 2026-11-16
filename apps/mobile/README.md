@@ -175,6 +175,19 @@ Material Symbols for decorative icons, always hidden from screen readers), and t
   - **Pending decision**: glass on Android. `expo-blur` can blur there only through an
     experimental method that needs each screen wrapped in a blur target; it is left off until it
     can be tried on devices.
+- **Motion and haptics** (ADR-008, **Proposed** visual system v2; groundwork only, no screen uses
+  them yet). `useMotion()` (`src/ui/motion.tsx`) gives `reduced` and `duration(token)` (0, 120, 220
+  and 320 ms, all 0 while reduced), following the device's reduce-motion setting through
+  `MotionProvider` in the root layout; **without a provider motion counts as reduced**, like glass,
+  so screen tests never wait on an animation. The `haptics` service (`src/providers/haptics.ts`,
+  in `AppServices`) plays selection, light and medium impact, success and warning through
+  expo-haptics on iOS and Android, nothing on the web, and records events in tests
+  (`createTestApp().haptics.events`). The root layout also wraps the app in
+  `GestureHandlerRootView` and `BottomSheetModalProvider`, and `createTestApp` mirrors both.
+  - **Verified** in jest: `src/ui/__tests__/motion.test.tsx`, `src/providers/__tests__/haptics.test.tsx`,
+    and `src/testing/__tests__/ui-libraries.test.tsx` (each new library renders under the jest
+    setup).
+  - **Not verified**: any of it on a device (motion, gestures, sheets, haptic feel).
 
 ### What is verified
 

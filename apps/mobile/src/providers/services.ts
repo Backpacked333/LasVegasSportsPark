@@ -1,6 +1,7 @@
 /**
  * Everything the app needs from the outside world, injected once at the root so tests replace it
- * with deterministic doubles (memory session store, manual connectivity, fake fetch, fixed clock).
+ * with deterministic doubles (memory session store, manual connectivity, fake fetch, fixed clock,
+ * recorded haptics).
  */
 import type { FetchLike, KeyGenerator, SessionStore } from '@sportspark/api-client';
 import { randomUUID } from 'expo-crypto';
@@ -9,6 +10,7 @@ import { SecureSessionStore } from '../session/secure-session-store';
 import { SecureThemeStore } from '../ui/secure-theme-store';
 import type { ThemePreferenceStore } from '../ui/theme-preference';
 import { consoleCrashReporter, type CrashReporter } from './crash-report';
+import { platformHaptics, type Haptics } from './haptics';
 import {
   expoNetworkSource,
   reactNativeAppStateSource,
@@ -30,6 +32,8 @@ export interface AppServices {
   crashReporter?: CrashReporter;
   /** Where the Legends mode choice is kept (absent: it lasts until the app closes). */
   themeStore?: ThemePreferenceStore;
+  /** Selection, impact and outcome haptics (ADR-008): the device's engine, silent on the web. */
+  haptics: Haptics;
 }
 
 export function createDeviceServices(): AppServices {
@@ -42,5 +46,6 @@ export function createDeviceServices(): AppServices {
     now: () => new Date(),
     crashReporter: consoleCrashReporter,
     themeStore: new SecureThemeStore(),
+    haptics: platformHaptics(),
   };
 }
