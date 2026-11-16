@@ -7,7 +7,6 @@ import { CAPABILITY_PRESENTATION, isCapabilityId } from '@sportspark/api-client'
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
-import { PENDING_DECISION_FALLBACK } from '../../ui/StateView';
 import { PENDING_FALLBACK, PENDING_MESSAGES, pendingMessage, pendingMessageFor } from '../pending';
 import { bannedIn, guardedFiles } from './customer-text';
 
@@ -45,9 +44,15 @@ describe('PA-11 SPK-UX-011 pending messages', () => {
     expect(pendingMessage('DEC-004')).toBe('Ask the front desk to make this change for you.');
   });
 
-  it('PA-11: an unknown decision gives the generic fallback, the same words as StateView', () => {
+  it('PA-11: an unknown decision gives the generic fallback', () => {
     expect(pendingMessage('DEC-999')).toBe("This isn't available in the app yet.");
-    expect(PENDING_FALLBACK).toBe(PENDING_DECISION_FALLBACK);
+    expect(PENDING_FALLBACK).toBe("This isn't available in the app yet.");
+  });
+
+  it('PA-11: the pass reads its own words while the scanners are open (DEC-023)', () => {
+    expect(pendingMessage('DEC-023')).toBe(
+      'For now, show or read out the reference at the front desk.',
+    );
   });
 
   it('PA-11: several decisions give the first specific one, after DEC-016', () => {

@@ -207,7 +207,7 @@ describe('SCR-C-29 DisputeScreen', () => {
     expect(screen.getByText('Decision: The goal was before the whistle.')).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "How appeals of a dispute decision work. This isn't available in the app yet.",
+        'How appeals of a dispute decision work. Ask the front desk how to make an appeal.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);

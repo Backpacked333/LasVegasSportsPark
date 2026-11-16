@@ -9,9 +9,9 @@
  * - offline-stale: no connection or old data; shows the age of what is shown and what is unavailable.
  * - unavailable: protected NOT_FOUND or a permission restriction; never implies the record exists.
  * - pending-decision: the screen or value waits on an operator decision (DEC-###); nothing invented.
- *   It says in plain words what the customer can do instead (`message`, e.g. "Pay at the front
- *   desk for now."), with an optional `action`; without a message it says only "This isn't
- *   available in the app yet." The decisions and their owner are in the support fold.
+ *   It says in plain words what the customer can do instead (`message`, required: the decision's
+ *   words from `src/copy/pending.ts`, e.g. "Pay at the front desk for now."), with an optional
+ *   `action`. The decisions and their owner are in the support fold.
  * - turned-off: a conditional capability the organization has switched off (K-12): "This isn't
  *   available right now.", with the decisions that may turn it on (DEC-016 and its own record) and
  *   the refused command's code in the support fold. An `error` that is the API's ACCESS_DENIED
@@ -89,10 +89,10 @@ export type StateViewProps =
       /** Owner wording from the decision register, when known. */
       owner?: string;
       /**
-       * What the customer can do instead, in plain words ("Pay at the front desk for now.").
-       * Optional for now; without it the state says "This isn't available in the app yet."
+       * What the customer can do instead, in plain words ("Pay at the front desk for now."):
+       * `pendingMessage` or `pendingMessageFor` from `src/copy/pending.ts` (PA-11, SPK-UX-011).
        */
-      message?: string;
+      message: string;
       /** A way forward the app can offer ("Call the front desk"). */
       action?: { label: string; onPress: () => void };
     }
@@ -199,9 +199,6 @@ const VARIANT_TILES: Record<StateViewProps['variant'], { icon: string; tone: Til
   'pending-decision': null,
   'turned-off': { icon: 'toggle_off', tone: 'neutral' },
 };
-
-/** Pending decision without a `message`: plain words, no codes (PA-11). */
-export const PENDING_DECISION_FALLBACK = "This isn't available in the app yet.";
 
 /** What a turned-off capability says (PA-11): the decisions are in the support fold. */
 export const TURNED_OFF_MESSAGE = "This isn't available right now.";
@@ -339,7 +336,7 @@ function StateBody({ state: props }: { state: StateViewProps }): ReactNode {
           tone="info"
           icon="schedule"
           title={props.subject}
-          message={props.message ?? PENDING_DECISION_FALLBACK}
+          message={props.message}
           action={props.action}
           style={styles.pending}
         >

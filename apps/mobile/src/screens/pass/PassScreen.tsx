@@ -83,6 +83,7 @@ import { continuousCorners, layout, makeStyles, radius, spacing } from '../../ui
 import { CommandError, type NotAvailableCopy } from '../../ui/CommandError';
 import { NightCard, PassCard } from './PassCard';
 import { usePassStore, type StoredPass } from './pass-store';
+import { pendingMessage } from '../../copy/pending';
 
 export { groupReference } from './PassCard';
 
@@ -535,7 +536,7 @@ const NO_PASS_TITLE = 'No pass on this device';
 const NO_PASS_TEXT =
   'Get your own pass to show at the front desk. A pass for your whole family comes from the front desk.';
 /** The scanner decision (DEC-023) is open: what the person does at the desk until then. */
-export const SCANNABLE_CODE_MESSAGE = 'For now, show or read out the reference at the front desk.';
+export const SCANNABLE_CODE_MESSAGE = pendingMessage('DEC-023');
 
 const SAVE_PROBLEM_LABEL = 'New pass not saved';
 const SAVE_PROBLEM_TEXT =

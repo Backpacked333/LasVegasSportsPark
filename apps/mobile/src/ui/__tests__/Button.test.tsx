@@ -16,8 +16,6 @@ const VARIANTS: readonly ButtonVariant[] = [
   'text',
   'destructive',
   'onMedia',
-  'lime',
-  'ghost-dark',
 ];
 
 describe('Button v2 (ADR-008, SPK-UX-009)', () => {
@@ -142,6 +140,14 @@ describe('Button v2 (ADR-008, SPK-UX-009)', () => {
       const label = drawnStyle(screen.getByText(variant));
       expect(label.color).toBe(look.text);
     }
+  });
+
+  it("ADR-008 Phase 6: the first system's variants are gone, so the compiler refuses them", () => {
+    // @ts-expect-error `lime` was removed: use `primary`.
+    const lime: ButtonVariant = 'lime';
+    // @ts-expect-error `ghost-dark` was removed: use `onMedia` or `tonal`.
+    const ghost: ButtonVariant = 'ghost-dark';
+    expect([lime, ghost].filter((v) => VARIANTS.includes(v))).toEqual([]);
   });
 
   it('maps the new variants to their tokens', () => {

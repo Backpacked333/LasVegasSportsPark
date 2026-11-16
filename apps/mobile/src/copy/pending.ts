@@ -8,10 +8,10 @@
  *
  * Each message is an instruction for now, and invents no rule the decision has not settled: it
  * sends the customer to the front desk, the team manager or the inbox, or to what the app already
- * shows. Screens pass it as the `message` of a `pending-decision` StateView.
+ * shows. Screens pass it as the `message` of a `pending-decision` StateView, which requires one.
  */
 
-/** Said when a decision has no message of its own (the same words as StateView's fallback). */
+/** Said when a decision has no message of its own. */
 export const PENDING_FALLBACK = "This isn't available in the app yet.";
 
 /** Decision or policy id → what the customer can do now. */
@@ -43,8 +43,8 @@ export const PENDING_MESSAGES: Readonly<Record<string, string>> = {
   'DEC-020': 'Check your inbox in the app for notices.',
   'DEC-061': 'You can carry on without them. Check your inbox in the app for notices.',
   'DEC-062': 'Check your inbox in the app for notices.',
-  // Hardware: a scannable pass code.
-  'DEC-023': 'Give your name at the front desk when you arrive.',
+  // Hardware: a scannable pass code (the pass shows a reference until then).
+  'DEC-023': 'For now, show or read out the reference at the front desk.',
   // Booking requests: whether approval reserves the time, deposits before approval.
   'DEC-029': 'Send your request and wait for the facility to approve it.',
   'DEC-030': 'Ask the front desk whether a deposit is needed.',

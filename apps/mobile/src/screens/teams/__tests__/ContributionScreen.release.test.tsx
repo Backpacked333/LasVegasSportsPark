@@ -27,7 +27,7 @@ describe('SCR-C-25 ContributionScreen (release build)', () => {
     expect(await screen.findByTestId('contribution-live-attempt')).toBeOnTheScreen();
     expect(screen.getByLabelText('Payment processing')).toBeOnTheScreen();
     expect(
-      screen.getByLabelText("Paying in the app. This isn't available in the app yet."),
+      screen.getByLabelText('Paying in the app. Pay at the front desk for now.'),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText('Decision: DEC-019')).toBeOnTheScreen();

@@ -18,6 +18,7 @@ import { OUTCOME_LOST_LABEL, OutcomeLost } from '../OutcomeLost';
 import { CommandError } from '../CommandError';
 import { FieldErrorText, TextField } from '../Field';
 import { StateView } from '../StateView';
+import { pendingMessage } from '../../copy/pending';
 
 const announce = AccessibilityInfo.announceForAccessibilityWithOptions as jest.Mock;
 const NOW = new Date('2026-10-24T12:00:00Z');
@@ -203,7 +204,12 @@ describe('SPK-UX-009 announcements reach VoiceOver (ui/announce)', () => {
   it('StateView: empty, unavailable, offline and turned-off answers are announced; loading and pending decisions are not', () => {
     render(<StateView variant="loading" label="notifications" />);
     render(
-      <StateView variant="pending-decision" subject="Account sign-in" decisions={['DEC-001']} />,
+      <StateView
+        variant="pending-decision"
+        subject="Account sign-in"
+        decisions={['DEC-001']}
+        message={pendingMessage('DEC-001')}
+      />,
     );
     expect(announce).not.toHaveBeenCalled();
 

@@ -12,7 +12,7 @@ import { Caption, Column, NightBand, Row, ScrimBand, Specimens } from './specime
 
 const VARIANTS = Object.keys(TEXT_VARIANTS) as TextVariant[];
 const PAGE_TONES: readonly TextTone[] = ['default', 'muted', 'accent', 'danger'];
-/** Button variants of the visual system v2 (the first system's `lime` and `ghost-dark` are left out). */
+/** Button variants of the visual system v2. */
 const BUTTON_VARIANTS: readonly ButtonVariant[] = [
   'primary',
   'secondary',

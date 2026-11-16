@@ -8,13 +8,9 @@ import { fireEvent, screen, within } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import { openSupportDetails, renderSurface } from '../../testing/ui-surfaces';
 import { MotionProvider } from '../motion';
-import {
-  announcementFor,
-  PENDING_DECISION_FALLBACK,
-  StateView,
-  TURNED_OFF_MESSAGE,
-} from '../StateView';
+import { announcementFor, StateView, TURNED_OFF_MESSAGE, type StateViewProps } from '../StateView';
 import { classicTheme, legendsTheme } from '../theme';
+import { pendingMessage } from '../../copy/pending';
 
 const CODES = /DEC-\d|POL-\d|owner|Error code|Reference|corr-/i;
 
@@ -57,14 +53,28 @@ describe('StateView pending-decision (PA-11)', () => {
     expect(screen.getByText('Owner: Technical lead/account owners')).toBeOnTheScreen();
   });
 
-  it('SPK-UX-011: without a message, says plainly that it is not in the app yet', async () => {
+  it("SPK-UX-011: says what to do instead in the decision's plain words (`message` is required)", async () => {
     await renderSurface(
-      <StateView variant="pending-decision" subject="Account sign-in" decisions={['DEC-018']} />,
+      <StateView
+        variant="pending-decision"
+        subject="Account sign-in"
+        decisions={['DEC-018']}
+        message={pendingMessage('DEC-018')}
+      />,
     );
-    expect(PENDING_DECISION_FALLBACK).toBe("This isn't available in the app yet.");
     expect(
-      screen.getByLabelText("Account sign-in. This isn't available in the app yet."),
+      screen.getByLabelText(
+        'Account sign-in. Ask the front desk to help with your account for now.',
+      ),
     ).toBeOnTheScreen();
+    // The compiler refuses a pending decision without its message.
+    // @ts-expect-error `message` is required on pending-decision.
+    const withoutMessage: StateViewProps = {
+      variant: 'pending-decision',
+      subject: 'Account sign-in',
+      decisions: ['DEC-018'],
+    };
+    void withoutMessage;
     expect(screen.queryByText(CODES)).toBeNull();
     // Only the fold is a control: no action is invented.
     expect(screen.getAllByRole('button')).toHaveLength(1);
@@ -80,7 +90,12 @@ describe('StateView pending-decision (PA-11)', () => {
       }),
     ).toBeNull();
     await renderSurface(
-      <StateView variant="pending-decision" subject="Account sign-in" decisions={['DEC-018']} />,
+      <StateView
+        variant="pending-decision"
+        subject="Account sign-in"
+        decisions={['DEC-018']}
+        message={pendingMessage('DEC-018')}
+      />,
     );
     expect(screen.getByTestId('state-pending-decision')).toHaveProp(
       'accessibilityLiveRegion',
@@ -185,12 +200,19 @@ describe('StateView controls and looks (SPK-UX-009)', () => {
     async (name, theme) => {
       await renderSurface(
         <>
-          <StateView variant="pending-decision" subject="Account sign-in" decisions={['DEC-018']} />
+          <StateView
+            variant="pending-decision"
+            subject="Account sign-in"
+            decisions={['DEC-018']}
+            message={pendingMessage('DEC-018')}
+          />
           <StateView variant="loading" label="your teams" />
         </>,
         { theme: name },
       );
-      const notice = screen.getByLabelText("Account sign-in. This isn't available in the app yet.");
+      const notice = screen.getByLabelText(
+        'Account sign-in. Ask the front desk to help with your account for now.',
+      );
       // The InfoCard is the host view around the notice's words.
       let card = notice.parent;
       while (card && typeof card.type !== 'string') card = card.parent;

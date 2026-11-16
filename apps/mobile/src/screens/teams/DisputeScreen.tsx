@@ -43,6 +43,7 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { orderRevisions } from './FixtureResultsScreen';
+import { pendingMessage } from '../../copy/pending';
 
 type Dispute = Schema<'Dispute'>;
 type ResultRevision = Schema<'ResultRevision'>;
@@ -383,6 +384,7 @@ function DisputeContent({
           subject="How appeals of a dispute decision work"
           decisions={['DEC-010']}
           owner="League manager/operator"
+          message={pendingMessage('DEC-010')}
         />
       </Section>
     </View>

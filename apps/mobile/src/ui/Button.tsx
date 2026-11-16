@@ -10,9 +10,8 @@
  * - `destructive`: the danger fill, for removing or cancelling something.
  * - `onMedia`: over artwork, on the scrim token with a light label, which keeps 4.5:1 on any image.
  *
- * The variants of the first visual system stay until the redesign replaces their callers (Phase 6
- * removes them): `lime` (floodlight, the main action on a night card) and `ghost-dark` (a line
- * border on a night card).
+ * The first visual system's `lime` and `ghost-dark` are gone (Phase 6): use `primary` for the main
+ * action, `onMedia` over artwork and `tonal` for a second action.
  *
  * Sizes: `md` (48 pt, the usual capsule) and `lg` (56 pt, the primary action of a sticky bottom
  * bar), from `buttonHeight`. An optional decorative `icon` sits before the label. A capsule at its
@@ -30,17 +29,7 @@ import { Icon } from './Icon';
 import { PressableScale, type PressHaptic } from './PressableScale';
 import { buttonHeight, fonts, MIN_TOUCH_SIZE, spacing, type, useTheme, type Theme } from './theme';
 
-export type ButtonVariant =
-  | 'primary'
-  | 'secondary'
-  | 'tonal'
-  | 'text'
-  | 'destructive'
-  | 'onMedia'
-  /** First visual system; removed in Phase 6 of the redesign. Use `primary` on new screens. */
-  | 'lime'
-  /** First visual system; removed in Phase 6 of the redesign. Use `onMedia` or `secondary`. */
-  | 'ghost-dark';
+export type ButtonVariant = 'primary' | 'secondary' | 'tonal' | 'text' | 'destructive' | 'onMedia';
 
 /** `md` 48 pt (the usual capsule); `lg` 56 pt (the action of a sticky bottom bar). */
 export type ButtonSize = 'md' | 'lg';
@@ -115,18 +104,6 @@ export function buttonLook({ colors }: Theme, variant: ButtonVariant): VariantLo
         box: { backgroundColor: colors.scrimEnd, borderWidth: 1, borderColor: colors.onMediaMuted },
         pressed: { opacity: 0.86 },
         text: colors.onMedia,
-      };
-    case 'lime':
-      return {
-        box: { backgroundColor: colors.floodlight },
-        pressed: { opacity: 0.86 },
-        text: colors.onFloodlight,
-      };
-    case 'ghost-dark':
-      return {
-        box: { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.nightLine },
-        pressed: { backgroundColor: colors.nightRaised },
-        text: colors.onNight,
       };
   }
 }

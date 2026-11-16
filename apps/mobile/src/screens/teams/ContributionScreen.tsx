@@ -70,6 +70,7 @@ import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { useContributionPayments } from './MyContributionsScreen';
+import { pendingMessage } from '../../copy/pending';
 
 type ContributionRequest = Schema<'ContributionRequest'>;
 /** The published component is nullable (reported); an outcome without an attempt shows nothing. */
@@ -265,6 +266,7 @@ function PayContribution({
           subject="Paying in the app"
           decisions={['DEC-019']}
           owner="Technical lead/account owners"
+          message={pendingMessage('DEC-019')}
         />
       </View>
     );
