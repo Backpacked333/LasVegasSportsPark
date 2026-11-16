@@ -2,12 +2,16 @@
  * Team obligation totals shown together and the same way everywhere (SPK-PAY-004): total,
  * received, allocated and remaining, read as one element by screen readers. Any excess received
  * beyond the total stays visible (SPK-PAY-005); how it is handled follows the overpayment policy,
- * which is pending (DEC-008, POL-015), so no handling is promised here.
+ * which is pending (DEC-008, POL-015), so no handling is promised here: the screen says what to do
+ * now (`pendingMessage`) with the decisions in "Details for support" (PA-11). Amounts are in
+ * tabular figures (ADR-008).
  */
 import type { Schema } from '@sportspark/api-client';
+import { pendingMessage } from '../../copy/pending';
 import { Text, View } from 'react-native';
 import { StatusBadge } from '../../ui/StatusBadge';
-import { fonts, makeStyles, spacing, type } from '../../ui/theme';
+import { SupportDetails } from '../../ui/SupportDetails';
+import { fonts, makeStyles, spacing, tabular, type } from '../../ui/theme';
 import { formatMoney } from './format';
 
 type Totals = Schema<'ObligationTotals'>;
@@ -43,9 +47,9 @@ export function ObligationTotals({ totals, testID }: { totals: Totals; testID?: 
             label={`Received beyond the total: ${m(totals.excessMinor)}`}
           />
           <Text style={styles.caption}>
-            The excess stays visible and traceable. How it is handled follows the overpayment
-            policy, which is still being decided (DEC-008, POL-015).
+            {`The extra amount stays on record. ${pendingMessage('POL-015')}`}
           </Text>
+          <SupportDetails decisions={['DEC-008', 'POL-015']} />
         </View>
       ) : null}
     </View>
@@ -57,7 +61,7 @@ const useStyles = makeStyles(({ colors }) => ({
   rows: { gap: spacing.xs },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   label: { ...type.body, color: colors.textMuted },
-  value: { ...type.body, color: colors.text, ...fonts.semibold },
+  value: { ...tabular(type.body), color: colors.text, ...fonts.semibold },
   excess: { gap: spacing.xs },
   caption: { ...type.caption, color: colors.textMuted },
 }));

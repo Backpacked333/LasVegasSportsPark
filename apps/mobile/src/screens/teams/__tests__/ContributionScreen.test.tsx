@@ -474,9 +474,9 @@ describe('SCR-C-25 ContributionScreen', () => {
         body: { id: CHILD, givenName: 'Sam', familyName: 'Morgan', kind: 'child' },
       },
     });
-    expect(await screen.findByRole('header', { name: 'Contribution for Sam' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'Share for Sam' })).toBeOnTheScreen();
     expect(screen.getByLabelText('Amount for Sam: $75.00')).toBeOnTheScreen();
-    expect(screen.queryByText('Your contribution')).toBeNull();
+    expect(screen.queryByText('Your share')).toBeNull();
     expect(
       screen.getByRole('button', { name: "Pay Sam's contribution: $75.00" }),
     ).toBeOnTheScreen();

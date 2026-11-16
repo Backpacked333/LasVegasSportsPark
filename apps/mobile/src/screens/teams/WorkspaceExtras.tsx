@@ -25,13 +25,16 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { useMemo, useRef } from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
 import { useApiRecords } from '../../features/registration/queries';
 import { ordinal, plural } from '../../features/teams/format';
 import type { Viewer, Workspace } from '../../features/teams/queries';
 import { isCurrentPlayer } from '../../features/teams/status';
-import { Body, CommandFailure, Detail, OfflineNotice } from '../../features/teams/ui';
+import { CommandFailure } from '../../features/teams/ui';
+import { FieldValue } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Text } from '../../ui/Text';
 import { useKeyedCommands } from '../../features/teams/useKeyedCommands';
 import { useConnectivity, useNow } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
@@ -301,11 +304,14 @@ export function MatchCheckIn({
             testID="check-in-error"
           />
         ) : (
-          <Body muted>Loading check-in…</Body>
+          <Text variant="caption" tone="muted">
+            Loading check-in…
+          </Text>
         )
       ) : (
         <>
-          <Detail
+          <FieldValue
+            layout="inline"
             label="Checked in"
             value={`${side?.present ?? 0} present, ${side?.absent ?? 0} absent, of ${plural(players.length, 'player')}`}
             testID="check-in-count"
@@ -363,9 +369,9 @@ export function MatchCheckIn({
             })}
           </View>
           {offline ? <OfflineNotice what="Checking players in" /> : null}
-          <Body muted>
+          <Text variant="caption" tone="muted">
             Mark your own team only. The referee or league staff confirm the match sheet.
-          </Body>
+          </Text>
         </>
       )}
     </View>

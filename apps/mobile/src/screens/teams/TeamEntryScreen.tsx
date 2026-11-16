@@ -57,19 +57,13 @@ import {
 } from '../../features/teams/queries';
 import { idParam, teamRoutes } from '../../features/teams/routes';
 import { teamEntryStatus } from '../../features/teams/status';
-import {
-  Body,
-  ButtonRow,
-  CommandFailure,
-  Detail,
-  FieldError,
-  OfflineNotice,
-  RadioGroup,
-  RadioRow,
-  Section,
-  TextField,
-  Title,
-} from '../../features/teams/ui';
+import { CommandFailure } from '../../features/teams/ui';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { AppHeader } from '../../ui/AppHeader';
+import { FieldValue, TextField } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { useKeyedCommands } from '../../features/teams/useKeyedCommands';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
@@ -128,10 +122,10 @@ function Divisions({ seasonId }: { seasonId: string }) {
   const divisions = useApiQuery({ path: '/divisions', request: { query: { seasonId } } });
   return (
     <Section title="Divisions">
-      <Body muted>
+      <Text variant="caption" tone="muted">
         The league places your entry in a division using these documented criteria; it cannot be
         chosen in the app.
-      </Body>
+      </Text>
       <QueryBoundary
         query={divisions}
         label="the divisions"
@@ -144,7 +138,12 @@ function Divisions({ seasonId }: { seasonId: string }) {
         {(list) => (
           <View accessibilityRole="list">
             {list.map((d) => (
-              <Detail key={d.id} label={d.name} value={divisionCriteriaText(d)} />
+              <FieldValue
+                layout="inline"
+                key={d.id}
+                label={d.name}
+                value={divisionCriteriaText(d)}
+              />
             ))}
           </View>
         )}
@@ -166,10 +165,10 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
     });
   return (
     <Section title="Players from last season" testID="suggested-players">
-      <Body>
+      <Text variant="body">
         These are suggestions only. Nobody is added automatically: each player joins by accepting an
         invitation, and eligibility is checked again for this season.
-      </Body>
+      </Text>
       {created.suggestedPlayers.map((player) => {
         const state = invite.states[player.personId];
         const withheld = state?.status === 'failed' && mustNotCreateAgain(state.error);
@@ -183,7 +182,7 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
               />
             ) : withheld ? (
               <>
-                <Body>{player.displayName}</Body>
+                <Text variant="body">{player.displayName}</Text>
                 <SecretWithheld
                   error={state.error}
                   what="invitation"
@@ -199,7 +198,7 @@ function SuggestedPlayers({ created, teamName }: { created: Created; teamName: s
               </>
             ) : (
               <>
-                <Body>{player.displayName}</Body>
+                <Text variant="body">{player.displayName}</Text>
                 <Button
                   label={`Invite ${player.displayName}`}
                   variant="secondary"
@@ -230,17 +229,17 @@ function CreatedEntry({ created, prior }: { created: Created; prior: Workspace |
       <Section title={created.team.name}>
         <StatusBadge {...teamEntryStatus(created.entry)} testID="created-status" />
         {created.entry.status === 'waiting' ? (
-          <Body>
+          <Text variant="body">
             Your team is on the waiting list. It holds no place and owes nothing; open the team to
             see its place in the order.
-          </Body>
+          </Text>
         ) : null}
-        <Body>
+        <Text variant="body">
           Nothing has been charged. Prices, eligibility, permissions and roster acceptance are
           checked again for this season.
-        </Body>
+        </Text>
         {prior ? (
-          <Body>{`Your ${prior.season.name} entry and its roster are unchanged.`}</Body>
+          <Text variant="body">{`Your ${prior.season.name} entry and its roster are unchanged.`}</Text>
         ) : null}
         <Button
           label="Open the new team"
@@ -292,8 +291,8 @@ function EntryForm({
     return (
       <StateView
         variant="empty"
-        title="No season open for team entries"
-        description="Team entries can be made when the league opens a season. Check Discover for upcoming leagues."
+        title="No season open for new teams"
+        description="You can enter a team when the league opens a season. Check Explore for upcoming leagues."
       />
     );
   }
@@ -301,12 +300,12 @@ function EntryForm({
     <View>
       {prior ? (
         <Section title="Renewing">
-          <Detail label="Team" value={prior.team.name} />
-          <Detail label="Last season" value={prior.season.name} />
-          <Body muted>
+          <FieldValue layout="inline" label="Team" value={prior.team.name} />
+          <FieldValue layout="inline" label="Last season" value={prior.season.name} />
+          <Text variant="caption" tone="muted">
             The team keeps its name and identity. Last season&apos;s entry and roster stay as they
             are; players are suggested, never added automatically.
-          </Body>
+          </Text>
         </Section>
       ) : (
         <Section title="Team">
@@ -317,49 +316,52 @@ function EntryForm({
             autoCapitalize="words"
             error={nameError}
           />
-          <Body muted>You will be the team&apos;s captain.</Body>
+          <Text variant="caption" tone="muted">
+            You will be the team&apos;s captain.
+          </Text>
         </Section>
       )}
       <Section title="Season">
-        <RadioGroup label="Open seasons" error={seasonError}>
-          {choices.map((season) => (
-            <RadioRow
-              key={season.id}
-              label={`${competitions.get(season.competitionId) ?? 'League'}: ${season.name}`}
-              detail={registrationWindow(season)}
-              checked={seasonId === season.id}
-              onSelect={() => setSeasonId(season.id)}
-            />
-          ))}
-        </RadioGroup>
-        {/* Announced when it appears, like every field error (SPK-UX-009). */}
-        <FieldError error={seasonError} testID="team-entry-season-error" />
+        {/* Its error is shown under it and announced when it appears (SPK-UX-009). */}
+        <ChoiceList
+          mode="single"
+          label="Open seasons"
+          error={seasonError}
+          options={choices.map((season) => ({
+            value: season.id,
+            label: `${competitions.get(season.competitionId) ?? 'League'}: ${season.name}`,
+            description: registrationWindow(season),
+          }))}
+          value={seasonId}
+          onChange={setSeasonId}
+          testID="team-entry-season"
+        />
       </Section>
       {seasonId ? <Divisions seasonId={seasonId} /> : null}
       <Section title={prior ? 'Renew' : 'Create'}>
-        <Body>
-          No payment is taken now. The league reviews the entry; prices, eligibility, permissions
-          and roster acceptance are evaluated for the new season.
-        </Body>
+        <Text variant="body">
+          No payment is taken now. The league reviews the team; prices, eligibility, permissions and
+          roster acceptance are evaluated for the new season.
+        </Text>
         {offline ? (
-          <OfflineNotice what={prior ? 'Renewing the team' : 'Creating the team entry'} />
+          <OfflineNotice what={prior ? 'Renewing the team' : 'Entering the team'} />
         ) : null}
-        <ButtonRow>
+        <View style={buttonRowStyles.row}>
           <Button
-            label={prior ? 'Renew the team entry' : 'Create the team entry'}
+            label={prior ? 'Renew the team' : 'Enter the team'}
             onPress={submit}
             disabled={offline}
             busy={create.isProcessing}
           />
-        </ButtonRow>
+        </View>
         {create.error ? (
           <CommandFailure
             error={create.error}
             onRetry={submit}
             unavailableText={
               prior
-                ? 'Renewing this team is not available to you. Only a captain of the prior entry can renew it.'
-                : 'Creating a team entry is not available to you.'
+                ? "Renewing this team is not available to you. Only a captain of last season's team can renew it."
+                : 'Entering a team is not available to you.'
             }
           />
         ) : null}
@@ -379,12 +381,12 @@ function EntryContent({ prior }: { prior: Workspace | null }) {
   const names = new Map((competitions.data ?? []).map((c) => [c.id, c.name]));
   return (
     <View>
-      <Title>{prior ? `Renew ${prior.team.name}` : 'Create a team entry'}</Title>
+      <AppHeader title={prior ? `Renew ${prior.team.name}` : 'Enter a new team'} />
       <QueryBoundary
         query={seasons}
         label="open seasons"
         empty={{ title: 'No seasons', description: 'No season is open.' }}
-        unavailableOffline={['creating or renewing a team entry']}
+        unavailableOffline={['entering or renewing a team']}
       >
         {(list) => <EntryForm seasons={list} competitions={names} prior={prior} />}
       </QueryBoundary>
@@ -402,7 +404,7 @@ function RenewContent({ priorEntryId }: { priorEntryId: string }) {
     return (
       <StateView
         variant="unavailable"
-        description="Renewing this team is not available to you. Only a captain of the prior entry can renew it."
+        description="Renewing this team is not available to you. Only a captain of last season's team can renew it."
       />
     );
   }
@@ -424,7 +426,7 @@ function RenewContent({ priorEntryId }: { priorEntryId: string }) {
         ) : (
           <StateView
             variant="unavailable"
-            description="Renewing this team is not available to you. Only a captain of the prior entry can renew it."
+            description="Renewing this team is not available to you. Only a captain of last season's team can renew it."
           />
         )
       }
@@ -441,13 +443,13 @@ export function TeamEntryScreen({
   const router = useRouter();
   return (
     <Screen>
-      <RequireSession what="team entries">
+      <RequireSession what="entering a team">
         {renewFrom === 'invalid' ? (
           <StateView
             variant="empty"
             title="No prior team to renew"
-            description="Open last season's team and choose Renew, or create a new team entry."
-            actionLabel="Create a new team entry"
+            description="Open last season's team and choose Renew, or enter a new team."
+            actionLabel="Enter a new team"
             onAction={() => router.replace(teamRoutes.newEntry())}
           />
         ) : renewFrom ? (
@@ -466,7 +468,7 @@ export function TeamEntryRoute() {
   const renewFrom = raw === undefined ? null : (idParam(raw) ?? 'invalid');
   return (
     <>
-      <Stack.Screen options={{ title: renewFrom ? 'Renew team' : 'Create team entry' }} />
+      <Stack.Screen options={{ title: renewFrom ? 'Renew team' : 'Enter a new team' }} />
       <TeamEntryScreen renewFrom={renewFrom} />
     </>
   );
@@ -474,4 +476,9 @@ export function TeamEntryRoute() {
 
 const styles = StyleSheet.create({
   suggestion: { gap: spacing.xs, paddingVertical: spacing.xs },
+});
+
+/** A row of buttons under a form or a choice. */
+const buttonRowStyles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingTop: spacing.xs },
 });

@@ -25,7 +25,7 @@
  */
 import type { Schema } from '@sportspark/api-client';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { usePermissions } from '../../api/permissions';
 import { useApiQuery } from '../../api/useApiQuery';
 import { formatDay, formatInstant, ordinal, plural } from '../../features/teams/format';
@@ -33,7 +33,9 @@ import type { Workspace } from '../../features/teams/queries';
 import { idParam, teamRoutes } from '../../features/teams/routes';
 import { fixtureStatus } from '../../features/teams/status';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import { Body, Section, Title } from '../../features/teams/ui';
+import { AppHeader } from '../../ui/AppHeader';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary, QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
@@ -168,7 +170,7 @@ export function TiebreakList({
     <Section title="How ties were decided" testID="tiebreaks">
       {explanations.map((tie, index) => (
         <View key={index} style={styles.tie}>
-          <Body>{`Tied on ${plural(tie.points, 'point')}: ${tie.teamEntryIds.map(name).join(' and ')}`}</Body>
+          <Text variant="body">{`Tied on ${plural(tie.points, 'point')}: ${tie.teamEntryIds.map(name).join(' and ')}`}</Text>
           {tie.steps.map((step, i) => (
             <View
               key={i}
@@ -187,7 +189,9 @@ export function TiebreakList({
               ) : null}
             </View>
           ))}
-          {!tie.resolved ? <Body>Still tied after every tiebreaker in the rule set.</Body> : null}
+          {!tie.resolved ? (
+            <Text variant="body">Still tied after every tiebreaker in the rule set.</Text>
+          ) : null}
         </View>
       ))}
     </Section>
@@ -314,7 +318,9 @@ function StandingsContent({ workspace }: { workspace: Workspace }) {
       : 'the season rule set';
   return (
     <View>
-      <Title>{`${workspace.season.name}${workspace.division ? `: ${workspace.division.name}` : ''}`}</Title>
+      <AppHeader
+        title={`${workspace.season.name}${workspace.division ? `: ${workspace.division.name}` : ''}`}
+      />
       <Section title="Standings">
         <QueryBoundary
           query={standings}
@@ -330,9 +336,9 @@ function StandingsContent({ workspace }: { workspace: Workspace }) {
             s ? (
               <View style={styles.group}>
                 <StandingsTable standings={s} entryId={entryId} />
-                <Body muted>
+                <Text variant="caption" tone="muted">
                   {`Calculated ${formatInstant(s.computedAt)} from ${plural(s.sourceResultIds.length, 'official result')} with ${ruleSetName}, version ${s.ruleSetVersion}. Provisional results are never counted.`}
-                </Body>
+                </Text>
               </View>
             ) : null
           }

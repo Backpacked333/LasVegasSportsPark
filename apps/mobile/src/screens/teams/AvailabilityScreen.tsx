@@ -54,22 +54,20 @@ import {
   type RsvpState,
 } from '../../features/teams/status';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import {
-  Body,
-  ButtonRow,
-  CommandFailure,
-  Detail,
-  OfflineNotice,
-  Section,
-  Subheading,
-  Title,
-} from '../../features/teams/ui';
+import { CommandFailure } from '../../features/teams/ui';
+import { AppHeader } from '../../ui/AppHeader';
+import { FieldValue } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryErrorView } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { makeStyles, spacing } from '../../ui/theme';
+import { pendingMessage } from '../../copy/pending';
+import { SupportDetails } from '../../ui/SupportDetails';
 
 type Upcoming = Schema<'UpcomingFixture'>;
 type FixtureResponse = Schema<'FixtureResponse'>;
@@ -127,8 +125,8 @@ function AnswerControl({
 
   return (
     <View style={styles.answer} testID={`answer-${fixtureId}-${name ? response.personId : 'me'}`}>
-      <Body>{`${whose}: ${rsvpStatus(current).label}`}</Body>
-      <ButtonRow>
+      <Text variant="body">{`${whose}: ${rsvpStatus(current).label}`}</Text>
+      <View style={buttonRowStyles.row}>
         {answers.map((state) => (
           <Button
             key={state}
@@ -144,7 +142,7 @@ function AnswerControl({
             accessibilityHint={`Records ${RSVP_LABELS[state].toLowerCase()} for this game; it is not a check-in`}
           />
         ))}
-      </ButtonRow>
+      </View>
       {respond.error && availabilityClosedAt(respond.error) !== null ? (
         <AvailabilityClosed error={respond.error} timeZone={timeZone} what="Answers" />
       ) : respond.error ? (
@@ -192,7 +190,11 @@ function Answers({
   );
   const timeZone = detail.data.venue?.timezone ?? null;
   if (responses.length === 0) {
-    return <Body muted>You are not on this roster, so there is no answer to give here.</Body>;
+    return (
+      <Text variant="caption" tone="muted">
+        You are not on this roster, so there is no answer to give here.
+      </Text>
+    );
   }
   return (
     <View>
@@ -235,7 +237,8 @@ function GameCard({
     <Section title={title} testID={`game-${game.fixture.id}`}>
       <StatusBadge {...fixtureStatus(game.fixture, venue?.timezone)} />
       {venue ? (
-        <Detail
+        <FieldValue
+          layout="inline"
           label="Where"
           value={`${venue.facilityName}${venue.resources.length > 0 ? `, ${venue.resources.map((r) => r.name).join(', ')}` : ''}`}
         />
@@ -244,12 +247,14 @@ function GameCard({
         accessible
         accessibilityLabel={`Answers from the roster: ${availabilitySummaryText(game.availability)}`}
       >
-        <Body>{`Answers from the roster: ${availabilitySummaryText(game.availability)}`}</Body>
+        <Text variant="body">{`Answers from the roster: ${availabilitySummaryText(game.availability)}`}</Text>
       </View>
       <Answers game={game} workspace={workspace} viewer={viewer} />
       {viewer.can(TEAM_ACTIONS.requestAvailability) ? (
         <View style={styles.request}>
-          <Subheading>Ask the roster</Subheading>
+          <Text variant="headline" heading>
+            Ask the roster
+          </Text>
           <AvailabilityRequests
             fixtureId={game.fixture.id}
             teamEntryId={workspace.entry.id}
@@ -267,21 +272,17 @@ function AvailabilityContent({ workspace, viewer }: { workspace: Workspace; view
   const games = workspace.upcomingFixtures;
   return (
     <View>
-      <Title>{`${workspace.team.name}: availability`}</Title>
+      <AppHeader title={`${workspace.team.name}: availability`} />
       <Section title="How availability works">
-        <Body>
+        <Text variant="body">
           An answer helps the captain plan. It is not a check-in and does not decide who is eligible
           to play, and a missing answer never blocks a game.
-        </Body>
-        <View
-          style={styles.pending}
-          accessible
-          accessibilityLabel="Tentative is not offered yet: whether it is used is still being decided (DEC-064)."
-        >
-          <StatusBadge tone="pending" label="Waiting on a decision" />
-          <Body muted>
-            Tentative is not offered yet: whether it is used is still being decided (DEC-064).
-          </Body>
+        </Text>
+        <View style={styles.pending}>
+          <Text variant="caption" tone="muted">
+            {`"Tentative" isn't offered yet. ${pendingMessage('DEC-064')}`}
+          </Text>
+          <SupportDetails decisions={['DEC-064']} />
         </View>
         {reachable === false ? <OfflineNotice what="Answering availability" /> : null}
       </Section>
@@ -338,3 +339,8 @@ const useStyles = makeStyles(({ colors }) => ({
   },
   pending: { gap: spacing.xs },
 }));
+
+/** A row of buttons under a form or a choice. */
+const buttonRowStyles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingTop: spacing.xs },
+});

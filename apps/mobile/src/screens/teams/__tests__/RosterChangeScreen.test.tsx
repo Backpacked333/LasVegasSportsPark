@@ -214,11 +214,10 @@ describe('SCR-C-26 RosterChangeScreen', () => {
     fireEvent.press(await screen.findByRole('radio', { name: 'Remove a player' }));
     fireEvent.press(screen.getByRole('radio', { name: /^Pat Player/ }));
     fireEvent.press(screen.getByRole('button', { name: 'Remove from the roster' }));
-    expect(
-      screen.getByLabelText(
-        'Reason for the removal. Give a reason; it is kept with the roster history.',
-      ),
-    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Reason for the removal')).toHaveProp(
+      'accessibilityHint',
+      'Error: Give a reason; it is kept with the roster history.',
+    );
     expect(app.requestsTo('POST', '/team-entries/{id}/roster')).toHaveLength(0);
     fireEvent.changeText(screen.getByLabelText(/^Reason for the removal/), 'Moved away');
     await act(async () => {

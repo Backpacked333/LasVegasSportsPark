@@ -52,16 +52,13 @@ import { ObligationTotals } from '../../features/teams/ObligationTotals';
 import { useMe, useSignedIn } from '../../features/teams/queries';
 import { idParam } from '../../features/teams/routes';
 import { contributionStatus, obligationStatus, paymentStatus } from '../../features/teams/status';
-import {
-  Body,
-  CommandFailure,
-  Detail,
-  OfflineNotice,
-  RadioGroup,
-  RadioRow,
-  Section,
-  Title,
-} from '../../features/teams/ui';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { CommandFailure } from '../../features/teams/ui';
+import { AppHeader } from '../../ui/AppHeader';
+import { FieldValue } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { useConnectivity } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { LiveRegion, sentences } from '../../ui/announce';
@@ -121,7 +118,7 @@ function PaymentProgress({
     <>
       <StatusBadge {...paymentStatus(current.status)} />
       {current.status === 'failed' && current.failureReason ? (
-        <Body>{current.failureReason}</Body>
+        <Text variant="body">{current.failureReason}</Text>
       ) : null}
       {UNSETTLED.has(current.status) ? (
         <Button
@@ -234,7 +231,7 @@ function PayContribution({
           testID="contribution-live-attempt"
           announcement={sentences(elsewhereText(elsewhere), paymentProgressWords(elsewhere))}
         >
-          <Body>{elsewhereText(elsewhere)}</Body>
+          <Text variant="body">{elsewhereText(elsewhere)}</Text>
           <PaymentProgress
             current={elsewhere}
             checking={known.payments.fetchStatus === 'fetching'}
@@ -245,10 +242,10 @@ function PayContribution({
       ) : null}
       {knownFailed && !current ? (
         <View style={styles.group} testID="contribution-payments-unchecked">
-          <Body muted>
+          <Text variant="caption" tone="muted">
             We could not check for a payment already on its way. If you paid recently, check again
             before paying: a second payment is refused while one is being confirmed.
-          </Body>
+          </Text>
           <CommandFailure error={knownFailed} onRetry={() => void known.payments.refetch()} read />
         </View>
       ) : null}
@@ -295,27 +292,24 @@ function PayContribution({
         />
       ) : null}
       {outcome?.overpaymentCreditId ? (
-        <Body>
+        <Text variant="body">
           More than the team&apos;s remaining balance was received: the excess is kept as a credit
           awaiting approval, and stays visible on the team totals.
-        </Body>
+        </Text>
       ) : null}
       {!locked ? (
         <>
-          <RadioGroup label="Payment method">
-            {methods.map((m) => (
-              <RadioRow
-                key={m.token}
-                label={m.label}
-                checked={token === m.token}
-                onSelect={() => {
-                  // Paying again after a failure is a new intent with a new key.
-                  if (current?.status === 'failed') pay.reset();
-                  setToken(m.token);
-                }}
-              />
-            ))}
-          </RadioGroup>
+          <ChoiceList
+            mode="single"
+            label="Payment method"
+            options={methods.map((m) => ({ value: m.token, label: m.label }))}
+            value={token}
+            onChange={(next) => {
+              // Paying again after a failure is a new intent with a new key.
+              if (current?.status === 'failed') pay.reset();
+              setToken(next);
+            }}
+          />
           {offline ? <OfflineNotice what="Paying" /> : null}
           <Button
             label={`${payLabel} ${formatMoney(request.amountMinor, request.currency)}`}
@@ -361,15 +355,16 @@ export function ContributionContent({ request }: { request: ContributionRequest 
   const { own, name } = useRequestedName(request);
   return (
     <View>
-      <Title>{own ? 'Your contribution' : `Contribution for ${name}`}</Title>
+      <AppHeader title={own ? 'Your share' : `Share for ${name}`} />
       <Section title={request.obligation.description}>
-        <Detail
+        <FieldValue
+          layout="inline"
           label={own ? 'Your amount' : `Amount for ${name}`}
           value={formatMoney(request.amountMinor, request.currency)}
         />
         <StatusBadge {...contributionStatus(request)} testID="contribution-status" />
         {request.message ? (
-          <Detail label="Message with the request" value={request.message} />
+          <FieldValue layout="inline" label="Message with the request" value={request.message} />
         ) : null}
       </Section>
       {request.status === 'requested' && request.obligation.status === 'open' ? (
@@ -380,12 +375,12 @@ export function ContributionContent({ request }: { request: ContributionRequest 
           />
         </Section>
       ) : null}
-      <Section title="Team obligation">
+      <Section title="Team total">
         <StatusBadge {...obligationStatus(request.obligation.status)} />
         <ObligationTotals totals={request.obligation.totals} />
-        <Body muted>
+        <Text variant="caption" tone="muted">
           These are the team&apos;s totals. Other players&apos; payments are never shown to you.
-        </Body>
+        </Text>
       </Section>
     </View>
   );
@@ -423,7 +418,7 @@ export function ContributionRoute() {
   const requestId = idParam(useLocalSearchParams<{ requestId: string }>().requestId);
   return (
     <>
-      <Stack.Screen options={{ title: 'Your contribution' }} />
+      <Stack.Screen options={{ title: 'Your share' }} />
       <ContributionScreen requestId={requestId} />
     </>
   );

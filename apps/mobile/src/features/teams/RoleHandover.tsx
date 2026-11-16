@@ -27,16 +27,11 @@ import { spacing } from '../../ui/theme';
 import { formatInstant } from './format';
 import { currentLeaders, MY_TEAMS_KEY, rosterNames, type Viewer, type Workspace } from './queries';
 import { isCurrentPlayer } from './status';
-import {
-  Body,
-  ButtonRow,
-  CommandFailure,
-  FieldError,
-  OfflineNotice,
-  RadioGroup,
-  RadioRow,
-  TextField,
-} from './ui';
+import { FieldError, TextField } from '../../ui/Field';
+import { ChoiceList } from '../../ui/ChoiceList';
+import { CommandFailure } from './ui';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Text } from '../../ui/Text';
 
 type RoleRecord = Schema<'TeamRoleRecord'>;
 type HandoverRole = 'captain' | 'co_captain';
@@ -141,59 +136,59 @@ export function RoleHandover({
         announcement={sentences(holder, history)}
       >
         <StatusBadge tone="success" label={holder} />
-        <Body>{history}</Body>
+        <Text variant="body">{history}</Text>
         <Button label="Show the team" onPress={onDone} />
       </LiveRegion>
     );
   }
 
   if (leaders.length === 0) {
-    return <Body>No one holds the captain or co-captain role now.</Body>;
+    return <Text variant="body">No one holds the captain or co-captain role now.</Text>;
   }
 
   return (
     <View style={styles.group} testID="role-handover">
-      <Body muted>
+      <Text variant="caption" tone="muted">
         The role passes to an active roster member at once; the change is recorded with your reason
         and the earlier role is kept as history.
-      </Body>
-      <RadioGroup label="Role to hand over" error={errors.role}>
-        {leaders.map((r) => (
-          <RadioRow
-            key={r.id}
-            label={`${ROLE_LABELS[r.role === 'co_captain' ? 'co_captain' : 'captain']}, held by ${holderName(r.personId)}`}
-            checked={recordId === r.id}
-            onSelect={() => {
-              setRecordId(r.id);
-              setToPersonId(null);
-              setConfirming(false);
-              handover.reset();
-            }}
-          />
-        ))}
-      </RadioGroup>
-      {/* Announced when they appear, like every field error (SPK-UX-009). */}
-      <FieldError error={errors.role} testID="handover-role-error" />
+      </Text>
+      <ChoiceList
+        mode="single"
+        label="Role to hand over"
+        error={errors.role}
+        options={leaders.map((r) => ({
+          value: r.id,
+          label: `${ROLE_LABELS[r.role === 'co_captain' ? 'co_captain' : 'captain']}, held by ${holderName(r.personId)}`,
+        }))}
+        value={recordId}
+        onChange={(next) => {
+          setRecordId(next);
+          setToPersonId(null);
+          setConfirming(false);
+          handover.reset();
+        }}
+        testID="handover-role"
+      />
       {record ? (
         candidates.length === 0 ? (
-          <Body>No active roster member can take this role now.</Body>
+          <Text variant="body">No active roster member can take this role now.</Text>
         ) : (
-          <RadioGroup label="New holder" error={errors.to}>
-            {candidates.map((m) => (
-              <RadioRow
-                key={m.personId}
-                label={m.displayName}
-                checked={toPersonId === m.personId}
-                onSelect={() => {
-                  setToPersonId(m.personId);
-                  setConfirming(false);
-                }}
-              />
-            ))}
-          </RadioGroup>
+          <ChoiceList
+            mode="single"
+            label="New holder"
+            error={errors.to}
+            options={candidates.map((m) => ({ value: m.personId, label: m.displayName }))}
+            value={toPersonId}
+            onChange={(next) => {
+              setToPersonId(next);
+              setConfirming(false);
+            }}
+            testID="handover-holder"
+          />
         )
       ) : null}
-      <FieldError error={errors.to} testID="handover-holder-error" />
+      {/* With no one to choose, the missing holder is still said and announced (SPK-UX-009). */}
+      {record && candidates.length === 0 ? <FieldError error={errors.to} /> : null}
       <TextField
         label="Reason"
         value={reason}
@@ -207,8 +202,8 @@ export function RoleHandover({
       {offline ? <OfflineNotice what="Handing over a role" /> : null}
       {confirming && record && role ? (
         <>
-          <Body>{`Hand the ${ROLE_LABELS[role].toLowerCase()} role from ${holderName(record.personId)} to ${toName}?`}</Body>
-          <ButtonRow>
+          <Text variant="body">{`Hand the ${ROLE_LABELS[role].toLowerCase()} role from ${holderName(record.personId)} to ${toName}?`}</Text>
+          <View style={buttonRowStyles.row}>
             <Button
               label={`Hand over to ${toName}`}
               onPress={submit}
@@ -223,7 +218,7 @@ export function RoleHandover({
                 setConfirming(false);
               }}
             />
-          </ButtonRow>
+          </View>
         </>
       ) : (
         <Button label="Review the handover" variant="secondary" onPress={review} />
@@ -246,4 +241,9 @@ export function RoleHandover({
 
 const styles = StyleSheet.create({
   group: { gap: spacing.sm },
+});
+
+/** A row of buttons under a form or a choice. */
+const buttonRowStyles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingTop: spacing.xs },
 });

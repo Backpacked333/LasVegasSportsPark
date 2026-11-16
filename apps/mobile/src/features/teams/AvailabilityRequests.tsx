@@ -26,7 +26,10 @@ import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StatusBadge } from '../../ui/StatusBadge';
 import { spacing } from '../../ui/theme';
 import { formatInstant, plural } from './format';
-import { Body, CommandFailure, OfflineNotice, TextField } from './ui';
+import { TextField } from '../../ui/Field';
+import { CommandFailure } from './ui';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Text } from '../../ui/Text';
 
 type AvailabilityRequest = Schema<'AvailabilityRequest'>;
 
@@ -66,8 +69,8 @@ export function AvailabilityClosed({
       occurrence={error}
     >
       <StatusBadge tone="neutral" label="Availability closed" />
-      <Body>{closed}</Body>
-      <Body muted>{`Error code: ${error.code}`}</Body>
+      <Text variant="body">{closed}</Text>
+      <Text variant="caption" tone="muted">{`Error code: ${error.code}`}</Text>
     </LiveRegion>
   );
 }
@@ -127,11 +130,11 @@ export function AvailabilityRequests({
   const reminder = (earlier.data?.length ?? 0) > 0;
   return (
     <View style={styles.group} testID={`availability-requests-${fixtureId}`}>
-      <Body muted>
+      <Text variant="caption" tone="muted">
         Only players who have not answered are asked; each gets a notice in the app inbox (for a
         child player, the guardian does). A later request is a reminder to those still without an
         answer.
-      </Body>
+      </Text>
       <QueryBoundary
         query={earlier}
         label="earlier availability requests"
@@ -152,7 +155,7 @@ export function AvailabilityRequests({
                   accessible
                   accessibilityLabel={`Request sent ${requestSummary(r, timeZone)}`}
                 >
-                  <Body>{`Request sent ${requestSummary(r, timeZone)}`}</Body>
+                  <Text variant="body">{`Request sent ${requestSummary(r, timeZone)}`}</Text>
                 </View>
               ))}
           </View>

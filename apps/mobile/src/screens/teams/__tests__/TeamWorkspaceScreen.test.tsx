@@ -266,8 +266,14 @@ describe('SCR-C-22 TeamWorkspaceScreen', () => {
       const app = createTestApp({ routes: routes() });
       render(<TeamWorkspaceScreen entryId={IDS.entry} />, { wrapper: app.wrapper });
       fireEvent.press(await screen.findByRole('button', { name: 'Send to the operating team' }));
-      expect(await screen.findByLabelText('Title. Enter a short title.')).toBeOnTheScreen();
-      expect(screen.getByLabelText('What you need. Enter what you need.')).toBeOnTheScreen();
+      expect(await screen.findByLabelText('Title')).toHaveProp(
+        'accessibilityHint',
+        'A few words, for example: Field 2 lights out. Error: Enter a short title.',
+      );
+      expect(screen.getByLabelText('What you need')).toHaveProp(
+        'accessibilityHint',
+        'Error: Enter what you need.',
+      );
       expect(app.fake.requests.filter((r) => r.route === '/me/support-requests')).toHaveLength(0);
     });
 

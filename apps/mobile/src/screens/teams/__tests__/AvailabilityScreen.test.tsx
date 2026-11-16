@@ -17,6 +17,7 @@ import {
   upcomingFixtureDetail,
   workspace,
 } from '../../../features/teams/testing/fixtures';
+import { openSupportDetails } from '../../../testing/ui-surfaces';
 import { createTeamsTestApp } from '../../../features/teams/testing/teams-test-app';
 import { AvailabilityScreen } from '../AvailabilityScreen';
 
@@ -113,10 +114,10 @@ describe('SCR-C-24 AvailabilityScreen', () => {
     expect(await screen.findByText('Your answer: Tentative')).toBeOnTheScreen();
     expect(screen.queryByRole('button', { name: 'Tentative' })).toBeNull();
     expect(
-      screen.getByLabelText(
-        'Tentative is not offered yet: whether it is used is still being decided (DEC-064).',
-      ),
+      screen.getByText('"Tentative" isn\'t offered yet. Answer Available or Unavailable for now.'),
     ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-064')).toBeOnTheScreen();
   });
 
   it('SPK-IAM-003: a guardian answers for their child with the child’s current answer shown', async () => {

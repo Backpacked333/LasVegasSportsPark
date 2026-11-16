@@ -488,11 +488,10 @@ describe('SCR-C-23 RosterScreen', () => {
       'not-an-email',
     );
     fireEvent.press(screen.getByRole('button', { name: 'Send invitation' }));
-    expect(
-      await screen.findByLabelText(
-        'Recipient 1: email address. Enter an email address like name@example.com.',
-      ),
-    ).toBeOnTheScreen();
+    expect(await screen.findByLabelText('Recipient 1: email address')).toHaveProp(
+      'accessibilityHint',
+      'Error: Enter an email address like name@example.com.',
+    );
     expect(app.requestsTo('POST', '/team-entries/{id}/invitations')).toHaveLength(0);
   });
 
@@ -724,10 +723,11 @@ describe('SCR-C-23 RosterScreen', () => {
       const app = renderRoster();
       const section = await screen.findByTestId('role-handover');
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
-      expect(within(section).getByText('▲ Choose the role to hand over.')).toBeOnTheScreen();
-      expect(
-        within(section).getByLabelText('Reason. Give the reason for the handover.'),
-      ).toBeOnTheScreen();
+      expect(within(section).getByText('✕ Choose the role to hand over.')).toBeOnTheScreen();
+      expect(within(section).getByLabelText('Reason')).toHaveProp(
+        'accessibilityHint',
+        'Recorded with the change, for example: stepping down for the rest of the season. Error: Give the reason for the handover.',
+      );
       expect(app.requestsTo('POST', '/team-entries/{id}/roles/handover')).toHaveLength(0);
     });
 
@@ -736,11 +736,11 @@ describe('SCR-C-23 RosterScreen', () => {
       const section = await screen.findByTestId('role-handover');
       fireEvent.changeText(within(section).getByLabelText('Reason'), 'Moving away for the season');
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
-      const roleError = within(section).getByTestId('handover-role-error');
-      expect(roleError).toHaveTextContent('▲ Choose the role to hand over.');
+      const roleError = within(section).getByText('✕ Choose the role to hand over.');
+      expect(roleError).toHaveProp('accessibilityRole', 'alert');
       expect(roleError).toHaveProp('accessibilityLiveRegion', 'polite');
       expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
-        'Choose the role to hand over.',
+        'Error: Choose the role to hand over.',
         { queue: true },
       );
       expect(within(section).getByRole('radio', { name: 'Captain, held by you' })).toHaveProp(
@@ -750,17 +750,17 @@ describe('SCR-C-23 RosterScreen', () => {
       // The role is chosen; the new holder is still missing.
       fireEvent.press(within(section).getByRole('radio', { name: 'Captain, held by you' }));
       fireEvent.press(within(section).getByRole('button', { name: 'Review the handover' }));
-      const holderError = within(section).getByTestId('handover-holder-error');
-      expect(holderError).toHaveTextContent('▲ Choose who takes the role.');
+      const holderError = within(section).getByText('✕ Choose who takes the role.');
+      expect(holderError).toHaveProp('accessibilityRole', 'alert');
       expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
-        'Choose who takes the role.',
+        'Error: Choose who takes the role.',
         { queue: true },
       );
       expect(within(section).getByRole('radio', { name: 'Pat Player' })).toHaveProp(
         'accessibilityHint',
         'Error: Choose who takes the role.',
       );
-      expect(within(section).queryByTestId('handover-role-error')).toBeNull();
+      expect(within(section).queryByText('✕ Choose the role to hand over.')).toBeNull();
     });
 
     it('SPK-AT-013: a new holder the rule set refuses shows the API reasons and code', async () => {

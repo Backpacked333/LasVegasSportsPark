@@ -1,20 +1,4 @@
 [
-  "src/features/teams/ObligationTotals.tsx :: DEC- :: …nt policy, which is still being decided (DEC-008, POL-015).",
-  "src/features/teams/ObligationTotals.tsx :: POL- :: …nt policy, which is still being decided (DEC-008, POL-015).",
-
   "src/navigation/RootNavigator.tsx :: fixture :: Fixture",
-  "src/navigation/RootNavigator.tsx :: session package :: Session packages",
-
-  "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
-  "src/screens/teams/AvailabilityScreen.tsx :: DEC- :: …d yet: whether it is used is still being decided (DEC-064).",
-
-  "src/screens/teams/ContributionScreen.tsx :: obligation :: Team obligation",
-
-  "src/screens/teams/RosterScreen.tsx :: POL- :: … league's invitation policy (POL-044, still being decided).",
-
-  "src/screens/teams/TeamContributionsScreen.tsx :: contribution request :: A contribution request asks one player to pay part of this …",
-  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: No team obligation",
-  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: Remaining on the team obligation: …",
-  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: the team's obligations",
-  "src/screens/teams/TeamContributionsScreen.tsx :: obligation :: … part of this team obligation. It does not add to the team…"
+  "src/navigation/RootNavigator.tsx :: session package :: Session packages"
 ]

@@ -37,7 +37,7 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
       ),
     ).toBeOnTheScreen();
     expect(
-      screen.getByLabelText('Billing: Team obligation with player contributions'),
+      screen.getByLabelText('Billing: Team fee with a share for each player'),
     ).toBeOnTheScreen();
     const contributions = screen.getByTestId(`contributions-${IDS.obligation}`);
     expect(within(contributions).getByLabelText('Paid on Oct 20, 2026')).toBeOnTheScreen();
@@ -69,7 +69,13 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
       }),
     });
     expect(await screen.findByLabelText('Received beyond the total: $50.00')).toBeOnTheScreen();
-    expect(screen.getByText(/still being decided \(DEC-008, POL-015\)/)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        'The extra amount stays on record. Ask the front desk if you paid more than you owe.',
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decisions: DEC-008, POL-015')).toBeOnTheScreen();
     // A settled obligation takes no new requests.
     expect(screen.queryByRole('button', { name: 'Request contribution' })).toBeNull();
   });
@@ -119,9 +125,10 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
     fireEvent.press(await screen.findByRole('radio', { name: 'Pat Player' }));
     fireEvent.changeText(screen.getByLabelText('Amount (USD)'), '25.555');
     fireEvent.press(screen.getByRole('button', { name: 'Request contribution' }));
-    expect(
-      screen.getByLabelText('Amount (USD). Enter an amount in USD, for example 25.00.'),
-    ).toBeOnTheScreen();
+    expect(screen.getByLabelText('Amount (USD)')).toHaveProp(
+      'accessibilityHint',
+      'Team amount still due: $600.00. Error: Enter an amount in USD, for example 25.00.',
+    );
     expect(app.requestsTo('POST', '/obligations/{id}/contribution-requests')).toHaveLength(0);
 
     fireEvent.changeText(screen.getByLabelText(/^Amount \(USD\)/), '25');
@@ -213,12 +220,12 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
     const app = renderContributions();
     fireEvent.changeText(await screen.findByLabelText('Amount (USD)'), '25');
     fireEvent.press(screen.getByRole('button', { name: 'Request contribution' }));
-    const error = screen.getByTestId('contribution-player-error');
-    expect(error).toHaveTextContent('▲ Choose the player to ask.');
+    const error = screen.getByText('✕ Choose the player to ask.');
     // A live region for TalkBack, an announcement for VoiceOver (no text field error fires).
+    expect(error).toHaveProp('accessibilityRole', 'alert');
     expect(error).toHaveProp('accessibilityLiveRegion', 'polite');
     expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
-      'Choose the player to ask.',
+      'Error: Choose the player to ask.',
       { queue: true },
     );
     expect(screen.getByRole('radio', { name: 'Pat Player' })).toHaveProp(
@@ -227,7 +234,7 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
     );
     expect(app.requestsTo('POST', '/obligations/{id}/contribution-requests')).toHaveLength(0);
     fireEvent.press(screen.getByRole('radio', { name: 'Pat Player' }));
-    expect(screen.queryByTestId('contribution-player-error')).toBeNull();
+    expect(screen.queryByText('✕ Choose the player to ask.')).toBeNull();
     expect(
       screen.getByRole('radio', { name: 'Pat Player' }).props.accessibilityHint,
     ).toBeUndefined();
@@ -235,7 +242,7 @@ describe('SCR-C-25 TeamContributionsScreen', () => {
 
   it('empty: no team obligation means individual billing or no fee recorded yet', async () => {
     renderContributions({ routes: baseRoutes({ 'GET /obligations': page([]) }) });
-    expect(await screen.findByRole('header', { name: 'No team obligation' })).toBeOnTheScreen();
+    expect(await screen.findByRole('header', { name: 'No team fee' })).toBeOnTheScreen();
   });
 
   it('SPK-CAP-002: a player the API refuses sees team totals as not available', async () => {

@@ -29,7 +29,10 @@ import { SupportDetails } from '../../ui/SupportDetails';
 import { spacing } from '../../ui/theme';
 import { formatInstant } from './format';
 import type { Workspace } from './queries';
-import { Body, CommandFailure, OfflineNotice, TextField } from './ui';
+import { TextField } from '../../ui/Field';
+import { CommandFailure } from './ui';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Text } from '../../ui/Text';
 
 /** Lengths the API accepts (`CustomerSupportRequestBody`). */
 export const SUPPORT_TITLE_MAX = 200;
@@ -103,7 +106,7 @@ export function ContactOperations({ workspace }: { workspace: Workspace }) {
         announcement={sentences(status.label, summary)}
       >
         <StatusBadge {...status} />
-        <Body>{summary}</Body>
+        <Text variant="body">{summary}</Text>
         <Button
           label="See your support requests"
           variant="secondary"
@@ -115,9 +118,9 @@ export function ContactOperations({ workspace }: { workspace: Workspace }) {
 
   return (
     <View style={styles.group} testID="contact-operations">
-      <Body muted>
+      <Text variant="caption" tone="muted">
         {`Ask the operating team about ${workspace.team.name}, for example a game, a field or the roster. The request is about the team, so do not include private family details.`}
-      </Body>
+      </Text>
       <TextField
         label="Title"
         value={title}
@@ -139,9 +142,9 @@ export function ContactOperations({ workspace }: { workspace: Workspace }) {
         disabled={offline}
         busy={send.isProcessing}
       />
-      <Body
-        muted
-      >{`The operating team answers through Support. ${pendingMessage('DEC-015')}`}</Body>
+      <Text variant="caption" tone="muted">
+        {`The operating team answers through Support. ${pendingMessage('DEC-015')}`}
+      </Text>
       <SupportDetails decisions={['DEC-015']} />
       {send.error ? (
         <CommandFailure
@@ -159,10 +162,10 @@ export function ContactThroughSupport() {
   const router = useRouter();
   return (
     <View style={styles.group}>
-      <Body>
+      <Text variant="body">
         Your captain contacts the operating team about the team. For a question about yourself, open
         a request on Support.
-      </Body>
+      </Text>
       <Button label="Open Support" variant="secondary" onPress={() => router.push('/support')} />
     </View>
   );

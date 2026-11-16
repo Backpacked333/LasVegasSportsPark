@@ -30,16 +30,12 @@ import { idParam } from '../../features/teams/routes';
 import { PUBLICATION_CONSEQUENCE_LABELS, disputeStatus } from '../../features/teams/status';
 import { DisputeWithdraw } from '../../features/teams/DisputeWithdraw';
 import { CaptainOnly, TeamFrame } from '../../features/teams/TeamFrame';
-import {
-  Body,
-  ButtonRow,
-  CommandFailure,
-  Detail,
-  OfflineNotice,
-  Section,
-  TextField,
-  Title,
-} from '../../features/teams/ui';
+import { CommandFailure } from '../../features/teams/ui';
+import { AppHeader } from '../../ui/AppHeader';
+import { FieldValue, TextField } from '../../ui/Field';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { useConnectivity } from '../../providers/AppProviders';
 import { Button } from '../../ui/Button';
 import { QueryBoundary } from '../../ui/QueryBoundary';
@@ -80,11 +76,11 @@ function WindowNotice({
   const hours = ruleSet.data?.content.protestDeadlineHours;
   if (hours === undefined) {
     return (
-      <Body muted>
+      <Text variant="caption" tone="muted">
         {ruleSet.error
           ? 'The dispute window could not be loaded. The service checks it when you submit.'
           : 'Loading the dispute window…'}
-      </Body>
+      </Text>
     );
   }
   const closes =
@@ -93,12 +89,17 @@ function WindowNotice({
       : null;
   return (
     <View style={styles.group} testID="dispute-window">
-      <Detail
+      <FieldValue
+        layout="inline"
         label="Dispute window"
         value={`${plural(hours, 'hour')} after the official result is published (${ruleSetLabel})`}
       />
-      {closes ? <Detail label="Window closes" value={formatInstant(closes, timeZone)} /> : null}
-      <Body muted>The service checks the window when you submit.</Body>
+      {closes ? (
+        <FieldValue layout="inline" label="Window closes" value={formatInstant(closes, timeZone)} />
+      ) : null}
+      <Text variant="caption" tone="muted">
+        The service checks the window when you submit.
+      </Text>
     </View>
   );
 }
@@ -112,19 +113,24 @@ function ExistingDisputes({
   timeZone: string | null;
   onReload: () => void;
 }) {
-  if (disputes.length === 0) return <Body>No disputes for this game yet.</Body>;
+  if (disputes.length === 0) return <Text variant="body">No disputes for this game yet.</Text>;
   return (
     <View accessibilityRole="list" style={styles.group}>
       {disputes.map((d) => (
         <View key={d.id} style={styles.group} testID={`dispute-${d.id}`}>
           <StatusBadge {...disputeStatus(d)} />
-          <Body>{d.reason}</Body>
-          <Body muted>{`Submitted ${formatInstant(d.submittedAt, timeZone)}`}</Body>
+          <Text variant="body">{d.reason}</Text>
+          <Text
+            variant="caption"
+            tone="muted"
+          >{`Submitted ${formatInstant(d.submittedAt, timeZone)}`}</Text>
           {d.publicationConsequence ? (
-            <Body>{PUBLICATION_CONSEQUENCE_LABELS[d.publicationConsequence]}</Body>
+            <Text variant="body">{PUBLICATION_CONSEQUENCE_LABELS[d.publicationConsequence]}</Text>
           ) : null}
-          {d.decisionReason ? <Body>{`Decision: ${d.decisionReason}`}</Body> : null}
-          {d.appealStatus !== 'none' ? <Body>{`Appeal: ${d.appealStatus}`}</Body> : null}
+          {d.decisionReason ? <Text variant="body">{`Decision: ${d.decisionReason}`}</Text> : null}
+          {d.appealStatus !== 'none' ? (
+            <Text variant="body">{`Appeal: ${d.appealStatus}`}</Text>
+          ) : null}
           <DisputeWithdraw dispute={d} onReload={onReload} />
         </View>
       ))}
@@ -199,9 +205,9 @@ function DisputeForm({
     return (
       <View style={styles.group} testID="dispute-submitted">
         <StatusBadge {...disputeStatus(d)} />
-        <Body>
+        <Text variant="body">
           {`Submitted ${formatInstant(d.submittedAt, timeZone)}. The league reviews it; the decision and any change to the published result appear on the game's results.`}
-        </Body>
+        </Text>
       </View>
     );
   }
@@ -245,7 +251,7 @@ function DisputeForm({
           />
         </View>
       ))}
-      <ButtonRow>
+      <View style={buttonRowStyles.row}>
         <Button
           label="Add an evidence reference"
           variant="secondary"
@@ -257,7 +263,7 @@ function DisputeForm({
             ]);
           }}
         />
-      </ButtonRow>
+      </View>
       {offline ? <OfflineNotice what="Submitting a dispute" /> : null}
       <Button
         label="Submit the dispute"
@@ -268,12 +274,12 @@ function DisputeForm({
       {closedAt !== null && submitDispute.error ? (
         <View style={styles.group} testID="window-closed">
           <StatusBadge tone="danger" label="Dispute window closed" />
-          <Body>
+          <Text variant="body">
             {closedAt
               ? `The dispute window closed ${formatInstant(closedAt, timeZone)}. Your draft is kept.`
               : 'The dispute window has closed. Your draft is kept.'}
-          </Body>
-          <Body muted>{`Error code: ${submitDispute.error.code}`}</Body>
+          </Text>
+          <Text variant="caption" tone="muted">{`Error code: ${submitDispute.error.code}`}</Text>
         </View>
       ) : submitDispute.error ? (
         <CommandFailure
@@ -328,7 +334,7 @@ function DisputeContent({
   const timeZone = f.venue?.timezone ?? null;
   return (
     <View>
-      <Title>{`Dispute: ${f.home.teamName} vs ${f.away?.teamName ?? 'Bye'}`}</Title>
+      <AppHeader title={`Dispute: ${f.home.teamName} vs ${f.away?.teamName ?? 'Bye'}`} />
       <Section title="Submission window">
         <WindowNotice
           ruleSetId={workspace.ruleSet.id}
@@ -336,7 +342,9 @@ function DisputeContent({
           official={official}
           timeZone={timeZone}
         />
-        {official ? null : <Body>There is no official result for this game yet.</Body>}
+        {official ? null : (
+          <Text variant="body">There is no official result for this game yet.</Text>
+        )}
       </Section>
       <Section title="Disputes for this game">
         {/* Loading, error and offline come from the read; "none yet" only for an empty list. */}
@@ -356,7 +364,10 @@ function DisputeContent({
         </QueryBoundary>
       </Section>
       <Section title="File a dispute">
-        <Body muted>{`Filed for ${workspace.team.name} as its captain.`}</Body>
+        <Text
+          variant="caption"
+          tone="muted"
+        >{`Filed for ${workspace.team.name} as its captain.`}</Text>
         <DisputeForm
           workspace={workspace}
           fixtureId={fixtureId}
@@ -410,4 +421,9 @@ export function DisputeRoute() {
 const styles = StyleSheet.create({
   group: { gap: spacing.sm },
   evidence: { gap: spacing.xs, paddingVertical: spacing.xs },
+});
+
+/** A row of buttons under a form or a choice. */
+const buttonRowStyles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingTop: spacing.xs },
 });

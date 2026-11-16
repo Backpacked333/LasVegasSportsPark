@@ -27,7 +27,9 @@ import { formatInstant, plural } from '../../features/teams/format';
 import type { Workspace } from '../../features/teams/queries';
 import { idParam } from '../../features/teams/routes';
 import { TeamFrame } from '../../features/teams/TeamFrame';
-import { Body, Section, Title } from '../../features/teams/ui';
+import { AppHeader } from '../../ui/AppHeader';
+import { Section } from '../../ui/Section';
+import { Text } from '../../ui/Text';
 import { ListRow } from '../../ui/ListRow';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { StateView } from '../../ui/StateView';
@@ -92,10 +94,10 @@ function PoolTable({ poolId, entryId }: { poolId: string; entryId: string }) {
                   s.pendingFixtureIds.length === 0 ? 'Pool complete' : 'Pool games still to play'
                 }
               />
-              <Body>{poolProgressText(s)}</Body>
-              <Body muted>
+              <Text variant="body">{poolProgressText(s)}</Text>
+              <Text variant="caption" tone="muted">
                 {`Calculated ${formatInstant(s.computedAt)} from ${plural(s.sourceResultIds.length, 'official result')} with rule set version ${s.ruleSetVersion}. Provisional results are never counted.`}
-              </Body>
+              </Text>
             </View>
           )}
         </QueryBoundary>
@@ -140,7 +142,7 @@ function PoolContent({ workspace, poolId }: { workspace: Workspace; poolId: stri
       >
         {(p) => (
           <View>
-            <Title>{`${p.name}: ${workspace.season.name}`}</Title>
+            <AppHeader title={`${p.name}: ${workspace.season.name}`} />
             <PoolEntries pool={p} entryId={entryId} />
             <PoolTable poolId={poolId} entryId={entryId} />
           </View>

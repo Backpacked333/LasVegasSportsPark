@@ -18,7 +18,10 @@ import { useConnectivity } from '../../providers/AppProviders';
 import { LiveRegion } from '../../ui/announce';
 import { Button } from '../../ui/Button';
 import { spacing } from '../../ui/theme';
-import { Body, ButtonRow, CommandFailure, OfflineNotice, TextField } from './ui';
+import { TextField } from '../../ui/Field';
+import { CommandFailure } from './ui';
+import { OfflineNotice } from '../../ui/OfflineNotice';
+import { Text } from '../../ui/Text';
 
 type Dispute = Schema<'Dispute'>;
 
@@ -63,7 +66,7 @@ export function DisputeWithdraw({
   if (withdraw.data) {
     return (
       <LiveRegion announcement={WITHDRAWN} testID={`dispute-${dispute.id}-withdrawn`}>
-        <Body>{WITHDRAWN}</Body>
+        <Text variant="body">{WITHDRAWN}</Text>
       </LiveRegion>
     );
   }
@@ -88,9 +91,11 @@ export function DisputeWithdraw({
         multiline
         error={reasonError}
       />
-      <Body muted>A withdrawn dispute is closed and the league stops reviewing it.</Body>
+      <Text variant="caption" tone="muted">
+        A withdrawn dispute is closed and the league stops reviewing it.
+      </Text>
       {offline ? <OfflineNotice what="Withdrawing a dispute" /> : null}
-      <ButtonRow>
+      <View style={buttonRowStyles.row}>
         <Button
           label="Withdraw the dispute"
           onPress={submit}
@@ -106,7 +111,7 @@ export function DisputeWithdraw({
             setAttempted(false);
           }}
         />
-      </ButtonRow>
+      </View>
       {withdraw.error ? (
         <CommandFailure
           error={withdraw.error}
@@ -125,4 +130,9 @@ export function DisputeWithdraw({
 
 const styles = StyleSheet.create({
   group: { gap: spacing.sm },
+});
+
+/** A row of buttons under a form or a choice. */
+const buttonRowStyles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingTop: spacing.xs },
 });

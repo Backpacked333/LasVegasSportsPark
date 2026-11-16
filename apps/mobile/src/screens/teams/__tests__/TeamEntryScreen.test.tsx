@@ -82,7 +82,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     ).toBeOnTheScreen();
     expect(screen.getByText(/it cannot be chosen in the app/)).toBeOnTheScreen();
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Create the team entry' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Enter the team' }));
     });
     expect(await screen.findByLabelText('Team entry awaiting approval')).toBeOnTheScreen();
     expect(screen.getByText(/Nothing has been charged/)).toBeOnTheScreen();
@@ -96,21 +96,25 @@ describe('SCR-C-27 TeamEntryScreen', () => {
 
   it('checks the team name and season before sending', async () => {
     const app = renderEntry(null);
-    fireEvent.press(await screen.findByRole('button', { name: 'Create the team entry' }));
-    expect(screen.getByLabelText('Team name. Enter the team name.')).toBeOnTheScreen();
-    expect(screen.getByText('▲ Choose a season.')).toBeOnTheScreen();
+    fireEvent.press(await screen.findByRole('button', { name: 'Enter the team' }));
+    expect(screen.getByLabelText('Team name')).toHaveProp(
+      'accessibilityHint',
+      'Error: Enter the team name.',
+    );
+    expect(screen.getByText('✕ Choose a season.')).toBeOnTheScreen();
     expect(app.requestsTo('POST', '/team-entries')).toHaveLength(0);
   });
 
   it('SPK-UX-009 (NA-A01, R4-CLIENTS-A11Y-COPY-03): a missing season is announced when it is the only error, and read with each season', async () => {
     const app = renderEntry(null);
     fireEvent.changeText(await screen.findByLabelText('Team name'), 'Desert Foxes');
-    fireEvent.press(screen.getByRole('button', { name: 'Create the team entry' }));
-    const error = screen.getByTestId('team-entry-season-error');
-    expect(error).toHaveTextContent('▲ Choose a season.');
+    fireEvent.press(screen.getByRole('button', { name: 'Enter the team' }));
+    // The choice's own error (ChoiceList): shown under it, an alert, and announced.
+    const error = screen.getByText('✕ Choose a season.');
+    expect(error).toHaveProp('accessibilityRole', 'alert');
     expect(error).toHaveProp('accessibilityLiveRegion', 'polite');
     expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
-      'Choose a season.',
+      'Error: Choose a season.',
       { queue: true },
     );
     for (const season of screen.getAllByRole('radio')) {
@@ -133,7 +137,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     fireEvent.changeText(await screen.findByLabelText('Team name'), 'Desert Foxes');
     fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Create the team entry' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Enter the team' }));
     });
     expect(
       await screen.findByText('The registration window for this season is closed.'),
@@ -176,7 +180,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     expect(screen.queryByLabelText('Team name')).toBeNull();
     fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Renew the team entry' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Renew the team' }));
     });
     expect(
       await screen.findByText('Your Fall 2026 entry and its roster are unchanged.'),
@@ -253,7 +257,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     expect(await screen.findByLabelText('Team: Desert Foxes')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Renew the team entry' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Renew the team' }));
     });
     const suggestions = await screen.findByTestId('suggested-players');
     await act(async () => {
@@ -334,7 +338,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     expect(await screen.findByLabelText('Team: Desert Foxes')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Renew the team entry' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Renew the team' }));
     });
     const suggestions = await screen.findByTestId('suggested-players');
     await act(async () => {
@@ -390,11 +394,11 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     });
     fireEvent.press(await screen.findByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
     await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'Renew the team entry' }));
+      fireEvent.press(screen.getByRole('button', { name: 'Renew the team' }));
     });
     expect(
       await screen.findByText(
-        'Renewing this team is not available to you. Only a captain of the prior entry can renew it.',
+        "Renewing this team is not available to you. Only a captain of last season's team can renew it.",
       ),
     ).toBeOnTheScreen();
     expect(screen.queryByText(/ACCESS_DENIED/)).toBeNull();
@@ -415,10 +419,10 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     });
     expect(
       await screen.findByText(
-        'Renewing this team is not available to you. Only a captain of the prior entry can renew it.',
+        "Renewing this team is not available to you. Only a captain of last season's team can renew it.",
       ),
     ).toBeOnTheScreen();
-    expect(screen.queryByRole('button', { name: 'Renew the team entry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Renew the team' })).toBeNull();
     expect(app.requestsTo('GET', '/seasons')).toHaveLength(0);
   });
 
@@ -444,7 +448,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
       screen.getByText('Renewing this team is not available for this team now.'),
     ).toBeOnTheScreen();
     expect(screen.queryByText(/Only a captain/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Renew the team entry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Renew the team' })).toBeNull();
     expect(app.requestsTo('GET', '/seasons')).toHaveLength(0);
   });
 
@@ -460,7 +464,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     });
     fireEvent.changeText(await screen.findByLabelText('Team name'), 'Desert Foxes');
     fireEvent.press(screen.getByRole('radio', { name: /^Adult Coed League: Winter 2027/ }));
-    fireEvent.press(screen.getByRole('button', { name: 'Create the team entry' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Enter the team' }));
     expect(await screen.findByLabelText('Team entry awaiting approval')).toBeOnTheScreen();
     expect(
       app.queryClient.getQueryState(['api', '/me/team-entries', null, null])?.isInvalidated,
@@ -470,14 +474,14 @@ describe('SCR-C-27 TeamEntryScreen', () => {
   it('empty: no season is open for team entries', async () => {
     renderEntry(null, { 'GET /seasons': { status: 200, body: [] } });
     expect(
-      await screen.findByRole('header', { name: 'No season open for team entries' }),
+      await screen.findByRole('header', { name: 'No season open for new teams' }),
     ).toBeOnTheScreen();
   });
 
   it('a malformed renewal link shows "No prior team to renew"', async () => {
     const app = renderEntry('invalid');
     expect(await screen.findByRole('header', { name: 'No prior team to renew' })).toBeOnTheScreen();
-    fireEvent.press(screen.getByRole('button', { name: 'Create a new team entry' }));
+    fireEvent.press(screen.getByRole('button', { name: 'Enter a new team' }));
     expect(mockRouter.replace).toHaveBeenCalledWith('/team/new');
     expect(app.requestsTo('GET', '/team-entries/{id}')).toHaveLength(0);
   });
@@ -486,7 +490,7 @@ describe('SCR-C-27 TeamEntryScreen', () => {
     const app = renderEntry(null);
     fireEvent.changeText(await screen.findByLabelText('Team name'), 'Desert Foxes');
     act(() => app.sources.setReachable(false));
-    expect(screen.getByRole('button', { name: 'Create the team entry' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enter the team' })).toBeDisabled();
     expect(screen.getByLabelText('Team name').props.value).toBe('Desert Foxes');
   });
 
