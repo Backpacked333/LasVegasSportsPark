@@ -23,16 +23,20 @@
  *   on no roster (`rosterStatus: null`) is not offered the choices. Answers close at kickoff: the
  *   API answers INVALID_TRANSITION with `details.code: AVAILABILITY_CLOSED`, shown in those words.
  * - RSVP is neither attendance nor eligibility; the caption says so.
+ * - Customer words (PA-11): a "game", never a "fixture"; an open decision is said as what to do
+ *   now (`pendingMessage`), its code only in "Details for support".
  * - The answer logic is `useRsvpAnswer`, shared with Home's inline control (`RsvpInline.tsx`).
  */
 import type { ApiError, Schema } from '@sportspark/api-client';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useApiCommand, type CommandRequest } from '../../api/useApiCommand';
+import { pendingMessage } from '../../copy/pending';
 import { useConnectivity } from '../../providers/AppProviders';
 import { LiveText } from '../../ui/announce';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SupportDetails } from '../../ui/SupportDetails';
 import { fonts, makeStyles, MIN_TOUCH_SIZE, radius, spacing, type } from '../../ui/theme';
 import { CommandFailure } from '../teams/ui';
 import { fixtureAcceptsRsvp, rsvpStatus, type RsvpState } from './status';
@@ -77,16 +81,24 @@ function rsvpErrorView(
   onReload?: () => void,
 ) {
   if (error.code === 'PARTICIPANT_AUTHORITY_REQUIRED' || error.code === 'ACCESS_DENIED') {
+    const forChild = error.code === 'PARTICIPANT_AUTHORITY_REQUIRED';
     return (
-      <StateView
-        variant="unavailable"
-        title="Responding is not available"
-        description={
-          error.code === 'PARTICIPANT_AUTHORITY_REQUIRED'
-            ? 'You cannot answer for this participant. Which permission lets a guardian answer for a child is still being decided (DEC-090).'
-            : "You can't answer for this game."
-        }
-      />
+      <View style={styles.box}>
+        <StateView
+          variant="unavailable"
+          title="Responding is not available"
+          description={
+            forChild
+              ? `You can't answer for this person. ${pendingMessage('DEC-090')}`
+              : "You can't answer for this game."
+          }
+        />
+        <SupportDetails
+          decisions={forChild ? ['DEC-090'] : undefined}
+          errorCode={error.code}
+          reference={error.correlationId}
+        />
+      </View>
     );
   }
   if (error.code === 'INVALID_TRANSITION' && detailsCode(error) === AVAILABILITY_CLOSED) {
@@ -176,7 +188,7 @@ export function RsvpControl({
       {open ? (
         <View
           accessibilityRole="radiogroup"
-          accessibilityLabel="Your availability for this fixture"
+          accessibilityLabel="Your availability for this game"
           style={styles.choices}
         >
           {OFFERED_RSVP_STATES.map((state) => {
@@ -204,17 +216,22 @@ export function RsvpControl({
           })}
         </View>
       ) : onRoster === false ? (
-        <Text style={styles.caption} testID="rsvp-not-on-roster">
-          You are not on a roster for this fixture, so there is no answer for you to give. Answering
-          for a child is still being decided (DEC-090).
-        </Text>
+        <View style={styles.box}>
+          <Text style={styles.caption} testID="rsvp-not-on-roster">
+            {`You are not on this game's roster, so there is no answer for you to give. ${pendingMessage('DEC-090')}`}
+          </Text>
+          <SupportDetails decisions={['DEC-090']} />
+        </View>
       ) : (
-        <Text style={styles.caption}>This fixture no longer takes availability answers.</Text>
+        <Text style={styles.caption}>This game no longer takes availability answers.</Text>
       )}
       {open ? (
-        <Text style={styles.caption}>
-          "Tentative" is not offered yet: whether it is used is still being decided (DEC-064).
-        </Text>
+        <View style={styles.box}>
+          <Text style={styles.caption}>
+            {`"Tentative" isn't offered yet. ${pendingMessage('DEC-064')}`}
+          </Text>
+          <SupportDetails decisions={['DEC-064']} />
+        </View>
       ) : null}
       {offline && open ? (
         <LiveText style={styles.caption} announcement={NEEDS_CONNECTION}>

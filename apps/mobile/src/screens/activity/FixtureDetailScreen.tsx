@@ -1,15 +1,17 @@
 /**
- * SCR-C-20 Activity or fixture detail, fixture variant (SPK-UX-004, SPK-CAP-002, SPK-CAP-003,
- * SPK-READY-002, SPK-RESULT-001, SPK-RESULT-005, SPK-COMMS-005, SPK-SCHED-008, SPK-UX-008,
- * SPK-UX-009).
+ * SCR-C-20 Activity or fixture detail, fixture variant: the game page (SPK-UX-004, SPK-CAP-002,
+ * SPK-CAP-003, SPK-READY-002, SPK-RESULT-001, SPK-RESULT-005, SPK-COMMS-005, SPK-SCHED-008,
+ * SPK-UX-008, SPK-UX-009; PA-11 customer words, "game" for a fixture; ADR-008).
  *
+ * - The top is the game's picture with its facts as tags, its status, the change, the required
+ *   action and the RSVP (`ActivityHero`).
  * - `GET /v1/fixtures/{id}`: teams, state, time, availability counts, the venue (facility, pitches
  *   and IANA zone, CMP-04), the viewer's roster status and the answers they may see (`responses`).
  *   NOT_FOUND (the person is on neither roster and holds no view grant) is "not available", with
  *   no hint that the fixture exists (§4.10).
- * - The next-activity card (SCR-C-04) with RSVP (`POST /v1/fixtures/{id}/availability`, with the
- *   answer's revision as `expectedRevision`); answers of children the API lists are shown, not
- *   offered (DEC-090).
+ * - RSVP in the shared control (`RsvpControl`, SCR-C-04: `POST /v1/fixtures/{id}/availability`, with
+ *   the answer's revision as `expectedRevision`); answers of children the API lists are shown, not
+ *   offered (DEC-090: the page says what to do instead, the decision in "Details for support").
  * - Material changes: the newest schedule notice about the fixture's scheduling event gives old
  *   and new details; times are on the venue's facility clock (SPK-SCHED-008).
  * - Match readiness as the customer may see it: `GET /v1/fixtures/{id}/readiness` answers with
@@ -22,7 +24,7 @@
  *   its `viewer.actingAsCaptain` (the API's answer, rule set included) decides the captain view.
  * - A captain acting for a side opens dispute submission (SCR-C-29) from an official result; the
  *   dispute screen and the API decide the rest (window, eligibility).
- * - Arrival guidance is POL-046 (Operations, pending).
+ * - Arrival guidance is POL-046 (Operations, pending): its plain message, the code in the fold.
  */
 import { apiQueryKey, presentationForError, type Schema } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -30,6 +32,8 @@ import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { Text, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
+import { artworkFor } from '../../artwork/artworkFor';
+import { pendingMessage } from '../../copy/pending';
 import { teamRoutes } from '../../features/teams/routes';
 import {
   awayOf,
@@ -41,7 +45,7 @@ import {
   venueOf,
   viewerOnRoster,
 } from '../../features/today/fixture-model';
-import { NextActivityCard, type ActivityCardModel } from '../../features/today/NextActivityCard';
+import type { ActivityCardModel } from '../../features/today/NextActivityCard';
 import { latestChangeForEvent, openAvailabilityRequest } from '../../features/today/notices';
 import { nameOf, useInbox, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { RsvpControl } from '../../features/today/RsvpControl';
@@ -64,7 +68,9 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge } from '../../ui/StatusBadge';
+import { SupportDetails } from '../../ui/SupportDetails';
 import { makeStyles, radius, spacing, type } from '../../ui/theme';
+import { ActivityHero } from './ActivityHero';
 
 type FixtureDetail = Schema<'FixtureDetail'>;
 type FixtureSide = Schema<'FixtureSide'>;
@@ -199,10 +205,10 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
     return (
       <SectionQueryState
         read={fixture}
-        label="the fixture"
+        label="the game"
         unavailable={{
           description:
-            'This fixture is not available. Check the link, or contact the front desk if you expected to see it.',
+            'This game is not available. Check the link, or contact the front desk if you expected to see it.',
         }}
       />
     );
@@ -267,9 +273,10 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         at={oldestUpdate([fixture.updatedAt, readiness.updatedAt, results.updatedAt])}
         now={now}
       />
-      <Section title="Fixture">
-        <NextActivityCard
+      <View>
+        <ActivityHero
           model={model}
+          source={artworkFor({ kind: 'game', title: model.title }, 'wide').source}
           testID="fixture-card"
           rsvp={
             <RsvpControl
@@ -284,7 +291,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
           }
         />
         {notice ? <Caption>{notice}</Caption> : null}
-      </Section>
+      </View>
 
       {!viewerKnown && (detail.responses ?? []).length > 0 ? (
         <Section title="Family answers" testID="fixture-family-answers">
@@ -313,10 +320,10 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
               );
             })}
           </View>
-          <Caption>
-            Answering for a child in the app is still being decided (DEC-090); these are the answers
-            recorded so far.
-          </Caption>
+          <Caption>{`These are the answers recorded so far. ${pendingMessage('DEC-090')}`}</Caption>
+          <View style={styles.pad}>
+            <SupportDetails decisions={['DEC-090']} />
+          </View>
         </Section>
       ) : null}
 
@@ -423,6 +430,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
         <StateView
           variant="pending-decision"
           subject="Arrival guidance for this activity"
+          message={pendingMessage('POL-046')}
           decisions={['POL-046']}
           owner="Operations"
         />
@@ -434,7 +442,7 @@ function FixtureContent({ fixtureId }: { fixtureId: string }) {
 export function FixtureDetailScreen({ fixtureId }: { fixtureId: string | undefined }) {
   return (
     <Screen>
-      <RequireSession what="this fixture">
+      <RequireSession what="this game">
         {fixtureId ? <FixtureContent fixtureId={fixtureId} /> : <StateView variant="unavailable" />}
       </RequireSession>
     </Screen>

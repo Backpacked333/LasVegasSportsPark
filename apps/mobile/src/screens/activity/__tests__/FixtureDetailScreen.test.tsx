@@ -1,7 +1,7 @@
 /**
- * SCR-C-20 fixture detail with the SCR-C-04 card and RSVP (SPK-UX-004, SPK-CAP-002, SPK-CAP-003,
- * SPK-READY-002, SPK-RESULT-001, SPK-COMMS-005, SPK-SCHED-008, SPK-UX-008, SPK-UX-009, §4.9,
- * §4.10, §4.15).
+ * SCR-C-20 fixture detail, the game page, with its hero artwork, key facts as tags and the
+ * SCR-C-04 RSVP (SPK-UX-004, SPK-CAP-002, SPK-CAP-003, SPK-READY-002, SPK-RESULT-001,
+ * SPK-COMMS-005, SPK-SCHED-008, SPK-UX-008, SPK-UX-009, §4.9, §4.10, §4.15; PA-11, ADR-008).
  */
 import { apiErrorBody, fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
@@ -106,11 +106,28 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     ).toBeOnTheScreen();
     expect(
       screen.getByLabelText(
-        "Arrival guidance for this activity. This isn't available in the app yet.",
+        'Arrival guidance for this activity. Check in at the front desk when you arrive.',
       ),
     ).toBeOnTheScreen();
     await openSupportDetails(screen);
     expect(screen.getByText('Decision: POL-046')).toBeOnTheScreen();
+  });
+
+  it('ADR-008: the game page opens with its artwork, the key facts as tags and the status', async () => {
+    renderFixture();
+    const card = await screen.findByTestId('fixture-card');
+    // The picture is decorative: hidden from screen readers.
+    const art = within(card).getByTestId('fixture-card-art', { includeHiddenElements: true });
+    expect(art).toHaveProp('importantForAccessibility', 'no-hide-descendants');
+    // The facts are drawn as tags and read once, as one element.
+    const facts = await within(card).findByLabelText(
+      'For: Lions. Against: Tigers. When: Sun, Oct 25, 10:00 AM to 11:30 AM PDT. Where: Main Park, Pitch 2',
+    );
+    expect(within(facts).getByText(/^Sun, Oct 25, 10:00\sAM to 11:30\sAM PDT$/)).toBeTruthy();
+    for (const tag of ['Main Park, Pitch 2', 'For Lions', 'vs Tigers']) {
+      expect(within(facts).getByText(tag)).toBeTruthy();
+    }
+    expect(screen.getByTestId('fixture-card-status')).toHaveProp('accessibilityLabel', 'Scheduled');
   });
 
   it('SPK-READY-002 / SPK-CAP-002: readiness as an assessment with responsible role and action, counts only', async () => {
@@ -204,7 +221,11 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     await act(async () => {
       await app.queryClient.invalidateQueries({ queryKey: ['api', '/fixtures/{id}'] });
     });
-    expect(await screen.findByText(/This fixture is not available\./)).toBeOnTheScreen();
+    expect(
+      await screen.findByText(
+        'This game is not available. Check the link, or contact the front desk if you expected to see it.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.queryByRole('radio', { name: 'Available' })).toBeNull();
     expect(screen.queryByTestId('fixture-card')).toBeNull();
   });
@@ -212,7 +233,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
   it('SPK-UX-009: the RSVP choices are a named radio group', async () => {
     renderFixture();
     // The group is a container (not one accessibility element), so the radios stay focusable.
-    const group = await screen.findByLabelText('Your availability for this fixture');
+    const group = await screen.findByLabelText('Your availability for this game');
     expect(group).toHaveProp('accessibilityRole', 'radiogroup');
     expect(within(group).getByRole('radio', { name: 'Available' })).toBeOnTheScreen();
   });
@@ -269,7 +290,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       'Unavailable',
     ]);
     expect(
-      screen.getByText(/whether it is used is still being decided \(DEC-064\)/),
+      screen.getByText('"Tentative" isn\'t offered yet. Answer Available or Unavailable for now.'),
     ).toBeOnTheScreen();
 
     fireEvent.press(screen.getByRole('radio', { name: 'Available' }));
@@ -377,7 +398,13 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     });
     fireEvent.press(await screen.findByRole('radio', { name: 'Available' }));
     expect(await screen.findByLabelText('Responding is not available')).toBeOnTheScreen();
-    expect(screen.getByText(/\(DEC-090\)/)).toBeOnTheScreen();
+    expect(
+      screen.getByText(
+        "You can't answer for this person. Tell your team manager whether your child can come.",
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(screen);
+    expect(screen.getByText('Decision: DEC-090')).toBeOnTheScreen();
 
     screen.unmount();
     let reads = 0;
@@ -406,7 +433,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       'GET /fixtures/{id}': ok(fixtureDetail({ status: 'played', myResponse: 'available' })),
     });
     expect(
-      await screen.findByText('This fixture no longer takes availability answers.'),
+      await screen.findByText('This game no longer takes availability answers.'),
     ).toBeOnTheScreen();
     expect(screen.queryByRole('radio')).toBeNull();
     expect(screen.getByTestId('rsvp-current')).toHaveProp('accessibilityLabel', 'Available');
@@ -422,7 +449,11 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
 
   it('§4.10: a fixture the person may not see is "not available"; a readiness denial hides only that section', async () => {
     renderFixture({ 'GET /fixtures/{id}': fail(404, 'NOT_FOUND') });
-    expect(await screen.findByText(/This fixture is not available\./)).toBeOnTheScreen();
+    expect(
+      await screen.findByText(
+        'This game is not available. Check the link, or contact the front desk if you expected to see it.',
+      ),
+    ).toBeOnTheScreen();
     expect(screen.queryByText(/NOT_FOUND/)).toBeNull();
 
     screen.unmount();
@@ -546,11 +577,19 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
       ),
       'GET /person-names': names({ [CHILD]: 'Sam' }),
     });
-    expect(await screen.findByTestId('rsvp-not-on-roster')).toBeOnTheScreen();
+    expect(await screen.findByTestId('rsvp-not-on-roster')).toHaveTextContent(
+      "You are not on this game's roster, so there is no answer for you to give. Tell your team manager whether your child can come.",
+    );
     expect(screen.queryByRole('radio')).toBeNull();
     const answers = await screen.findByTestId('fixture-family-answers');
     expect(await within(answers).findByLabelText('Sam: Available')).toBeOnTheScreen();
-    expect(within(answers).getByText(/\(DEC-090\)/)).toBeOnTheScreen();
+    expect(
+      within(answers).getByText(
+        'These are the answers recorded so far. Tell your team manager whether your child can come.',
+      ),
+    ).toBeOnTheScreen();
+    await openSupportDetails(within(answers));
+    expect(within(answers).getByText('Decision: DEC-090')).toBeOnTheScreen();
     expect(app.fake.requests.filter((r) => r.method === 'POST')).toHaveLength(0);
   });
 
@@ -619,7 +658,7 @@ describe('SCR-C-20 FixtureDetailScreen', () => {
     const card = await screen.findByTestId('fixture-card');
     expect(
       await within(card).findByLabelText(
-        'Action needed: Answer the availability request for this fixture.',
+        'Action needed. Answer the availability request for this game.',
       ),
     ).toBeOnTheScreen();
   });

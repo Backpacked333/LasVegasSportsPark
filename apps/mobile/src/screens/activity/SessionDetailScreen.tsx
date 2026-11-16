@@ -13,13 +13,17 @@
  *   change with old and new details. A canceled session says so with the reason.
  * - Times are on the facility clock: the enrollment's `offering.timezone` (ENR-02), else the
  *   facility of the offering (`GET /v1/facilities/{id}`), which also names the place.
- * - Arrival guidance is POL-046 (Operations, pending).
+ * - The top is the activity's picture with its facts as tags, its status and the change
+ *   (`ActivityHero`, ADR-008).
+ * - Arrival guidance is POL-046 (Operations, pending): its plain message, the code in the fold
+ *   (PA-11).
  */
 import { presentationForError, type Schema } from '@sportspark/api-client';
 import { useLocalSearchParams } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { useApiQuery } from '../../api/useApiQuery';
-import { NextActivityCard } from '../../features/today/NextActivityCard';
+import { artworkFor } from '../../artwork/artworkFor';
+import { pendingMessage } from '../../copy/pending';
 import { nameOf, useMe, usePersonNames, useSignedIn } from '../../features/today/queries';
 import { Caption, Section, SectionQueryState } from '../../features/today/Section';
 import { useSessionActivity, type SessionRef } from '../../features/today/session-activity';
@@ -30,6 +34,7 @@ import { LastUpdated } from '../../ui/LastUpdated';
 import { Screen } from '../../ui/Screen';
 import { StateView } from '../../ui/StateView';
 import { spacing } from '../../ui/theme';
+import { ActivityHero } from './ActivityHero';
 
 type Enrollment = Schema<'Enrollment'>;
 type SessionBooking = Schema<'SessionBooking'>;
@@ -131,10 +136,14 @@ function SessionContent({
   return (
     <View testID="session-detail">
       <LastUpdated at={owner.updatedAt} now={now} />
-      <Section title="Activity">
-        <NextActivityCard model={activity.model} testID="session-card" />
+      <View>
+        <ActivityHero
+          model={activity.model}
+          source={artworkFor(activity.offering ?? { title: activity.model.title }, 'wide').source}
+          testID="session-card"
+        />
         {notice ? <Caption>{notice}</Caption> : null}
-      </Section>
+      </View>
       {session?.status === 'canceled' ? (
         <Section title="Canceled" testID="session-canceled">
           <Caption>
@@ -152,6 +161,7 @@ function SessionContent({
           <StateView
             variant="pending-decision"
             subject="Arrival guidance for this activity"
+            message={pendingMessage('POL-046')}
             decisions={['POL-046']}
             owner="Operations"
           />

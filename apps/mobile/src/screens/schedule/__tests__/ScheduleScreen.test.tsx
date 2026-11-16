@@ -405,7 +405,7 @@ describe('SCR-C-18 Schedule: fixtures and facility clocks (CMP-02, SPK-SCHED-008
     const sheet = await waitFor(() => openSheet(screen));
     expect(within(sheet).getByRole('header', { name: 'Lions vs Tigers' })).toBeOnTheScreen();
     // A named radio group (a container, so the radios stay focusable).
-    expect(within(sheet).getByLabelText('Your availability for this fixture')).toHaveProp(
+    expect(within(sheet).getByLabelText('Your availability for this game')).toHaveProp(
       'accessibilityRole',
       'radiogroup',
     );
