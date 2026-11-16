@@ -165,6 +165,35 @@ describe('DateField (ADR-008)', () => {
     expect(button).toHaveAccessibilityValue({ text: 'Wednesday 18 November 2026' });
     expect(drawnStyle(button).minHeight).toBeGreaterThanOrEqual(MIN_TOUCH_SIZE);
   });
+
+  it('on iOS, Done on an empty field commits the date the picker shows, without a wheel turn', async () => {
+    const onChange = jest.fn();
+    await renderUi(
+      <DateField
+        label="Camp week"
+        value={null}
+        minimumDate="2026-12-21"
+        onChange={onChange}
+        presentation="picker"
+      />,
+      { motion: 'full' },
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Camp week' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Done' }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('2026-12-21');
+  });
+
+  it('on iOS, Done on a field that already has a date changes nothing', async () => {
+    const onChange = jest.fn();
+    await renderUi(
+      <DateField label="Camp week" value="2026-11-18" onChange={onChange} presentation="picker" />,
+      { motion: 'full' },
+    );
+    fireEvent.press(screen.getByRole('button', { name: 'Camp week' }));
+    fireEvent.press(await screen.findByRole('button', { name: 'Done' }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });
 
 describe('DateRangeField (ADR-008)', () => {

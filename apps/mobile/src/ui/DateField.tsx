@@ -281,6 +281,9 @@ function PickerDateField({
   const [open, setOpen] = useState(false);
   const trigger = useRef<View>(null);
   const initial = value ?? minimumDate ?? null;
+  // The date the iOS picker shows when its sheet opens. An empty field has nothing committed yet,
+  // so accepting the sheet without turning the wheel commits this date (Done means "this one").
+  const shown = useRef<Date | null>(null);
 
   const choose = (date: Date) => {
     const iso = isoOfLocal(date);
@@ -302,7 +305,13 @@ function PickerDateField({
       });
       return;
     }
+    shown.current = initial ? localOf(initial) : new Date();
     setOpen(true);
+  };
+  const close = () => {
+    if (value === null && shown.current) choose(shown.current);
+    shown.current = null;
+    setOpen(false);
   };
 
   return (
@@ -330,22 +339,19 @@ function PickerDateField({
         <Icon name="calendar_today" size={20} color={theme.colors.textMuted} />
       </Pressable>
       {Platform.OS === 'ios' ? (
-        <Sheet
-          open={open}
-          onClose={() => setOpen(false)}
-          title={label}
-          returnFocusTo={trigger}
-          closeLabel="Done"
-        >
+        <Sheet open={open} onClose={close} title={label} returnFocusTo={trigger} closeLabel="Done">
           <View style={own.picker}>
             <DateTimePicker
-              value={initial ? localOf(initial) : new Date()}
+              value={initial ? localOf(initial) : (shown.current ?? new Date())}
               mode="date"
               display="inline"
               themeVariant={theme.dark ? 'dark' : 'light'}
               accentColor={theme.colors.primary}
               {...bounds}
-              onValueChange={(_event, date) => choose(date)}
+              onValueChange={(_event, date) => {
+                shown.current = date;
+                choose(date);
+              }}
             />
           </View>
         </Sheet>

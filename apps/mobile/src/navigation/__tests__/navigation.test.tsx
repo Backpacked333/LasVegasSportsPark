@@ -5,7 +5,7 @@
  * the root layout swapped for the test providers.
  */
 import type { FakeHandler } from '@sportspark/api-client/testing';
-import { fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
+import { fireEvent, renderRouter, screen } from 'expo-router/testing-library';
 import { createTestApp } from '../../testing/test-app';
 import { DESTINATIONS } from '../destinations';
 import { RootNavigator } from '../RootNavigator';
@@ -100,10 +100,11 @@ describe('primary navigation (SPK-UX-002)', () => {
     expect(app.haptics.events).toEqual(['selection']);
   });
 
-  it('PA-11: /family-calendar opens Calendar with the "Everyone" filter, so existing links keep working', async () => {
+  it('PA-11 SCR-C-19: /family-calendar still renders the family calendar until Calendar absorbs it', async () => {
     const { router } = renderApp('/family-calendar');
-    await waitFor(() => expect(router.getPathname()).toBe('/schedule'));
-    expect(router.getSearchParams()).toEqual({ people: 'everyone' });
+    expect(await screen.findByRole('button', { name: 'Previous week' })).toBeOnTheScreen();
+    expect(router.getPathname()).toBe('/family-calendar');
+    expect(screen.queryByLabelText('Link not available')).toBeNull();
   });
 
   it('offers the pass and the inbox in the body of Home as well (SPK-UX-002 Home: quick access to pass)', async () => {
