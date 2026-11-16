@@ -73,8 +73,9 @@ export function CapabilityGate({
         <StateView variant="offline-stale" offline updatedAt={null} now={now} onRetry={retry} />
       );
     } else {
+      // "Checking class packs": no verb to agree with a plural name.
       unknown = (
-        <StateView variant="loading" label={`whether ${label.toLowerCase()} is turned on`} />
+        <StateView variant="loading" label={label} text={`Checking ${label.toLowerCase()}`} />
       );
     }
     // What the customer already has is readable whatever the switch says (reads are never gated,

@@ -159,6 +159,67 @@ describe('Screen v2 (ADR-008)', () => {
     expect(screen.getByText('Game at 9 am')).toBeOnTheScreen();
   });
 
+  it('scrollToSection scrolls the section with that key to the top, again for each new request', async () => {
+    const scroll = jest
+      .spyOn(SectionList.prototype, 'scrollToLocation')
+      .mockImplementation(() => undefined);
+    const days = [
+      { key: 'sat', title: 'Saturday', data: [GAMES[0]!] },
+      { key: 'sun', title: 'Sunday', data: [GAMES[1]!] },
+    ];
+    const ui = (request: { key: string } | null) => (
+      <Screen
+        sections={{
+          sections: days,
+          keyExtractor: (item) => item.id,
+          renderItem: ({ item }) => <Text>{item.title}</Text>,
+        }}
+        scrollToSection={request}
+      />
+    );
+    const { rerender } = await renderSurface(ui(null));
+    expect(scroll).not.toHaveBeenCalled();
+    const sunday = { key: 'sun' };
+    rerender(ui(sunday));
+    // Motion is reduced without a MotionProvider: it jumps, nothing animates.
+    expect(scroll).toHaveBeenLastCalledWith({
+      sectionIndex: 1,
+      itemIndex: 0,
+      viewOffset: 0,
+      animated: false,
+    });
+    rerender(ui(sunday));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    rerender(<MotionProvider reduced={false}>{ui({ key: 'sun' })}</MotionProvider>);
+    expect(scroll).toHaveBeenCalledTimes(2);
+    expect(scroll).toHaveBeenLastCalledWith(expect.objectContaining({ animated: true }));
+    rerender(ui({ key: 'mon' }));
+    expect(scroll).toHaveBeenCalledTimes(2);
+    scroll.mockRestore();
+  });
+
+  it('listRef and sectionsRef give the list itself', async () => {
+    const listRef = { current: null as FlatList<(typeof GAMES)[number]> | null };
+    await renderSurface(
+      <Screen
+        list={{ data: GAMES, renderItem: ({ item }) => <Text>{item.title}</Text> }}
+        listRef={listRef}
+      />,
+    );
+    expect(listRef.current).toBeInstanceOf(FlatList);
+    const sectionsRef = jest.fn();
+    await renderSurface(
+      <Screen
+        sections={{
+          sections: [{ title: 'Saturday', data: GAMES }],
+          renderItem: ({ item }) => <Text>{item.title}</Text>,
+        }}
+        sectionsRef={sectionsRef}
+      />,
+    );
+    expect(sectionsRef).toHaveBeenCalledWith(expect.any(SectionList));
+  });
+
   it.each([
     ['classic', classicTheme],
     ['legends', legendsTheme],

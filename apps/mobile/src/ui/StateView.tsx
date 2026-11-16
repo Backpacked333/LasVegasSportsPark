@@ -59,7 +59,13 @@ interface ActionProps {
 }
 
 export type StateViewProps =
-  | { variant: 'loading'; label: string }
+  | {
+      variant: 'loading';
+      /** What is loading: "Loading {label}". */
+      label: string;
+      /** Words instead of "Loading {label}", for a check rather than a load ("Checking class packs"). */
+      text?: string;
+    }
   | ({ variant: 'empty'; title: string; description: string } & ActionProps)
   | { variant: 'error'; error: ApiError; onRetry?: () => void; onAction?: () => void }
   | {
@@ -261,11 +267,11 @@ function StateBody({ state: props }: { state: StateViewProps }): ReactNode {
           style={styles.row}
           accessible
           accessibilityRole="progressbar"
-          accessibilityLabel={`Loading ${props.label}`}
+          accessibilityLabel={props.text ?? `Loading ${props.label}`}
           accessibilityState={{ busy: true }}
         >
           <ActivityIndicator color={colors.primary} />
-          <Text style={styles.body}>Loading {props.label}…</Text>
+          <Text style={styles.body}>{`${props.text ?? `Loading ${props.label}`}…`}</Text>
         </View>
       );
     case 'empty':

@@ -22,7 +22,7 @@
  * offline (cached with its age; "Load more" needs a connection).
  *
  * Visual system v2 (ADR-008) and customer words (PA-11): each list is a `Section` card of
- * `ListRow`s; an empty list is `MoneyEmpty`.
+ * `ListRow`s; an empty list is the boundary's illustrated empty state.
  *
  * Payments, receipts and orders carry no facility, so times are in the device's zone with
  * the zone named (reported; stage 3 left "facility zone on money records" open).
@@ -30,6 +30,7 @@
 import { presentationForError } from '@sportspark/api-client';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
 import { useApiPages } from '../../api/useApiPages';
 import { formatInstant, formatMoney } from '../../features/money/format';
 import { useOrderPayments } from '../../features/money/live-payments';
@@ -46,7 +47,7 @@ import {
 import { useNameOf } from '../../features/money/people';
 import { moneyRoutes } from '../../features/money/routes';
 import { paymentStatus } from '../../features/money/status';
-import { MoneyEmpty } from '../../features/money/surfaces';
+
 import { registrationRoutes } from '../../features/registration/routes';
 import { ListRow } from '../../ui/ListRow';
 import { LoadMore } from '../../ui/LoadMore';
@@ -70,31 +71,30 @@ export function MyPaymentsList() {
       <QueryBoundary
         query={payments}
         label="your payments"
-        empty={{ title: '', description: '' }}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No payments yet',
+          description:
+            'Payments you make, or make for the people you pay for, appear here with their state.',
+          source: illustrations['empty-payments'],
+        }}
         unavailableOffline={['loading more payments']}
       >
-        {(items) =>
-          items.length === 0 ? (
-            <MoneyEmpty
-              title="No payments yet"
-              message="Payments you make, or make for the people you pay for, appear here with their state."
-            />
-          ) : (
-            <View accessibilityRole="list">
-              {items.map((attempt) => (
-                <ListRow
-                  key={attempt.id}
-                  title={paymentTitle(attempt)}
-                  detail={payerLine(nameOf(attempt.payerPersonId), attempt.createdAt)}
-                  status={paymentStatus(attempt.status)}
-                  onPress={() => router.push(moneyRoutes.payment(attempt.id))}
-                  accessibilityHint="Opens the payment with its state and any refunds"
-                  testID={`payment-${attempt.id}`}
-                />
-              ))}
-            </View>
-          )
-        }
+        {(items) => (
+          <View accessibilityRole="list">
+            {items.map((attempt) => (
+              <ListRow
+                key={attempt.id}
+                title={paymentTitle(attempt)}
+                detail={payerLine(nameOf(attempt.payerPersonId), attempt.createdAt)}
+                status={paymentStatus(attempt.status)}
+                onPress={() => router.push(moneyRoutes.payment(attempt.id))}
+                accessibilityHint="Opens the payment with its state and any refunds"
+                testID={`payment-${attempt.id}`}
+              />
+            ))}
+          </View>
+        )}
       </QueryBoundary>
       <LoadMore pages={payments} label="payments" />
     </Section>
@@ -109,37 +109,36 @@ export function MyReceiptsList() {
       <QueryBoundary
         query={receipts}
         label="your receipts"
-        empty={{ title: '', description: '' }}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No receipts yet',
+          description:
+            'Each payment the facility receives from you, online or at the front desk, appears here.',
+          source: illustrations['empty-payments'],
+        }}
         unavailableOffline={['loading more receipts']}
       >
-        {(items) =>
-          items.length === 0 ? (
-            <MoneyEmpty
-              title="No receipts yet"
-              message="Each payment the facility receives from you, online or at the front desk, appears here."
-            />
-          ) : (
-            <View accessibilityRole="list">
-              {items.map((receipt) => {
-                const paymentId = receipt.paymentAttemptId;
-                return (
-                  <ListRow
-                    key={receipt.id}
-                    title={`Received ${formatMoney(receipt.amountMinor, receipt.currency)}`}
-                    detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt)}. ${receiptAmounts(receipt)}`}
-                    onPress={
-                      paymentId ? () => router.push(moneyRoutes.payment(paymentId)) : undefined
-                    }
-                    accessibilityHint={
-                      paymentId ? 'Opens the payment this receipt is for' : undefined
-                    }
-                    testID={`receipt-${receipt.id}`}
-                  />
-                );
-              })}
-            </View>
-          )
-        }
+        {(items) => (
+          <View accessibilityRole="list">
+            {items.map((receipt) => {
+              const paymentId = receipt.paymentAttemptId;
+              return (
+                <ListRow
+                  key={receipt.id}
+                  title={`Received ${formatMoney(receipt.amountMinor, receipt.currency)}`}
+                  detail={`${RECEIPT_SOURCE_LABELS[receipt.sourceKind]}, ${formatInstant(receipt.receivedAt)}. ${receiptAmounts(receipt)}`}
+                  onPress={
+                    paymentId ? () => router.push(moneyRoutes.payment(paymentId)) : undefined
+                  }
+                  accessibilityHint={
+                    paymentId ? 'Opens the payment this receipt is for' : undefined
+                  }
+                  testID={`receipt-${receipt.id}`}
+                />
+              );
+            })}
+          </View>
+        )}
       </QueryBoundary>
       <LoadMore pages={receipts} label="receipts" />
     </Section>
@@ -158,31 +157,29 @@ export function MyOrdersList() {
       <QueryBoundary
         query={orders}
         label="your orders"
-        empty={{ title: '', description: '' }}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No orders yet',
+          description: 'Registrations you pay for appear here as orders, with what each line cost.',
+          source: illustrations['empty-payments'],
+        }}
         unavailableOffline={['loading more orders']}
       >
-        {(items) =>
-          items.length === 0 ? (
-            <MoneyEmpty
-              title="No orders yet"
-              message="Registrations you pay for appear here as orders, with what each line cost."
-            />
-          ) : (
-            <View accessibilityRole="list">
-              {items.map((order) => (
-                <ListRow
-                  key={order.id}
-                  title={orderTitle(order)}
-                  detail={`${orderAmounts(order)}. Ordered ${formatInstant(order.createdAt)}`}
-                  status={orderStatus(order, live.get(order.id))}
-                  onPress={() => router.push(moneyRoutes.order(order.id))}
-                  accessibilityHint="Opens the order with its balances and installments"
-                  testID={`order-${order.id}`}
-                />
-              ))}
-            </View>
-          )
-        }
+        {(items) => (
+          <View accessibilityRole="list">
+            {items.map((order) => (
+              <ListRow
+                key={order.id}
+                title={orderTitle(order)}
+                detail={`${orderAmounts(order)}. Ordered ${formatInstant(order.createdAt)}`}
+                status={orderStatus(order, live.get(order.id))}
+                onPress={() => router.push(moneyRoutes.order(order.id))}
+                accessibilityHint="Opens the order with its balances and installments"
+                testID={`order-${order.id}`}
+              />
+            ))}
+          </View>
+        )}
       </QueryBoundary>
       <LoadMore pages={orders} label="orders" />
     </Section>

@@ -13,6 +13,9 @@
  *   are the whole offer.
  * - A viewer on no roster is not offered the choices; answering for a child is DEC-090, so the
  *   card says what to do instead (`pendingMessage`) and the decision is in "Details for support".
+ * - The radio group is named "Are you going to this game?"; where several cards each carry one
+ *   (Teams), `label` names the game so each group has its own name ("Are you going to the next
+ *   Desert Foxes game?").
  */
 import type { ApiError } from '@sportspark/api-client';
 import { View } from 'react-native';
@@ -41,6 +44,9 @@ export const INLINE_RSVP_CHOICES: readonly { state: RsvpState; label: string }[]
   { state: 'available', label: 'Going' },
   { state: 'unavailable', label: 'Not going' },
 ];
+
+/** The radio group's name unless the screen gives one. */
+export const RSVP_INLINE_LABEL = 'Are you going to this game?';
 
 /** What a viewer on no roster reads on the card (DEC-090 open). */
 export const NOT_ON_ROSTER_TEXT = `You're not on this game's roster. ${pendingMessage('DEC-090')}`;
@@ -86,7 +92,14 @@ function InlineError({
   return <CommandFailure error={error} onRetry={onRetry} testID="rsvp-failure" />;
 }
 
-export function RsvpInline({ onReload, ...props }: RsvpControlProps) {
+export function RsvpInline({
+  onReload,
+  label = RSVP_INLINE_LABEL,
+  ...props
+}: RsvpControlProps & {
+  /** The radio group's name, naming the game when a screen has several ("Are you going to …"). */
+  label?: string;
+}) {
   const styles = useStyles();
   const { colors } = useTheme();
   const { rsvp, recorded, open, offline, choose, retry } = useRsvpAnswer(props);
@@ -100,11 +113,7 @@ export function RsvpInline({ onReload, ...props }: RsvpControlProps) {
         <StatusBadge {...rsvpStatus(recorded)} testID="rsvp-current" />
       </View>
       {open ? (
-        <View
-          accessibilityRole="radiogroup"
-          accessibilityLabel="Are you going to this game?"
-          style={styles.choices}
-        >
+        <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.choices}>
           {INLINE_RSVP_CHOICES.map(({ state, label }) => {
             const selected = recorded === state;
             return (

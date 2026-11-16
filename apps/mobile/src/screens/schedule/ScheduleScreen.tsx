@@ -8,7 +8,8 @@
  *
  * - One week model: a `DateStrip` (previous week, next week, Today; weeks run Monday to Sunday,
  *   `calendar-week.ts`) over a `SectionList` agenda with one section per day of the week, the
- *   selected day highlighted. Pull to refresh reads everything shown again.
+ *   selected day highlighted; picking a day scrolls the agenda to it (`Screen` `scrollToSection`).
+ *   Pull to refresh reads everything shown again.
  * - `GET /v1/me/family-calendar` (`from`, `to`) is the source of sessions and bookings, read in the
  *   same 28-day windows Home reads (window 0 is Home's look-ahead: one cached response). The API
  *   includes only people the caller currently holds `view` over (`participantPersonIds`), so a child
@@ -501,6 +502,8 @@ function CalendarContent() {
     if (requested) setFilter(requested);
   }
   const [picked, setPicked] = useState<string | null>(null);
+  // A day picked on the strip scrolls the list to it (a new object for every pick).
+  const [scrollTo, setScrollTo] = useState<{ key: string } | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -551,7 +554,10 @@ function CalendarContent() {
   const strip = (marked: readonly string[]) => (
     <DateStrip
       value={selectedDay}
-      onChange={setPicked}
+      onChange={(day) => {
+        setPicked(day);
+        setScrollTo({ key: day });
+      }}
       today={now}
       timeZone={stripZone}
       markedDates={marked}
@@ -694,6 +700,7 @@ function CalendarContent() {
     <Screen<string, { key: string; data: string[] }>
       onRefresh={refresh}
       refreshing={refreshing}
+      scrollToSection={scrollTo}
       sections={{
         sections,
         keyExtractor: (day) => day,

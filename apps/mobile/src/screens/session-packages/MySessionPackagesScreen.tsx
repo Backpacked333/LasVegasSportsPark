@@ -34,6 +34,7 @@
  */
 import { Stack } from 'expo-router';
 import { View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import {
@@ -57,7 +58,7 @@ import { FieldValue as Field } from '../../ui/Field';
 import { Section } from '../../ui/Section';
 import { Text } from '../../ui/Text';
 import { makeStyles, spacing } from '../../ui/theme';
-import { MoneyEmpty, usePullToRefresh } from '../../features/money/surfaces';
+import { usePullToRefresh } from '../../features/money/surfaces';
 import { BookWithPackage } from './BookWithPackage';
 
 /** What the screen, its section and its turned-off notice call it (PA-11). */
@@ -149,28 +150,26 @@ export function SessionPackagesList() {
       <QueryBoundary
         query={packages}
         label="class packs"
-        // No `isEmpty`: the empty list is drawn below, with the payments illustration.
-        empty={{ title: '', description: '' }}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No class packs',
+          description:
+            'Class packs you or your family buy appear here, with sessions left and when they expire.',
+          source: illustrations['empty-payments'],
+          testID: 'packages-empty',
+        }}
         unavailableOffline={['loading more class packs']}
       >
-        {(items) =>
-          items.length === 0 ? (
-            <MoneyEmpty
-              title="No class packs"
-              message="Class packs you or your family buy appear here, with sessions left and when they expire."
-              testID="packages-empty"
-            />
-          ) : (
-            <View accessibilityRole="list" style={styles.list}>
-              {items.map((pkg) => {
-                const zone = zones.get(pkg.offeringId);
-                return zone ? (
-                  <PackageCard key={pkg.id} pkg={pkg} zone={zone} bookingOn={bookingOn} />
-                ) : null;
-              })}
-            </View>
-          )
-        }
+        {(items) => (
+          <View accessibilityRole="list" style={styles.list}>
+            {items.map((pkg) => {
+              const zone = zones.get(pkg.offeringId);
+              return zone ? (
+                <PackageCard key={pkg.id} pkg={pkg} zone={zone} bookingOn={bookingOn} />
+              ) : null;
+            })}
+          </View>
+        )}
       </QueryBoundary>
       <LoadMore pages={packages} label="class packs" />
     </>

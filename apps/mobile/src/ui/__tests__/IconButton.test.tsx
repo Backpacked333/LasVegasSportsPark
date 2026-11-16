@@ -77,6 +77,29 @@ describe('IconButton (ADR-008, SPK-UX-009)', () => {
     expect(iconButtonName('Notification inbox', 140)).toBe('Notification inbox, 140 unread');
   });
 
+  it('SPK-UX-009: a capped count says "more than" in the name and "99+" on the badge', async () => {
+    await renderUi(
+      <IconButton
+        icon="notifications"
+        label="Notification inbox"
+        count={99}
+        countCapped
+        onPress={() => undefined}
+        testID="inbox"
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Notification inbox, more than 99 unread' }),
+    ).toBeOnTheScreen();
+    expect(screen.getByTestId('inbox-badge', { includeHiddenElements: true })).toHaveTextContent(
+      '99+',
+    );
+    expect(badgeText(99, true)).toBe('99+');
+    expect(iconButtonName('Notification inbox', 99, 'unread', true)).toBe(
+      'Notification inbox, more than 99 unread',
+    );
+  });
+
   it('SPK-UX-009: is a 44 pt target in every variant', async () => {
     await renderUi(
       <>

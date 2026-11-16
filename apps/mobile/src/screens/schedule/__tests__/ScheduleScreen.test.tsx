@@ -7,6 +7,7 @@
 import { apiQueryKey } from '@sportspark/api-client';
 import { fakeResponse, type FakeHandler } from '@sportspark/api-client/testing';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { SectionList } from 'react-native';
 import { calendarWindowQuery } from '../../../features/today/calendar';
 import {
   BOOKING,
@@ -307,6 +308,26 @@ describe('SCR-C-18 Calendar (ScheduleScreen)', () => {
     expect(
       screen.getByRole('button', { name: 'Saturday 24 October, today, has activities' }),
     ).not.toBeSelected();
+  });
+
+  it('picking a day scrolls the agenda to that day', async () => {
+    const scroll = jest
+      .spyOn(SectionList.prototype, 'scrollToLocation')
+      .mockImplementation(() => undefined);
+    const app = createTestApp({ routes: routes() });
+    render(<ScheduleScreen />, { wrapper: app.wrapper });
+    await screen.findByTestId('day-2026-10-24');
+    // Nothing moves until a day is picked: the strip stays in view on arrival.
+    expect(scroll).not.toHaveBeenCalled();
+    // The week runs Monday 19 to Sunday 25 October: Sunday is the seventh section.
+    fireEvent.press(screen.getByRole('button', { name: 'Sunday 25 October' }));
+    expect(scroll).toHaveBeenLastCalledWith({
+      sectionIndex: 6,
+      itemIndex: 0,
+      viewOffset: 0,
+      animated: false,
+    });
+    scroll.mockRestore();
   });
 });
 

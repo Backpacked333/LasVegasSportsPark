@@ -38,6 +38,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
 import { usePermissions } from '../../api/permissions';
 import { useApiPages } from '../../api/useApiPages';
 import { moneyRoutes } from '../../features/money/routes';
@@ -66,7 +67,7 @@ import { Card } from '../../ui/Card';
 import { FieldValue as Field } from '../../ui/Field';
 import { Text } from '../../ui/Text';
 import { layout, makeStyles, spacing } from '../../ui/theme';
-import { Actions, MoneyEmpty, usePullToRefresh } from '../../features/money/surfaces';
+import { Actions, usePullToRefresh } from '../../features/money/surfaces';
 import { BookWithMembership } from './BookWithMembership';
 import { RenewMembership } from './RenewMembership';
 
@@ -207,32 +208,31 @@ function MembershipsList() {
       <QueryBoundary
         query={memberships}
         label="memberships"
-        // No `isEmpty`: the empty list is drawn below, with the payments illustration.
-        empty={{ title: '', description: '' }}
+        isEmpty={(list) => list.length === 0}
+        empty={{
+          title: 'No memberships',
+          description:
+            'Memberships you or your family hold appear here, with what each one includes. Find one in Explore.',
+          actionLabel: 'Open Explore',
+          onAction: () => router.push('/discover'),
+          source: illustrations['empty-payments'],
+          testID: 'memberships-empty',
+        }}
         unavailableOffline={['Renewing']}
       >
-        {(list) =>
-          list.length === 0 ? (
-            <MoneyEmpty
-              title="No memberships"
-              message="Memberships you or your family hold appear here, with what each one includes. Find one in Explore."
-              action={{ label: 'Open Explore', onPress: () => router.push('/discover') }}
-              testID="memberships-empty"
-            />
-          ) : (
-            <View accessibilityRole="list" style={styles.list}>
-              {list.map((m) => (
-                <MembershipCard
-                  key={m.enrollmentId}
-                  membership={m}
-                  zone={zones.get(m.offeringId) ?? displayZone(null)}
-                  forWhom={labelOf(m.participantPersonId)}
-                  canRenew={canRenew}
-                />
-              ))}
-            </View>
-          )
-        }
+        {(list) => (
+          <View accessibilityRole="list" style={styles.list}>
+            {list.map((m) => (
+              <MembershipCard
+                key={m.enrollmentId}
+                membership={m}
+                zone={zones.get(m.offeringId) ?? displayZone(null)}
+                forWhom={labelOf(m.participantPersonId)}
+                canRenew={canRenew}
+              />
+            ))}
+          </View>
+        )}
       </QueryBoundary>
       <LoadMore pages={memberships} label="memberships" />
     </>

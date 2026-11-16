@@ -55,6 +55,11 @@ export interface ButtonProps {
   busy?: boolean;
   /** What happens on press, when the label alone does not say it. */
   accessibilityHint?: string;
+  /**
+   * The name screen readers read, when the visible label needs more words to stand alone ("Pay,
+   * Spring league"); the visible `label` by default.
+   */
+  accessibilityLabel?: string;
   /** Decorative Material Symbols name shown before the label (hidden from screen readers). */
   icon?: string;
   /** Stretch to the width of the parent (bottom action bars). */
@@ -134,6 +139,7 @@ export function Button({
   disabled = false,
   busy = false,
   accessibilityHint,
+  accessibilityLabel,
   icon,
   block = false,
   haptic = 'light',
@@ -145,7 +151,7 @@ export function Button({
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityHint={accessibilityHint}
       accessibilityState={{ disabled: inactive, busy }}
       disabled={inactive}

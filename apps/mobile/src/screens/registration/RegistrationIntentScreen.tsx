@@ -349,7 +349,7 @@ function IntentChooser({ offering }: { offering: Offering }) {
       return `${description} ${turnedOffLabel(presentation.label)}. ${pendingMessageFor(presentation.decisions)}`;
     }
     if (switchOf(option) === undefined && capability) {
-      return `${description} Checking whether ${CAPABILITY_PRESENTATION[capability].label.toLowerCase()} is turned on.`;
+      return `${description} Checking ${CAPABILITY_PRESENTATION[capability].label.toLowerCase()}.`;
     }
     return optionHandling === 'basket' || optionHandling === 'session'
       ? description

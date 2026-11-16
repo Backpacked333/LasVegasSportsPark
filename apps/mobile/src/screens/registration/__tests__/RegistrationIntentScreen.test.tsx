@@ -639,7 +639,7 @@ describe('SCR-C-09 RegistrationIntentScreen', () => {
     // One type, its switch not known yet: said, and nobody can be added under it.
     expect(
       await screen.findByLabelText(
-        'Registration type: Membership. Join this membership. Checking whether memberships is turned on.',
+        'Registration type: Membership. Join this membership. Checking memberships.',
       ),
     ).toBeOnTheScreen();
     expect(screen.queryByRole('checkbox', { name: 'Ada. Eligible' })).toBeNull();

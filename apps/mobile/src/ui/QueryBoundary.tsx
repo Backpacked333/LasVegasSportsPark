@@ -2,11 +2,17 @@
  * Renders a query's SPK-UX-008 state (loading, empty, error, offline or stale, unavailable) and,
  * when data is present, the content with its age. Valid data stays on screen when a refresh fails
  * or the device goes offline; the notice above it says how old it is.
+ *
+ * The empty state is `StateView`'s, or, when `empty.source` names an illustration (ADR-008), an
+ * illustrated `EmptyState` announced with the same words (`announce`), so a screen keeps the
+ * boundary's loading, error, offline and "not available" states and still draws its picture.
  */
 import { presentationForError, type ApiError } from '@sportspark/api-client';
 import type { ReactNode } from 'react';
 import { View } from 'react-native';
 import { useApp, useConnectivity, useNow } from '../providers/AppProviders';
+import type { ArtworkSource } from './Artwork';
+import { EmptyState } from './EmptyState';
 import { LastUpdated } from './LastUpdated';
 import { StateView } from './StateView';
 
@@ -18,12 +24,49 @@ export interface QueryLike<T> {
   refetch: () => unknown;
 }
 
+/** What an empty answer shows: words, an optional action and an optional illustration. */
+export interface QueryEmpty {
+  title: string;
+  description: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  /** An illustration from the artwork manifest: the empty state is then an `EmptyState`. */
+  source?: ArtworkSource;
+  testID?: string;
+}
+
+/** The empty state of a boundary (`StateView`'s, or the illustrated one with `source`). */
+function EmptyAnswer({ empty }: { empty: QueryEmpty }) {
+  const { source, title, description, actionLabel, onAction, testID } = empty;
+  if (!source) {
+    return (
+      <StateView
+        variant="empty"
+        title={title}
+        description={description}
+        actionLabel={actionLabel}
+        onAction={onAction}
+      />
+    );
+  }
+  return (
+    <EmptyState
+      source={source}
+      title={title}
+      message={description}
+      action={actionLabel && onAction ? { label: actionLabel, onPress: onAction } : undefined}
+      announce
+      testID={testID}
+    />
+  );
+}
+
 export interface QueryBoundaryProps<T> {
   query: QueryLike<T>;
   /** What is loading, for the announcement: "notifications". */
   label: string;
   isEmpty?: (data: T) => boolean;
-  empty: { title: string; description: string; actionLabel?: string; onAction?: () => void };
+  empty: QueryEmpty;
   /** Actions on this screen that need a connection, listed in the offline notice. */
   unavailableOffline?: string[];
   children: (data: T) => ReactNode;
@@ -93,7 +136,7 @@ export function QueryBoundary<T>({
       ) : (
         <LastUpdated at={query.updatedAt} now={now} />
       )}
-      {isEmpty?.(query.data) ? <StateView variant="empty" {...empty} /> : children(query.data)}
+      {isEmpty?.(query.data) ? <EmptyAnswer empty={empty} /> : children(query.data)}
     </View>
   );
 }

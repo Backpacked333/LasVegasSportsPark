@@ -214,7 +214,15 @@ function useStanding(team: MyTeamEntry): StandingWords {
  * the game screen) gives the answer, its revision and whether the person is on the roster. Shown
  * only while the game takes answers and the person may answer; the game screen says the rest.
  */
-function NextGameAnswer({ fixtureId, viewerId }: { fixtureId: string; viewerId: string | null }) {
+function NextGameAnswer({
+  fixtureId,
+  viewerId,
+  teamName,
+}: {
+  fixtureId: string;
+  viewerId: string | null;
+  teamName: string;
+}) {
   const fixture = useApiQuery({ path: '/fixtures/{id}', request: { path: { id: fixtureId } } });
   const detail = fixture.data;
   if (!detail || viewerId === null) return null;
@@ -231,6 +239,8 @@ function NextGameAnswer({ fixtureId, viewerId }: { fixtureId: string; viewerId: 
       responseRevision={own?.revision ?? null}
       onRoster={onRoster}
       onReload={() => void fixture.refetch()}
+      // Each team card has its own group: its name says whose game it is.
+      label={`Are you going to the next ${teamName} game?`}
     />
   );
 }
@@ -294,7 +304,11 @@ function TeamCard({
             />
           </View>
           {team.nextFixture ? (
-            <NextGameAnswer fixtureId={team.nextFixture.fixtureId} viewerId={viewerId} />
+            <NextGameAnswer
+              fixtureId={team.nextFixture.fixtureId}
+              viewerId={viewerId}
+              teamName={team.teamName}
+            />
           ) : null}
         </View>
       }

@@ -36,6 +36,7 @@
 import { presentationForError } from '@sportspark/api-client';
 import { Stack, useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
+import { illustrations } from '../../artwork/manifest';
 import { pendingMessage } from '../../copy/pending';
 import { View } from 'react-native';
 import { useApiPages } from '../../api/useApiPages';
@@ -70,7 +71,7 @@ import { StatTile } from '../../ui/StatTile';
 import { SupportDetails } from '../../ui/SupportDetails';
 import { Text } from '../../ui/Text';
 import { layout, makeStyles, spacing } from '../../ui/theme';
-import { Actions, MoneyEmpty, usePullToRefresh } from '../../features/money/surfaces';
+import { Actions, usePullToRefresh } from '../../features/money/surfaces';
 import { amountsText } from '../payments/MoneySummary';
 import { SessionPackagesSection } from '../session-packages/MySessionPackagesScreen';
 
@@ -209,24 +210,22 @@ function CreditsSection({ person }: { person: AccountPerson }) {
       <QueryBoundary
         query={credits}
         label="credits"
-        // No `isEmpty`: the empty list is drawn below, with the payments illustration.
-        empty={{ title: '', description: '' }}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No credits',
+          description:
+            'Money credits from the facility appear here, with what they can be used for and when they expire.',
+          source: illustrations['empty-payments'],
+          testID: 'credits-empty',
+        }}
       >
-        {(items) =>
-          items.length === 0 ? (
-            <MoneyEmpty
-              title="No credits"
-              message="Money credits from the facility appear here, with what they can be used for and when they expire."
-              testID="credits-empty"
-            />
-          ) : (
-            <View accessibilityRole="list" style={styles.list}>
-              {items.map((credit) => (
-                <CreditCard key={credit.id} credit={credit} />
-              ))}
-            </View>
-          )
-        }
+        {(items) => (
+          <View accessibilityRole="list" style={styles.list}>
+            {items.map((credit) => (
+              <CreditCard key={credit.id} credit={credit} />
+            ))}
+          </View>
+        )}
       </QueryBoundary>
       <LoadMore pages={credits} label="credits" />
     </Section>

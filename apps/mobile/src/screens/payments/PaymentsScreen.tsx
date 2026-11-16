@@ -31,13 +31,14 @@
 import { Stack, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
 import { useApiPages } from '../../api/useApiPages';
 import { liveAttemptStatus, obligationAmounts } from '../../features/money/payment-lists';
 import { PeopleGate } from '../../features/money/PeopleGate';
 import type { AccountPerson } from '../../features/money/people';
 import { moneyRoutes } from '../../features/money/routes';
 import { obligationStatus, type Obligation } from '../../features/money/status';
-import { MoneyEmpty, usePullToRefresh } from '../../features/money/surfaces';
+import { usePullToRefresh } from '../../features/money/surfaces';
 import { useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
 import { ChipRow } from '../../ui/Chip';
@@ -87,20 +88,16 @@ function ObligationList({ person }: { person: AccountPerson }) {
       <QueryBoundary
         query={obligations}
         label="payments"
-        // No `isEmpty`: the empty page is drawn below, with the payments illustration.
-        empty={{ title: '', description: '' }}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No payments',
+          description: `Anything ${person.self ? 'you owe' : `${person.displayName} owes`} for registrations, and the installments of a plan, will appear here.`,
+          source: illustrations['empty-payments'],
+          testID: 'payments-empty',
+        }}
         unavailableOffline={['paying a balance']}
       >
         {(items) => {
-          if (items.length === 0) {
-            return (
-              <MoneyEmpty
-                title="No payments"
-                message={`Anything ${person.self ? 'you owe' : `${person.displayName} owes`} for registrations, and the installments of a plan, will appear here.`}
-                testID="payments-empty"
-              />
-            );
-          }
           const open = items.filter((o) => o.status === 'open');
           const closed = items.filter((o) => o.status !== 'open');
           return (

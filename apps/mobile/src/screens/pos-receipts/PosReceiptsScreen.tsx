@@ -27,9 +27,10 @@
  */
 import { Stack } from 'expo-router';
 import { View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
 import { useApiPages } from '../../api/useApiPages';
 import { formatMoney } from '../../features/money/format';
-import { MoneyEmpty, usePullToRefresh } from '../../features/money/surfaces';
+import { usePullToRefresh } from '../../features/money/surfaces';
 import {
   receiptLineText,
   receiptStatus,
@@ -145,28 +146,26 @@ function ReceiptsList() {
       <QueryBoundary
         query={receipts}
         label="in-person receipts"
-        // No `isEmpty`: the empty list is drawn below, with the payments illustration.
-        empty={{ title: '', description: '' }}
+        isEmpty={(items) => items.length === 0}
+        empty={{
+          title: 'No in-person receipts',
+          description:
+            'Purchases at the front desk that were recorded under your name appear here with their receipt.',
+          source: illustrations['empty-payments'],
+          testID: 'pos-receipts-empty',
+        }}
       >
-        {(items) =>
-          items.length === 0 ? (
-            <MoneyEmpty
-              title="No in-person receipts"
-              message="Purchases at the front desk that were recorded under your name appear here with their receipt."
-              testID="pos-receipts-empty"
-            />
-          ) : (
-            <View accessibilityRole="list" style={styles.list}>
-              {items.map((r) => (
-                <ReceiptCard
-                  key={r.saleId}
-                  receipt={r}
-                  facility={facilities.get(r.facilityId) ?? { zone: displayZone(null), name: null }}
-                />
-              ))}
-            </View>
-          )
-        }
+        {(items) => (
+          <View accessibilityRole="list" style={styles.list}>
+            {items.map((r) => (
+              <ReceiptCard
+                key={r.saleId}
+                receipt={r}
+                facility={facilities.get(r.facilityId) ?? { zone: displayZone(null), name: null }}
+              />
+            ))}
+          </View>
+        )}
       </QueryBoundary>
       <LoadMore pages={receipts} label="receipts" />
     </>

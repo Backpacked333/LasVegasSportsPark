@@ -81,6 +81,18 @@ describe('Button v2 (ADR-008, SPK-UX-009)', () => {
     expect(screen.getByText('event', { includeHiddenElements: true })).toBeOnTheScreen();
   });
 
+  it('SPK-UX-009: accessibilityLabel names the button when the label needs more words; the label stays visible', async () => {
+    await renderUi(
+      <Button label="Pay" accessibilityLabel="Pay, Spring league" onPress={() => undefined} />,
+    );
+    expect(screen.getByRole('button', { name: 'Pay, Spring league' })).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Pay, Spring league' })).toHaveProp(
+      'accessibilityLabel',
+      'Pay, Spring league',
+    );
+    expect(screen.getByText('Pay')).toBeOnTheScreen();
+  });
+
   it('a press that lands plays a light impact; a busy or disabled one plays nothing', async () => {
     const { haptics, rerender } = await renderUi(
       <Button label="Accept" onPress={() => undefined} />,

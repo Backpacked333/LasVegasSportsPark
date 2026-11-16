@@ -191,7 +191,9 @@ describe('SCR-C-21 TeamsScreen', () => {
           fakeResponse(200, answered((request.body as { state: string }).state, 3)),
       });
       const card = await screen.findByTestId(`team-row-${IDS.entry}`);
-      const group = await within(card).findByLabelText('Are you going to this game?');
+      const group = await within(card).findByLabelText(
+        'Are you going to the next Desert Foxes game?',
+      );
       expect(group).toHaveProp('accessibilityRole', 'radiogroup');
       expect(within(group).getByRole('radio', { name: 'Going' })).toHaveProp(
         'accessibilityState',
@@ -216,7 +218,7 @@ describe('SCR-C-21 TeamsScreen', () => {
       });
       expect(await screen.findByRole('button', { name: /^Desert Foxes, / })).toBeOnTheScreen();
       await app.settle();
-      expect(screen.queryByLabelText('Are you going to this game?')).toBeNull();
+      expect(screen.queryByLabelText('Are you going to the next Desert Foxes game?')).toBeNull();
       expect(app.requestsTo('POST', '/fixtures/{id}/availability')).toHaveLength(0);
     });
   });

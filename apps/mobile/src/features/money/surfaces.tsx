@@ -1,12 +1,9 @@
 /**
  * What the money screens (SCR-C-34, SCR-C-35 and the Package G money screens) share on top of the
- * visual system v2 in `src/ui` (ADR-008; PA-11 customer words):
+ * visual system v2 in `src/ui` (ADR-008; PA-11 customer words). An empty money list is the
+ * boundary's own illustrated empty state (`QueryBoundary` `empty.source`, the `empty-payments`
+ * illustration), announced with its words (SPK-UX-008, SPK-UX-009).
  *
- * - `MoneyEmpty`: an empty list with the `empty-payments` illustration (`ui/EmptyState`), its
- *   title a header, and the same words announced to VoiceOver when it appears as the
- *   `StateView` empty state announces them (SPK-UX-008, SPK-UX-009; TalkBack reads the live
- *   region). Screens give `QueryBoundary` no `isEmpty` and render this for an empty page, so the
- *   loading, error, offline and "not available" states stay the boundary's.
  * - `PAY_AT_DESK_MESSAGE`: what paying in the app says while the payment provider is not
  *   selected (DEC-019, Technical lead/account owners): "Pay at the front desk for now." The
  *   decision stays in the "Details for support" fold.
@@ -19,9 +16,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { pendingMessage } from '../../copy/pending';
-import { illustrations } from '../../artwork/manifest';
-import { LiveRegion, sentences } from '../../ui/announce';
-import { EmptyState } from '../../ui/EmptyState';
 import { makeStyles, spacing } from '../../ui/theme';
 
 /** DEC-019 (PA-11): paying in the app waits on the payment provider; what to do instead. */
@@ -32,29 +26,6 @@ export const PAY_AT_DESK_SUPPORT = {
   decisions: ['DEC-019'],
   owner: 'Technical lead/account owners',
 } as const;
-
-export function MoneyEmpty({
-  title,
-  message,
-  action,
-  testID,
-}: {
-  title: string;
-  message: string;
-  action?: { label: string; onPress: () => void };
-  testID?: string;
-}) {
-  return (
-    <LiveRegion announcement={sentences(title, message, action?.label)} testID={testID}>
-      <EmptyState
-        source={illustrations['empty-payments']}
-        title={title}
-        message={message}
-        action={action}
-      />
-    </LiveRegion>
-  );
-}
 
 export function usePullToRefresh(): { refreshing: boolean; onRefresh: () => void } {
   const queryClient = useQueryClient();

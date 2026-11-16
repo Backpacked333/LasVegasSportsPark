@@ -228,7 +228,7 @@ describe('Session packages (SCR-C-35, Package G)', () => {
         }),
     });
     expect(await screen.findByTestId(`package-${LIST_IDS.package}`)).toBeOnTheScreen();
-    expect(screen.getByLabelText('Loading whether class packs is turned on')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Checking class packs')).toBeOnTheScreen();
     expect(screen.queryByTestId('state-turned-off')).toBeNull();
     await act(async () => {
       answer(fakeResponse(200, fakePermissions({ principalKind: 'customer' })));
