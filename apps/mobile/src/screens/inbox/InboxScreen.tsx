@@ -25,19 +25,33 @@
  * - Essential notices and promotional messages are labelled apart (SPK-COMMS-007).
  * - Offline: the cached list with its age; reading and acknowledging wait for a connection.
  *
+ * - Look and finding things (ADR-008, PA-11): "All" and "Needs action" tabs (`SegmentedControl`;
+ *   "Needs action" is `needsAction`, inbox-sections.ts) over a list in sections by day ("Today",
+ *   "Yesterday", "Sat, Oct 24"), with pull to refresh. A row opens its item (`noticeTarget`, as on
+ *   Home): the record the notice is about, marked read with the same request the notice sends when
+ *   opened, or else the notice itself in a sheet with "Acknowledge". The empty inbox is the
+ *   `empty-inbox` illustration. A notice the API withdrew while open says so in its sheet.
+ *
  * Status vocabulary (journeys.md section 3): "Unread", "Read", "Acknowledged",
  * "Replaced by a newer update".
  */
 import type { Schema } from '@sportspark/api-client';
+import { presentationForError } from '@sportspark/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useApiCommand } from '../../api/useApiCommand';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { Pressable, View } from 'react-native';
+import { illustrations } from '../../artwork/manifest';
 import { UNREAD_COUNT_KEY } from '../../api/inbox-unread';
+import { useApiCommand } from '../../api/useApiCommand';
 import { useApiQuery } from '../../api/useApiQuery';
 import { ChangeDetails } from '../../features/today/ChangeDetails';
-import { categoryLabel, scheduleChangeOf } from '../../features/today/notices';
+import { noticeTarget } from '../../features/today/notice-target';
+import {
+  availabilityRequestOf,
+  categoryLabel,
+  scheduleChangeOf,
+} from '../../features/today/notices';
 import {
   INBOX_PAGE_SIZE,
   nameOf,
@@ -45,19 +59,33 @@ import {
   useMe,
   usePersonNames,
 } from '../../features/today/queries';
-import { Caption, SectionQueryState } from '../../features/today/Section';
+import { SectionQueryState } from '../../features/today/Section';
 import { noticeStatus } from '../../features/today/status';
-import { displayZone, formatWhen } from '../../features/today/time';
-import { useApp, useConnectivity } from '../../providers/AppProviders';
+import { displayZone, formatTime, formatWhen } from '../../features/today/time';
+import { useApp, useConnectivity, useNow } from '../../providers/AppProviders';
 import { RequireSession } from '../../session/RequireSession';
-import { LiveRegion } from '../../ui/announce';
+import { LiveRegion, sentences } from '../../ui/announce';
 import { Button } from '../../ui/Button';
+import { EmptyState } from '../../ui/EmptyState';
+import { Icon } from '../../ui/Icon';
 import { QueryBoundary } from '../../ui/QueryBoundary';
 import { Screen } from '../../ui/Screen';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Sheet } from '../../ui/Sheet';
 import { StateView } from '../../ui/StateView';
 import { StatusBadge, type StatusBadgeProps } from '../../ui/StatusBadge';
-import { fonts, makeStyles, MIN_TOUCH_SIZE, spacing, type } from '../../ui/theme';
+import { Text } from '../../ui/Text';
+import {
+  continuousCorners,
+  layout,
+  makeStyles,
+  MIN_TOUCH_SIZE,
+  radius,
+  spacing,
+  useTheme,
+} from '../../ui/theme';
 import { CommandError } from '../account/components/CommandError';
+import { inboxSections, noticeTime, type InboxDay, type InboxTab } from './inbox-sections';
 
 type InboxItem = Schema<'InboxItem'>;
 type InboxPage = Schema<'InboxPage'>;
@@ -81,14 +109,36 @@ function revisionBody(...revisions: (number | null | undefined)[]): { expectedRe
   return known.length > 0 ? { expectedRevision: Math.max(...known) } : {};
 }
 
+/** The customer word for what a notice is about, on its "Open …" button (PA-11). */
+const SUBJECT_WORDS: Readonly<Record<string, string>> = {
+  fixture: 'Open the game',
+  enrollment: 'Open the registration',
+  obligation: 'Open the payment',
+  payment_attempt: 'Open the payment',
+  order: 'Open the order',
+  waitlist_entry: 'Open your waitlist place',
+  team_entry: 'Open the team',
+  contribution_request: 'Open your share',
+  booking: 'Open the booking',
+  offering: 'Open the activity',
+};
+
+/** The label of the button that opens what a notice is about ("Open the game"). */
+export function openSubjectLabel(item: InboxItem): string {
+  const type = availabilityRequestOf(item) ? 'fixture' : (item.subject?.type ?? '');
+  return SUBJECT_WORDS[type] ?? 'Open';
+}
+
 function NoticeDetail({
   item,
   newer,
   onShowNewer,
+  onWithdrawn,
 }: {
   item: InboxItem;
   newer: InboxItem | null;
   onShowNewer: (attemptId: string) => void;
+  onWithdrawn: (attemptId: string) => void;
 }) {
   const styles = useStyles();
   const router = useRouter();
@@ -122,8 +172,9 @@ function NoticeDetail({
   // elsewhere (STALE_REVISION: read on another device) is read again to show its state.
   const readStale = read.error?.code === 'STALE_REVISION';
   useEffect(() => {
+    if (withdrawn) onWithdrawn(item.attemptId);
     if (withdrawn || readStale) void queryClient.invalidateQueries({ queryKey: INBOX_KEY });
-  }, [withdrawn, readStale, queryClient]);
+  }, [withdrawn, readStale, queryClient, onWithdrawn, item.attemptId]);
 
   const acknowledgeNow = () =>
     void acknowledge
@@ -137,32 +188,26 @@ function NoticeDetail({
     void queryClient.invalidateQueries({ queryKey: INBOX_KEY });
   };
 
-  if (withdrawn) {
-    return (
-      <StateView
-        variant="unavailable"
-        title="No longer available"
-        description="This notice is no longer available to you."
-      />
-    );
-  }
+  if (withdrawn) return <NoticeWithdrawn />;
 
   const change = scheduleChangeOf(item);
   const zone = displayZone(change?.after?.timezone ?? change?.before?.timezone ?? null);
-  const fixtureId = item.subject?.type === 'fixture' ? item.subject.id : null;
+  const target = noticeTarget(item);
   const canAcknowledge = !item.acknowledgedAt && !item.supersededByNotificationId;
 
   return (
     <View style={styles.detail} testID={`notice-detail-${item.attemptId}`}>
-      <Text style={styles.caption}>
+      {/* After "Acknowledge" the announced badge below says it; the status is not shown twice. */}
+      {acknowledge.status !== 'success' ? <StatusBadge {...noticeStatus(item)} /> : null}
+      <Text variant="footnote" tone="muted">
         {categoryLabel(item)}
         {item.deliveredAt ? `. Received ${formatWhen(item.deliveredAt, zone.zone)}` : ''}
       </Text>
-      <Text style={styles.body}>{item.body}</Text>
+      <Text variant="body">{item.body}</Text>
       {change ? <ChangeDetails change={change} testID={`notice-change-${item.attemptId}`} /> : null}
       {item.supersededByNotificationId ? (
         <View style={styles.gap}>
-          <Text style={styles.body}>A newer update replaces this notice.</Text>
+          <Text variant="body">A newer update replaces this notice.</Text>
           {newer ? (
             <Button
               label="Show the newer update"
@@ -171,17 +216,17 @@ function NoticeDetail({
               testID={`notice-newer-${item.attemptId}`}
             />
           ) : (
-            <Text style={styles.caption}>The newer update is not available to you.</Text>
+            <Text variant="footnote" tone="muted">
+              The newer update is not available to you.
+            </Text>
           )}
         </View>
       ) : null}
-      {fixtureId ? (
+      {target.kind === 'subject' ? (
         <Button
-          label="Open fixture"
+          label={openSubjectLabel(item)}
           variant="secondary"
-          onPress={() =>
-            router.push({ pathname: '/fixtures/[id]', params: { id: fixtureId } } as Href)
-          }
+          onPress={() => router.push(target.href as Href)}
         />
       ) : null}
       {canAcknowledge ? (
@@ -197,7 +242,9 @@ function NoticeDetail({
         />
       ) : null}
       {offline && canAcknowledge ? (
-        <Text style={styles.caption}>Acknowledging needs a connection.</Text>
+        <Text variant="footnote" tone="muted">
+          Acknowledging needs a connection.
+        </Text>
       ) : null}
       {acknowledge.error && !withdrawn ? (
         <CommandError error={acknowledge.error} onRetry={acknowledgeNow} onReload={reload} />
@@ -211,51 +258,105 @@ function NoticeDetail({
   );
 }
 
-function NoticeRow({
-  item,
-  expanded,
-  newer,
-  names,
-  onToggle,
-  onShowNewer,
-}: {
-  item: InboxItem;
-  expanded: boolean;
-  newer: InboxItem | null;
-  names: Map<string, string>;
-  onToggle: () => void;
-  onShowNewer: (attemptId: string) => void;
-}) {
-  const styles = useStyles();
-  const status = noticeStatus(item);
-  const about = participantsLine(item, names);
+/** A notice the API no longer serves to this person: nothing about it is implied (§4.10). */
+function NoticeWithdrawn() {
   return (
-    <View style={styles.row} testID={`inbox-item-${item.attemptId}`}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={[item.title, about, status.label].filter(Boolean).join(', ')}
-        accessibilityHint={expanded ? 'Hides the notice' : 'Shows the whole notice'}
-        accessibilityState={{ expanded }}
-        onPress={onToggle}
-        style={({ pressed }) => [styles.header, pressed && styles.pressed]}
-        testID={`inbox-toggle-${item.attemptId}`}
-      >
-        <Text style={styles.title}>{item.title}</Text>
-        {about ? <Text style={styles.caption}>{about}</Text> : null}
-        {!expanded ? (
-          <Text style={styles.caption} numberOfLines={2}>
-            {item.body}
-          </Text>
-        ) : null}
-        <StatusBadge {...status} />
-      </Pressable>
-      {expanded ? <NoticeDetail item={item} newer={newer} onShowNewer={onShowNewer} /> : null}
-    </View>
+    <StateView
+      variant="unavailable"
+      title="No longer available"
+      description="This notice is no longer available to you."
+    />
   );
 }
 
+/**
+ * One notice in the list: a button named "title, for whom, status", that opens its item. Opening
+ * the record a notice is about marks an unread notice read with the request the notice sends when
+ * opened (SPK-COMMS-004); not while offline.
+ */
+function NoticeRow({
+  item,
+  names,
+  zone,
+  onOpenNotice,
+}: {
+  item: InboxItem;
+  names: Map<string, string>;
+  zone: string;
+  onOpenNotice: (attemptId: string, trigger: RefObject<View | null>) => void;
+}) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const router = useRouter();
+  const { reachable } = useConnectivity();
+  const ref = useRef<View>(null);
+  const read = useApiCommand('post', '/me/inbox/{id}/read', {
+    invalidate: [INBOX_KEY, UNREAD_COUNT_KEY],
+  });
+  const status = noticeStatus(item);
+  const about = participantsLine(item, names);
+  const unread = !item.readAt && !item.acknowledgedAt;
+  const target = noticeTarget(item);
+  const open = () => {
+    if (target.kind !== 'subject') {
+      onOpenNotice(item.attemptId, ref);
+      return;
+    }
+    router.push(target.href as Href);
+    if (!unread || reachable === false) return;
+    read
+      .submit({ path: { id: item.attemptId }, body: revisionBody(item.revision) })
+      .catch(() => undefined);
+  };
+  return (
+    <Pressable
+      ref={ref}
+      accessibilityRole="button"
+      accessibilityLabel={[item.title, about, status.label].filter(Boolean).join(', ')}
+      accessibilityHint={
+        target.kind === 'subject' ? 'Opens what this notice is about' : 'Opens the notice'
+      }
+      onPress={open}
+      android_ripple={{ color: colors.surface }}
+      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      testID={`inbox-item-${item.attemptId}`}
+    >
+      <View style={[styles.dot, unread ? styles.dotUnread : null]} />
+      <View style={styles.rowText}>
+        <View style={styles.rowTop}>
+          <Text variant="headline" style={styles.rowTitle}>
+            {item.title}
+          </Text>
+          <Text variant="footnote" tone="muted" tabular>
+            {formatTime(noticeTime(item), zone)}
+          </Text>
+        </View>
+        {about ? (
+          <Text variant="footnote" tone="muted">
+            {about}
+          </Text>
+        ) : null}
+        <Text variant="callout" tone="muted" numberOfLines={2}>
+          {item.body}
+        </Text>
+        <StatusBadge {...status} />
+      </View>
+      <Icon name="chevron_right" size={22} color={colors.primary} />
+    </Pressable>
+  );
+}
+
+const TABS = [
+  { value: 'all', label: 'All' },
+  { value: 'action', label: 'Needs action' },
+] as const;
+
+const EMPTY_TITLE = 'No notifications';
+const EMPTY_TEXT = 'Schedule changes, results and messages from the facility will appear here.';
+
 function InboxList({ openId }: { openId?: string }) {
   const styles = useStyles();
+  const now = useNow();
   const { session } = useApp();
   const signedIn = session.status === 'signed_in';
   const first = useApiQuery({
@@ -273,92 +374,166 @@ function InboxList({ openId }: { openId?: string }) {
     signedIn,
   );
   const me = useMe();
-  const loadedItems = [first.data, ...older.map((o) => o.data)].flatMap((p) => p?.items ?? []);
+  const pages: InboxPage[] = first.data
+    ? [first.data, ...older.flatMap((o) => (o.data ? [o.data] : []))]
+    : [];
+  const items = pages.flatMap((p) => p.items);
   const names = usePersonNames(
-    loadedItems.flatMap((i) => i.subjectPersonIds ?? []),
+    items.flatMap((i) => i.subjectPersonIds ?? []),
     me.data,
   );
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(openId ? [openId] : []));
+  const [tab, setTab] = useState<InboxTab>('all');
+  const [open, setOpen] = useState<string | null>(openId ?? null);
+  const [withdrawn, setWithdrawn] = useState<ReadonlySet<string>>(() => new Set());
+  const returnFocus = useRef<unknown>(null);
   useEffect(() => {
-    if (openId) setExpanded((s) => new Set(s).add(openId));
+    if (openId) setOpen(openId);
   }, [openId]);
 
-  const toggle = (id: string) =>
-    setExpanded((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const onWithdrawn = useCallback(
+    (id: string) => setWithdrawn((s) => (s.has(id) ? s : new Set(s).add(id))),
+    [],
+  );
+  const openNotice = useCallback((id: string, from: RefObject<View | null>) => {
+    returnFocus.current = from.current;
+    setOpen(id);
+  }, []);
+
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([first.refetch(), ...older.map((o) => o.refetch())]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const zone = displayZone(null).zone;
+  // Cached notices are not listed once the API answers that the list is not available (§4.10).
+  const listed =
+    first.data !== undefined &&
+    !(first.error && presentationForError(first.error) === 'unavailable');
+  const sections: InboxDay[] = listed ? inboxSections(items, tab, now, zone) : [];
+  const byNotification = new Map(items.map((i) => [i.notificationId, i]));
+  const byAttempt = new Map(items.map((i) => [i.attemptId, i]));
+  const openItem = open ? (byAttempt.get(open) ?? null) : null;
+  const openWithdrawn = open !== null && openItem === null && withdrawn.has(open);
+  const last = pages[pages.length - 1];
+  const pendingOlder = older.find((o) => o.data === undefined);
+
+  const footer = listed ? (
+    <View style={styles.footer}>
+      {pendingOlder ? (
+        <SectionQueryState read={pendingOlder} label="older notices" />
+      ) : last?.nextCursor ? (
+        <Button
+          label="Show older notices"
+          variant="secondary"
+          onPress={() => {
+            const cursor = last.nextCursor;
+            if (cursor) setCursors((c) => (c.includes(cursor) ? c : [...c, cursor]));
+          }}
+          testID="inbox-older"
+        />
+      ) : null}
+      {items.length > 0 ? (
+        <Text variant="footnote" tone="muted">
+          Notices you can no longer see, for example after a permission was removed, are not listed.
+        </Text>
+      ) : null}
+    </View>
+  ) : null;
 
   return (
-    <QueryBoundary
-      query={first}
-      label="notifications"
-      isEmpty={(page) => page.items.length === 0}
-      empty={{
-        title: 'No notifications',
-        description: 'Schedule changes, results and messages from the facility will appear here.',
+    <Screen<InboxItem, InboxDay>
+      onRefresh={() => void refresh()}
+      refreshing={refreshing}
+      sections={{
+        sections,
+        keyExtractor: (item) => item.attemptId,
+        renderSectionHeader: ({ section }) => (
+          <Text variant="label" tone="muted" heading style={styles.day}>
+            {section.title}
+          </Text>
+        ),
+        renderItem: ({ item }) => (
+          <NoticeRow item={item} names={names} zone={zone} onOpenNotice={openNotice} />
+        ),
+        ItemSeparatorComponent: () => <View style={styles.separator} />,
+        ListEmptyComponent:
+          listed && items.length > 0 ? (
+            <EmptyState
+              title="You're all caught up"
+              message="Nothing in your notifications needs you right now."
+              testID="inbox-no-action"
+            />
+          ) : null,
+        ListFooterComponent: footer,
+        stickySectionHeadersEnabled: false,
       }}
-      unavailableOffline={['marking notices as read', 'acknowledging notices']}
     >
-      {(page) => {
-        const pages: InboxPage[] = [page, ...older.flatMap((o) => (o.data ? [o.data] : []))];
-        const items = pages.flatMap((p) => p.items);
-        const byNotification = new Map(items.map((i) => [i.notificationId, i]));
-        const last = pages[pages.length - 1];
-        const pendingOlder = older.find((o) => o.data === undefined);
-        return (
-          <View>
-            <View accessibilityRole="list">
-              {items.map((item) => (
-                <NoticeRow
-                  key={item.attemptId}
-                  item={item}
-                  expanded={expanded.has(item.attemptId)}
-                  newer={
-                    item.supersededByNotificationId
-                      ? (byNotification.get(item.supersededByNotificationId) ?? null)
-                      : null
-                  }
-                  names={names}
-                  onToggle={() => toggle(item.attemptId)}
-                  onShowNewer={(id) => setExpanded((s) => new Set(s).add(id))}
-                />
-              ))}
-            </View>
-            {pendingOlder ? (
-              <SectionQueryState read={pendingOlder} label="older notices" />
-            ) : last?.nextCursor ? (
-              <View style={styles.more}>
-                <Button
-                  label="Show older notices"
-                  variant="secondary"
-                  onPress={() => {
-                    const cursor = last.nextCursor;
-                    if (cursor) setCursors((c) => (c.includes(cursor) ? c : [...c, cursor]));
-                  }}
-                  testID="inbox-older"
-                />
-              </View>
-            ) : null}
-            <Caption>
-              Notices you can no longer see, for example after a permission was removed, are not
-              listed.
-            </Caption>
-          </View>
-        );
-      }}
-    </QueryBoundary>
+      <QueryBoundary
+        query={first}
+        label="notifications"
+        empty={{ title: EMPTY_TITLE, description: EMPTY_TEXT }}
+        unavailableOffline={['marking notices as read', 'acknowledging notices']}
+      >
+        {(page) =>
+          page.items.length === 0 && items.length === 0 ? (
+            <LiveRegion announcement={sentences(EMPTY_TITLE, EMPTY_TEXT)}>
+              <EmptyState
+                source={illustrations['empty-inbox']}
+                title={EMPTY_TITLE}
+                message={EMPTY_TEXT}
+                testID="inbox-empty"
+              />
+            </LiveRegion>
+          ) : (
+            <SegmentedControl<InboxTab>
+              label="Show"
+              segments={TABS}
+              value={tab}
+              onChange={setTab}
+              style={styles.tabs}
+              testID="inbox-tabs"
+            />
+          )
+        }
+      </QueryBoundary>
+      <Sheet
+        open={openItem !== null || openWithdrawn}
+        onClose={() => setOpen(null)}
+        title={openItem?.title ?? 'Notice'}
+        returnFocusTo={returnFocus}
+      >
+        {openItem ? (
+          <NoticeDetail
+            key={openItem.attemptId}
+            item={openItem}
+            newer={
+              openItem.supersededByNotificationId
+                ? (byNotification.get(openItem.supersededByNotificationId) ?? null)
+                : null
+            }
+            onShowNewer={setOpen}
+            onWithdrawn={onWithdrawn}
+          />
+        ) : openWithdrawn ? (
+          <NoticeWithdrawn />
+        ) : null}
+      </Sheet>
+    </Screen>
   );
 }
 
 export function InboxScreen({ openId }: { openId?: string } = {}) {
+  const { session } = useApp();
+  // Signed in: the inbox draws its own list frame, with pull to refresh.
+  if (session.status === 'signed_in') return <InboxList openId={openId} />;
   return (
     <Screen>
-      <RequireSession what="your notifications">
-        <InboxList openId={openId} />
-      </RequireSession>
+      <RequireSession what="your notifications">{null}</RequireSession>
     </Screen>
   );
 }
@@ -370,22 +545,31 @@ export function InboxRoute() {
 }
 
 const useStyles = makeStyles(({ colors }) => ({
+  tabs: { marginHorizontal: layout.gutter, marginTop: spacing.md },
+  day: { paddingHorizontal: layout.gutter, paddingTop: spacing.xl, paddingBottom: spacing.sm },
   row: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.background,
-  },
-  header: {
     minHeight: MIN_TOUCH_SIZE,
+    marginHorizontal: layout.gutter,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    gap: spacing.xs,
+    borderRadius: radius.lg,
+    ...continuousCorners,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   pressed: { backgroundColor: colors.surface },
-  title: { ...type.body, ...fonts.semibold, color: colors.text },
-  body: { ...type.body, color: colors.text },
-  caption: { ...type.caption, color: colors.textMuted },
-  detail: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, gap: spacing.sm },
+  separator: { height: spacing.sm },
+  // The unread dot is decorative: the status badge says "Unread" in words.
+  dot: { width: 8, height: 8, marginTop: 8, borderRadius: radius.pill },
+  dotUnread: { backgroundColor: colors.primary },
+  rowText: { flex: 1, gap: spacing.xs },
+  rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  rowTitle: { flex: 1 },
+  detail: { gap: spacing.sm },
   gap: { gap: spacing.sm },
-  more: { padding: spacing.lg },
+  footer: { paddingHorizontal: layout.gutter, paddingVertical: spacing.lg, gap: spacing.md },
 }));

@@ -44,8 +44,6 @@
 
   "src/screens/credits/CreditsScreen.tsx :: DEC- :: Credit expiry rules are not decided yet (DEC-058, Finance).",
 
-  "src/screens/inbox/InboxScreen.tsx :: fixture :: Open fixture",
-
   "src/screens/memberships/RenewMembership.tsx :: basket :: Add the renewal to a basket",
   "src/screens/memberships/RenewMembership.tsx :: basket :: …e renewal to a new basket; nothing is charged until checko…",
   "src/screens/memberships/RenewMembership.tsx :: basket :: …ou choose to a new basket. Nothing is charged until you ch…",
